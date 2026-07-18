@@ -177,6 +177,8 @@ func BuildRegistry(db *sql.DB, home string, mem *Memory) *Registry {
 	}
 
 	// image generation (OpenRouter images API)
+	r.Register(makeRequestApprovalTool(home))
+	r.Register(makeResolveApprovalTool(home))
 	r.Register(makeGenerateImageTool(home))
 
 	return r
@@ -818,6 +820,79 @@ func makeViewImageTool() *Tool {
 				return fmt.Sprintf("Error: image is %d MB; max 8 MB", len(data)>>20)
 			}
 			return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)
+		},
+	}
+}
+
+// --- Approval tools (multi-turn gate for destructive ops) ---
+
+func makeRequestApprovalTool(home string) *Tool {
+	return &Tool{
+		Name:        "request_approval",
+		Description: "Pause and ask for user approval BEFORE executing a destructive or irreversible action. Use for deleting emails, files, modifying configs, sending messages, or spending money. Saves the request so the user can review it later.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"action_id":  map[string]any{"type": "string", "description": "Short unique ID, e.g. 'gmail-cleanup-2026-07-18'"},
+				"title":      map[string]any{"type": "string", "description": "One-line summary for the user, e.g. 'Delete 7 promotional emails'"},
+				"details":    map[string]any{"type": "string", "description": "Full details: what will be affected, why it should be done, what the risks are"},
+				"exec_plan":  map[string]any{"type": "string", "description": "Instructions for what to do if approved. Include exact tool calls, email IDs, file paths, etc. The LLM will read this back when executing."},
+			},
+			"required": []string{"action_id", "title", "details", "exec_plan"},
+		},
+		Fn: func(args map[string]any) string {
+			actionID, _ := args["action_id"].(string)
+			title, _ := args["title"].(string)
+			details, _ := args["details"].(string)
+			execPlan, _ := args["exec_plan"].(string)
+			os.MkdirAll(filepath.Join(home, "pending"), 0700)
+			path := filepath.Join(home, "pending", actionID+".json")
+			data, _ := json.Marshal(map[string]any{
+				"action_id": actionID,
+				"title":     title,
+				"details":   details,
+				"exec_plan": execPlan,
+				"created":   time.Now().Format(time.RFC3339),
+			})
+			os.WriteFile(path, data, 0600)
+			return fmt.Sprintf("[APPROVAL_REQUIRED] %s — %s\n\nThe user will see this in their next conversation. Wait for their response before proceeding.", actionID, title)
+		},
+	}
+}
+
+func makeResolveApprovalTool(home string) *Tool {
+	return &Tool{
+		Name:        "resolve_approval",
+		Description: "Check or resolve a pending approval. Use BEFORE executing any action that was previously approved. If decision is 'approve', the exec_plan is returned so you can carry it out. If 'reject', the request is deleted.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"action_id": map[string]any{"type": "string", "description": "The ID of the pending approval"},
+				"decision":  map[string]any{"type": "string", "description": "'approve' or 'reject'"},
+				"reason":    map[string]any{"type": "string", "description": "Why approved or rejected (optional)"},
+			},
+			"required": []string{"action_id", "decision"},
+		},
+		Fn: func(args map[string]any) string {
+			actionID, _ := args["action_id"].(string)
+			decision, _ := args["decision"].(string)
+			reason, _ := args["reason"].(string)
+			path := filepath.Join(home, "pending", actionID+".json")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return fmt.Sprintf("No pending approval found for '%s'", actionID)
+			}
+			var req map[string]any
+			json.Unmarshal(data, &req)
+			os.Remove(path)
+			if decision == "approve" {
+				execPlan, _ := req["exec_plan"].(string)
+				return fmt.Sprintf("APPROVED: %s\n\nExec plan:\n%s", req["title"], execPlan)
+			}
+			if reason != "" {
+				return fmt.Sprintf("REJECTED: %s — %s", req["title"], reason)
+			}
+			return fmt.Sprintf("REJECTED: %s", req["title"])
 		},
 	}
 }

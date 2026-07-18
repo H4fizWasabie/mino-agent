@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+### Added
+- Approval system: `request_approval` + `resolve_approval` tools for destructive operations (delete email, rm files, etc.)
+- Pending approvals injected into system prompt across all sessions
+- SELF-VERIFY prompt rule: LLM checks "did I call the tool?" before replying
+- `LLMClient` interface — test seam for `RunLoop`, enables deterministic evals
+- Eval test suite (9 tests): scripted fake LLM client, zero API cost, catches bluffs and regressions
+- `view_image` tool — loads images into LLM's visual context
+- `generate_image` tool via Pollinations.ai (free, no API key)
+
+### Changed
+- `RunLoop` accepts `LLMClient` interface instead of concrete `*ProviderManager`
+- Default soul includes SELF-VERIFY and tool truth rules
+
 ## [0.1.0] — Initial release
 
 - Agent loop with tool discipline (reason → act → observe)

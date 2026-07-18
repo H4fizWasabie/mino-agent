@@ -31,8 +31,15 @@ func notify(obs Observer, kind string, data map[string]any) {
 	}
 }
 
+// LLMClient is the interface RunLoop needs to call the model.
+// One real implementation (ProviderManager), one fake for tests.
+type LLMClient interface {
+	Create(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error)
+	Stream(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error)
+}
+
 func RunLoop(
-	client *ProviderManager,
+	client LLMClient,
 	sessionID string,
 	system string,
 	messages []Message,
