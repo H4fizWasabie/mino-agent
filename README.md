@@ -75,7 +75,7 @@ artifacts.go     — large output management
 
 Mino can run entirely on free tiers:
 
-- **LLM**: [Google Gemini Flash](https://openrouter.ai/google/gemini-2.5-flash) (free on OpenRouter, 1,500 req/day)
+- **LLM**: [Google Gemma 4](https://openrouter.ai/google/gemma-4-31b-it) (free on OpenRouter, no cost)
 - **Image gen**: [Pollinations.ai](https://pollinations.ai) (free, no key)
 - **Embeddings**: via OpenRouter (free tier available)
 - **Web search**: Tavily (free tier, 1,000 req/month)
