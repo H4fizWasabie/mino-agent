@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 ### Added
+- Vision-aware provider routing: `text_only` providers skipped for image turns; separate sticky bucket keeps text sessions on the main model
+- Telegram rich formatting: bold, code, fences, links, headings, bullets, strikethrough, pipe tables as aligned <pre> (ported from Crow's pipeline)
+- Tool filter: embedding-based top-K tool selection per turn — only relevant tools sent to the LLM (cuts context waste)
+- `EmbedBatch`: batch embeddings in one request (86 tools in <2s vs 49s sequential)
 - Approval system: `request_approval` + `resolve_approval` tools for destructive operations (delete email, rm files, etc.)
 - Pending approvals injected into system prompt across all sessions
 - SELF-VERIFY prompt rule: LLM checks "did I call the tool?" before replying
@@ -11,6 +15,8 @@
 - `generate_image` tool via Pollinations.ai (free, no API key)
 
 ### Changed
+- Dashboard live-system SVG redesigned as a technical runtime blueprint while preserving backend-driven nodes, links, counts, and stage animations
+- Telegram sends unified into sendTelegramReply: 4000-char HTML-safe chunking + plain-text fallback; notify path no longer truncates
 - `RunLoop` accepts `LLMClient` interface instead of concrete `*ProviderManager`
 - Default soul includes SELF-VERIFY and tool truth rules
 

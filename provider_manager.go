@@ -15,6 +15,10 @@ type ModelRole string
 const (
 	MainModel  ModelRole = "main"
 	SmallModel ModelRole = "small"
+	// VisionModel is synthetic: callers never pass it. Create/Stream flip to it
+	// when messages carry images, giving vision turns their own sticky bucket
+	// so an image turn can't downgrade a session's text routing.
+	VisionModel ModelRole = "vision"
 )
 
 type ProviderConfig struct {
@@ -24,6 +28,7 @@ type ProviderConfig struct {
 	APIKeyEnv string `json:"api_key_env"`
 	Model     string `json:"model"`
 	Small     string `json:"small_model"`
+	TextOnly  bool   `json:"text_only"` // provider rejects image input; skipped for vision turns
 }
 
 type providerFile struct {
@@ -89,15 +94,26 @@ func loadProviders(home string, legacy *Settings) ([]ProviderConfig, error) {
 }
 
 func (m *ProviderManager) Create(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
-	return m.call(session, role, func(c *Client, model string) (*LLMResponse, error) {
+	return m.call(session, routeRole(role, messages), func(c *Client, model string) (*LLMResponse, error) {
 		return c.Create(model, messages, maxTokens, system, tools)
 	})
 }
 
 func (m *ProviderManager) Stream(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
-	return m.call(session, role, func(c *Client, model string) (*LLMResponse, error) {
+	return m.call(session, routeRole(role, messages), func(c *Client, model string) (*LLMResponse, error) {
 		return c.Stream(model, messages, maxTokens, system, tools, onText)
 	})
+}
+
+// routeRole flips any role to VisionModel when the outgoing messages carry
+// images. Covers every image source (Telegram photos, view_image results).
+func routeRole(role ModelRole, messages []Message) ModelRole {
+	for _, msg := range messages {
+		if len(msg.Images) > 0 {
+			return VisionModel
+		}
+	}
+	return role
 }
 
 func (m *ProviderManager) call(session string, role ModelRole, call func(*Client, string) (*LLMResponse, error)) (*LLMResponse, error) {
@@ -133,12 +149,15 @@ func (m *ProviderManager) candidates(session string, role ModelRole) []ProviderC
 	var out []ProviderConfig
 	if name := m.sticky[m.key(session, role)]; name != "" && m.state[name].openUntil.Before(now) {
 		for _, p := range m.providers {
-			if p.Name == name {
+			if p.Name == name && !(role == VisionModel && p.TextOnly) {
 				out = append(out, p)
 			}
 		}
 	}
 	for _, p := range m.providers {
+		if role == VisionModel && p.TextOnly {
+			continue
+		}
 		if m.state[p.Name].openUntil.Before(now) && (len(out) == 0 || out[0].Name != p.Name) {
 			out = append(out, p)
 		}

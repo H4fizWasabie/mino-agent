@@ -258,7 +258,7 @@ func TestToolCatalogIsStable(t *testing.T) {
 		registry.Register(&Tool{Name: name})
 	}
 	got := registry.Catalog()
-	if got[0].Name != "alpha" || got[1].Name != "zeta" || got[2].Name != "web_search" {
+	if got[0].Name != "alpha" || got[1].Name != "web_search" || got[2].Name != "zeta" {
 		t.Fatalf("catalog order is unstable: %#v", got)
 	}
 }

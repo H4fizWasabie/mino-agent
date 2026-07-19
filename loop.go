@@ -50,6 +50,7 @@ func RunLoop(
 	stream bool,
 	chk *CheckpointManager,
 	traceHome string,
+	es *EmbeddingStore,
 ) *LoopResult {
 	result := &LoopResult{}
 	dedup := make(map[string]string) // tool dedup: key → cached output
@@ -68,6 +69,12 @@ func RunLoop(
 		logTrace(traceHome, "turn_end", map[string]any{"reply": result.Reply, "iterations": result.Iterations})
 	}()
 
+	// build filter query once — tools needed don't change mid-loop
+	filterQuery := system
+	if len(messages) > 0 {
+		filterQuery += "\n" + messages[len(messages)-1].Content
+	}
+
 	for i := 1; i <= maxIter; i++ {
 		result.Iterations = i
 
@@ -75,12 +82,18 @@ func RunLoop(
 		var resp *LLMResponse
 		var err error
 
+		// build filter query from system + last user message
+		filterQuery := system
+		if len(messages) > 0 {
+			filterQuery += "\n" + messages[len(messages)-1].Content
+		}
+
 		if stream {
-			resp, err = client.Stream(sessionID, MainModel, messages, maxTokens, system, tools.Schemas(), func(delta string) {
+			resp, err = client.Stream(sessionID, MainModel, messages, maxTokens, system, tools.SchemasFor(filterQuery, es), func(delta string) {
 				notify(obs, "text", map[string]any{"delta": delta})
 			})
 		} else {
-			resp, err = client.Create(sessionID, MainModel, messages, maxTokens, system, tools.Schemas())
+			resp, err = client.Create(sessionID, MainModel, messages, maxTokens, system, tools.SchemasFor(filterQuery, es))
 		}
 		if err != nil {
 			result.Reply = fmt.Sprintf("(error: %v)", err)

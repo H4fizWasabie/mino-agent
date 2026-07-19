@@ -81,7 +81,7 @@ func TestScheduleTaskActuallyWritesJSON(t *testing.T) {
 	}
 
 	fake := &fakeClient{script: script}
-	result := RunLoop(fake, "eval", "", nil, tools, 10, 2048, nil, false, nil, home)
+	result := RunLoop(fake, "eval", "", nil, tools, 10, 2048, nil, false, nil, home, nil)
 
 	// Task file must exist
 	data, err := os.ReadFile(filepath.Join(home, "schedule.json"))
@@ -119,7 +119,7 @@ func TestNotifyCheckpointSavedAfterTool(t *testing.T) {
 		scriptedResp([]ContentBlock{textBlock("done")}, "end_turn"),
 	}
 
-	RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 10, 2048, nil, false, chk, home)
+	RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 10, 2048, nil, false, chk, home, nil)
 
 	data, _ := os.ReadFile(filepath.Join(home, "active_tasks", "eval-session.json"))
 	if len(data) == 0 {
@@ -146,7 +146,7 @@ func TestRequestApprovalCreatesPendingFile(t *testing.T) {
 		scriptedResp([]ContentBlock{textBlock("Awaiting your approval, Abah.")}, "end_turn"),
 	}
 
-	RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 10, 2048, nil, false, nil, home)
+	RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 10, 2048, nil, false, nil, home, nil)
 
 	path := filepath.Join(home, "pending", "delete-emails-7.json")
 	data, err := os.ReadFile(path)
@@ -173,7 +173,7 @@ func TestBluffingDoesNotCreateArtifact(t *testing.T) {
 	}
 
 	fake := &fakeClient{script: script}
-	result := RunLoop(fake, "eval", "", nil, tools, 10, 2048, nil, false, nil, home)
+	result := RunLoop(fake, "eval", "", nil, tools, 10, 2048, nil, false, nil, home, nil)
 
 	// schedule.json must NOT exist or be empty (no tool was called)
 	data, _ := os.ReadFile(filepath.Join(home, "schedule.json"))
@@ -195,7 +195,7 @@ func TestNoToolTurnEndsInOneIteration(t *testing.T) {
 		scriptedResp([]ContentBlock{textBlock("Paris is the capital of France.")}, "end_turn"),
 	}
 
-	result := RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 10, 2048, nil, false, nil, home)
+	result := RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 10, 2048, nil, false, nil, home, nil)
 
 	if result.Iterations != 1 {
 		t.Errorf("expected 1 iteration, got %d", result.Iterations)
@@ -217,7 +217,7 @@ func TestIterationGuardrailStopsRunawayLoop(t *testing.T) {
 		}, "tool_use"))
 	}
 
-	result := RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 3, 2048, nil, false, nil, home)
+	result := RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 3, 2048, nil, false, nil, home, nil)
 
 	if result.Iterations != 3 {
 		t.Errorf("expected 3 iterations (max), got %d", result.Iterations)
@@ -253,7 +253,7 @@ func TestResolveApprovalApprovesAndCleansUp(t *testing.T) {
 		scriptedResp([]ContentBlock{textBlock("Executing deletion now.")}, "end_turn"),
 	}
 
-	RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 10, 2048, nil, false, nil, home)
+	RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 10, 2048, nil, false, nil, home, nil)
 
 	// Pending file must be removed
 	if _, err := os.Stat(filepath.Join(pending, "test-approve.json")); err == nil {
@@ -285,7 +285,7 @@ func TestResolveApprovalRejectsAndCleansUp(t *testing.T) {
 		scriptedResp([]ContentBlock{textBlock("Rejected. File kept.")}, "end_turn"),
 	}
 
-	RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 10, 2048, nil, false, nil, home)
+	RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 10, 2048, nil, false, nil, home, nil)
 
 	if _, err := os.Stat(filepath.Join(pending, "test-reject.json")); err == nil {
 		t.Error("pending file not removed after rejection")

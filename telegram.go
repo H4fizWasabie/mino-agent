@@ -56,30 +56,8 @@ func RunTelegram(w *Core) {
 
 		result := w.RespondFor(sid, text, "telegram", nil, false, images...)
 
-		reply := formatTelegramHTML(result.Reply, result.ToolCalls)
-		msg := tgbotapi.NewMessage(chatID, reply)
-		msg.ParseMode = tgbotapi.ModeHTML
-		bot.Send(msg)
+		sendTelegramReply(bot, chatID, result.Reply, result.ToolCalls)
 	}
-}
-
-func formatTelegramHTML(reply string, tools []ToolCall) string {
-	out := escapeHTML(reply)
-	if len(tools) > 0 {
-		names := make([]string, len(tools))
-		for i, t := range tools {
-			names[i] = t.Name
-		}
-		out += "\n\n<code>" + strings.Join(names, " → ") + "</code>"
-	}
-	return out
-}
-
-func escapeHTML(s string) string {
-	s = strings.ReplaceAll(s, "&", "&amp;")
-	s = strings.ReplaceAll(s, "<", "&lt;")
-	s = strings.ReplaceAll(s, ">", "&gt;")
-	return s
 }
 
 var imageMimes = map[string]bool{"image/png": true, "image/jpeg": true, "image/webp": true, "image/gif": true}

@@ -164,7 +164,7 @@ func (es *EmbeddingStore) Index(source, content string) {
 			return
 		}
 	}
-	emb, err := es.embed(content)
+	emb, err := es.Embed(content)
 	if err != nil {
 		slog.Warn("embed failed", "source", source, "error", err)
 		return
@@ -204,7 +204,7 @@ func (es *EmbeddingStore) SearchScored(query string, topK int) []scoredDoc {
 	if len(es.docs) == 0 {
 		return nil
 	}
-	qEmb, err := es.embed(query)
+	qEmb, err := es.Embed(query)
 	if err != nil {
 		return nil
 	}
@@ -285,8 +285,53 @@ func memoryFileEntry(line string) string {
 	return content
 }
 
-// embed calls OpenRouter embeddings API.
-func (es *EmbeddingStore) embed(text string) ([]float32, error) {
+// EmbedBatch calls OpenRouter embeddings API with multiple inputs in one request.
+func (es *EmbeddingStore) EmbedBatch(texts []string) ([][]float32, error) {
+	if es.apiKey == "" || len(texts) == 0 {
+		return nil, fmt.Errorf("no api key or empty texts")
+	}
+	// ponytail: single HTTP call, 86 tools in <2s vs 49s sequentially
+	payload := map[string]any{
+		"model":    es.model,
+		"input":    texts,
+		"provider": map[string]any{"zdr": true},
+	}
+	body, _ := json.Marshal(payload)
+
+	req, err := http.NewRequest("POST", "https://openrouter.ai/api/v1/embeddings", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+es.apiKey)
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("batch embedding: HTTP %d", resp.StatusCode)
+	}
+	var result struct {
+		Data []struct {
+			Embedding []float32 `json:"embedding"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("parse batch embedding: %w", err)
+	}
+	out := make([][]float32, len(result.Data))
+	for i, d := range result.Data {
+		out[i] = d.Embedding
+	}
+	return out, nil
+}
+
+// Embed calls OpenRouter embeddings API.
+func (es *EmbeddingStore) Embed(text string) ([]float32, error) {
 	if es.apiKey == "" || text == "" {
 		return nil, fmt.Errorf("no api key or empty text")
 	}

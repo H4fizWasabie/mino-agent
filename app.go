@@ -3,7 +3,6 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"log/slog"
@@ -82,6 +81,16 @@ func NewCore() *Core {
 	mcpBridge := NewMCPBridge(s.Home, tools)
 	mcpBridge.Start()
 
+	// Tool filter: use embeddings to send only relevant tools per turn
+	coreTools := []string{"recall", "save_note", "read_file", "write_file", "edit_file", "bash",
+		"request_approval", "resolve_approval", "schedule_task", "list_scheduled", "search_web"}
+	toolFilter := NewToolFilter(coreTools, 25) // top 25 + 11 core = max 36 tools/turn
+	if mem.embedder != nil {
+		toolFilter.Index(tools.Schemas(), mem.embedder)
+		slog.Info("tool filter indexed", "tools", len(tools.Schemas()))
+	}
+	tools.SetFilter(toolFilter)
+
 	addDelegateTools(w)
 
 	// Scheduler: runs prompts through agent loop on schedule
@@ -110,21 +119,7 @@ func (w *Core) Respond(userMessage, source string, obs Observer, stream bool) *L
 func (w *Core) captureBot(bot *tgbotapi.BotAPI, chatID int64) {
 	w.notifyChatID = chatID
 	w.notifyTelegram = func(result *LoopResult) {
-		reply := result.Reply
-		if len(reply) > 4000 {
-			reply = reply[:4000] + "..."
-		}
-		html := escapeHTML(reply)
-		if len(result.ToolCalls) > 0 {
-			names := make([]string, len(result.ToolCalls))
-			for i, t := range result.ToolCalls {
-				names[i] = t.Name
-			}
-			html += "\n\n<code>" + strings.Join(names, " -> ") + "</code>"
-		}
-		msg := tgbotapi.NewMessage(w.notifyChatID, html)
-		msg.ParseMode = tgbotapi.ModeHTML
-		bot.Send(msg)
+		sendTelegramReply(bot, w.notifyChatID, result.Reply, result.ToolCalls)
 	}
 }
 
@@ -156,11 +151,16 @@ func (w *Core) RespondFor(sessionID, userMessage, source string, obs Observer, s
 		messages[len(messages)-1].Images = images
 	}
 
+	var es *EmbeddingStore
+	if w.Memory != nil {
+		es = w.Memory.embedder
+	}
 	result := RunLoop(
 		w.Client, conversation.Session.sessionID, system, messages, w.Tools,
 		w.Settings.MaxIter, w.Settings.MaxTokens, obs, stream,
 		conversation.Checkpoint,
 		w.Settings.Home,
+		es,
 	)
 
 	conversation.Session.AddExchange(userMessage, userContext, result.Reply, result.ToolCalls, source)

@@ -477,8 +477,8 @@ func parseAnthropicStream(r io.Reader, onText func(string)) (*LLMResponse, error
 			Type  string `json:"type"`
 			Index int    `json:"index"`
 			Delta struct {
-				Type      string `json:"type"`
-				Text      string `json:"text"`
+				Type       string `json:"type"`
+				Text       string `json:"text"`
 				StopReason string `json:"stop_reason"`
 			} `json:"delta"`
 			ContentBlock struct {

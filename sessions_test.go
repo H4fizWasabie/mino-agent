@@ -164,7 +164,7 @@ func TestViewImageBecomesVisionContent(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(makeViewImageTool())
 	home := t.TempDir()
-	result := RunLoop(fakePM(ts.URL), "s", "sys", []Message{{Role: "user", Content: "read the scan"}}, reg, 3, 100, nil, false, nil, home)
+	result := RunLoop(fakePM(ts.URL), "s", "sys", []Message{{Role: "user", Content: "read the scan"}}, reg, 3, 100, nil, false, nil, home, nil)
 
 	if result.Reply != "a scanned invoice" {
 		t.Fatalf("reply = %q", result.Reply)

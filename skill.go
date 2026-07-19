@@ -105,7 +105,7 @@ type skCandidate struct {
 }
 
 func (sl *SkillLoader) semanticMatch(message string) []*Skill {
-	qEmb, err := sl.embedder.embed(message)
+	qEmb, err := sl.embedder.Embed(message)
 	if err != nil || len(qEmb) == 0 {
 		return nil
 	}
@@ -118,7 +118,7 @@ func (sl *SkillLoader) semanticMatch(message string) []*Skill {
 		if len(s.Triggers) > 0 {
 			text += ". Triggers: " + strings.Join(s.Triggers, ", ")
 		}
-		sEmb, err := sl.embedder.embed(text)
+		sEmb, err := sl.embedder.Embed(text)
 		if err != nil {
 			continue
 		}

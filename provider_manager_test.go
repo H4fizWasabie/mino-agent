@@ -114,3 +114,65 @@ func TestCircuitOpenAndRecovery(t *testing.T) {
 		t.Fatalf("candidates after cooldown = %v", got)
 	}
 }
+
+func visionManager() *ProviderManager {
+	return &ProviderManager{
+		providers: []ProviderConfig{
+			{Name: "pro", Priority: 1, Model: "mimo-v2.5-pro", TextOnly: true},
+			{Name: "omni", Priority: 2, Model: "mimo-v2.5"},
+		},
+		state:  map[string]*providerState{"pro": {}, "omni": {}},
+		sticky: map[string]string{},
+		now:    func() time.Time { return time.Unix(100, 0) },
+		sleep:  func(time.Duration) {},
+	}
+}
+
+func TestRouteRole(t *testing.T) {
+	cases := []struct {
+		name     string
+		role     ModelRole
+		messages []Message
+		want     ModelRole
+	}{
+		{"text stays main", MainModel, []Message{{Role: "user", Content: "hi"}}, MainModel},
+		{"image flips to vision", MainModel, []Message{{Role: "user", Content: "look", Images: []string{"data:image/png;base64,x"}}}, VisionModel},
+		{"image in any message counts", MainModel, []Message{{Role: "user", Content: "a"}, {Role: "user", Content: "b", Images: []string{"d"}}}, VisionModel},
+		{"small with image flips too", SmallModel, []Message{{Role: "user", Images: []string{"d"}}}, VisionModel},
+		{"small text stays small", SmallModel, []Message{{Role: "user", Content: "hi"}}, SmallModel},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := routeRole(c.role, c.messages); got != c.want {
+				t.Errorf("got %q want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestVisionCandidatesSkipTextOnly(t *testing.T) {
+	m := visionManager()
+	got := m.candidates("s", VisionModel)
+	if len(got) != 1 || got[0].Name != "omni" {
+		t.Fatalf("vision candidates = %#v, want only omni", got)
+	}
+	if got := m.candidates("s", MainModel); got[0].Name != "pro" {
+		t.Fatalf("main first = %s, want pro", got[0].Name)
+	}
+}
+
+func TestVisionStickyDoesNotPoisonMain(t *testing.T) {
+	m := visionManager()
+	m.success("s", VisionModel, "omni") // image turn landed on omni
+	if got := m.candidates("s", MainModel); got[0].Name != "pro" {
+		t.Fatalf("main after vision turn = %s, want pro", got[0].Name)
+	}
+}
+
+func TestAllTextOnlyVisionFails(t *testing.T) {
+	m := visionManager()
+	m.providers = m.providers[:1] // only text-only pro remains
+	if _, err := m.call("s", VisionModel, failCall); err == nil {
+		t.Fatal("expected error when no vision-capable provider")
+	}
+}
