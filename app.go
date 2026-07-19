@@ -42,13 +42,10 @@ func NewCore() *Core {
 			fmt.Fprintln(os.Stderr, "    export MINO_API_KEY=your-key-here")
 			fmt.Fprintln(os.Stderr, "    export MINO_BASE_URL=https://api.openai.com/v1")
 			fmt.Fprintln(os.Stderr, "    export MINO_MODEL=gpt-4.1-mini")
-			fmt.Fprintln(os.Stderr, "    ./mino")
+			fmt.Fprintln(os.Stderr, "    mino")
 			fmt.Fprintln(os.Stderr, "")
 			fmt.Fprintln(os.Stderr, "  Option 2 — Create ~/.mino/providers.json (multi-provider):")
 			fmt.Fprintln(os.Stderr, "    See github.com/H4fizWasabie/mino-agent#readme")
-			fmt.Fprintln(os.Stderr, "")
-			fmt.Fprintln(os.Stderr, "  Or run the dashboard to configure providers:")
-			fmt.Fprintln(os.Stderr, "    MINO_DASHBOARD_PORT=7779 ./mino dashboard")
 			os.Exit(1)
 		}
 	}

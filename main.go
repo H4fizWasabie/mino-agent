@@ -29,6 +29,14 @@ func main() {
 		fmt.Fprintf(os.Stderr, "\n⚠ Mino %s is available (you have %s). Run 'mino update' to upgrade.\n\n", latest, Version)
 	}
 
+	// Default to dashboard on port 7779 (set before NewCore so onboarding works).
+	// Explicit CLI or Telegram modes skip this.
+	if len(os.Args) <= 1 || (len(os.Args) > 1 && os.Args[1] != "cli") {
+		if os.Getenv("MINO_DASHBOARD_PORT") == "" && os.Getenv("TELEGRAM_BOT_TOKEN") == "" {
+			os.Setenv("MINO_DASHBOARD_PORT", "7779")
+		}
+	}
+
 	w := NewCore()
 	defer w.Close()
 	w.Scheduler.Start()
@@ -46,12 +54,7 @@ func main() {
 		return
 	}
 
-	// Default: dashboard on MINO_DASHBOARD_PORT or 7779
-	dashPort := os.Getenv("MINO_DASHBOARD_PORT")
-	if dashPort == "" {
-		dashPort = "7779"
-		os.Setenv("MINO_DASHBOARD_PORT", dashPort)
-	}
+	// Default: dashboard
 	RunDashboard(w)
 }
 
