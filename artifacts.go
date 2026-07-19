@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const artifactInlineLimit = 500
+const artifactInlineLimit = 8000
 const inputPreviewLimit = 8000
 
 // prepareToolOutput keeps an explicit, bounded read_file slice in context.
