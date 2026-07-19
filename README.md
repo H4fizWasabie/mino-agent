@@ -2,6 +2,8 @@
 
 One binary. One SQLite file. Your own AI assistant.
 
+[![DeepWiki](https://img.shields.io/badge/DeepWiki-Architecture%20Docs-blue)](https://deepwiki.com/H4fizWasabie/mino-agent)
+
 - **Dashboard** — chat, memory, tools, file browser
 - **Telegram** — chat on the go
 - **Tools** — file ops, calendar, notes, web search, image generation, recall
