@@ -5,6 +5,10 @@
 - **minowrap**: universal tool adapter — one JSON entry per tool, template args auto-generate JSON Schema, new tools appear instantly (Mino self-extends without restarts)
 - **`reload_plugins` tool**: hot-reloads extensions.json and mcp.d/ on demand, discovers new tools without restart
 - **`Reload()` on MCPBridge**: re-scans mcp.d/ for new server configs, skips already-connected servers
+- **`mino version`**: prints embedded version + platform
+- **`mino update`**: downloads latest GitHub release binary, replaces self atomically (data in ~/.mino/ untouched)
+- **Update notification**: checks GitHub releases API once/day, prints banner if newer version available
+- **Schema versioning**: `_meta` table tracks schema_version, version-gated `runMigrations()` for future DB changes
 - Vision-aware provider routing: `text_only` providers skipped for image turns; separate sticky bucket keeps text sessions on the main model
 - Telegram rich formatting: bold, code, fences, links, headings, bullets, strikethrough, pipe tables as aligned <pre> (ported from Crow's pipeline)
 - Tool filter: embedding-based top-K tool selection per turn — only relevant tools sent to the LLM (cuts context waste)

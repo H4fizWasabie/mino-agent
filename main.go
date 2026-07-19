@@ -8,6 +8,28 @@ import (
 )
 
 func main() {
+	// Handle special commands that don't need the full core
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "version", "--version", "-v":
+			printVersion()
+			return
+		case "update":
+			if err := DoUpdate(); err != nil {
+				fmt.Fprintf(os.Stderr, "Update failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+	}
+
+	// Check for updates early (before full init, so it works even without API key).
+	// Load minimal settings just for the home path.
+	s := LoadSettings()
+	if latest := CheckForUpdate(s.Home); latest != "" {
+		fmt.Fprintf(os.Stderr, "\n⚠ Mino %s is available (you have %s). Run 'mino update' to upgrade.\n\n", latest, Version)
+	}
+
 	w := NewCore()
 	defer w.Close()
 	w.Scheduler.Start()
