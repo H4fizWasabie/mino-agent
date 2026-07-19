@@ -44,7 +44,7 @@ Open `http://localhost:7777` — fill in your provider details, done.
 | `MINO_CONTEXT_CHARS` | `100000` | Context window budget in chars |
 | `TELEGRAM_BOT_TOKEN` | — | Optional Telegram bot token |
 | `HF_TOKEN` | — | HuggingFace token (for FLUX.1-schnell, optional) |
-| `TAVILY_API_KEY` | — | Tavily web search API key |
+| `TAVILY_API_KEY` | — | Optional — enriches web search (falls back to DuckDuckGo) |
 | `MINO_OPENROUTER_KEY` | — | OpenRouter key (for embeddings, fallback search) |
 
 See `.env.example` for a copy-paste template.
@@ -62,6 +62,7 @@ tools.go         — built-in tools (file, calendar, notes, search, image gen)
 provider.go      — OpenAI-compatible client + SSE streaming
 provider_manager.go — priority, retry, fallback, circuit breaking
 telegram.go      — Telegram bot gateway
+telegram_format.go — Markdown→HTML formatting for Telegram
 dashboard.go     — web UI + REST API
 mcp.go           — MCP bridge (stdio-based servers)
 skill.go         — skill loader (SKILL.md files)
@@ -78,7 +79,10 @@ Mino can run entirely on free tiers:
 - **LLM**: [Google Gemma 4](https://openrouter.ai/google/gemma-4-31b-it) (free on OpenRouter, no cost)
 - **Image gen**: [Pollinations.ai](https://pollinations.ai) (free, no key)
 - **Embeddings**: via OpenRouter (free tier available)
+- **Web search**: DuckDuckGo (built-in, keyless). Optional Tavily upgrade for richer results.
+- **URL fetch**: pipes HTML through markitdown — preserves tables, headings, links for better LLM reading
 - **Web search**: Tavily (free tier, 1,000 req/month)
+- **URL fetch**: pipes HTML through markitdown — preserves tables, headings, links for better LLM reading
 
 ## Extensions
 
