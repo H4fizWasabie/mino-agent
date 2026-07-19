@@ -65,6 +65,7 @@ func RunDashboard(w *Core) {
 	}
 	host := os.Getenv("MINO_DASHBOARD_HOST")
 	addr := net.JoinHostPort(host, port)
+	fmt.Printf("\n  Mino dashboard → http://%s\n\n", addr)
 	slog.Info("dashboard", "addr", addr)
 	http.ListenAndServe(addr, nil)
 }
