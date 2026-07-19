@@ -14,21 +14,38 @@ One binary. One SQLite file. Your own AI assistant.
 ## Quickstart
 
 ```bash
-# Build (requires Go 1.25+, SQLite with FTS5)
-go build -tags sqlite_fts5
+# Download (requires Go 1.22+)
+git clone https://github.com/H4fizWasabie/mino-agent.git
+cd mino-agent
+go build -tags sqlite_fts5 -ldflags "-X main.Version=v0.2.0" -o mino .
+sudo cp mino /usr/local/bin/  # or ~/.local/bin/
 
-# Set your API key
-export MINO_API_KEY=sk-...
-
-# Run (dashboard on :7777)
-./mino
-
-# Or with Telegram
-export TELEGRAM_BOT_TOKEN=...
-./mino
+# Launch — dashboard opens automatically
+mino
 ```
 
-Open `http://localhost:7777` — fill in your provider details, done.
+Open `http://localhost:7779` — add your provider in the onboarding page, done.
+
+**Need CLI instead?** `mino cli`
+
+```bash
+# Quick CLI start with env vars (skip the dashboard)
+export MINO_API_KEY=sk-...
+export MINO_BASE_URL=https://api.openai.com/v1
+export MINO_MODEL=gpt-4.1-mini
+mino cli
+```
+
+## Commands
+
+| Command | What |
+|---------|------|
+| `mino` | Launch dashboard (default) |
+| `mino cli` | Terminal chat |
+| `mino version` | Show version |
+| `mino update` | Self-update from GitHub releases |
+
+No API keys? The dashboard has an onboarding page to set them up. No more panics.
 
 ## Configuration
 
@@ -39,7 +56,7 @@ Open `http://localhost:7777` — fill in your provider details, done.
 | `MINO_BASE_URL` | `https://api.openai.com/v1` | API base URL |
 | `MINO_MODEL` | `gpt-4o-mini` | Main model |
 | `MINO_SMALL_MODEL` | `gpt-4o-mini` | Model for background tasks |
-| `MINO_DASHBOARD_PORT` | `7777` | Dashboard port |
+| `MINO_DASHBOARD_PORT` | `7779` | Dashboard port |
 | `MINO_DASHBOARD_HOST` | (all interfaces) | Bind address (e.g. `127.0.0.1` or Tailscale IP) |
 | `MINO_MAX_ITERATIONS` | `10` | Max tool calls per turn |
 | `MINO_MAX_TOKENS` | `4096` | Max output tokens |
@@ -96,7 +113,23 @@ External tools connect via HTTP. Create `~/.mino/extensions.json`:
 ]
 ```
 
-Mino discovers tools via `GET /tools` and proxies calls via `POST /execute`. See the [extension protocol](extensions.go) for details.
+Mino discovers tools via `GET /tools` and proxies calls via `POST /execute`.
+
+### minowrap — universal tool adapter
+
+Add any CLI command as a tool in one JSON line. Ships with Mino:
+
+```json
+// ~/.minowrap/tools.json
+[
+  {"name": "disk_usage", "description": "Show disk usage for a path", "run": "df -h {path}"},
+  {"name": "deploy", "description": "Deploy the app", "run": "curl -X POST https://api.example.com/deploy"}
+]
+```
+
+Template args like `{path}` auto-generate JSON Schema. Mino discovers them on next `reload_plugins` call. No restart, no coding, any language.
+
+See the [extension protocol](extensions.go) for details.
 
 ## MCP servers
 
