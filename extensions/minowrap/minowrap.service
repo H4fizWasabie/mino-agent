@@ -1,0 +1,15 @@
+[Unit]
+Description=MinoWrap - Universal tool adapter for Mino
+After=network.target
+
+[Service]
+Type=simple
+User=mino
+ExecStart=/usr/local/bin/minowrap
+Environment=MINOWRAP_DIR=/home/mino/.minowrap
+Environment=MINOWRAP_PORT=9876
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

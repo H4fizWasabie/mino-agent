@@ -121,6 +121,26 @@ func httpGetJSON(url string) (string, error) {
 	return string(data), nil
 }
 
+// MakeReloadPluginsTool returns a tool that re-discovers extension and MCP tools.
+// Call after modifying extensions.json, mcp.d/*.json, or minowrap tools.json.
+func MakeReloadPluginsTool(home string, r *Registry, bridge *MCPBridge) *Tool {
+	return &Tool{
+		Name:        "reload_plugins",
+		Description: "Reload all extensions (extensions.json) and MCP servers (mcp.d/). Use after adding or modifying plugin configs to discover new tools without restarting.",
+		Schema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		Fn: func(args map[string]any) string {
+			LoadExtensions(home, r)
+			if bridge != nil {
+				bridge.Reload()
+			}
+			return "Plugins reloaded. New tools are now available."
+		},
+	}
+}
+
 // CheckExtensions polls all extension /check endpoints for alerts.
 // Returns any alert messages found.
 func CheckExtensions(home string) []string {

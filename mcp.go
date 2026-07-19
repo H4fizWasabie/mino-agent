@@ -165,6 +165,43 @@ func (b *MCPBridge) Close() {
 	}
 }
 
+// Reload re-scans mcp.d/ for new server configs and connects them.
+// Already-connected servers are skipped — only new configs are picked up.
+func (b *MCPBridge) Reload() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	entries, err := os.ReadDir(b.dir)
+	if err != nil {
+		return
+	}
+	count := 0
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(b.dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		var cfg mcpServerConfig
+		if json.Unmarshal(data, &cfg) != nil || cfg.Command == "" {
+			continue
+		}
+		if cfg.Name == "" {
+			cfg.Name = strings.TrimSuffix(e.Name(), ".json")
+		}
+		if _, ok := b.servers[cfg.Name]; ok {
+			continue // already connected
+		}
+		b.connect(cfg)
+		count++
+	}
+	if count > 0 {
+		slog.Info("mcp reload added servers", "count", count)
+	}
+}
+
 // Servers returns the list of configured MCP server names.
 func (b *MCPBridge) Servers() []string {
 	b.mu.Lock()

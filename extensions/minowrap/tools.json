@@ -1,0 +1,17 @@
+[
+  {
+    "name": "disk_usage",
+    "description": "Show disk usage for a given path",
+    "run": "df -h {path}"
+  },
+  {
+    "name": "memory_usage",
+    "description": "Show current memory usage",
+    "run": "free -h"
+  },
+  {
+    "name": "uptime_check",
+    "description": "Check system uptime",
+    "run": "uptime"
+  }
+]

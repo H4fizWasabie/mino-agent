@@ -80,6 +80,7 @@ func NewCore() *Core {
 	// MCP bridge: connect configured servers and register their tools
 	mcpBridge := NewMCPBridge(s.Home, tools)
 	mcpBridge.Start()
+	tools.Register(MakeReloadPluginsTool(s.Home, tools, mcpBridge))
 
 	// Tool filter: use embeddings to send only relevant tools per turn
 	coreTools := []string{"recall", "save_note", "read_file", "write_file", "edit_file", "bash",
