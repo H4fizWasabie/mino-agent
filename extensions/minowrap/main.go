@@ -32,6 +32,7 @@ type ExtensionTool struct {
 }
 
 var reArg = regexp.MustCompile(`\{(\w+)\}`)
+var reRawArg = regexp.MustCompile(`\{!(\w+)\}`)
 
 func main() {
 	dir := os.Getenv("MINOWRAP_DIR")
@@ -118,18 +119,22 @@ func loadTools(path string) []ToolEntry {
 
 // toExtensionTool converts a ToolEntry to the extension protocol format,
 // auto-generating the JSON Schema from template args in the run field.
+// {name} = safe-quoted arg, {!name} = raw/unquoted arg (for code).
 func toExtensionTool(t ToolEntry) ExtensionTool {
-	matches := reArg.FindAllStringSubmatch(t.Run, -1)
 	props := map[string]any{}
 	required := []string{}
 
-	for _, m := range matches {
+	for _, m := range reArg.FindAllStringSubmatch(t.Run, -1) {
 		name := m[1]
-		props[name] = map[string]any{
-			"type":        "string",
-			"description": name + " parameter",
-		}
+		props[name] = map[string]any{"type": "string", "description": name + " parameter"}
 		required = append(required, name)
+	}
+	for _, m := range reRawArg.FindAllStringSubmatch(t.Run, -1) {
+		name := m[1]
+		if _, ok := props[name]; !ok {
+			props[name] = map[string]any{"type": "string", "description": name + " (code — raw, no escaping)"}
+			required = append(required, name)
+		}
 	}
 
 	schema := map[string]any{
@@ -147,9 +152,19 @@ func toExtensionTool(t ToolEntry) ExtensionTool {
 	}
 }
 
-// interpolate replaces {arg} placeholders with values from Mino's args.
-// Unmatched placeholders are left as-is (shell will error if invalid).
+// interpolate replaces {arg} placeholders with safe-quoted values and
+// {!arg} with raw/unquoted values (for code snippets).
 func interpolate(template string, args map[string]any) string {
+	// Raw args first: {!name} → raw value (no quoting)
+	template = reRawArg.ReplaceAllStringFunc(template, func(match string) string {
+		name := reRawArg.FindStringSubmatch(match)[1]
+		v, ok := args[name]
+		if !ok {
+			return match
+		}
+		return fmt.Sprint(v)
+	})
+	// Safe args: {name} → single-quoted with escaping
 	return reArg.ReplaceAllStringFunc(template, func(match string) string {
 		name := match[1 : len(match)-1] // strip { and }
 		v, ok := args[name]
@@ -157,7 +172,6 @@ func interpolate(template string, args map[string]any) string {
 			return match
 		}
 		s := fmt.Sprint(v)
-		// basic shell escaping for single quotes
 		s = strings.ReplaceAll(s, "'", "'\\''")
 		return "'" + s + "'"
 	})
