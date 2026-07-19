@@ -26,6 +26,8 @@ mino
 
 Open `http://localhost:7779` — add your provider in the onboarding page, done.
 
+![Onboarding](onboarding.jpeg)
+
 **Need CLI instead?** `mino cli`
 
 ```bash
