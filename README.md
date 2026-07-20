@@ -17,25 +17,31 @@ One binary. One SQLite file. Your own AI assistant.
 # Download (requires Go 1.22+)
 git clone https://github.com/H4fizWasabie/mino-agent.git
 cd mino-agent
-go build -tags sqlite_fts5 -ldflags "-X main.Version=v0.2.0" -o mino .
-sudo cp mino /usr/local/bin/  # or ~/.local/bin/
+go build -tags sqlite_fts5 -o mino .
 
-# Launch — dashboard opens automatically
-mino
+# Run — dashboard opens in your browser automatically
+./mino
 ```
 
-Open `http://localhost:7779` — add your provider in the onboarding page, done.
+No API key? The onboarding page lets you add one. No terminal needed.
 
 ![Onboarding](onboarding.jpeg)
 
-**Need CLI instead?** `mino cli`
+**Want it available everywhere?**
 
 ```bash
-# Quick CLI start with env vars (skip the dashboard)
+sudo cp mino /usr/local/bin/
+hash -r
+mino
+```
+
+**Advanced: CLI mode**
+
+```bash
 export MINO_API_KEY=sk-...
 export MINO_BASE_URL=https://api.openai.com/v1
 export MINO_MODEL=gpt-4.1-mini
-mino cli
+./mino cli
 ```
 
 ## Commands
