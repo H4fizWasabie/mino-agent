@@ -1,0 +1,17 @@
+{
+  "name": "codex",
+  "display_name": "ChatGPT (Codex)",
+  "auth_type": "pkce",
+  "authorize_url": "https://auth.openai.com/authorize",
+  "token_url": "https://auth.openai.com/oauth/token",
+  "client_id": "app_EMoamEEZ73f0CkXaXp7hrann",
+  "scopes": ["openid", "offline_access"],
+  "api_base_url": "https://chatgpt.com/backend-api/codex",
+  "api_key_url": "https://auth.openai.com/oauth/token",
+  "models": ["codex-gpt-5.5", "codex-gpt-5.2", "codex-gpt-4.1"],
+  "extra": {
+    "token_exchange_grant": "urn:ietf:params:oauth:grant-type:token-exchange",
+    "requested_token": "openai-api-key",
+    "subject_token_type": "urn:ietf:params:oauth:token-type:id_token"
+  }
+}

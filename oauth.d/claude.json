@@ -1,0 +1,15 @@
+{
+  "name": "claude",
+  "display_name": "Anthropic Claude",
+  "auth_type": "pkce",
+  "authorize_url": "https://claude.com/cai/oauth/authorize",
+  "token_url": "https://platform.claude.com/v1/oauth/token",
+  "client_id": "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+  "scopes": ["user:profile", "user:inference", "user:sessions:claude_code"],
+  "api_base_url": "https://api.anthropic.com",
+  "api_key_url": "https://api.anthropic.com/api/oauth/claude_cli/create_api_key",
+  "models": ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"],
+  "extra": {
+    "oauth_beta_header": "oauth-2025-04-20"
+  }
+}

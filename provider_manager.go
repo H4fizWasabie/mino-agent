@@ -46,24 +46,22 @@ type ProviderManager struct {
 	clients   map[string]*Client
 	state     map[string]*providerState
 	sticky    map[string]string
+	authStore *AuthStore
 	mu        sync.Mutex
 	sleep     func(time.Duration)
 	now       func() time.Time
 }
 
-func NewProviderManager(home string, legacy *Settings) (*ProviderManager, error) {
+func NewProviderManager(home string, legacy *Settings, authStore *AuthStore) (*ProviderManager, error) {
 	configs, err := loadProviders(home, legacy)
 	if err != nil {
 		return nil, err
 	}
-	m := &ProviderManager{clients: map[string]*Client{}, state: map[string]*providerState{}, sticky: map[string]string{}, sleep: time.Sleep, now: time.Now}
+	m := &ProviderManager{clients: map[string]*Client{}, state: map[string]*providerState{}, sticky: map[string]string{}, authStore: authStore, sleep: time.Sleep, now: time.Now}
 	for _, p := range configs {
-		key := ""
-		if p.APIKeyEnv != "" {
-			key = os.Getenv(p.APIKeyEnv)
-			if key == "" {
-				return nil, fmt.Errorf("provider %q: %s is not set", p.Name, p.APIKeyEnv)
-			}
+		key := m.resolveKey(p)
+		if key == "" && p.APIKeyEnv != "" {
+			return nil, fmt.Errorf("provider %q: %s is not set", p.Name, p.APIKeyEnv)
 		}
 		if p.Name == "" || p.BaseURL == "" || p.Model == "" {
 			return nil, fmt.Errorf("provider config requires name, base_url, and model")
@@ -119,8 +117,22 @@ func routeRole(role ModelRole, messages []Message) ModelRole {
 	return role
 }
 
+func (m *ProviderManager) resolveKey(p ProviderConfig) string {
+	if p.APIKeyEnv != "" {
+		if k := os.Getenv(p.APIKeyEnv); k != "" {
+			return k
+		}
+	}
+	if m.authStore != nil {
+		return m.authStore.Get(p.Name)
+	}
+	return ""
+}
+
 func (m *ProviderManager) call(session string, role ModelRole, call func(*Client, string) (*LLMResponse, error)) (*LLMResponse, error) {
 	for _, p := range m.candidates(session, role) {
+		// refresh key from env/auth.json (supports runtime key changes)
+		m.clients[p.Name].apiKey = m.resolveKey(p)
 		for attempt := 0; attempt < 3; attempt++ {
 			resp, err := call(m.clients[p.Name], modelFor(p, role))
 			if err == nil {

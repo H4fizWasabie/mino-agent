@@ -56,6 +56,10 @@ func RunDashboard(w *Core) {
 	http.HandleFunc("/api/files", handleFilesAPI)
 	http.HandleFunc("/api/active-tasks", handleActiveTasks)
 	http.HandleFunc("/api/settings", handleSettingsAPI)
+	http.HandleFunc("/api/auth", handleAuthAPI)
+	http.HandleFunc("/api/oauth/providers", handleOAuthProviders)
+	http.HandleFunc("/api/oauth/login/", handleOAuthLogin)
+	http.HandleFunc("/api/oauth/device/", handleOAuthDevice)
 
 	// Telegram runs in main — don't double-start here
 
@@ -602,9 +606,13 @@ func providerSnapshot() []map[string]any {
 		if state != nil && state.openUntil.After(m.now()) {
 			status = "circuit open"
 		}
+		keySet := os.Getenv(p.APIKeyEnv) != ""
+		if !keySet && dashCore.AuthStore != nil {
+			keySet = dashCore.AuthStore.Get(p.Name) != ""
+		}
 		out = append(out, map[string]any{
 			"name": p.Name, "priority": p.Priority, "base_url": p.BaseURL, "model": p.Model,
-			"small_model": p.Small, "api_key_env": p.APIKeyEnv, "key_set": os.Getenv(p.APIKeyEnv) != "",
+			"small_model": p.Small, "api_key_env": p.APIKeyEnv, "key_set": keySet,
 			"status": status, "sticky_sessions": sticky[p.Name],
 		})
 	}
@@ -710,7 +718,146 @@ func handleActiveTasks(w http.ResponseWriter, r *http.Request) {
 
 func needsOnboarding(home string) bool {
 	_, err := os.Stat(filepath.Join(home, "providers.json"))
-	return os.IsNotExist(err) && os.Getenv("MINO_API_KEY") == ""
+	return os.IsNotExist(err) && os.Getenv("MINO_API_KEY") == "" && dashCore.AuthStore.Get("default") == ""
+}
+
+func handleAuthAPI(w http.ResponseWriter, r *http.Request) {
+	if dashCore.AuthStore == nil {
+		http.Error(w, "auth store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	switch r.Method {
+	case "GET":
+		providers := providerSnapshot()
+		for i, p := range providers {
+			name, _ := p["name"].(string)
+			p["key_set"] = dashCore.AuthStore.Get(name) != "" || os.Getenv(safeGet(p, "api_key_env")) != ""
+			providers[i] = p
+		}
+		json.NewEncoder(w).Encode(map[string]any{"providers": providers})
+	case "POST":
+		var body struct {
+			Provider string `json:"provider"`
+			Key      string `json:"key"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Provider == "" {
+			http.Error(w, "provider name required", 400)
+			return
+		}
+		if body.Key == "" {
+			dashCore.AuthStore.Delete(body.Provider)
+		} else {
+			dashCore.AuthStore.Set(body.Provider, body.Key)
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	case "DELETE":
+		provider := r.URL.Query().Get("provider")
+		if provider == "" {
+			http.Error(w, "?provider= required", 400)
+			return
+		}
+		dashCore.AuthStore.Delete(provider)
+		json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	default:
+		http.Error(w, "GET, POST, or DELETE", 405)
+	}
+}
+
+func safeGet(m map[string]any, key string) string {
+	v, _ := m[key].(string)
+	return v
+}
+
+func handleOAuthProviders(w http.ResponseWriter, r *http.Request) {
+	if dashCore.OAuth == nil {
+		json.NewEncoder(w).Encode(map[string]any{"providers": []any{}})
+		return
+	}
+	providers := dashCore.OAuth.Providers()
+	out := make([]map[string]any, 0, len(providers))
+	for _, p := range providers {
+		out = append(out, map[string]any{
+			"name":         p.Name,
+			"display_name": p.DisplayName,
+			"auth_type":    p.AuthType,
+			"models":       p.Models,
+			"logged_in":    dashCore.AuthStore.Get(p.Name) != "",
+		})
+	}
+	json.NewEncoder(w).Encode(map[string]any{"providers": out})
+}
+
+func handleOAuthLogin(w http.ResponseWriter, r *http.Request) {
+	if dashCore.OAuth == nil {
+		http.Error(w, "oauth not available", http.StatusServiceUnavailable)
+		return
+	}
+	provider := strings.TrimPrefix(r.URL.Path, "/api/oauth/login/")
+	if provider == "" {
+		http.Error(w, "provider name required in path", 400)
+		return
+	}
+
+	if provider == "gemini" {
+		_, err := dashCore.OAuth.HandleGeminiADC()
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "message": "ADC configured. Run gcloud auth print-access-token to get token."})
+		return
+	}
+
+	authURL, err := dashCore.OAuth.BeginPKCE(provider)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+
+	go OpenBrowser(authURL)
+	json.NewEncoder(w).Encode(map[string]any{"ok": true, "url": authURL, "message": "Browser opened. Complete login there."})
+}
+
+func handleOAuthDevice(w http.ResponseWriter, r *http.Request) {
+	if dashCore.OAuth == nil {
+		http.Error(w, "oauth not available", http.StatusServiceUnavailable)
+		return
+	}
+	provider := strings.TrimPrefix(r.URL.Path, "/api/oauth/device/")
+
+	switch r.Method {
+	case "POST":
+		verificationURL, userCode, err := dashCore.OAuth.BeginDeviceCode(provider)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		go OpenBrowser(verificationURL)
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok":              true,
+			"user_code":       userCode,
+			"verification_url": verificationURL,
+			"device_code":     userCode,
+		})
+	case "GET":
+		deviceCode := r.URL.Query().Get("device_code")
+		if deviceCode == "" {
+			http.Error(w, "?device_code= required", 400)
+			return
+		}
+		token, err := dashCore.OAuth.PollDeviceCode(deviceCode)
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]any{"ok": false, "pending": true, "error": err.Error()})
+			return
+		}
+		if err := dashCore.AuthStore.Set(provider, token); err != nil {
+			http.Error(w, "failed to save key", 500)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	default:
+		http.Error(w, "POST or GET", 405)
+	}
 }
 
 func handleSettingsAPI(w http.ResponseWriter, r *http.Request) {
@@ -746,6 +893,10 @@ func handleSettingsAPI(w http.ResponseWriter, r *http.Request) {
 	data, _ := json.MarshalIndent(map[string]any{"providers": cfg}, "", "  ")
 	path := filepath.Join(dashCore.Settings.Home, "providers.json")
 	os.WriteFile(path, data, 0644)
+	// also save key to auth.json (no restart needed for key changes)
+	if dashCore.AuthStore != nil {
+		dashCore.AuthStore.Set(name, body.APIKey)
+	}
 	// also write the key to mino.env so systemd picks it up
 	envPath := filepath.Join(dashCore.Settings.Home, "mino.env")
 	envData := fmt.Sprintf("MINO_HOME=%s\nMINO_API_KEY=%s\nMINO_BASE_URL=%s\nMINO_MODEL=%s\nMINO_SMALL_MODEL=%s\n",

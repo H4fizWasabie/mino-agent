@@ -19,6 +19,8 @@ type Core struct {
 	Settings       *Settings
 	DB             *sql.DB
 	Client         *ProviderManager
+	AuthStore      *AuthStore
+	OAuth          *OAuthEngine
 	Memory         *Memory
 	Tools          *Registry
 	Sessions       *SessionManager
@@ -32,7 +34,8 @@ func NewCore() *Core {
 	CleanupArtifacts(24 * time.Hour)
 
 	db := Connect(s.Home)
-	client, err := NewProviderManager(s.Home, s)
+	authStore := LoadAuthStore(s.Home)
+	client, err := NewProviderManager(s.Home, s, authStore)
 	if err != nil {
 		if dashboardRequested() && needsOnboarding(s.Home) {
 			slog.Info("dashboard awaiting provider setup")
@@ -82,12 +85,14 @@ func NewCore() *Core {
 	}
 
 	w := &Core{
-		Settings: s,
-		DB:       db,
-		Client:   client,
-		Memory:   mem,
-		Tools:    tools,
-		Sessions: NewSessionManager(s, mem),
+		Settings:  s,
+		DB:        db,
+		Client:    client,
+		AuthStore: authStore,
+		OAuth:     LoadOAuthEngine(s.Home, authStore),
+		Memory:    mem,
+		Tools:     tools,
+		Sessions:  NewSessionManager(s, mem),
 	}
 	// MCP bridge: connect configured servers and register their tools
 	mcpBridge := NewMCPBridge(s.Home, tools)
