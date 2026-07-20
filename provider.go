@@ -67,16 +67,16 @@ func NewClient(apiKey, baseURL string) *Client {
 }
 
 func (c *Client) Create(model string, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
-	return c.create(model, messages, maxTokens, system, tools, false, nil)
+	return c.create(model, "", messages, maxTokens, system, tools, false, nil)
 }
 
 func (c *Client) Stream(model string, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
-	return c.create(model, messages, maxTokens, system, tools, true, onText)
+	return c.create(model, "", messages, maxTokens, system, tools, true, onText)
 }
 
-func (c *Client) create(model string, messages []Message, maxTokens int, system string, tools []ToolDef, stream bool, onText func(string)) (*LLMResponse, error) {
+func (c *Client) create(model, reasoning string, messages []Message, maxTokens int, system string, tools []ToolDef, stream bool, onText func(string)) (*LLMResponse, error) {
 	if c.isCodex() {
-		return c.createCodex(model, messages, maxTokens, system, tools, onText)
+		return c.createCodex(model, reasoning, messages, maxTokens, system, tools, onText)
 	}
 	if c.isAnthropic() {
 		return c.createAnthropic(model, messages, maxTokens, system, tools, stream, onText)

@@ -8,7 +8,8 @@
   "scopes": [],
   "api_base_url": "https://chatgpt.com/backend-api/codex",
   "api_key_url": "",
-  "models": ["gpt-5.4", "gpt-5.5", "gpt-5.4-mini"],
+  "models": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5", "gpt-5.6-luna"],
+  "reasoning_levels": ["default", "low", "medium", "high", "xhigh"],
   "extra": {
     "note": "Uses OpenAI device-code login directly; works locally and remotely without the Codex CLI."
   }

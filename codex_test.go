@@ -143,7 +143,8 @@ func TestCodexResponsesTransport(t *testing.T) {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		if body["stream"] != true || body["instructions"] != "system" {
+		reasoning, _ := body["reasoning"].(map[string]any)
+		if body["stream"] != true || body["instructions"] != "system" || reasoning["effort"] != "high" {
 			t.Errorf("unexpected request body: %v", body)
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
@@ -160,7 +161,7 @@ func TestCodexResponsesTransport(t *testing.T) {
 
 	client := NewClient(token, server.URL+"/codex")
 	var streamed strings.Builder
-	response, err := client.Stream("gpt-5.4", []Message{{Role: "user", Content: "hello"}}, 100, "system", []ToolDef{{Name: "read_file"}}, func(delta string) { streamed.WriteString(delta) })
+	response, err := client.create("gpt-5.6-sol", "high", []Message{{Role: "user", Content: "hello"}}, 100, "system", []ToolDef{{Name: "read_file"}}, true, func(delta string) { streamed.WriteString(delta) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,5 +176,22 @@ func TestCodexResponsesTransport(t *testing.T) {
 func TestCodexAccountIDRejectsAPIKey(t *testing.T) {
 	if _, err := codexAccountID(url.QueryEscape("sk-not-oauth")); err == nil {
 		t.Fatal("expected a non-OAuth key to be rejected")
+	}
+}
+
+func TestEnsureProviderRefreshesModelChoices(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "providers.json")
+	if err := os.WriteFile(path, []byte(`{"providers":[{"name":"codex","priority":10,"base_url":"https://chatgpt.com/backend-api/codex","model":"gpt-5.4"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	engine := LoadOAuthEngine(home, LoadAuthStore(home), "http://localhost")
+	engine.EnsureProvider(&OAuthProvider{Name: "codex", Models: []string{"gpt-5.6-sol", "gpt-5.6-terra"}, Reasoning: []string{"default", "high"}})
+	providers, err := loadProviders(home, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if providers[0].Model != "gpt-5.6-sol" || providers[0].Small != "gpt-5.6-terra" || len(providers[0].Models) != 2 || providers[0].ReasoningLevels[1] != "high" {
+		t.Fatalf("provider choices were not refreshed: %+v", providers[0])
 	}
 }

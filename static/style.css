@@ -487,7 +487,9 @@
 .provider-clickable { cursor:pointer; border-bottom:1px dashed var(--ink3); display:inline-flex; align-items:center; gap:4px; }
 .provider-clickable:hover { color:var(--accent); border-color:var(--accent); }
 .dropdown-arrow { font-size:10px; opacity:0.6; }
-.provider-popup { position:fixed; background:var(--panel); border:1px solid var(--line); border-radius:6px; box-shadow:0 8px 24px rgba(0,0,0,0.15); z-index:999; min-width:180px; max-height:280px; overflow-y:auto; padding:4px 0; }
+.provider-popup { position:fixed; background:var(--panel); border:1px solid var(--line); border-radius:6px; box-shadow:0 8px 24px rgba(0,0,0,0.15); z-index:999; min-width:360px; max-height:360px; overflow-y:auto; padding:4px 0; }
+.provider-option-row { display:flex; align-items:center; }
 .provider-option { display:block; width:100%; text-align:left; padding:8px 14px; border:none; background:none; cursor:pointer; font-size:13px; color:var(--ink); border-radius:0; }
 .provider-option:hover { background:var(--accent-soft); }
 .provider-option.active { font-weight:600; color:var(--accent); }
+.provider-reasoning { margin-right:8px; padding:4px 6px; border:1px solid var(--line); border-radius:5px; background:var(--bg); color:var(--ink); font-size:11px; }

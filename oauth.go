@@ -32,6 +32,7 @@ type OAuthProvider struct {
 	APIBaseURL    string         `json:"api_base_url"`          // where to send LLM requests
 	APIKeyURL     string         `json:"api_key_url,omitempty"` // exchange oauth token for api key (Codex)
 	Models        []string       `json:"models"`                // available models
+	Reasoning     []string       `json:"reasoning_levels,omitempty"`
 	Extra         map[string]any `json:"extra,omitempty"`
 }
 
@@ -405,7 +406,28 @@ func (e *OAuthEngine) EnsureProvider(p *OAuthProvider) {
 	list, _ := existing["providers"].([]any)
 	for _, item := range list {
 		if m, ok := item.(map[string]any); ok && m["name"] == p.Name {
-			return // already exists
+			supported := func(model string) bool {
+				for _, candidate := range p.Models {
+					if model == candidate {
+						return true
+					}
+				}
+				return false
+			}
+			if current, _ := m["model"].(string); !supported(current) {
+				m["model"] = p.Models[0]
+			}
+			if current, _ := m["small_model"].(string); !supported(current) && len(p.Models) > 1 {
+				m["small_model"] = p.Models[len(p.Models)-1]
+			}
+			m["models"] = p.Models
+			if len(p.Reasoning) > 0 {
+				m["reasoning_levels"] = p.Reasoning
+			}
+			if data, err := json.MarshalIndent(existing, "", "  "); err == nil {
+				os.WriteFile(providersPath, data, 0644)
+			}
+			return
 		}
 	}
 	// add new provider entry
@@ -415,6 +437,10 @@ func (e *OAuthEngine) EnsureProvider(p *OAuthProvider) {
 		"base_url":    p.APIBaseURL,
 		"api_key_env": "",
 		"model":       p.Models[0],
+		"models":      p.Models,
+	}
+	if len(p.Reasoning) > 0 {
+		newProvider["reasoning_levels"] = p.Reasoning
 	}
 	if len(p.Models) > 1 {
 		newProvider["small_model"] = p.Models[len(p.Models)-1]

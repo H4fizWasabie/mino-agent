@@ -22,13 +22,16 @@ const (
 )
 
 type ProviderConfig struct {
-	Name      string `json:"name"`
-	Priority  int    `json:"priority"`
-	BaseURL   string `json:"base_url"`
-	APIKeyEnv string `json:"api_key_env"`
-	Model     string `json:"model"`
-	Small     string `json:"small_model"`
-	TextOnly  bool   `json:"text_only"` // provider rejects image input; skipped for vision turns
+	Name            string   `json:"name"`
+	Priority        int      `json:"priority"`
+	BaseURL         string   `json:"base_url"`
+	APIKeyEnv       string   `json:"api_key_env"`
+	Model           string   `json:"model"`
+	Models          []string `json:"models,omitempty"`
+	Small           string   `json:"small_model"`
+	ReasoningEffort string   `json:"reasoning_effort,omitempty"`
+	ReasoningLevels []string `json:"reasoning_levels,omitempty"`
+	TextOnly        bool     `json:"text_only"` // provider rejects image input; skipped for vision turns
 }
 
 type providerFile struct {
@@ -38,6 +41,17 @@ type providerState struct {
 	failures  int
 	openUntil time.Time
 }
+type providerPreference struct {
+	provider  string
+	model     string
+	reasoning string
+}
+type ProviderOption struct {
+	Name            string   `json:"name"`
+	Model           string   `json:"model"`
+	Models          []string `json:"models"`
+	ReasoningLevels []string `json:"reasoning_levels"`
+}
 
 // ProviderManager applies priority, retries, fallback, a shared circuit breaker,
 // and per-session stickiness around OpenAI-compatible clients.
@@ -46,6 +60,7 @@ type ProviderManager struct {
 	clients   map[string]*Client
 	state     map[string]*providerState
 	sticky    map[string]string
+	preferred map[string]providerPreference
 	authStore *AuthStore
 	mu        sync.Mutex
 	authMu    sync.Mutex
@@ -58,7 +73,7 @@ func NewProviderManager(home string, legacy *Settings, authStore *AuthStore) (*P
 	if err != nil {
 		return nil, err
 	}
-	m := &ProviderManager{clients: map[string]*Client{}, state: map[string]*providerState{}, sticky: map[string]string{}, authStore: authStore, sleep: time.Sleep, now: time.Now}
+	m := &ProviderManager{clients: map[string]*Client{}, state: map[string]*providerState{}, sticky: map[string]string{}, preferred: map[string]providerPreference{}, authStore: authStore, sleep: time.Sleep, now: time.Now}
 	for _, p := range configs {
 		key := ""
 		if p.APIKeyEnv != "" {
@@ -102,14 +117,14 @@ func loadProviders(home string, legacy *Settings) ([]ProviderConfig, error) {
 }
 
 func (m *ProviderManager) Create(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
-	return m.call(session, routeRole(role, messages), func(c *Client, model string) (*LLMResponse, error) {
-		return c.Create(model, messages, maxTokens, system, tools)
+	return m.call(session, routeRole(role, messages), func(c *Client, model, reasoning string) (*LLMResponse, error) {
+		return c.create(model, reasoning, messages, maxTokens, system, tools, false, nil)
 	})
 }
 
 func (m *ProviderManager) Stream(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
-	return m.call(session, routeRole(role, messages), func(c *Client, model string) (*LLMResponse, error) {
-		return c.Stream(model, messages, maxTokens, system, tools, onText)
+	return m.call(session, routeRole(role, messages), func(c *Client, model, reasoning string) (*LLMResponse, error) {
+		return c.create(model, reasoning, messages, maxTokens, system, tools, true, onText)
 	})
 }
 
@@ -155,7 +170,7 @@ func (m *ProviderManager) resolveKey(p ProviderConfig) (string, error) {
 	return "", nil
 }
 
-func (m *ProviderManager) call(session string, role ModelRole, call func(*Client, string) (*LLMResponse, error)) (*LLMResponse, error) {
+func (m *ProviderManager) call(session string, role ModelRole, call func(*Client, string, string) (*LLMResponse, error)) (*LLMResponse, error) {
 	var lastErr error
 	for _, p := range m.candidates(session, role) {
 		// refresh key from env/auth.json (supports runtime key changes)
@@ -169,7 +184,7 @@ func (m *ProviderManager) call(session string, role ModelRole, call func(*Client
 			client.apiKey = key
 		}
 		for attempt := 0; attempt < 3; attempt++ {
-			resp, err := call(client, modelFor(p, role))
+			resp, err := call(client, modelFor(p, role), p.ReasoningEffort)
 			if err == nil {
 				m.success(session, role, p.Name)
 				return resp, nil
@@ -204,6 +219,9 @@ func (m *ProviderManager) candidates(session string, role ModelRole) []ProviderC
 	if name := m.sticky[m.key(session, role)]; name != "" && m.state[name].openUntil.Before(now) {
 		for _, p := range m.providers {
 			if p.Name == name && !(role == VisionModel && p.TextOnly) {
+				if pref := m.preferred[m.key(session, role)]; pref.provider == p.Name {
+					p.Model, p.ReasoningEffort = pref.model, pref.reasoning
+				}
 				out = append(out, p)
 			}
 		}
@@ -238,30 +256,62 @@ func (m *ProviderManager) failure(session string, role ModelRole, name string) {
 
 // SetPreferred forces a session to use a specific provider.
 func (m *ProviderManager) SetPreferred(session, provider string) error {
+	return m.SetPreferredModel(session, provider, "", "")
+}
+
+// SetPreferredModel selects a provider plus one of its advertised model and reasoning options.
+func (m *ProviderManager) SetPreferredModel(session, provider, model, reasoning string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	found := false
+	var selected *ProviderConfig
 	for _, p := range m.providers {
 		if p.Name == provider {
-			found = true
+			copy := p
+			selected = &copy
 			break
 		}
 	}
-	if !found {
+	if selected == nil {
 		return fmt.Errorf("unknown provider: %s", provider)
 	}
-	for _, p := range m.providers {
-		if p.Name == provider {
-			key, err := m.resolveKey(p)
-			if err != nil {
-				return err
-			}
-			if key == "" {
-				return fmt.Errorf("provider %s has no API key configured", provider)
-			}
+	if model == "" {
+		model = selected.Model
+	}
+	allowedModel := model == selected.Model
+	for _, candidate := range selected.Models {
+		allowedModel = allowedModel || model == candidate
+	}
+	if !allowedModel {
+		return fmt.Errorf("model %s is not configured for provider %s", model, provider)
+	}
+	if reasoning == "" {
+		reasoning = selected.ReasoningEffort
+	}
+	if reasoning == "" {
+		reasoning = "default"
+	}
+	if reasoning != "default" {
+		allowedReasoning := false
+		for _, candidate := range selected.ReasoningLevels {
+			allowedReasoning = allowedReasoning || reasoning == candidate
+		}
+		if !allowedReasoning {
+			return fmt.Errorf("reasoning %s is not configured for provider %s", reasoning, provider)
 		}
 	}
-	m.sticky[m.key(session, MainModel)] = provider
+	key, err := m.resolveKey(*selected)
+	if err != nil {
+		return err
+	}
+	if key == "" {
+		return fmt.Errorf("provider %s has no API key configured", provider)
+	}
+	selectionKey := m.key(session, MainModel)
+	m.sticky[selectionKey] = provider
+	if m.preferred == nil {
+		m.preferred = map[string]providerPreference{}
+	}
+	m.preferred[selectionKey] = providerPreference{provider: provider, model: model, reasoning: reasoning}
 	return nil
 }
 
@@ -270,6 +320,57 @@ func (m *ProviderManager) ActiveProvider(session string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.sticky[m.key(session, MainModel)]
+}
+
+// ActiveModel returns the main model configured for the session's sticky provider.
+func (m *ProviderManager) ActiveModel(session string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	selectionKey := m.key(session, MainModel)
+	name := m.sticky[selectionKey]
+	if pref := m.preferred[selectionKey]; pref.provider == name && pref.model != "" {
+		return pref.model
+	}
+	for _, p := range m.providers {
+		if p.Name == name {
+			return p.Model
+		}
+	}
+	return ""
+}
+
+func (m *ProviderManager) ActiveReasoning(session string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	selectionKey := m.key(session, MainModel)
+	name := m.sticky[selectionKey]
+	if pref := m.preferred[selectionKey]; pref.provider == name && pref.reasoning != "" {
+		return pref.reasoning
+	}
+	for _, p := range m.providers {
+		if p.Name == name && p.ReasoningEffort != "" {
+			return p.ReasoningEffort
+		}
+	}
+	return "default"
+}
+
+func (m *ProviderManager) ProviderOptions() []ProviderOption {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	options := make([]ProviderOption, 0, len(m.providers))
+	for _, p := range m.providers {
+		models := append([]string(nil), p.Models...)
+		if len(models) == 0 {
+			models = []string{p.Model}
+		}
+		levels := append([]string(nil), p.ReasoningLevels...)
+		if len(levels) == 0 {
+			levels = []string{"default"}
+		}
+		options = append(options, ProviderOption{Name: p.Name, Model: p.Model, Models: models, ReasoningLevels: levels})
+	}
+	return options
 }
 
 // ProviderNames returns all configured provider names.
@@ -281,4 +382,33 @@ func (m *ProviderManager) ProviderNames() []string {
 		names[i] = p.Name
 	}
 	return names
+}
+
+// ReloadProviders re-reads providers.json without restarting Mino.
+func (m *ProviderManager) ReloadProviders(home string) error {
+	configs, err := loadProviders(home, nil)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, p := range configs {
+		if _, exists := m.clients[p.Name]; exists {
+			for i := range m.providers {
+				if m.providers[i].Name == p.Name {
+					m.providers[i] = p
+					break
+				}
+			}
+			continue
+		}
+		key, _ := m.resolveKey(p)
+		client := NewClient(key, p.BaseURL)
+		client.usageLogPath = filepath.Join(home, "usage.jsonl")
+		m.providers = append(m.providers, p)
+		m.clients[p.Name] = client
+		m.state[p.Name] = &providerState{}
+	}
+	sort.SliceStable(m.providers, func(i, j int) bool { return m.providers[i].Priority < m.providers[j].Priority })
+	return nil
 }

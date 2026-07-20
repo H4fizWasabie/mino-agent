@@ -41,14 +41,36 @@ func TestModelFor(t *testing.T) {
 	}
 }
 
-func failCall(*Client, string) (*LLMResponse, error) { return nil, errors.New("down") }
+func TestPreferredModelAndReasoningFollowProvider(t *testing.T) {
+	m := testManager()
+	m.providers[1].Models = []string{"backup", "backup-fast"}
+	m.providers[1].ReasoningLevels = []string{"default", "low", "high"}
+	m.authStore = &AuthStore{data: map[string]AuthEntry{"backup": {Key: "token"}}}
+	if err := m.SetPreferredModel("s", "backup", "backup-fast", "high"); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.ActiveModel("s"); got != "backup-fast" {
+		t.Fatalf("active model = %q", got)
+	}
+	if got := m.ActiveReasoning("s"); got != "high" {
+		t.Fatalf("active reasoning = %q", got)
+	}
+	response, err := m.call("s", MainModel, func(_ *Client, model, reasoning string) (*LLMResponse, error) {
+		return &LLMResponse{FinalText: model + ":" + reasoning}, nil
+	})
+	if err != nil || response.FinalText != "backup-fast:high" {
+		t.Fatalf("response=%+v err=%v", response, err)
+	}
+}
+
+func failCall(*Client, string, string) (*LLMResponse, error) { return nil, errors.New("down") }
 
 func TestRetryBackoff(t *testing.T) {
 	m := testManager()
 	var sleeps []time.Duration
 	m.sleep = func(d time.Duration) { sleeps = append(sleeps, d) }
 	calls := 0
-	resp, err := m.call("s", MainModel, func(_ *Client, model string) (*LLMResponse, error) {
+	resp, err := m.call("s", MainModel, func(_ *Client, model, _ string) (*LLMResponse, error) {
 		calls++
 		if calls < 3 {
 			return nil, errors.New("down")
@@ -69,7 +91,7 @@ func TestRetryBackoff(t *testing.T) {
 
 func TestFallback(t *testing.T) {
 	m := testManager()
-	resp, err := m.call("s", MainModel, func(_ *Client, model string) (*LLMResponse, error) {
+	resp, err := m.call("s", MainModel, func(_ *Client, model, _ string) (*LLMResponse, error) {
 		if model == "mimo" {
 			return nil, errors.New("down")
 		}
@@ -103,7 +125,7 @@ func TestCircuitOpenAndRecovery(t *testing.T) {
 		t.Fatalf("sticky not cleared: %v", m.sticky)
 	}
 	calls := 0
-	if _, err := m.call("s", MainModel, func(*Client, string) (*LLMResponse, error) {
+	if _, err := m.call("s", MainModel, func(*Client, string, string) (*LLMResponse, error) {
 		calls++
 		return nil, errors.New("down")
 	}); err == nil || calls != 0 {

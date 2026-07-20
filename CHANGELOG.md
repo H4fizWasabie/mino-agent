@@ -28,6 +28,7 @@
 - `generate_image` tool via Pollinations.ai (free, no API key)
 
 ### Changed
+- Dashboard provider switching now selects Codex models and reasoning effort per session; Codex defaults to GPT-5.6 Sol with Luna for small-model work
 - Dashboard live-system SVG redesigned as a technical runtime blueprint while preserving backend-driven nodes, links, counts, and stage animations
 - Telegram sends unified into sendTelegramReply: 4000-char HTML-safe chunking + plain-text fallback; notify path no longer truncates
 - `RunLoop` accepts `LLMClient` interface instead of concrete `*ProviderManager`

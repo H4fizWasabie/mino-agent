@@ -495,12 +495,19 @@ func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	activeProvider := ""
+	activeModel := dashCore.Settings.Model
+	activeReasoning := "default"
 	if dashCore.Client != nil {
 		activeProvider = dashCore.Client.ActiveProvider("default")
+		if model := dashCore.Client.ActiveModel("default"); model != "" {
+			activeModel = model
+		}
+		activeReasoning = dashCore.Client.ActiveReasoning("default")
 	}
 	resp := map[string]any{
 		"provider":          dashCore.Settings.Provider,
-		"model":             dashCore.Settings.Model,
+		"model":             activeModel,
+		"reasoning":         activeReasoning,
 		"active_provider":   activeProvider,
 		"home":              dashCore.Settings.Home,
 		"chat_log":          chatLog,
@@ -791,23 +798,27 @@ func handleSwitchAPI(w http.ResponseWriter, r *http.Request) {
 	case "GET":
 		active := dashCore.Client.ActiveProvider("default")
 		json.NewEncoder(w).Encode(map[string]any{
-			"active":    active,
-			"providers": dashCore.Client.ProviderNames(),
+			"active": active, "active_model": dashCore.Client.ActiveModel("default"),
+			"reasoning": dashCore.Client.ActiveReasoning("default"),
+			"providers": dashCore.Client.ProviderNames(), "options": dashCore.Client.ProviderOptions(),
 		})
 	case "POST":
 		var body struct {
-			Provider string `json:"provider"`
-			Session  string `json:"session"`
+			Provider  string `json:"provider"`
+			Model     string `json:"model"`
+			Reasoning string `json:"reasoning"`
+			Session   string `json:"session"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		if body.Session == "" {
 			body.Session = "default"
 		}
-		if err := dashCore.Client.SetPreferred(body.Session, body.Provider); err != nil {
+		if err := dashCore.Client.SetPreferredModel(body.Session, body.Provider, body.Model, body.Reasoning); err != nil {
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{"ok": true, "active": body.Provider})
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "active": body.Provider,
+			"model": dashCore.Client.ActiveModel(body.Session), "reasoning": dashCore.Client.ActiveReasoning(body.Session)})
 	default:
 		http.Error(w, "GET or POST", 405)
 	}
@@ -990,6 +1001,10 @@ func handleOAuthDevice(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": err.Error()})
 				return
+			}
+			if done {
+				dashCore.OAuth.EnsureProvider(dashCore.OAuth.providerMap["codex"])
+				dashCore.Client.ReloadProviders(dashCore.Settings.Home)
 			}
 			json.NewEncoder(w).Encode(map[string]any{"ok": done, "pending": !done})
 			return

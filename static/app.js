@@ -1,8 +1,8 @@
 const esc = s => (s??"").toString().replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 
 // --- provider switcher ---
-async function switchProvider(name) {
-  const r = await postJSON("/api/switch", {provider: name});
+async function switchProvider(name, model="", reasoning="default") {
+  const r = await postJSON("/api/switch", {provider: name, model, reasoning});
   if (r.ok) { document.getElementById("provider-popup")?.remove(); refresh(); return true; }
   alert("Switch failed: "+JSON.stringify(r));
   return false;
@@ -16,13 +16,20 @@ function toggleProviderMenu(ev) {
   pop.id = "provider-popup";
   pop.className = "provider-popup";
   fetch("/api/switch").then(r=>r.json()).then(d => {
-    (d.providers||[]).forEach(p => {
-      const row = document.createElement("button");
-      row.className = "provider-option" + (p === d.active ? " active" : "");
-      row.textContent = p + (p === d.active ? " ✓" : "");
-      row.onclick = () => switchProvider(p);
-      pop.appendChild(row);
-    });
+    const options=d.options||(d.providers||[]).map(name=>({name,models:[""] ,reasoning_levels:["default"]}));
+    options.forEach(p => (p.models||[p.model]).forEach(model => {
+      const row=document.createElement("div"), button=document.createElement("button");
+      const active=p.name===d.active&&model===d.active_model;
+      row.className="provider-option-row";
+      button.className="provider-option"+(active?" active":"");
+      button.textContent=p.name+(model?" · "+model:"")+(active?" ✓":"");
+      const levels=p.reasoning_levels||["default"], effort=document.createElement("select");
+      effort.className="provider-reasoning"; effort.title="Reasoning effort";
+      levels.forEach(level=>{ const opt=document.createElement("option"); opt.value=level; opt.textContent=level; opt.selected=active&&level===(d.reasoning||"default"); effort.appendChild(opt); });
+      effort.onclick=event=>event.stopPropagation();
+      button.onclick=()=>switchProvider(p.name,model,effort.value);
+      row.append(button); if(levels.length>1) row.append(effort); pop.appendChild(row);
+    }));
   });
   document.body.appendChild(pop);
   const r = btn.getBoundingClientRect();
@@ -894,7 +901,7 @@ const VIEWS = {
         <p class="overview-lede">Your conversations, memory, tools, and learning loops share one live workspace.</p>
         <div class="overview-links"><a href="#gateway">Open gateway <span>→</span></a><a href="#memory">Inspect memory <span>→</span></a></div>
       </div><div class="overview-runtime"><span class="runtime-kicker"><i></i> RUNTIME STATUS</span><strong>Operational</strong>
-        <span class="provider-clickable" onclick="toggleProviderMenu(event)" title="Click to switch provider">${esc(d.active_provider||d.provider)} · ${esc(d.model)} <i class="dropdown-arrow">▾</i></span><small>${sessions} active conversation${sessions===1?"":"s"} · ${esc(d.home)}</small></div>
+        <span class="provider-clickable" onclick="toggleProviderMenu(event)" title="Click to switch provider">${esc(d.active_provider||d.provider)} · ${esc(d.model)} · ${esc(d.reasoning||"default")} <i class="dropdown-arrow">▾</i></span><small>${sessions} active conversation${sessions===1?"":"s"} · ${esc(d.home)}</small></div>
     </section>
     <section class="overview-metrics" aria-label="Mino runtime summary">
       ${metric(s.turns,"Total turns",`${s.tool_calls} tool calls`,"primary")}
