@@ -39,7 +39,7 @@ func codexAccountID(token string) (string, error) {
 	return accountID, nil
 }
 
-func (c *Client) createCodex(model, reasoning string, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
+func (c *Client) createCodex(model, reasoning string, messages []Message, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
 	accountID, err := codexAccountID(c.apiKey)
 	if err != nil {
 		return nil, err
@@ -58,7 +58,7 @@ func (c *Client) createCodex(model, reasoning string, messages []Message, maxTok
 	}
 	payload := map[string]any{
 		"model": model, "store": false, "stream": true, "instructions": system,
-		"input": input, "max_output_tokens": maxTokens, "tool_choice": "auto", "parallel_tool_calls": true,
+		"input": input, "tool_choice": "auto", "parallel_tool_calls": true,
 	}
 	if reasoning != "" && reasoning != "default" {
 		payload["reasoning"] = map[string]string{"effort": reasoning}

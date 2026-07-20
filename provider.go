@@ -76,7 +76,7 @@ func (c *Client) Stream(model string, messages []Message, maxTokens int, system 
 
 func (c *Client) create(model, reasoning string, messages []Message, maxTokens int, system string, tools []ToolDef, stream bool, onText func(string)) (*LLMResponse, error) {
 	if c.isCodex() {
-		return c.createCodex(model, reasoning, messages, maxTokens, system, tools, onText)
+		return c.createCodex(model, reasoning, messages, system, tools, onText)
 	}
 	if c.isAnthropic() {
 		return c.createAnthropic(model, messages, maxTokens, system, tools, stream, onText)

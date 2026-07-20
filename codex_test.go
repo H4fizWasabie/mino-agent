@@ -144,7 +144,8 @@ func TestCodexResponsesTransport(t *testing.T) {
 			return
 		}
 		reasoning, _ := body["reasoning"].(map[string]any)
-		if body["stream"] != true || body["instructions"] != "system" || reasoning["effort"] != "high" {
+		_, hasMaxTokens := body["max_output_tokens"]
+		if body["stream"] != true || body["instructions"] != "system" || reasoning["effort"] != "high" || hasMaxTokens {
 			t.Errorf("unexpected request body: %v", body)
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
