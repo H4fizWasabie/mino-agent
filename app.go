@@ -28,6 +28,7 @@ type Core struct {
 func NewCore() *Core {
 	s := LoadSettings()
 	s.EnsureHome()
+	seedBuiltinSkills(s.Home)
 	CleanupArtifacts(24 * time.Hour)
 
 	db := Connect(s.Home)

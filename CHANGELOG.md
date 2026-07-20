@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 ### Added
+- **Native coding agent**: 10 discovery tools (list_files, grep, glob, git_diff/status, graphify_query/explain/path, codegraph_query/sync) for language-agnostic codebase navigation
+- **Coding skill**: auto-loaded phased workflow (understand→plan→edit→verify), overrides assistant STOP rule when active, mandates AGENTS.md read on first turn
+- **Multi-edit support**: edit_file accepts `edits` array for multiple replacements in one call
+- **Context7 MCP default**: auto-seeded config for up-to-date library documentation (no API key required)
+- **read_file 16KB limit**: increased from 4KB for real source files
 - **minowrap**: universal tool adapter — one JSON entry per tool, template args auto-generate JSON Schema, new tools appear instantly (Mino self-extends without restarts)
 - **`reload_plugins` tool**: hot-reloads extensions.json and mcp.d/ on demand, discovers new tools without restart
 - **`Reload()` on MCPBridge**: re-scans mcp.d/ for new server configs, skips already-connected servers

@@ -211,8 +211,8 @@ func makeReadTool() *Tool {
 			if offset < 0 {
 				offset = 0
 			}
-			if limit <= 0 || limit > 4000 {
-				limit = 4000
+			if limit <= 0 || limit > 16000 {
+				limit = 16000
 			}
 			data, err := os.ReadFile(path)
 			if err != nil {
@@ -261,28 +261,54 @@ func makeWriteTool() *Tool {
 func makeEditTool() *Tool {
 	return &Tool{
 		Name:        "edit_file",
-		Description: "Edit a file by replacing old_text with new_text. old_text must match exactly.",
+		Description: "Edit a file. Use 'edits' array for multiple replacements: [{\"oldText\":\"...\",\"newText\":\"...\"}]. Or use single oldText/newText for one replacement. oldText must match exactly and be unique in the file.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":    map[string]any{"type": "string", "description": "Path to the file"},
-				"oldText": map[string]any{"type": "string", "description": "Exact text to replace"},
-				"newText": map[string]any{"type": "string", "description": "Replacement text"},
+				"oldText": map[string]any{"type": "string", "description": "Exact text to replace (single-edit mode)"},
+				"newText": map[string]any{"type": "string", "description": "Replacement text (single-edit mode)"},
+				"edits": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"oldText": map[string]any{"type": "string"}, "newText": map[string]any{"type": "string"}}}, "description": "Array of {oldText, newText} for multiple replacements"},
 			},
-			"required": []string{"path", "oldText", "newText"},
+			"required": []string{"path"},
 		},
 		Fn: func(args map[string]any) string {
 			path, _ := args["path"].(string)
-			oldText, _ := args["oldText"].(string)
-			newText, _ := args["newText"].(string)
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return fmt.Sprintf("Error reading %s: %v", path, err)
 			}
-			if strings.Count(string(data), oldText) == 0 {
+			result := string(data)
+			count := 0
+
+			// multi-edit mode: edits array
+			if editsRaw, ok := args["edits"]; ok {
+				if edits, ok := editsRaw.([]any); ok {
+					for _, e := range edits {
+						if em, ok := e.(map[string]any); ok {
+							oldT, _ := em["oldText"].(string)
+							newT, _ := em["newText"].(string)
+							if strings.Count(result, oldT) == 0 {
+								return fmt.Sprintf("old_text not found in %s: %s", path, oldT[:min(80, len(oldT))])
+							}
+							result = strings.Replace(result, oldT, newT, 1)
+							count++
+						}
+					}
+					if err := os.WriteFile(path, []byte(result), 0644); err != nil {
+						return fmt.Sprintf("Error writing %s: %v", path, err)
+					}
+					return fmt.Sprintf("Edited %s (%d replacements)", path, count)
+				}
+			}
+
+			// single-edit mode (backward compat)
+			oldText, _ := args["oldText"].(string)
+			newText, _ := args["newText"].(string)
+			if strings.Count(result, oldText) == 0 {
 				return fmt.Sprintf("old_text not found in %s", path)
 			}
-			result := strings.Replace(string(data), oldText, newText, 1)
+			result = strings.Replace(result, oldText, newText, 1)
 			if err := os.WriteFile(path, []byte(result), 0644); err != nil {
 				return fmt.Sprintf("Error writing %s: %v", path, err)
 			}
