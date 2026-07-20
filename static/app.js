@@ -81,6 +81,7 @@ function renderMarkdown(text){
   return out.join("");
 }
 let D = null;
+let oauthProviders = {}, oauthMessage = "";
 
 // Click a section's data to open the real local file/folder (editor or Finder).
 function revealFile(p){ fetch("/api/reveal?path=" + encodeURIComponent(p)); }
@@ -90,6 +91,48 @@ const reveal = (path, label) => `<a class="reveal" onclick="revealFile('${path}'
 // in-progress edit isn't wiped (same idea as the animation guard).
 let editing = false;
 async function postJSON(url, body){ return (await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json(); }
+function showAddProvider(){
+  const form=document.getElementById("add-provider-form"); if(!form) return;
+  form.hidden=!form.hidden; editing=!form.hidden;
+  if(!form.hidden) document.getElementById("provider-name").focus();
+}
+async function addProvider(){
+  const value=id=>document.getElementById(id).value.trim(), msg=document.getElementById("provider-form-status");
+  const body={name:value("provider-name"),base_url:value("provider-base-url"),model:value("provider-model"),small_model:value("provider-small-model"),api_key:value("provider-api-key"),priority:Number(value("provider-priority"))||10};
+  if(!body.name||!body.base_url||!body.model){ msg.textContent="Name, base URL, and model are required."; return; }
+  try { await postJSON("/api/providers",body); editing=false; await refresh(); }
+  catch(e){ msg.textContent="Could not add provider: "+e.message; }
+}
+async function removeProvider(name){
+  if(!confirm("Remove provider "+name+"?")) return;
+  try {
+    const r=await fetch("/api/providers?name="+encodeURIComponent(name),{method:"DELETE"});
+    if(!r.ok) throw new Error((await r.text())||"request failed");
+    await refresh();
+  } catch(e){ alert("Could not remove provider: "+e.message); }
+}
+async function startOAuth(name){
+  const provider=oauthProviders[name]||{}, status=document.getElementById("oauth-status");
+  oauthMessage="Starting "+(provider.display_name||name)+" login…"; if(status) status.textContent=oauthMessage;
+  try {
+    if(provider.auth_type==="device_code"){
+      const r=await postJSON("/api/oauth/device/"+encodeURIComponent(name),{});
+      oauthMessage="Enter code "+r.user_code+" at "+r.verification_url; if(status) status.textContent=oauthMessage;
+      for(let i=0;i<60;i++){
+        await new Promise(resolve=>setTimeout(resolve,5000));
+        const poll=await (await fetch("/api/oauth/device/"+encodeURIComponent(name)+"?device_code="+encodeURIComponent(r.device_code))).json();
+        if(poll.ok){ oauthMessage=(provider.display_name||name)+" login complete."; await refresh(); return; }
+        if(!poll.pending) throw new Error(poll.error||"login failed");
+      }
+      oauthMessage="Login is still pending. Try again when ready.";
+    } else {
+      const r=await postJSON("/api/oauth/login/"+encodeURIComponent(name),{});
+      if(r.url) window.open(r.url, "_blank");
+      oauthMessage=r.message||"Login page opened. Complete login in the new tab.";
+    }
+  } catch(e){ oauthMessage="Login failed: "+e.message; }
+  if(status) status.textContent=oauthMessage;
+}
 function editFact(id){
   const row = document.getElementById("fact-"+id); if(!row) return;
   editing = true;
@@ -765,9 +808,19 @@ function opsRelease(d){
 
 function settingsView(d){
   const cfg=d.settings||{providers:[],config_file:""}, providers=cfg.providers||[];
-  return `<section class="settings-hero"><div><span class="section-kicker">RUNTIME CONFIGURATION</span><h2>Simple, visible, restart-bound.</h2><p>Provider priority and fallback live in one file. This surface is read-only so dashboard clicks cannot silently change the runtime.</p></div><div class="settings-runtime"><span class="runtime-kicker"><i></i> ACTIVE RUNTIME</span><strong>${esc(d.provider)} · ${esc(d.model)}</strong><small>${esc(d.home)}</small></div></section>
-    <div class="overview-section-head"><div><span class="section-kicker">PROVIDER CHAIN</span><h2>Priority and health</h2></div><span class="section-note">retry · fallback · circuit breaker · stickiness</span></div>
-    ${providers.length?`<div class="provider-stack">${providers.map((p,i)=>`<article><span class="provider-priority">${p.priority}</span><div class="provider-main"><div><strong>${esc(p.name)}</strong><span class="status-chip ${p.status==="healthy"&&p.key_set?"good":"warn"}">${esc(p.status)}</span></div><p>${esc(p.model)}${p.small_model?` · small ${esc(p.small_model)}`:""}</p><small>${esc(p.base_url)} · ${esc(p.api_key_env)} ${p.key_set?"set":"missing"}</small></div><div class="provider-stick"><strong>${p.sticky_sessions||0}</strong><span>sticky sessions</span></div>${i<providers.length-1?`<span class="fallback-arrow">↓ fallback</span>`:""}</article>`).join("")}</div>`:`<div class="surface-empty"><span>◇</span><strong>No provider snapshot available</strong><p>Restart Mino after creating providers.json.</p></div>`}
+  setTimeout(async()=>{
+    const el=document.getElementById("oauth-providers"); if(!el) return;
+    try {
+      const r=await (await fetch("/api/oauth/providers")).json(), list=r.providers||[];
+      oauthProviders=Object.fromEntries(list.map(p=>[p.name,p]));
+      el.innerHTML=list.length?list.map(p=>{ const name=encodeURIComponent(p.name).replace(/'/g,"%27"); return `<article><div><strong>${esc(p.display_name||p.name)}</strong><small>${esc((p.models||[]).join(" · "))}</small></div>${p.logged_in?`<span class="status-chip good">logged in</span>`:`<button class="oauth-btn" onclick="startOAuth(decodeURIComponent('${name}'))">Login with ${esc(p.display_name||p.name)}</button>`}</article>`; }).join(""):`<div class="surface-empty compact"><strong>No OAuth providers available</strong></div>`;
+    } catch(e){ el.innerHTML=`<div class="surface-empty compact"><strong>OAuth unavailable</strong><p>${esc(e.message)}</p></div>`; }
+  },0);
+  return `<section class="settings-hero"><div><span class="section-kicker">RUNTIME CONFIGURATION</span><h2>Simple, visible, restart-bound.</h2><p>Manage provider priority, credentials, and OAuth connections from one local surface.</p></div><div class="settings-runtime"><span class="runtime-kicker"><i></i> ACTIVE RUNTIME</span><strong>${esc(d.provider)} · ${esc(d.model)}</strong><small>${esc(d.home)}</small></div></section>
+    <div class="overview-section-head"><div><span class="section-kicker">PROVIDER CHAIN</span><h2>Priority and health</h2></div><button class="oauth-btn" onclick="showAddProvider()">+ Add Provider</button></div>
+    <form id="add-provider-form" class="add-provider-form" hidden onsubmit="event.preventDefault();addProvider()"><input id="provider-name" placeholder="Name" required><input id="provider-base-url" type="url" placeholder="Base URL" required><input id="provider-model" placeholder="Model" required><input id="provider-small-model" placeholder="Small model"><input id="provider-api-key" type="password" placeholder="API key (optional)"><input id="provider-priority" type="number" min="1" value="10" placeholder="Priority"><button type="submit">Add</button><span id="provider-form-status" aria-live="polite"></span></form>
+    ${providers.length?`<div class="provider-stack">${providers.map((p,i)=>{ const name=encodeURIComponent(p.name).replace(/'/g,"%27"); return `<article><span class="provider-priority">${p.priority}</span><div class="provider-main"><div><strong>${esc(p.name)}</strong><span class="status-chip ${p.key_set?"good":"warn"}">${p.key_set?"key set":"key missing"}</span></div><p>${esc(p.model)}${p.small_model?` · small ${esc(p.small_model)}`:""}</p><small>${esc(p.base_url)}</small></div><button class="provider-remove" title="Remove provider" aria-label="Remove provider" onclick="removeProvider(decodeURIComponent('${name}'))">✕</button>${i<providers.length-1?`<span class="fallback-arrow">↓ fallback</span>`:""}</article>`; }).join("")}</div>`:`<div class="surface-empty"><span>◇</span><strong>No provider snapshot available</strong><p>Add a provider to providers.json.</p></div>`}
+    <div class="overview-section-head"><div><span class="section-kicker">OAUTH</span><h2>Connected accounts</h2></div><span id="oauth-status" class="section-note" aria-live="polite">${esc(oauthMessage)}</span></div><div id="oauth-providers" class="oauth-providers"><div class="surface-empty compact"><strong>Loading OAuth providers…</strong></div></div>
     <div class="settings-grid"><section><span class="settings-icon">⌘</span><div><span class="section-kicker">CONFIG FILE</span><strong>providers.json</strong><p>${esc(cfg.config_file||"")}</p></div>${reveal("providers.json","open file")}</section><section><span class="settings-icon">▦</span><div><span class="section-kicker">STATE HOME</span><strong>Mino home</strong><p>${esc(d.home)}</p></div>${reveal("","open folder")}</section><section><span class="settings-icon">✦</span><div><span class="section-kicker">PERSONALITY</span><strong>SOUL.md</strong><p>Editable safely from Memory.</p></div><a href="#memory/soul">Open SOUL →</a></section></div>`;
 }
 

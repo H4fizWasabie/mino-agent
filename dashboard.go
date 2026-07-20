@@ -56,6 +56,7 @@ func RunDashboard(w *Core) {
 	http.HandleFunc("/api/files", handleFilesAPI)
 	http.HandleFunc("/api/active-tasks", handleActiveTasks)
 	http.HandleFunc("/api/settings", handleSettingsAPI)
+	http.HandleFunc("/callback", handleOAuthCallback)
 	http.HandleFunc("/api/auth", handleAuthAPI)
 	http.HandleFunc("/api/switch", handleSwitchAPI)
 	http.HandleFunc("/api/oauth/providers", handleOAuthProviders)
@@ -770,6 +771,14 @@ func safeGet(m map[string]any, key string) string {
 	return v
 }
 
+func handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
+	if dashCore.OAuth != nil {
+		dashCore.OAuth.HandleCallback(w, r)
+	} else {
+		http.Error(w, "OAuth not configured", http.StatusServiceUnavailable)
+	}
+}
+
 func handleSwitchAPI(w http.ResponseWriter, r *http.Request) {
 	if dashCore.Client == nil {
 		http.Error(w, "no providers configured", http.StatusServiceUnavailable)
@@ -847,8 +856,8 @@ func handleOAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go OpenBrowser(authURL)
-	json.NewEncoder(w).Encode(map[string]any{"ok": true, "url": authURL, "message": "Browser opened. Complete login there."})
+	go func() { /* browser on local machine: frontend opens the URL */ }()
+	json.NewEncoder(w).Encode(map[string]any{"ok": true, "url": authURL, "message": "Complete login in your browser."})
 }
 
 func handleOAuthDevice(w http.ResponseWriter, r *http.Request) {

@@ -84,12 +84,19 @@ func NewCore() *Core {
 		}()
 	}
 
+	dashHost := os.Getenv("MINO_DASHBOARD_HOST")
+	dashPort := envOr("MINO_DASHBOARD_PORT", "7777")
+	if dashHost == "" {
+		dashHost = "127.0.0.1"
+	}
+	redirectBase := "http://" + dashHost + ":" + dashPort
+
 	w := &Core{
 		Settings:  s,
 		DB:        db,
 		Client:    client,
 		AuthStore: authStore,
-		OAuth:     LoadOAuthEngine(s.Home, authStore),
+		OAuth:     LoadOAuthEngine(s.Home, authStore, redirectBase),
 		Memory:    mem,
 		Tools:     tools,
 		Sessions:  NewSessionManager(s, mem),

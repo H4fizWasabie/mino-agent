@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -46,26 +45,25 @@ type pendingOAuth struct {
 }
 
 // OAuthEngine handles browser-based login flows.
+// Uses the dashboard's HTTP server for callbacks (no separate listener).
 type OAuthEngine struct {
-	home      string
-	authStore *AuthStore
-	providers map[string]*OAuthProvider
-	pending   map[string]*pendingOAuth // state → pending (PKCE) or deviceCode → pending (device)
-	mu        sync.Mutex
-	listener  net.Listener
-	port      int
-	server    *http.Server
+	home            string
+	authStore       *AuthStore
+	providers       map[string]*OAuthProvider
+	pending         map[string]*pendingOAuth
+	redirectBaseURL string // e.g. "http://100.101.53.98:7779"
+	mu              sync.Mutex
 }
 
-func LoadOAuthEngine(home string, authStore *AuthStore) *OAuthEngine {
+func LoadOAuthEngine(home string, authStore *AuthStore, redirectBaseURL string) *OAuthEngine {
 	e := &OAuthEngine{
-		home:      home,
-		authStore: authStore,
-		providers: map[string]*OAuthProvider{},
-		pending:   map[string]*pendingOAuth{},
+		home:            home,
+		authStore:       authStore,
+		providers:       map[string]*OAuthProvider{},
+		pending:         map[string]*pendingOAuth{},
+		redirectBaseURL: strings.TrimRight(redirectBaseURL, "/"),
 	}
 	e.loadProviders()
-	e.startCallbackServer()
 	return e
 }
 
@@ -89,30 +87,7 @@ func (e *OAuthEngine) loadProviders() {
 		}
 		e.providers[p.Name] = &p
 	}
-	slog.Info("oauth providers loaded", "count", len(e.providers))
-}
-
-func (e *OAuthEngine) startCallbackServer() {
-	// find free port
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		slog.Error("oauth callback server", "error", err)
-		return
-	}
-	e.listener = l
-	e.port = l.Addr().(*net.TCPAddr).Port
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/callback", e.handleCallback)
-	e.server = &http.Server{Handler: mux}
-	go e.server.Serve(l)
-	slog.Info("oauth callback server", "port", e.port)
-}
-
-func (e *OAuthEngine) Shutdown() {
-	if e.server != nil {
-		e.server.Close()
-	}
+	slog.Info("oauth providers loaded", "count", len(e.providers), "callback", e.redirectBaseURL+"/callback")
 }
 
 // BeginPKCE starts a PKCE OAuth flow. Returns the URL to open in browser.
@@ -138,7 +113,7 @@ func (e *OAuthEngine) BeginPKCE(providerName string) (authURL string, err error)
 	}
 	e.mu.Unlock()
 
-	redirectURI := fmt.Sprintf("http://localhost:%d/callback", e.port)
+	redirectURI := e.redirectBaseURL + "/callback"
 	u, _ := url.Parse(p.AuthorizeURL)
 	q := u.Query()
 	q.Set("client_id", p.ClientID)
@@ -252,8 +227,8 @@ func (e *OAuthEngine) PollDeviceCode(deviceCode string) (accessToken string, err
 	}
 }
 
-// handleCallback handles the OAuth redirect from the browser.
-func (e *OAuthEngine) handleCallback(w http.ResponseWriter, r *http.Request) {
+// HandleCallback serves the OAuth redirect from the browser.
+func (e *OAuthEngine) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("code")
 	state := r.URL.Query().Get("state")
 	errMsg := r.URL.Query().Get("error")
@@ -320,7 +295,7 @@ type tokenResponse struct {
 }
 
 func (e *OAuthEngine) exchangeCode(p *OAuthProvider, code, verifier string) (*tokenResponse, error) {
-	redirectURI := fmt.Sprintf("http://localhost:%d/callback", e.port)
+	redirectURI := e.redirectBaseURL + "/callback"
 	data := url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {code},
@@ -479,9 +454,6 @@ func (e *OAuthEngine) Providers() []*OAuthProvider {
 	}
 	return out
 }
-
-// Port returns the callback server port.
-func (e *OAuthEngine) Port() int { return e.port }
 
 // OpenBrowser opens a URL in the default browser.
 func OpenBrowser(url string) error {
