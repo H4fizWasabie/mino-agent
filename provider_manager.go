@@ -37,6 +37,9 @@ type ProviderConfig struct {
 type providerFile struct {
 	Providers []ProviderConfig `json:"providers"`
 }
+var codexModels = []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5", "gpt-5.6-luna"}
+var codexReasoningLevels = []string{"default", "low", "medium", "high", "xhigh"}
+
 type providerState struct {
 	failures  int
 	openUntil time.Time
@@ -112,6 +115,9 @@ func loadProviders(home string, legacy *Settings) ([]ProviderConfig, error) {
 	var file providerFile
 	if err := json.Unmarshal(data, &file); err != nil || len(file.Providers) == 0 {
 		return nil, fmt.Errorf("invalid providers.json")
+	}
+	for i := range file.Providers {
+		file.Providers[i] = normalizeProvider(file.Providers[i])
 	}
 	return file.Providers, nil
 }
@@ -384,6 +390,19 @@ func (m *ProviderManager) ProviderNames() []string {
 	return names
 }
 
+// normalizeProvider fills in missing model/reasoning metadata for known providers.
+func normalizeProvider(p ProviderConfig) ProviderConfig {
+	if p.Name == "codex" {
+		if len(p.Models) == 0 {
+			p.Models = append([]string(nil), codexModels...)
+		}
+		if len(p.ReasoningLevels) == 0 {
+			p.ReasoningLevels = append([]string(nil), codexReasoningLevels...)
+		}
+	}
+	return p
+}
+
 // ReloadProviders re-reads providers.json without restarting Mino.
 func (m *ProviderManager) ReloadProviders(home string) error {
 	configs, err := loadProviders(home, nil)
@@ -392,22 +411,29 @@ func (m *ProviderManager) ReloadProviders(home string) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// prune removed providers
+	seen := map[string]bool{}
+	for _, p := range configs {
+		seen[p.Name] = true
+	}
+	for name := range m.clients {
+		if !seen[name] {
+			delete(m.clients, name)
+			delete(m.state, name)
+		}
+	}
+	m.providers = m.providers[:0]
 	for _, p := range configs {
 		if _, exists := m.clients[p.Name]; exists {
-			for i := range m.providers {
-				if m.providers[i].Name == p.Name {
-					m.providers[i] = p
-					break
-				}
-			}
+			m.providers = append(m.providers, p)
 			continue
 		}
 		key, _ := m.resolveKey(p)
 		client := NewClient(key, p.BaseURL)
 		client.usageLogPath = filepath.Join(home, "usage.jsonl")
-		m.providers = append(m.providers, p)
 		m.clients[p.Name] = client
 		m.state[p.Name] = &providerState{}
+		m.providers = append(m.providers, p)
 	}
 	sort.SliceStable(m.providers, func(i, j int) bool { return m.providers[i].Priority < m.providers[j].Priority })
 	return nil

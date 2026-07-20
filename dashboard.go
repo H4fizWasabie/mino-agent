@@ -874,6 +874,7 @@ func handleProvidersAPI(w http.ResponseWriter, r *http.Request) {
 		if body.APIKey != "" && dashCore.AuthStore != nil {
 			dashCore.AuthStore.Set(body.Name, body.APIKey)
 		}
+		dashCore.Client.ReloadProviders(dashCore.Settings.Home)
 		json.NewEncoder(w).Encode(map[string]any{"ok": true})
 	case "DELETE":
 		name := r.URL.Query().Get("name")
@@ -901,6 +902,7 @@ func handleProvidersAPI(w http.ResponseWriter, r *http.Request) {
 		if dashCore.AuthStore != nil {
 			dashCore.AuthStore.Delete(name)
 		}
+		dashCore.Client.ReloadProviders(dashCore.Settings.Home)
 		json.NewEncoder(w).Encode(map[string]any{"ok": true})
 	default:
 		http.Error(w, "POST or DELETE", 405)
@@ -938,12 +940,32 @@ func handleOAuthLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if provider == "gemini" {
-		_, err := dashCore.OAuth.HandleGeminiADC()
-		if err != nil {
-			http.Error(w, err.Error(), 500)
+		// Step 2: user submits the redirect URL from their local browser
+		if r.Method == "POST" && r.URL.Query().Get("step") == "complete" {
+			var body struct {
+				State       string `json:"state"`
+				RedirectURL string `json:"redirect_url"`
+			}
+			json.NewDecoder(r.Body).Decode(&body)
+			if err := dashCore.OAuth.CompleteGeminiADC(body.State, body.RedirectURL); err != nil {
+				json.NewEncoder(w).Encode(map[string]any{"ok": false, "message": err.Error()})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"ok": true, "message": "Logged in to Google Gemini!"})
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{"ok": true, "message": "ADC configured. Run gcloud auth print-access-token to get token."})
+		// Step 1: start ADC login, return URL
+		authURL, state, err := dashCore.OAuth.BeginGeminiADC()
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]any{"ok": false, "message": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok":      true,
+			"url":     authURL,
+			"state":   state,
+			"message": "Open this URL in your browser. After login, Google will redirect you to localhost — copy the FULL redirect URL from the address bar and paste it back.",
+		})
 		return
 	}
 
@@ -1038,45 +1060,62 @@ func handleSettingsAPI(w http.ResponseWriter, r *http.Request) {
 		TelegramToken string `json:"telegram_token"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
-	if body.APIKey == "" || body.BaseURL == "" || body.Model == "" {
-		http.Error(w, "api_key, base_url, and model are required", 400)
+	// api_key is optional (keyless providers like Ollama)
+	if body.BaseURL == "" || body.Model == "" {
+		http.Error(w, "base_url and model are required", 400)
 		return
 	}
 	name := body.ProviderName
 	if name == "" {
 		name = "default"
 	}
-	cfg := []ProviderConfig{{
-		Name:      name,
-		Priority:  1,
-		BaseURL:   body.BaseURL,
-		APIKeyEnv: "MINO_API_KEY",
-		Model:     body.Model,
-		Small:     body.SmallModel,
-	}}
-	data, _ := json.MarshalIndent(map[string]any{"providers": cfg}, "", "  ")
-	path := filepath.Join(dashCore.Settings.Home, "providers.json")
+	// merge into existing providers (don't overwrite)
+	home := dashCore.Settings.Home
+	path := filepath.Join(home, "providers.json")
+	existing := map[string]any{}
+	if data, err := os.ReadFile(path); err == nil {
+		json.Unmarshal(data, &existing)
+	}
+	list, _ := existing["providers"].([]any)
+	filtered := make([]any, 0)
+	for _, item := range list {
+		if m, ok := item.(map[string]any); ok && m["name"] == name {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	apiKeyEnv := ""
+	if body.APIKey != "" {
+		apiKeyEnv = "MINO_API_KEY"
+	}
+	filtered = append(filtered, map[string]any{
+		"name":        name,
+		"priority":    1,
+		"base_url":    body.BaseURL,
+		"api_key_env": apiKeyEnv,
+		"model":       body.Model,
+		"small_model": body.SmallModel,
+	})
+	existing["providers"] = filtered
+	data, _ := json.MarshalIndent(existing, "", "  ")
 	os.WriteFile(path, data, 0644)
-	// also save key to auth.json (no restart needed for key changes)
-	if dashCore.AuthStore != nil {
+	// save key to auth.json
+	if body.APIKey != "" && dashCore.AuthStore != nil {
 		dashCore.AuthStore.Set(name, body.APIKey)
 	}
-	// also write the key to mino.env so systemd picks it up
-	envPath := filepath.Join(dashCore.Settings.Home, "mino.env")
+	// write mino.env so systemd picks it up
+	envPath := filepath.Join(home, "mino.env")
 	envData := fmt.Sprintf("MINO_HOME=%s\nMINO_API_KEY=%s\nMINO_BASE_URL=%s\nMINO_MODEL=%s\nMINO_SMALL_MODEL=%s\n",
-		dashCore.Settings.Home, body.APIKey, body.BaseURL, body.Model, body.SmallModel)
+		home, body.APIKey, body.BaseURL, body.Model, body.SmallModel)
 	if body.TelegramToken != "" {
 		envData += fmt.Sprintf("TELEGRAM_BOT_TOKEN=%s\n", body.TelegramToken)
 	}
 	os.WriteFile(envPath, []byte(envData), 0600)
-
-	json.NewEncoder(w).Encode(map[string]any{"ok": true, "message": "Saved. Restarting..."})
-
-	// auto-restart after response is sent
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		os.Exit(0)
-	}()
+	// pick up changes without restart
+	if dashCore.Client != nil {
+		dashCore.Client.ReloadProviders(home)
+	}
+	json.NewEncoder(w).Encode(map[string]any{"ok": true, "message": "Saved."})
 }
 
 func countRows(db *sql.DB, table string) (int, error) {

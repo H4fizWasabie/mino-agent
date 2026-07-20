@@ -89,7 +89,10 @@ func NewCore() *Core {
 	if dashHost == "" {
 		dashHost = "127.0.0.1"
 	}
-	redirectBase := "http://" + dashHost + ":" + dashPort
+	redirectBase := os.Getenv("MINO_PUBLIC_URL")
+	if redirectBase == "" {
+		redirectBase = "http://" + dashHost + ":" + dashPort
+	}
 
 	w := &Core{
 		Settings:  s,
