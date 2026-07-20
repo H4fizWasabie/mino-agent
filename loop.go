@@ -15,6 +15,7 @@ import (
 
 type LoopResult struct {
 	Reply      string
+	Status     string
 	ToolCalls  []ToolCall
 	Iterations int
 	TokensIn   int
@@ -23,6 +24,29 @@ type LoopResult struct {
 
 // Observer matches Core's Observer callback
 type Observer func(kind string, data map[string]any)
+
+const (
+	completionToolName = "complete_task"
+	completionPrompt   = `COMPLETION PROTOCOL (RUNTIME ENFORCED):
+- Ordinary assistant text is progress and cannot end the turn.
+- To answer the user, call complete_task ALONE with status and the final reply.
+- Use status "complete" only when every requested step is verified complete.
+- Use status "blocked" only when required user input, approval, or an unavailable external dependency prevents further safe progress.
+- If work remains, call the next tool instead. Put all user-facing final text in complete_task.reply.`
+)
+
+var completionTool = ToolDef{
+	Name:        completionToolName,
+	Description: "Finish the current task. Call alone only after all work is complete or genuinely blocked.",
+	Parameters: map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"status": map[string]any{"type": "string", "enum": []string{"complete", "blocked"}},
+			"reply":  map[string]any{"type": "string", "description": "The final user-facing answer or exact blocker."},
+		},
+		"required": []string{"status", "reply"},
+	},
+}
 
 // notify helper for observers
 func notify(obs Observer, kind string, data map[string]any) {
@@ -53,8 +77,10 @@ func RunLoop(
 	es *EmbeddingStore,
 ) *LoopResult {
 	result := &LoopResult{}
+	system = strings.TrimSpace(system) + "\n\n" + completionPrompt
 	dedup := make(map[string]string) // tool dedup: key → cached output
 	dedupStatus := make(map[string]string)
+	lastActionFailed := false
 
 	defer func() {
 		decision, reason := "skip", "recall tool not invoked"
@@ -116,18 +142,45 @@ func RunLoop(
 
 		// extract tool uses
 		toolUses := extractToolUses(resp.Content)
+		completionError := "Error: complete_task must be called alone with status complete or blocked and a non-empty reply."
 
-		// guardrail 1: no tool calls → reply to human
+		// Plain text is provisional. Only complete_task can end the turn.
 		if len(toolUses) == 0 {
-			result.Reply = extractText(resp.Content)
-			return result
+			notify(obs, "progress", map[string]any{"text": "Still working..."})
+			messages = append(messages, Message{Role: "user", Content: "Your previous response did not complete the protocol. Continue working, or call complete_task alone with the final reply."})
+			continue
+		}
+
+		if len(toolUses) == 1 && toolUses[0].Name == completionToolName {
+			args, _ := toolUses[0].Input.(map[string]any)
+			status, _ := args["status"].(string)
+			reply, _ := args["reply"].(string)
+			status, reply = strings.ToLower(strings.TrimSpace(status)), strings.TrimSpace(reply)
+			if (status == "complete" || status == "blocked") && reply != "" && (status == "blocked" || !lastActionFailed) {
+				result.Status, result.Reply = status, reply
+				notify(obs, "completion", map[string]any{"status": status})
+				logTrace(traceHome, "task_completion", map[string]any{"status": status})
+				return result
+			}
+			if status == "complete" && lastActionFailed {
+				completionError = "Error: the last tool batch failed. Recover with another tool call or finish with status blocked and the exact blocker."
+			}
 		}
 
 		// act: execute each tool; observe: feed results back
 		toolResults := make([]map[string]any, 0)
 		var turnImages []string
+		batchTools, batchFailed := 0, false
 		for _, tc := range toolUses {
 			args, _ := tc.Input.(map[string]any)
+			if tc.Name == completionToolName {
+				toolResults = append(toolResults, map[string]any{
+					"type": "tool_result", "tool_use_id": tc.ID,
+					"content": completionError,
+				})
+				continue
+			}
+			batchTools++
 			key := dedupKey(tc.Name, args)
 			var output, status string
 			if cached, ok := dedup[key]; ok {
@@ -142,6 +195,9 @@ func RunLoop(
 					raw = "[image loaded into visual context]"
 				}
 				status = toolOutputStatus(raw)
+				if status == "error" {
+					batchFailed = true
+				}
 				output = prepareToolOutput(traceHome, sessionID, i, tc.Name, raw)
 				dedup[key] = output
 				dedupStatus[key] = status
@@ -168,10 +224,14 @@ func RunLoop(
 				"content":     output,
 			})
 		}
+		if batchTools > 0 {
+			lastActionFailed = batchFailed
+		}
 		messages = append(messages, Message{Role: "user", Content: formatToolResults(toolResults), Images: turnImages})
 	}
 
-	result.Reply = "(I hit my iteration limit — try breaking the request into smaller steps.)"
+	result.Status = "iteration_limit"
+	result.Reply = "(I hit my iteration limit before completing the task. The task remains incomplete.)"
 	// turn_end trace handled by defer
 	return result
 }

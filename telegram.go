@@ -54,7 +54,33 @@ func RunTelegram(w *Core) {
 
 		bot.Send(tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping))
 
-		result := w.RespondFor(sid, text, "telegram", nil, false, images...)
+		// progress observer: send tool-call status to Telegram so user knows Mino is working
+		var statusMsg tgbotapi.Message
+		statusSent := false
+		showProgress := func(progress string) {
+			progress = strings.TrimSpace(progress)
+			if progress == "" {
+				return
+			}
+			if !statusSent {
+				statusMsg, _ = bot.Send(tgbotapi.NewMessage(chatID, progress))
+				statusSent = true
+			} else if statusMsg.MessageID != 0 {
+				bot.Send(tgbotapi.NewEditMessageText(chatID, statusMsg.MessageID, progress))
+			}
+		}
+		obs := func(kind string, data map[string]any) {
+			switch kind {
+			case "tool":
+				toolName, _ := data["tool"].(string)
+				showProgress(fmt.Sprintf("Running %s...", toolName))
+			case "progress":
+				progress, _ := data["text"].(string)
+				showProgress(progress)
+			}
+		}
+
+		result := w.RespondFor(sid, text, "telegram", obs, false, images...)
 
 		sendTelegramReply(bot, chatID, result.Reply, result.ToolCalls)
 

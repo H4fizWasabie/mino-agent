@@ -132,6 +132,18 @@ func BuildRegistry(db *sql.DB, home string, mem *Memory) *Registry {
 	r.Register(makeEditTool())
 	r.Register(makeBashTool())
 
+	// coding discovery tools
+	r.Register(makeListFilesTool())
+	r.Register(makeGrepTool())
+	r.Register(makeGlobTool())
+	r.Register(makeGitDiffTool())
+	r.Register(makeGitStatusTool())
+	r.Register(makeGraphifyQueryTool())
+	r.Register(makeGraphifyExplainTool())
+	r.Register(makeGraphifyPathTool())
+	r.Register(makeCodegraphQueryTool())
+	r.Register(makeCodegraphSyncTool())
+
 	// calendar tools (Core: calendar.make_tool + make_list_tool)
 	r.Register(makeCalendarTool(db, home))
 	r.Register(makeListCalendarTool(db))
@@ -200,7 +212,7 @@ func makeReadTool() *Tool {
 			"properties": map[string]any{
 				"path":   map[string]any{"type": "string", "description": "Path to the file"},
 				"offset": map[string]any{"type": "integer", "description": "Byte offset, default 0"},
-				"limit":  map[string]any{"type": "integer", "description": "Maximum bytes, default 4000"},
+				"limit":  map[string]any{"type": "integer", "description": "Maximum bytes, default 16000"},
 			},
 			"required": []string{"path"},
 		},

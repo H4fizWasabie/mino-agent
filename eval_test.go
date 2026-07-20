@@ -161,14 +161,14 @@ func TestRequestApprovalCreatesPendingFile(t *testing.T) {
 }
 
 func TestBluffingDoesNotCreateArtifact(t *testing.T) {
-	// This is the bug we fixed! LLM says "Done!" but never calls the tool.
+	// The completion protocol prevents bluffing — plain text never ends the turn.
 	home := makeTestHome(t)
 	tools := makeEvalTools(home)
 
-	// Script: LLM just replies with text claiming success — NO tool_use block
+	// Script: LLM claims success via complete_task but never called schedule_task
 	script := []*LLMResponse{
 		scriptedResp([]ContentBlock{
-			textBlock("All set! I've created the gmail-cleanup task for 12:30 PM weekdays. ✅"),
+			toolBlock("complete_task", map[string]any{"status": "complete", "reply": "All set! I've created the gmail-cleanup task for 12:30 PM weekdays. ✅"}),
 		}, "end_turn"),
 	}
 
@@ -181,9 +181,12 @@ func TestBluffingDoesNotCreateArtifact(t *testing.T) {
 		t.Errorf("BLUFF DETECTED: LLM claimed to create task but never called schedule_task.\nReply was: %s", result.Reply)
 	}
 
-	// Verify loop ended in 1 iteration (no tool use → immediate return)
+	// Verify loop ended in 1 iteration (complete_task ends the turn)
 	if result.Iterations != 1 {
-		t.Errorf("expected 1 iteration (no tools = immediate return), got %d", result.Iterations)
+		t.Errorf("expected 1 iteration, got %d", result.Iterations)
+	}
+	if result.Status != "complete" {
+		t.Errorf("expected status complete, got %s", result.Status)
 	}
 }
 
@@ -192,7 +195,9 @@ func TestNoToolTurnEndsInOneIteration(t *testing.T) {
 	tools := makeEvalTools(home)
 
 	script := []*LLMResponse{
-		scriptedResp([]ContentBlock{textBlock("Paris is the capital of France.")}, "end_turn"),
+		scriptedResp([]ContentBlock{
+			toolBlock("complete_task", map[string]any{"status": "complete", "reply": "Paris is the capital of France."}),
+		}, "end_turn"),
 	}
 
 	result := RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 10, 2048, nil, false, nil, home, nil)

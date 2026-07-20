@@ -76,7 +76,7 @@ func TestRespondForSerializesSameSession(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond) // widen the race window
 		inFlight.Add(-1)
-		fmt.Fprint(w, `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"","tool_calls":[{"id":"1","function":{"name":"complete_task","arguments":"{\"status\":\"complete\",\"reply\":\"ok\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
 	}))
 	defer ts.Close()
 
@@ -120,7 +120,7 @@ func TestImagesAttachToCurrentTurnOnly(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		bodies = append(bodies, string(b))
-		fmt.Fprint(w, `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{}}`)
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"","tool_calls":[{"id":"1","function":{"name":"complete_task","arguments":"{\"status\":\"complete\",\"reply\":\"ok\"}"}}]},"finish_reason":"tool_calls"}],"usage":{}}`)
 	}))
 	defer ts.Close()
 
@@ -157,7 +157,7 @@ func TestViewImageBecomesVisionContent(t *testing.T) {
 			fmt.Fprintf(w, `{"choices":[{"message":{"content":"","tool_calls":[{"id":"1","function":{"name":"view_image","arguments":%s}}]},"finish_reason":"tool_calls"}],"usage":{}}`, args)
 			return
 		}
-		fmt.Fprint(w, `{"choices":[{"message":{"content":"a scanned invoice"},"finish_reason":"stop"}],"usage":{}}`)
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"","tool_calls":[{"id":"2","function":{"name":"complete_task","arguments":"{\"status\":\"complete\",\"reply\":\"a scanned invoice\"}"}}]},"finish_reason":"tool_calls"}],"usage":{}}`)
 	}))
 	defer ts.Close()
 
