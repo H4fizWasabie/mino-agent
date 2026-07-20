@@ -49,9 +49,9 @@ type pendingOAuth struct {
 type OAuthEngine struct {
 	home            string
 	authStore       *AuthStore
-	providers       map[string]*OAuthProvider
+	providerMap     map[string]*OAuthProvider
 	pending         map[string]*pendingOAuth
-	redirectBaseURL string // e.g. "http://100.101.53.98:7779"
+	redirectBaseURL string
 	mu              sync.Mutex
 }
 
@@ -59,7 +59,7 @@ func LoadOAuthEngine(home string, authStore *AuthStore, redirectBaseURL string) 
 	e := &OAuthEngine{
 		home:            home,
 		authStore:       authStore,
-		providers:       map[string]*OAuthProvider{},
+		providerMap:     map[string]*OAuthProvider{},
 		pending:         map[string]*pendingOAuth{},
 		redirectBaseURL: strings.TrimRight(redirectBaseURL, "/"),
 	}
@@ -85,14 +85,14 @@ func (e *OAuthEngine) loadProviders() {
 		if json.Unmarshal(data, &p) != nil || p.Name == "" {
 			continue
 		}
-		e.providers[p.Name] = &p
+		e.providerMap[p.Name] = &p
 	}
-	slog.Info("oauth providers loaded", "count", len(e.providers), "callback", e.redirectBaseURL+"/callback")
+	slog.Info("oauth providers loaded", "count", len(e.providerMap), "callback", e.redirectBaseURL+"/callback")
 }
 
 // BeginPKCE starts a PKCE OAuth flow. Returns the URL to open in browser.
 func (e *OAuthEngine) BeginPKCE(providerName string) (authURL string, err error) {
-	p := e.providers[providerName]
+	p := e.providerMap[providerName]
 	if p == nil {
 		return "", fmt.Errorf("unknown oauth provider: %s", providerName)
 	}
@@ -131,7 +131,7 @@ func (e *OAuthEngine) BeginPKCE(providerName string) (authURL string, err error)
 
 // BeginDeviceCode starts a device code flow. Returns userCode and verificationURL to show user.
 func (e *OAuthEngine) BeginDeviceCode(providerName string) (verificationURL, userCode string, err error) {
-	p := e.providers[providerName]
+	p := e.providerMap[providerName]
 	if p == nil {
 		return "", "", fmt.Errorf("unknown oauth provider: %s", providerName)
 	}
@@ -183,7 +183,7 @@ func (e *OAuthEngine) PollDeviceCode(deviceCode string) (accessToken string, err
 		return "", fmt.Errorf("unknown device code")
 	}
 
-	p := e.providers[pending.provider]
+	p := e.providerMap[pending.provider]
 	if p == nil {
 		return "", fmt.Errorf("provider not found")
 	}
@@ -248,7 +248,7 @@ func (e *OAuthEngine) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p := e.providers[pending.provider]
+	p := e.providerMap[pending.provider]
 
 	// exchange code for token (may be id_token for Codex, access_token for others)
 	tokenResp, err := e.exchangeCode(p, code, pending.codeVerifier)
@@ -283,7 +283,7 @@ func (e *OAuthEngine) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// auto-add provider to providers.json if not present
-	e.ensureProvider(p)
+	e.EnsureProvider(p)
 
 	w.Header().Set("Content-Type", "text/html")
 	fmt.Fprintf(w, "<html><body><h1>✅ Logged in to %s!</h1><p>You can close this tab.</p></body></html>", p.DisplayName)
@@ -385,8 +385,8 @@ func (e *OAuthEngine) exchangeForAPIKey(p *OAuthProvider, accessToken string) (s
 	return result.Key, nil
 }
 
-// ensureProvider adds the OAuth provider to providers.json if not already there.
-func (e *OAuthEngine) ensureProvider(p *OAuthProvider) {
+// EnsureProvider adds the OAuth provider to providers.json if not already there.
+func (e *OAuthEngine) EnsureProvider(p *OAuthProvider) {
 	providersPath := filepath.Join(e.home, "providers.json")
 	existing := map[string]any{}
 	if data, err := os.ReadFile(providersPath); err == nil {
@@ -416,9 +416,46 @@ func (e *OAuthEngine) ensureProvider(p *OAuthProvider) {
 	}
 }
 
+// HandleCodexLogin reads credentials from ~/.codex/auth.json (set up by `codex login` CLI).
+// If not found, prompts the user to run codex login first.
+func (e *OAuthEngine) HandleCodexLogin() (string, error) {
+	p := e.providerMap["codex"]
+	if p == nil {
+		return "", fmt.Errorf("codex provider not configured")
+	}
+	// try reading Codex CLI's auth file
+	codexHome := os.Getenv("CODEX_HOME")
+	if codexHome == "" {
+		codexHome = filepath.Join(os.Getenv("HOME"), ".codex")
+	}
+	authPath := filepath.Join(codexHome, "auth.json")
+	data, err := os.ReadFile(authPath)
+	if err != nil {
+		// try running codex login
+		cmd := exec.Command("codex", "login")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return "", fmt.Errorf("codex login failed: %w — install codex CLI or paste API key in Settings", err)
+		}
+		data, err = os.ReadFile(authPath)
+		if err != nil {
+			return "", fmt.Errorf("codex auth not found after login: %w", err)
+		}
+	}
+	var auth struct {
+		OpenAIAPIKey string `json:"openai_api_key"`
+	}
+	json.Unmarshal(data, &auth)
+	if auth.OpenAIAPIKey == "" {
+		return "", fmt.Errorf("no openai_api_key in %s — run 'codex login' first", authPath)
+	}
+	return auth.OpenAIAPIKey, nil
+}
+
 // HandleGeminiADC runs gcloud auth application-default login for Gemini.
 func (e *OAuthEngine) HandleGeminiADC() (string, error) {
-	p := e.providers["gemini"]
+	p := e.providerMap["gemini"]
 	if p == nil {
 		return "", fmt.Errorf("gemini provider not configured")
 	}
@@ -448,8 +485,8 @@ func (e *OAuthEngine) HandleGeminiADC() (string, error) {
 
 // Providers returns the list of configured OAuth providers.
 func (e *OAuthEngine) Providers() []*OAuthProvider {
-	out := make([]*OAuthProvider, 0, len(e.providers))
-	for _, p := range e.providers {
+	out := make([]*OAuthProvider, 0, len(e.providerMap))
+	for _, p := range e.providerMap {
 		out = append(out, p)
 	}
 	return out

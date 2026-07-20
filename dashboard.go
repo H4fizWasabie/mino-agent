@@ -59,6 +59,7 @@ func RunDashboard(w *Core) {
 	http.HandleFunc("/callback", handleOAuthCallback)
 	http.HandleFunc("/api/auth", handleAuthAPI)
 	http.HandleFunc("/api/switch", handleSwitchAPI)
+	http.HandleFunc("/api/providers", handleProvidersAPI)
 	http.HandleFunc("/api/oauth/providers", handleOAuthProviders)
 	http.HandleFunc("/api/oauth/login/", handleOAuthLogin)
 	http.HandleFunc("/api/oauth/device/", handleOAuthDevice)
@@ -70,11 +71,7 @@ func RunDashboard(w *Core) {
 		port = p
 	}
 	host := os.Getenv("MINO_DASHBOARD_HOST")
-	if host == "" {
-		host = "localhost"
-	}
 	addr := net.JoinHostPort(host, port)
-	fmt.Printf("\n  Mino dashboard → http://%s\n\n", addr)
 	slog.Info("dashboard", "addr", addr)
 	http.ListenAndServe(addr, nil)
 }
@@ -731,6 +728,7 @@ func handleAuthAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case "GET":
+		// list providers with key status (keys masked)
 		providers := providerSnapshot()
 		for i, p := range providers {
 			name, _ := p["name"].(string)
@@ -810,6 +808,89 @@ func handleSwitchAPI(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func handleProvidersAPI(w http.ResponseWriter, r *http.Request) {
+	home := dashCore.Settings.Home
+	switch r.Method {
+	case "POST":
+		var body struct {
+			Name       string `json:"name"`
+			BaseURL    string `json:"base_url"`
+			Model      string `json:"model"`
+			SmallModel string `json:"small_model"`
+			APIKey     string `json:"api_key"`
+			Priority   int    `json:"priority"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		if body.Name == "" || body.BaseURL == "" || body.Model == "" {
+			http.Error(w, "name, base_url, and model are required", 400)
+			return
+		}
+		if body.Priority == 0 {
+			body.Priority = 10
+		}
+		// load existing
+		existing := map[string]any{}
+		path := filepath.Join(home, "providers.json")
+		if data, err := os.ReadFile(path); err == nil {
+			json.Unmarshal(data, &existing)
+		}
+		list, _ := existing["providers"].([]any)
+		// dedup by name
+		filtered := make([]any, 0)
+		for _, item := range list {
+			if m, ok := item.(map[string]any); ok && m["name"] == body.Name {
+				continue
+			}
+			filtered = append(filtered, item)
+		}
+		filtered = append(filtered, map[string]any{
+			"name":        body.Name,
+			"priority":    body.Priority,
+			"base_url":    body.BaseURL,
+			"api_key_env": "",
+			"model":       body.Model,
+			"small_model": body.SmallModel,
+		})
+		existing["providers"] = filtered
+		data, _ := json.MarshalIndent(existing, "", "  ")
+		os.WriteFile(path, data, 0644)
+		// save key to auth.json
+		if body.APIKey != "" && dashCore.AuthStore != nil {
+			dashCore.AuthStore.Set(body.Name, body.APIKey)
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	case "DELETE":
+		name := r.URL.Query().Get("name")
+		if name == "" {
+			http.Error(w, "?name= required", 400)
+			return
+		}
+		path := filepath.Join(home, "providers.json")
+		existing := map[string]any{}
+		if data, err := os.ReadFile(path); err == nil {
+			json.Unmarshal(data, &existing)
+		}
+		list, _ := existing["providers"].([]any)
+		filtered := make([]any, 0)
+		for _, item := range list {
+			if m, ok := item.(map[string]any); ok && m["name"] == name {
+				continue
+			}
+			filtered = append(filtered, item)
+		}
+		existing["providers"] = filtered
+		data, _ := json.MarshalIndent(existing, "", "  ")
+		os.WriteFile(path, data, 0644)
+		// also remove from auth.json
+		if dashCore.AuthStore != nil {
+			dashCore.AuthStore.Delete(name)
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	default:
+		http.Error(w, "POST or DELETE", 405)
+	}
+}
+
 func handleOAuthProviders(w http.ResponseWriter, r *http.Request) {
 	if dashCore.OAuth == nil {
 		json.NewEncoder(w).Encode(map[string]any{"providers": []any{}})
@@ -847,6 +928,18 @@ func handleOAuthLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		json.NewEncoder(w).Encode(map[string]any{"ok": true, "message": "ADC configured. Run gcloud auth print-access-token to get token."})
+		return
+	}
+
+	if provider == "codex" {
+		key, err := dashCore.OAuth.HandleCodexLogin()
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		dashCore.AuthStore.Set(provider, key)
+		dashCore.OAuth.EnsureProvider(dashCore.OAuth.providerMap["codex"])
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "message": "Codex API key extracted."})
 		return
 	}
 
