@@ -102,8 +102,36 @@ Mino can run entirely on free tiers:
 - **Embeddings**: via OpenRouter (free tier available)
 - **Web search**: DuckDuckGo (built-in, keyless). Optional Tavily upgrade for richer results.
 - **URL fetch**: pipes HTML through markitdown — preserves tables, headings, links for better LLM reading
-- **Web search**: Tavily (free tier, 1,000 req/month)
-- **URL fetch**: pipes HTML through markitdown — preserves tables, headings, links for better LLM reading
+
+## Local LLMs
+
+Run models on your own hardware — no API keys, no internet:
+
+### Ollama
+
+```bash
+# Install: https://ollama.com
+ollama pull llama3.1:8b
+```
+
+Create `~/.mino/providers.json`:
+
+```json
+{
+  "providers": [
+    {
+      "name": "ollama",
+      "priority": 1,
+      "base_url": "http://localhost:11434/v1",
+      "api_key_env": "",
+      "model": "llama3.1:8b",
+      "small_model": "llama3.1:8b"
+    }
+  ]
+}
+```
+
+`""` for `api_key_env` means no auth required. Works with LM Studio, vLLM, and any OpenAI-compatible local server too.
 
 ## Extensions
 

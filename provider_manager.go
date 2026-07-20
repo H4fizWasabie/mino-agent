@@ -58,9 +58,12 @@ func NewProviderManager(home string, legacy *Settings) (*ProviderManager, error)
 	}
 	m := &ProviderManager{clients: map[string]*Client{}, state: map[string]*providerState{}, sticky: map[string]string{}, sleep: time.Sleep, now: time.Now}
 	for _, p := range configs {
-		key := os.Getenv(p.APIKeyEnv)
-		if key == "" {
-			return nil, fmt.Errorf("provider %q: %s is not set", p.Name, p.APIKeyEnv)
+		key := ""
+		if p.APIKeyEnv != "" {
+			key = os.Getenv(p.APIKeyEnv)
+			if key == "" {
+				return nil, fmt.Errorf("provider %q: %s is not set", p.Name, p.APIKeyEnv)
+			}
 		}
 		if p.Name == "" || p.BaseURL == "" || p.Model == "" {
 			return nil, fmt.Errorf("provider config requires name, base_url, and model")
