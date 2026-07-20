@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 ### Added
+- Local- and VPS-safe ChatGPT/Codex login using native device-code OAuth, automatic token refresh, and the Codex Responses transport
 - **Native coding agent**: 10 discovery tools (list_files, grep, glob, git_diff/status, graphify_query/explain/path, codegraph_query/sync) for language-agnostic codebase navigation
 - **Coding skill**: auto-loaded phased workflow (understand→plan→edit→verify), overrides assistant STOP rule when active, mandates AGENTS.md read on first turn
 - **Multi-edit support**: edit_file accepts `edits` array for multiple replacements in one call

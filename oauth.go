@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -20,18 +21,18 @@ import (
 
 // OAuthProvider config — one JSON file in oauth.d/ per provider.
 type OAuthProvider struct {
-	Name        string   `json:"name"`         // machine name ("codex", "claude")
-	DisplayName string   `json:"display_name"` // "ChatGPT (Codex)"
-	AuthType    string   `json:"auth_type"`    // "pkce" | "device_code"
-	AuthorizeURL string  `json:"authorize_url"`
-	TokenURL    string   `json:"token_url"`
-	DeviceCodeURL string `json:"device_code_url,omitempty"` // for device_code flow
-	ClientID    string   `json:"client_id"`
-	Scopes      []string `json:"scopes"`
-	APIBaseURL  string   `json:"api_base_url"`  // where to send LLM requests
-	APIKeyURL   string   `json:"api_key_url,omitempty"` // exchange oauth token for api key (Codex)
-	Models      []string `json:"models"`        // available models
-	Extra       map[string]any `json:"extra,omitempty"`
+	Name          string         `json:"name"`         // machine name ("codex", "claude")
+	DisplayName   string         `json:"display_name"` // "ChatGPT (Codex)"
+	AuthType      string         `json:"auth_type"`    // "pkce" | "device_code"
+	AuthorizeURL  string         `json:"authorize_url"`
+	TokenURL      string         `json:"token_url"`
+	DeviceCodeURL string         `json:"device_code_url,omitempty"` // for device_code flow
+	ClientID      string         `json:"client_id"`
+	Scopes        []string       `json:"scopes"`
+	APIBaseURL    string         `json:"api_base_url"`          // where to send LLM requests
+	APIKeyURL     string         `json:"api_key_url,omitempty"` // exchange oauth token for api key (Codex)
+	Models        []string       `json:"models"`                // available models
+	Extra         map[string]any `json:"extra,omitempty"`
 }
 
 type pendingOAuth struct {
@@ -343,11 +344,11 @@ func (e *OAuthEngine) exchangeIDTokenForAPIKey(p *OAuthProvider, idToken string)
 	subjectTokenType, _ := p.Extra["subject_token_type"].(string)
 
 	data := url.Values{
-		"grant_type":          {grantType},
-		"client_id":           {p.ClientID},
-		"requested_token":     {requestedToken},
-		"subject_token":       {idToken},
-		"subject_token_type":  {subjectTokenType},
+		"grant_type":         {grantType},
+		"client_id":          {p.ClientID},
+		"requested_token":    {requestedToken},
+		"subject_token":      {idToken},
+		"subject_token_type": {subjectTokenType},
 	}
 
 	req, _ := http.NewRequest("POST", p.APIKeyURL, strings.NewReader(data.Encode()))
@@ -423,6 +424,146 @@ func (e *OAuthEngine) EnsureProvider(p *OAuthProvider) {
 	if data, err := json.MarshalIndent(existing, "", "  "); err == nil {
 		os.WriteFile(providersPath, data, 0644)
 	}
+}
+
+const codexClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
+
+var (
+	codexDeviceURL      = "https://auth.openai.com/codex/device"
+	codexDeviceStartURL = "https://auth.openai.com/api/accounts/deviceauth/usercode"
+	codexDevicePollURL  = "https://auth.openai.com/api/accounts/deviceauth/token"
+	codexTokenURL       = "https://auth.openai.com/oauth/token"
+	codexDeviceRedirect = "https://auth.openai.com/deviceauth/callback"
+	codexHTTPClient     = &http.Client{Timeout: 30 * time.Second}
+)
+
+// BeginCodexDeviceLogin starts OpenAI's device flow directly. The browser may
+// run on the same machine or elsewhere; only Mino needs outbound HTTPS.
+func (e *OAuthEngine) BeginCodexDeviceLogin() (verificationURL, userCode, deviceCode string, interval int, err error) {
+	if e.providerMap["codex"] == nil {
+		return "", "", "", 0, fmt.Errorf("codex OAuth provider is not configured")
+	}
+	body, _ := json.Marshal(map[string]string{"client_id": codexClientID})
+	resp, err := codexHTTPClient.Post(codexDeviceStartURL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return "", "", "", 0, fmt.Errorf("codex device login: %w", err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", "", "", 0, fmt.Errorf("codex device login failed (%d): %.200s", resp.StatusCode, data)
+	}
+	var result struct {
+		DeviceAuthID string `json:"device_auth_id"`
+		UserCode     string `json:"user_code"`
+		Interval     any    `json:"interval"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil || result.DeviceAuthID == "" || result.UserCode == "" {
+		return "", "", "", 0, fmt.Errorf("invalid codex device response: %.200s", data)
+	}
+	interval = 5
+	switch value := result.Interval.(type) {
+	case float64:
+		interval = int(value)
+	case string:
+		if parsed, parseErr := time.ParseDuration(value + "s"); parseErr == nil {
+			interval = int(parsed.Seconds())
+		}
+	}
+	if interval < 1 {
+		interval = 5
+	}
+	e.mu.Lock()
+	e.pending[result.DeviceAuthID] = &pendingOAuth{
+		provider: "codex", deviceCode: result.UserCode, interval: interval,
+		createdAt: time.Now(), expiresAt: time.Now().Add(15 * time.Minute),
+	}
+	e.mu.Unlock()
+	return codexDeviceURL, result.UserCode, result.DeviceAuthID, interval, nil
+}
+
+// PollCodexDeviceLogin performs one poll, keeping dashboard requests short.
+func (e *OAuthEngine) PollCodexDeviceLogin(deviceCode string) (bool, error) {
+	e.mu.Lock()
+	pending, ok := e.pending[deviceCode]
+	e.mu.Unlock()
+	if !ok || pending.provider != "codex" {
+		return false, fmt.Errorf("unknown codex device login")
+	}
+	if time.Now().After(pending.expiresAt) {
+		e.mu.Lock()
+		delete(e.pending, deviceCode)
+		e.mu.Unlock()
+		return false, fmt.Errorf("codex device login expired")
+	}
+	body, _ := json.Marshal(map[string]string{"device_auth_id": deviceCode, "user_code": pending.deviceCode})
+	resp, err := codexHTTPClient.Post(codexDevicePollURL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return false, fmt.Errorf("codex device poll: %w", err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
+		return false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("codex device poll failed (%d): %.200s", resp.StatusCode, data)
+	}
+	var result struct {
+		AuthorizationCode string `json:"authorization_code"`
+		CodeVerifier      string `json:"code_verifier"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil || result.AuthorizationCode == "" || result.CodeVerifier == "" {
+		return false, fmt.Errorf("invalid codex device token response: %.200s", data)
+	}
+	credential, err := exchangeCodexToken(url.Values{
+		"grant_type": {"authorization_code"}, "client_id": {codexClientID},
+		"code": {result.AuthorizationCode}, "code_verifier": {result.CodeVerifier},
+		"redirect_uri": {codexDeviceRedirect},
+	})
+	if err != nil {
+		return false, err
+	}
+	if err := e.authStore.SetOAuth("codex", credential.Key, credential.Refresh, credential.ExpiresAt, credential.AccountID); err != nil {
+		return false, err
+	}
+	e.EnsureProvider(e.providerMap["codex"])
+	e.mu.Lock()
+	delete(e.pending, deviceCode)
+	e.mu.Unlock()
+	return true, nil
+}
+
+func refreshCodexToken(refresh string) (AuthEntry, error) {
+	return exchangeCodexToken(url.Values{
+		"grant_type": {"refresh_token"}, "refresh_token": {refresh}, "client_id": {codexClientID},
+	})
+}
+
+func exchangeCodexToken(form url.Values) (AuthEntry, error) {
+	resp, err := codexHTTPClient.PostForm(codexTokenURL, form)
+	if err != nil {
+		return AuthEntry{}, fmt.Errorf("codex token exchange: %w", err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	var token struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int64  `json:"expires_in"`
+	}
+	if resp.StatusCode != http.StatusOK {
+		return AuthEntry{}, fmt.Errorf("codex token exchange failed (%d): %.200s", resp.StatusCode, data)
+	}
+	if err := json.Unmarshal(data, &token); err != nil || token.AccessToken == "" || token.RefreshToken == "" || token.ExpiresIn < 1 {
+		return AuthEntry{}, fmt.Errorf("invalid codex token response: %.200s", data)
+	}
+	accountID, err := codexAccountID(token.AccessToken)
+	if err != nil {
+		return AuthEntry{}, err
+	}
+	return AuthEntry{Type: "oauth", Key: token.AccessToken, Refresh: token.RefreshToken,
+		ExpiresAt: time.Now().Add(time.Duration(token.ExpiresIn) * time.Second).Unix(), AccountID: accountID}, nil
 }
 
 // HandleGeminiADC runs gcloud auth application-default login for Gemini.

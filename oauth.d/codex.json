@@ -1,18 +1,15 @@
 {
   "name": "codex",
   "display_name": "ChatGPT (Codex)",
-  "auth_type": "pkce",
-  "authorize_url": "https://auth.openai.com/oauth/authorize",
-  "token_url": "https://auth.openai.com/oauth/token",
-  "client_id": "app_EMoamEEZ73f0CkXaXp7hrann",
-  "scopes": ["openid", "profile", "email", "offline_access"],
+  "auth_type": "codex_device",
+  "authorize_url": "",
+  "token_url": "",
+  "client_id": "",
+  "scopes": [],
   "api_base_url": "https://chatgpt.com/backend-api/codex",
-  "api_key_url": "https://auth.openai.com/oauth/token",
-  "models": ["codex-gpt-5.5", "codex-gpt-5.2", "codex-gpt-4.1"],
+  "api_key_url": "",
+  "models": ["gpt-5.4", "gpt-5.5", "gpt-5.4-mini"],
   "extra": {
-    "token_exchange_grant": "urn:ietf:params:oauth:grant-type:token-exchange",
-    "requested_token": "openai-api-key",
-    "subject_token_type": "urn:ietf:params:oauth:token-type:id_token",
-    "extra_params": "codex_cli_simplified_flow=true&originator=codex_cli_rs"
+    "note": "Uses OpenAI device-code login directly; works locally and remotely without the Codex CLI."
   }
 }

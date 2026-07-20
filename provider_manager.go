@@ -48,6 +48,7 @@ type ProviderManager struct {
 	sticky    map[string]string
 	authStore *AuthStore
 	mu        sync.Mutex
+	authMu    sync.Mutex
 	sleep     func(time.Duration)
 	now       func() time.Time
 }
@@ -59,7 +60,13 @@ func NewProviderManager(home string, legacy *Settings, authStore *AuthStore) (*P
 	}
 	m := &ProviderManager{clients: map[string]*Client{}, state: map[string]*providerState{}, sticky: map[string]string{}, authStore: authStore, sleep: time.Sleep, now: time.Now}
 	for _, p := range configs {
-		key := m.resolveKey(p)
+		key := ""
+		if p.APIKeyEnv != "" {
+			key = os.Getenv(p.APIKeyEnv)
+		}
+		if key == "" && authStore != nil {
+			key = authStore.Get(p.Name)
+		}
 		if key == "" && p.APIKeyEnv != "" {
 			return nil, fmt.Errorf("provider %q: %s is not set", p.Name, p.APIKeyEnv)
 		}
@@ -117,33 +124,65 @@ func routeRole(role ModelRole, messages []Message) ModelRole {
 	return role
 }
 
-func (m *ProviderManager) resolveKey(p ProviderConfig) string {
+func (m *ProviderManager) resolveKey(p ProviderConfig) (string, error) {
 	if p.APIKeyEnv != "" {
 		if k := os.Getenv(p.APIKeyEnv); k != "" {
-			return k
+			return k, nil
 		}
 	}
 	if m.authStore != nil {
-		return m.authStore.Get(p.Name)
+		entry, ok := m.authStore.GetEntry(p.Name)
+		if !ok {
+			return "", nil
+		}
+		if p.Name == "codex" && entry.Type == "oauth" && entry.Refresh != "" && entry.ExpiresAt <= time.Now().Add(time.Minute).Unix() {
+			m.authMu.Lock()
+			defer m.authMu.Unlock()
+			entry, _ = m.authStore.GetEntry(p.Name)
+			if entry.ExpiresAt <= time.Now().Add(time.Minute).Unix() {
+				fresh, err := refreshCodexToken(entry.Refresh)
+				if err != nil {
+					return "", err
+				}
+				if err := m.authStore.SetOAuth(p.Name, fresh.Key, fresh.Refresh, fresh.ExpiresAt, fresh.AccountID); err != nil {
+					return "", err
+				}
+				entry = fresh
+			}
+		}
+		return entry.Key, nil
 	}
-	return ""
+	return "", nil
 }
 
 func (m *ProviderManager) call(session string, role ModelRole, call func(*Client, string) (*LLMResponse, error)) (*LLMResponse, error) {
+	var lastErr error
 	for _, p := range m.candidates(session, role) {
 		// refresh key from env/auth.json (supports runtime key changes)
-		m.clients[p.Name].apiKey = m.resolveKey(p)
+		key, err := m.resolveKey(p)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		client := m.clients[p.Name]
+		if client != nil {
+			client.apiKey = key
+		}
 		for attempt := 0; attempt < 3; attempt++ {
-			resp, err := call(m.clients[p.Name], modelFor(p, role))
+			resp, err := call(client, modelFor(p, role))
 			if err == nil {
 				m.success(session, role, p.Name)
 				return resp, nil
 			}
+			lastErr = err
 			if attempt < 2 {
 				m.sleep(time.Duration(1<<attempt) * time.Second)
 			}
 		}
 		m.failure(session, role, p.Name)
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("all %s providers failed: %w", role, lastErr)
 	}
 	return nil, fmt.Errorf("all %s providers failed", role)
 }
@@ -213,7 +252,11 @@ func (m *ProviderManager) SetPreferred(session, provider string) error {
 	}
 	for _, p := range m.providers {
 		if p.Name == provider {
-			if m.resolveKey(p) == "" {
+			key, err := m.resolveKey(p)
+			if err != nil {
+				return err
+			}
+			if key == "" {
 				return fmt.Errorf("provider %s has no API key configured", provider)
 			}
 		}

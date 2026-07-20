@@ -118,8 +118,21 @@ async function startOAuth(name){
     if(provider.auth_type==="device_code"){
       const r=await postJSON("/api/oauth/device/"+encodeURIComponent(name),{});
       oauthMessage="Enter code "+r.user_code+" at "+r.verification_url; if(status) status.textContent=oauthMessage;
+      if(r.verification_url) window.open(r.verification_url, "_blank");
       for(let i=0;i<60;i++){
         await new Promise(resolve=>setTimeout(resolve,5000));
+        const poll=await (await fetch("/api/oauth/device/"+encodeURIComponent(name)+"?device_code="+encodeURIComponent(r.device_code))).json();
+        if(poll.ok){ oauthMessage=(provider.display_name||name)+" login complete."; await refresh(); return; }
+        if(!poll.pending) throw new Error(poll.error||"login failed");
+      }
+      oauthMessage="Login is still pending. Try again when ready.";
+    } else if(provider.auth_type==="codex_device"){
+      const r=await postJSON("/api/oauth/login/"+encodeURIComponent(name),{});
+      if(!r.ok) throw new Error(r.message||"login start failed");
+      oauthMessage="Code: "+r.user_code+" at "+r.url; if(status) status.textContent=oauthMessage;
+      if(r.url) window.open(r.url, "_blank");
+      for(let i=0;i<180;i++){
+        await new Promise(resolve=>setTimeout(resolve,(r.interval||5)*1000));
         const poll=await (await fetch("/api/oauth/device/"+encodeURIComponent(name)+"?device_code="+encodeURIComponent(r.device_code))).json();
         if(poll.ok){ oauthMessage=(provider.display_name||name)+" login complete."; await refresh(); return; }
         if(!poll.pending) throw new Error(poll.error||"login failed");

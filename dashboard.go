@@ -494,10 +494,14 @@ func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	activeProvider := ""
+	if dashCore.Client != nil {
+		activeProvider = dashCore.Client.ActiveProvider("default")
+	}
 	resp := map[string]any{
 		"provider":          dashCore.Settings.Provider,
 		"model":             dashCore.Settings.Model,
-		"active_provider":   dashCore.Client.ActiveProvider("default"),
+		"active_provider":   activeProvider,
 		"home":              dashCore.Settings.Home,
 		"chat_log":          chatLog,
 		"sessions":          sessions,
@@ -718,7 +722,8 @@ func handleActiveTasks(w http.ResponseWriter, r *http.Request) {
 
 func needsOnboarding(home string) bool {
 	_, err := os.Stat(filepath.Join(home, "providers.json"))
-	return os.IsNotExist(err) && os.Getenv("MINO_API_KEY") == "" && dashCore.AuthStore.Get("default") == ""
+	hasStoredKey := dashCore != nil && dashCore.AuthStore != nil && dashCore.AuthStore.Get("default") != ""
+	return os.IsNotExist(err) && os.Getenv("MINO_API_KEY") == "" && !hasStoredKey
 }
 
 func handleAuthAPI(w http.ResponseWriter, r *http.Request) {
@@ -931,13 +936,26 @@ func handleOAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if provider == "codex" {
+		verificationURL, userCode, deviceCode, interval, err := dashCore.OAuth.BeginCodexDeviceLogin()
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]any{"ok": false, "message": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok": true, "url": verificationURL, "user_code": userCode,
+			"device_code": deviceCode, "interval": interval,
+			"message": "Open the link and enter the code.",
+		})
+		return
+	}
+
 	authURL, err := dashCore.OAuth.BeginPKCE(provider)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
 
-	go func() { /* browser on local machine: frontend opens the URL */ }()
 	json.NewEncoder(w).Encode(map[string]any{"ok": true, "url": authURL, "message": "Complete login in your browser."})
 }
 
@@ -955,17 +973,25 @@ func handleOAuthDevice(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		go OpenBrowser(verificationURL)
 		json.NewEncoder(w).Encode(map[string]any{
-			"ok":              true,
-			"user_code":       userCode,
+			"ok":               true,
+			"user_code":        userCode,
 			"verification_url": verificationURL,
-			"device_code":     userCode,
+			"device_code":      userCode,
 		})
 	case "GET":
 		deviceCode := r.URL.Query().Get("device_code")
 		if deviceCode == "" {
 			http.Error(w, "?device_code= required", 400)
+			return
+		}
+		if provider == "codex" {
+			done, err := dashCore.OAuth.PollCodexDeviceLogin(deviceCode)
+			if err != nil {
+				json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": err.Error()})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"ok": done, "pending": !done})
 			return
 		}
 		token, err := dashCore.OAuth.PollDeviceCode(deviceCode)
