@@ -57,6 +57,16 @@ func RunTelegram(w *Core) {
 		result := w.RespondFor(sid, text, "telegram", nil, false, images...)
 
 		sendTelegramReply(bot, chatID, result.Reply, result.ToolCalls)
+
+		// auto-continue: if Mino hit the iteration limit (still mid-task),
+		// feed "continue" back in so multi-step tasks complete without user prodding.
+		// ponytail: max 10 auto-continues to prevent infinite loops.
+		for auto := 0; auto < 10 && result.Iterations >= w.Settings.MaxIter; auto++ {
+			slog.Info("telegram auto-continue", "auto", auto+1, "iterations", result.Iterations)
+			bot.Send(tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping))
+			result = w.RespondFor(sid, "continue", "telegram", nil, false)
+			sendTelegramReply(bot, chatID, result.Reply, result.ToolCalls)
+		}
 	}
 }
 
