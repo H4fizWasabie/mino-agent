@@ -57,6 +57,7 @@ func RunDashboard(w *Core) {
 	http.HandleFunc("/api/active-tasks", handleActiveTasks)
 	http.HandleFunc("/api/settings", handleSettingsAPI)
 	http.HandleFunc("/api/auth", handleAuthAPI)
+	http.HandleFunc("/api/switch", handleSwitchAPI)
 	http.HandleFunc("/api/oauth/providers", handleOAuthProviders)
 	http.HandleFunc("/api/oauth/login/", handleOAuthLogin)
 	http.HandleFunc("/api/oauth/device/", handleOAuthDevice)
@@ -498,6 +499,7 @@ func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{
 		"provider":          dashCore.Settings.Provider,
 		"model":             dashCore.Settings.Model,
+		"active_provider":   dashCore.Client.ActiveProvider("default"),
 		"home":              dashCore.Settings.Home,
 		"chat_log":          chatLog,
 		"sessions":          sessions,
@@ -766,6 +768,37 @@ func handleAuthAPI(w http.ResponseWriter, r *http.Request) {
 func safeGet(m map[string]any, key string) string {
 	v, _ := m[key].(string)
 	return v
+}
+
+func handleSwitchAPI(w http.ResponseWriter, r *http.Request) {
+	if dashCore.Client == nil {
+		http.Error(w, "no providers configured", http.StatusServiceUnavailable)
+		return
+	}
+	switch r.Method {
+	case "GET":
+		active := dashCore.Client.ActiveProvider("default")
+		json.NewEncoder(w).Encode(map[string]any{
+			"active":    active,
+			"providers": dashCore.Client.ProviderNames(),
+		})
+	case "POST":
+		var body struct {
+			Provider string `json:"provider"`
+			Session  string `json:"session"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		if body.Session == "" {
+			body.Session = "default"
+		}
+		if err := dashCore.Client.SetPreferred(body.Session, body.Provider); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "active": body.Provider})
+	default:
+		http.Error(w, "GET or POST", 405)
+	}
 }
 
 func handleOAuthProviders(w http.ResponseWriter, r *http.Request) {

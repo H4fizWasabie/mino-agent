@@ -196,3 +196,46 @@ func (m *ProviderManager) failure(session string, role ModelRole, name string) {
 		delete(m.sticky, m.key(session, role))
 	}
 }
+
+// SetPreferred forces a session to use a specific provider.
+func (m *ProviderManager) SetPreferred(session, provider string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	found := false
+	for _, p := range m.providers {
+		if p.Name == provider {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("unknown provider: %s", provider)
+	}
+	for _, p := range m.providers {
+		if p.Name == provider {
+			if m.resolveKey(p) == "" {
+				return fmt.Errorf("provider %s has no API key configured", provider)
+			}
+		}
+	}
+	m.sticky[m.key(session, MainModel)] = provider
+	return nil
+}
+
+// ActiveProvider returns the current sticky provider for a session, or "" if none.
+func (m *ProviderManager) ActiveProvider(session string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sticky[m.key(session, MainModel)]
+}
+
+// ProviderNames returns all configured provider names.
+func (m *ProviderManager) ProviderNames() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	names := make([]string, len(m.providers))
+	for i, p := range m.providers {
+		names[i] = p.Name
+	}
+	return names
+}

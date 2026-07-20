@@ -1,5 +1,36 @@
 const esc = s => (s??"").toString().replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 
+// --- provider switcher ---
+async function switchProvider(name) {
+  const r = await postJSON("/api/switch", {provider: name});
+  if (r.ok) { document.getElementById("provider-popup")?.remove(); refresh(); return true; }
+  alert("Switch failed: "+JSON.stringify(r));
+  return false;
+}
+function toggleProviderMenu(ev) {
+  ev.stopPropagation();
+  const old = document.getElementById("provider-popup");
+  if (old) { old.remove(); return; }
+  const btn = ev.currentTarget;
+  const pop = document.createElement("div");
+  pop.id = "provider-popup";
+  pop.className = "provider-popup";
+  fetch("/api/switch").then(r=>r.json()).then(d => {
+    (d.providers||[]).forEach(p => {
+      const row = document.createElement("button");
+      row.className = "provider-option" + (p === d.active ? " active" : "");
+      row.textContent = p + (p === d.active ? " ✓" : "");
+      row.onclick = () => switchProvider(p);
+      pop.appendChild(row);
+    });
+  });
+  document.body.appendChild(pop);
+  const r = btn.getBoundingClientRect();
+  pop.style.top = (r.bottom+4)+"px";
+  pop.style.left = r.left+"px";
+  setTimeout(()=>document.addEventListener("click",()=>pop.remove(),{once:true}),10);
+}
+
 // --- tiny markdown renderer for chat replies (no dependency, XSS-safe: we
 // escape first, then apply a small set of transforms the LLM actually uses:
 // bold/italic/code, links, ordered/unordered lists, and tables).
@@ -310,8 +341,8 @@ function wireDock(){
   syncChatLogs();
 }
 
-// --- Mino Holographic Dossier: one live case file assembled from correspondence,
-// memory evidence, specialist tools, and operational proof.
+// --- Mino Runtime Blueprint: one live engineering sheet assembled from
+// correspondence, memory evidence, specialist tools, and operational proof.
 function archSVG(d){
   const s = d.stats;
   const latest = (d.turns||[])[0] || {};
@@ -322,6 +353,7 @@ function archSVG(d){
   const module = (x,y,w,h,kicker,title,sub,view,nid,mark,cls="") =>
     `<g class="node dossier-node ${cls}" ${attrs(view,nid,title,sub)}><title>${title}: ${sub}</title>
       <rect class="target node-panel" x="${x}" y="${y}" width="${w}" height="${h}" rx="11"/>
+      <path class="module-bracket" d="M${x+8} ${y+22}V${y+8}H${x+22}M${x+w-22} ${y+h-8}H${x+w-8}V${y+h-22}"/>
       <rect class="module-index" x="${x+13}" y="${y+15}" width="28" height="28" rx="7"/>
       <text class="module-mark" x="${x+27}" y="${y+33}" text-anchor="middle">${mark}</text>
       <text class="dossier-kicker" x="${x+52}" y="${y+20}">${kicker}</text>
@@ -330,10 +362,12 @@ function archSVG(d){
   const chip = (x,y,w,title,count,view,nid,mark) =>
     `<g class="node dossier-node evidence-node" ${attrs(view,nid,title,`${count}`)}><title>${title}: ${count}</title>
       <rect class="target evidence-chip" x="${x}" y="${y}" width="${w}" height="44" rx="7"/>
+      <path class="evidence-rule" d="M${x+5} ${y+5}V${y+39}"/>
       <text class="evidence-mark" x="${x+14}" y="${y+18}">${mark}</text><text class="evidence-title" x="${x+30}" y="${y+18}">${title}</text>
       <text class="evidence-count" x="${x+w-10}" y="${y+18}" text-anchor="end">${count}</text><text class="evidence-sub" x="${x+30}" y="${y+33}">ATTACHED EVIDENCE</text></g>`;
   const stamp = (x,y,title,sub,view,nid,mark) =>
     `<g class="node dossier-node stamp-node" ${attrs(view,nid,title,sub)}><title>${title}: ${sub}</title>
+      <path class="stamp-ticks" d="M${x-31} ${y-18}V${y-31}H${x-18}M${x+18} ${y-31}H${x+31}V${y-18}M${x-31} ${y+18}V${y+31}H${x-18}M${x+18} ${y+31}H${x+31}V${y+18}"/>
       <circle class="target stamp-ring" cx="${x}" cy="${y}" r="25"/><circle class="stamp-inner" cx="${x}" cy="${y}" r="19"/>
       <text class="stamp-mark" x="${x}" y="${y+4}" text-anchor="middle">${mark}</text><text class="stamp-title" x="${x+36}" y="${y-3}">${title}</text>
       <text class="stamp-sub" x="${x+36}" y="${y+13}">${sub}</text></g>`;
@@ -354,42 +388,44 @@ function archSVG(d){
   const caseNo = String(s.turns||0).padStart(4,"0");
   const toolCount = ((d.tools||{}).catalog||[]).length;
   const defs = `<defs>
-    <linearGradient id="dossier-bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#060a17"/><stop offset=".55" stop-color="#0a1224"/><stop offset="1" stop-color="#0d1324"/></linearGradient>
-    <linearGradient id="case-sheet" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#142344"/><stop offset="1" stop-color="#0d172e"/></linearGradient>
-    <linearGradient id="holo-scan" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#67e8f9" stop-opacity="0"/><stop offset=".5" stop-color="#67e8f9" stop-opacity=".34"/><stop offset="1" stop-color="#67e8f9" stop-opacity="0"/></linearGradient>
-    <pattern id="dossier-grid" width="22" height="22" patternUnits="userSpaceOnUse"><path d="M22 0H0V22" fill="none" stroke="#33466c" stroke-width=".45"/></pattern>
-    <filter id="dossier-glow" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <linearGradient id="dossier-bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#06111f"/><stop offset=".52" stop-color="#08213a"/><stop offset="1" stop-color="#071523"/></linearGradient>
+    <linearGradient id="case-sheet" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#0d2a47"/><stop offset="1" stop-color="#091c31"/></linearGradient>
+    <linearGradient id="holo-scan" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#67e8f9" stop-opacity="0"/><stop offset=".5" stop-color="#67e8f9" stop-opacity=".42"/><stop offset="1" stop-color="#67e8f9" stop-opacity="0"/></linearGradient>
+    <pattern id="dossier-grid" width="11" height="11" patternUnits="userSpaceOnUse"><path d="M11 0H0V11" fill="none" stroke="#4b7ba4" stroke-width=".32"/><path d="M55 0H0V55" fill="none" stroke="#64a4ca" stroke-width=".62"/></pattern>
+    <pattern id="blueprint-hatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><path d="M0 0V7" stroke="#78a9c7" stroke-width=".45" opacity=".25"/></pattern>
+    <filter id="dossier-glow" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="2.3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
     <marker id="dossier-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10Z" class="wire-head"/></marker>
   </defs>`;
   const core = (x,y,compact=false) => `<g class="node dossier-node mino-core" ${attrs("loop","llm","Mino case handler","reasoning on this dossier")}>
-    <title>Mino: reasoning on this dossier</title><circle class="core-scan" cx="${x}" cy="${y}" r="${compact?37:43}"/>
+    <title>Mino: reasoning on this dossier</title><path class="core-axis" d="M${x-(compact?45:51)} ${y}H${x+(compact?45:51)}M${x} ${y-(compact?45:51)}V${y+(compact?45:51)}"/><circle class="core-scan" cx="${x}" cy="${y}" r="${compact?37:43}"/>
     <circle class="target assistant-core" cx="${x}" cy="${y}" r="${compact?30:35}"/><circle class="assistant-head" cx="${x}" cy="${y-(compact?7:8)}" r="${compact?8:9}"/>
     <path class="assistant-body" d="M${x-(compact?16:18)} ${y+(compact?18:21)}Q${x} ${y+(compact?1:2)} ${x+(compact?16:18)} ${y+(compact?18:21)}"/>
-    <text class="assistant-name" x="${x}" y="${y+(compact?55:64)}" text-anchor="middle">MINO</text><text class="assistant-role" x="${x}" y="${y+(compact?68:78)}" text-anchor="middle">CASE HANDLER</text></g>`;
+    <text class="assistant-name" x="${x}" y="${y+(compact?55:64)}" text-anchor="middle">MINO</text><text class="assistant-role" x="${x}" y="${y+(compact?68:78)}" text-anchor="middle">RUNTIME CORE</text></g>`;
   const archive = (compact=false) => compact ? `<g class="archive-block">
-      <text class="dossier-kicker" x="38" y="563">EVIDENCE ARCHIVE</text>
+      <text class="dossier-kicker" x="38" y="563">MEMORY EVIDENCE INDEX</text>
       <g class="node dossier-node gate-node" ${attrs("memory/overview","gate","Memory gate",`${s.gate_skips} skip · ${s.gate_retrieves} retrieve`)}><rect class="target archive-gate" x="30" y="578" width="360" height="48" rx="8"/><text class="gate-symbol" x="49" y="607">◇</text><text class="archive-title" x="72" y="598">RETRIEVAL GATE</text><text class="archive-sub" x="72" y="614">${s.gate_skips} SKIP · ${s.gate_retrieves} RETRIEVE</text></g>
       ${chip(30,638,112,"Skills",(d.skills||[]).length,"memory/skills","procedural","S")}${chip(154,638,112,"Facts",(d.facts||[]).length,"memory/semantic","semantic","F")}${chip(278,638,112,"Episodes",(d.episodes||[]).length,"memory/episodic","episodic","E")}
       <g class="node dossier-node consolidation-node" ${attrs("memory/consolidation","consolidation","Consolidation",`${d.chat_pending||0} queued`)}><rect class="target archive-consolidation" x="30" y="694" width="236" height="43" rx="7"/><text class="archive-title" x="44" y="712">CONSOLIDATION</text><text class="archive-sub" x="44" y="727">${d.chat_pending||0} QUEUED · ${esc(d.consolidate_every)}</text></g></g>` : `<g class="archive-block">
-      <rect class="archive-shell" x="28" y="333" width="229" height="260" rx="13"/><text class="dossier-kicker" x="45" y="358">EVIDENCE ARCHIVE</text>
+      <rect class="archive-shell" x="28" y="333" width="229" height="260" rx="13"/><path class="archive-hatch" d="M29 348H256V378H29Z"/><text class="dossier-kicker" x="45" y="358">MEMORY EVIDENCE INDEX</text><text class="archive-code" x="239" y="358" text-anchor="end">M-04</text>
       <g class="node dossier-node gate-node" ${attrs("memory/overview","gate","Memory gate",`${s.gate_skips} skip · ${s.gate_retrieves} retrieve`)}><rect class="target archive-gate" x="43" y="373" width="199" height="53" rx="8"/><text class="gate-symbol" x="58" y="403">◇</text><text class="archive-title" x="82" y="394">RETRIEVAL GATE</text><text class="archive-sub" x="82" y="411">${s.gate_skips} SKIP · ${s.gate_retrieves} RETRIEVE</text></g>
       ${chip(43,438,199,"Skills",(d.skills||[]).length,"memory/skills","procedural","S")}${chip(43,489,199,"Facts",(d.facts||[]).length,"memory/semantic","semantic","F")}${chip(43,540,199,"Episodes",(d.episodes||[]).length,"memory/episodic","episodic","E")}
       <g class="node dossier-node consolidation-node" ${attrs("memory/consolidation","consolidation","Consolidation",`${d.chat_pending||0} queued`)}><rect class="target archive-consolidation" x="43" y="599" width="199" height="34" rx="7"/><text class="archive-title" x="55" y="620">CONSOLIDATE · ${d.chat_pending||0} QUEUED</text></g></g>`;
 
   if (window.innerWidth < 720) return `<div class="arch-wrap dossier-wrap"><svg viewBox="0 0 420 820" class="arch dossier-arch arch-compact" role="img" aria-labelledby="dossier-title dossier-desc">
-    <title id="dossier-title">Mino active holographic dossier</title><desc id="dossier-desc">A live case file showing correspondence, context, Mino reasoning, memory evidence, tools, reply dispatch, and operational proof.</desc>
+    <title id="dossier-title">Mino live runtime blueprint</title><desc id="dossier-desc">A live engineering sheet showing correspondence, context, Mino reasoning, memory evidence, tools, reply dispatch, and operational proof.</desc>
     ${defs}<rect class="dossier-stage" x="4" y="4" width="412" height="812" rx="22"/><rect class="dossier-grid" x="5" y="5" width="410" height="810" rx="21"/>
-    <text class="dossier-brand" x="25" y="35">MINO // ACTIVE DOSSIER</text><text class="dossier-live" x="395" y="35" text-anchor="end">CASE ${caseNo}</text>
-    ${wire("M174 92H205","e-gw-wm")}${wire("M294 123V179","e-wm-loop")}${wire("M210 510V578","e-reply-save","dashed")}${wire("M330 501C375 521 382 747 345 766","e-reply-trace")}
-    ${wire("M210 578V555C210 529 255 515 275 500","e-gate-wm","dashed")}${wire("M86 638V626","e-gate-proc","dashed")}${wire("M210 638V626","e-gate-sem","dashed")}${wire("M334 638V626","e-gate-epi","dashed")}${wire("M266 716H278V660","e-consol-sem","dashed")}
+    <path class="blueprint-ruler" d="M22 45H398M22 47V42M66 47V42M110 47V42M154 47V42M198 47V42M242 47V42M286 47V42M330 47V42M374 47V42"/>
+    <text class="dossier-brand" x="25" y="29">MINO // RUNTIME BLUEPRINT</text><text class="dossier-live" x="395" y="29" text-anchor="end">SHEET ${caseNo}</text>
+    ${wire("M174 92H205","e-gw-wm")}${wire("M294 123V179","e-wm-loop")}${wire("M210 510V578","e-reply-save","dashed")}${wire("M330 501H382V766H345","e-reply-trace")}
+    ${wire("M210 578V538H275V500","e-gate-wm","dashed")}${wire("M86 638V626","e-gate-proc","dashed")}${wire("M210 638V626","e-gate-sem","dashed")}${wire("M334 638V626","e-gate-epi","dashed")}${wire("M266 716H278V660","e-consol-sem","dashed")}
     ${module(22,58,152,72,"CORRESPONDENCE","Gateway",`${(d.sessions||[]).length} open threads`,"gateway","gateway","IN","compact-module")}
     ${module(205,58,193,72,"CONTEXT PACKET","Assembled",`${s.turns} turns available`,"memory/overview","wm","CX","compact-module")}
-    <g class="case-stack"><rect class="case-shadow back" x="35" y="166" width="350" height="342" rx="12"/><rect class="case-shadow mid" x="29" y="160" width="350" height="342" rx="12"/><path class="case-sheet" d="M23 176Q23 151 48 151H150L168 168H372Q391 168 391 187V500Q391 518 373 518H42Q23 518 23 499Z"/>
+    <g class="case-stack"><rect class="case-shadow back" x="35" y="166" width="350" height="342" rx="5"/><rect class="case-shadow mid" x="29" y="160" width="350" height="342" rx="5"/><path class="case-sheet" d="M23 176V151H150L168 168H391V518H23Z"/>
       <path class="case-rule" d="M42 223H372M42 360H372M42 435H372"/><rect class="case-scanline" x="27" y="185" width="360" height="3"/>
-      <text class="dossier-kicker" x="43" y="192">CURRENT REQUEST</text><text class="case-state" x="368" y="192" text-anchor="end">● OPEN</text>
+      <text class="sheet-tab" x="42" y="164">SHEET 03 / RESPONSE ASSEMBLY</text><text class="dossier-kicker" x="43" y="192">CURRENT REQUEST</text><text class="case-state" x="368" y="192" text-anchor="end">● LIVE</text>
       <text class="request-copy" x="43" y="212">${request.map((line,i)=>`<tspan x="43" dy="${i?17:0}">${line}</tspan>`).join("")}</text>
       ${core(112,302,true)}
-      <text class="dossier-kicker" x="174" y="271">ANALYSIS LAYER</text><text class="case-heading" x="174" y="292">Personal AI reviewing</text>
+      <text class="dossier-kicker" x="174" y="271">PROCESSOR / MINO</text><text class="case-heading" x="174" y="292">Context under review</text>
       <path class="analysis-line" d="M174 310H342M174 324H318M174 338H352"/><circle class="analysis-cursor" cx="357" cy="338" r="3"/>
       <g class="node dossier-node tools-node" ${attrs("tools","tools","Specialist tools",`${toolCount} available`)}><rect class="target tool-attachment" x="259" y="368" width="112" height="53" rx="8"/><text class="attachment-clip" x="273" y="388">⌘</text><text class="archive-title" x="294" y="387">TOOLS</text><text class="archive-sub" x="294" y="403">${toolCount} AVAILABLE</text></g>
       <g class="node dossier-node reply-node" ${attrs("loop","reply","Reply dispatch","back to you")}><rect class="target dispatch-button" x="43" y="448" width="328" height="51" rx="8"/><text class="dispatch-label" x="57" y="468">RESPONSE READY</text><text class="dispatch-copy" x="57" y="486">${esc(response[0]||"Awaiting response")}</text><text class="dispatch-enter" x="354" y="478" text-anchor="end">ENTER ↵</text></g>
@@ -400,23 +436,24 @@ function archSVG(d){
   </svg></div>`;
 
   return `<div class="arch-wrap dossier-wrap"><svg viewBox="0 0 1040 660" class="arch dossier-arch" role="img" aria-labelledby="dossier-title dossier-desc">
-    <title id="dossier-title">Mino active holographic dossier</title><desc id="dossier-desc">A live case file showing correspondence, context, Mino reasoning, memory evidence, tools, reply dispatch, and operational proof.</desc>
+    <title id="dossier-title">Mino live runtime blueprint</title><desc id="dossier-desc">A live engineering sheet showing correspondence, context, Mino reasoning, memory evidence, tools, reply dispatch, and operational proof.</desc>
     ${defs}<rect class="dossier-stage" x="5" y="5" width="1030" height="650" rx="23"/><rect class="dossier-grid" x="6" y="6" width="1028" height="648" rx="22"/>
-    <text class="dossier-brand" x="30" y="40">MINO // HOLOGRAPHIC DOSSIER</text><text class="dossier-live" x="1010" y="40" text-anchor="end">LIVE CASE ${caseNo} · ${s.turns} TURNS</text>
+    <path class="blueprint-ruler" d="M29 52H1011M29 55V48M84 55V48M139 55V48M194 55V48M249 55V48M304 55V48M359 55V48M414 55V48M469 55V48M524 55V48M579 55V48M634 55V48M689 55V48M744 55V48M799 55V48M854 55V48M909 55V48M964 55V48M1011 55V48"/>
+    <text class="dossier-brand" x="30" y="36">MINO // LIVE RUNTIME BLUEPRINT</text><text class="dossier-live" x="1010" y="36" text-anchor="end">SHEET ${caseNo} · ${s.turns} TURNS · REV 02</text>
     <path class="registration-mark" d="M28 68V55H41M999 55H1012V68M28 626V639H41M999 639H1012V626"/>
-    ${wire("M225 133C260 133 269 169 300 169","e-gw-wm")}${wire("M225 263C270 263 276 287 323 287","e-wm-loop")}
-    ${wire("M242 399C270 399 278 310 322 310","e-gate-wm","dashed")}${wire("M142 438V426","e-gate-proc","dashed")}${wire("M142 489V477","e-gate-sem","dashed")}${wire("M142 540V528","e-gate-epi","dashed")}${wire("M242 616C273 616 279 511 324 511","e-reply-save","dashed")}${wire("M242 616V512H242","e-consol-sem","dashed")}
-    ${wire("M742 474C784 474 788 440 819 440","e-reply-trace")}
+    ${wire("M225 133H263V169H300","e-gw-wm")}${wire("M225 263H273V287H323","e-wm-loop")}
+    ${wire("M242 399H272V310H322","e-gate-wm","dashed")}${wire("M142 438V426","e-gate-proc","dashed")}${wire("M142 489V477","e-gate-sem","dashed")}${wire("M142 540V528","e-gate-epi","dashed")}${wire("M242 616H278V511H324","e-reply-save","dashed")}${wire("M242 616V512","e-consol-sem","dashed")}
+    ${wire("M742 474H780V440H819","e-reply-trace")}
     ${module(28,82,197,101,"CORRESPONDENCE","Gateway",`${(d.sessions||[]).length} open threads · every channel`,"gateway","gateway","IN")}
     ${module(28,207,197,101,"CONTEXT PACKET","Assembled",`${s.turns} traced turns available`,"memory/overview","wm","CX")}
     ${archive(false)}
-    <g class="case-stack"><rect class="case-shadow back" x="315" y="84" width="440" height="520" rx="15"/><rect class="case-shadow mid" x="307" y="77" width="440" height="520" rx="15"/>
-      <path class="case-sheet" d="M299 104Q299 70 333 70H470L493 92H733Q758 92 758 117V584Q758 609 733 609H324Q299 609 299 584Z"/>
+    <g class="case-stack"><rect class="case-shadow back" x="315" y="84" width="440" height="520" rx="6"/><rect class="case-shadow mid" x="307" y="77" width="440" height="520" rx="6"/>
+      <path class="case-sheet" d="M299 104V70H470L493 92H758V609H299Z"/>
       <path class="case-rule" d="M324 180H733M324 392H733M324 486H733"/><rect class="case-scanline" x="304" y="112" width="449" height="4"/>
-      <text class="dossier-kicker" x="324" y="111">ACTIVE REQUEST</text><text class="case-state" x="730" y="111" text-anchor="end">● OPEN · PRIORITY NORMAL</text>
-      <text class="request-copy" x="324" y="137">${requestText}</text><text class="case-id" x="730" y="159" text-anchor="end">DOSSIER / ${caseNo}</text>
+      <text class="sheet-tab" x="322" y="84">SHEET 03 / RESPONSE ASSEMBLY</text><text class="dossier-kicker" x="324" y="111">ACTIVE REQUEST</text><text class="case-state" x="730" y="111" text-anchor="end">● LIVE · PRIORITY NORMAL</text>
+      <text class="request-copy" x="324" y="137">${requestText}</text><text class="case-id" x="730" y="159" text-anchor="end">RUNTIME SHEET / ${caseNo}</text>
       ${core(386,286)}
-      <text class="dossier-kicker" x="457" y="237">MINO ANALYSIS</text><text class="case-heading" x="457" y="262">Case context under review</text>
+      <text class="dossier-kicker" x="457" y="237">PROCESSOR / MINO</text><text class="case-heading" x="457" y="262">Context under review</text>
       <text class="case-note" x="457" y="284">One assistant coordinates the evidence, tools,</text><text class="case-note" x="457" y="302">and final response inside this live record.</text>
       <path class="analysis-line" d="M457 330H690M457 347H650M457 364H708"/><circle class="analysis-cursor" cx="714" cy="364" r="3"/>
       <text class="dossier-kicker" x="324" y="421">ATTACHED MATERIAL</text>
@@ -425,11 +462,11 @@ function archSVG(d){
       <g class="node dossier-node reply-node" ${attrs("loop","reply","Reply dispatch","back to you")}><rect class="target dispatch-button" x="324" y="502" width="408" height="82" rx="9"/><text class="dispatch-label" x="343" y="526">APPROVED RESPONSE</text>
         <text class="dispatch-copy" x="343" y="549">${responseText}</text><rect class="enter-key" x="644" y="524" width="70" height="42" rx="7"/><text class="dispatch-enter" x="679" y="549" text-anchor="middle">ENTER ↵</text></g>
     </g>
-    <g class="ops-proof"><text class="dossier-kicker" x="800" y="94">OPERATIONAL PROOF</text>
+    <g class="ops-proof"><text class="dossier-kicker" x="800" y="94">VERIFICATION RAIL</text>
       ${module(788,110,220,101,"SPECIALIST NETWORK","Tools",`${toolCount} available capabilities`,"tools","tools","⌘","tools-module")}
       ${stamp(823,275,"Trace",`${s.trace_files} files`,"ops/traces","trace","T")}${stamp(823,355,"Evaluate","tests + judge","ops/release","eval","E")}${stamp(823,435,"Release",d.eval_report?d.eval_report.deterministic:"make gate","ops/release","release","R")}
       <path class="proof-rail" d="M823 300V330M823 380V410"/>
-      <text class="proof-note" x="800" y="515">Every completed dossier leaves</text><text class="proof-note" x="800" y="532">a trace, an evaluation path, and</text><text class="proof-note" x="800" y="549">a deliberate release record.</text></g>
+      <text class="proof-note" x="800" y="515">Every completed turn leaves</text><text class="proof-note" x="800" y="532">a trace, an evaluation path, and</text><text class="proof-note" x="800" y="549">a deliberate release record.</text></g>
   </svg></div>`;
 }
 
@@ -791,7 +828,7 @@ const VIEWS = {
         <p class="overview-lede">Your conversations, memory, tools, and learning loops share one live workspace.</p>
         <div class="overview-links"><a href="#gateway">Open gateway <span>→</span></a><a href="#memory">Inspect memory <span>→</span></a></div>
       </div><div class="overview-runtime"><span class="runtime-kicker"><i></i> RUNTIME STATUS</span><strong>Operational</strong>
-        <span>${esc(d.provider)} · ${esc(d.model)}</span><small>${sessions} active conversation${sessions===1?"":"s"} · ${esc(d.home)}</small></div>
+        <span class="provider-clickable" onclick="toggleProviderMenu(event)" title="Click to switch provider">${esc(d.active_provider||d.provider)} · ${esc(d.model)} <i class="dropdown-arrow">▾</i></span><small>${sessions} active conversation${sessions===1?"":"s"} · ${esc(d.home)}</small></div>
     </section>
     <section class="overview-metrics" aria-label="Mino runtime summary">
       ${metric(s.turns,"Total turns",`${s.tool_calls} tool calls`,"primary")}
@@ -803,7 +840,7 @@ const VIEWS = {
     <section class="overview-signal"><div class="overview-section-head"><div><span class="section-kicker">SIGNAL</span><h2>Retrieval gate</h2></div><span class="section-note">records whether recall entered each turn</span></div>
       <div class="signal-body">${gateSplit(s)}</div>
     </section>
-    <section class="overview-universe"><div class="overview-section-head"><div><span class="section-kicker">LIVE SYSTEM</span><h2>Active dossier</h2></div><span class="section-note">open any record to inspect it <span class="arch-status"></span></span></div>${archSVG(d)}</section>
+    <section class="overview-universe"><div class="overview-section-head"><div><span class="section-kicker">LIVE SYSTEM</span><h2>Runtime blueprint</h2></div><span class="section-note">open any subsystem to inspect it <span class="arch-status"></span></span></div>${archSVG(d)}</section>
     <section class="overview-latest"><div class="overview-section-head"><div><span class="section-kicker">RECENT ACTIVITY</span><h2>Latest turn</h2></div><span class="section-note">${latestLabel}</span></div>
       ${latest?turnCard(latest):'<div class="card empty">No turns yet — send a message from the chat dock to wake Mino.</div>'}
     </section>`;
