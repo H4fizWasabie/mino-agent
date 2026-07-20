@@ -22,9 +22,6 @@ type LoopResult struct {
 	TokensOut  int
 }
 
-// Observer matches Core's Observer callback
-type Observer func(kind string, data map[string]any)
-
 const (
 	completionToolName = "complete_task"
 	completionPrompt   = `COMPLETION PROTOCOL (RUNTIME ENFORCED):
@@ -32,7 +29,8 @@ const (
 - To answer the user, call complete_task ALONE with status and the final reply.
 - Use status "complete" only when every requested step is verified complete.
 - Use status "blocked" only when required user input, approval, or an unavailable external dependency prevents further safe progress.
-- If work remains, call the next tool instead. Put all user-facing final text in complete_task.reply.`
+- If work remains, call the next tool instead.
+- IMPORTANT: complete_task.reply must contain the FULL answer including any jokes, lists, code, or content the user requested. NEVER wrap it with meta-commentary like "Hope that helped!" — put the actual content in the reply field.`
 )
 
 var completionTool = ToolDef{
@@ -47,6 +45,9 @@ var completionTool = ToolDef{
 		"required": []string{"status", "reply"},
 	},
 }
+
+// Observer matches Core's Observer callback
+type Observer func(kind string, data map[string]any)
 
 // notify helper for observers
 func notify(obs Observer, kind string, data map[string]any) {
@@ -92,7 +93,7 @@ func RunLoop(
 		}
 		notify(obs, "gate", map[string]any{"decision": decision, "reason": reason})
 		logTrace(traceHome, "gate", map[string]any{"decision": decision, "reason": reason})
-		logTrace(traceHome, "turn_end", map[string]any{"reply": result.Reply, "iterations": result.Iterations})
+		logTrace(traceHome, "turn_end", map[string]any{"reply": result.Reply, "status": result.Status, "iterations": result.Iterations})
 	}()
 
 	// build filter query once — tools needed don't change mid-loop
@@ -114,15 +115,17 @@ func RunLoop(
 			filterQuery += "\n" + messages[len(messages)-1].Content
 		}
 
+		schemas := append(tools.SchemasFor(filterQuery, es), completionTool)
 		if stream {
-			resp, err = client.Stream(sessionID, MainModel, messages, maxTokens, system, tools.SchemasFor(filterQuery, es), func(delta string) {
+			resp, err = client.Stream(sessionID, MainModel, messages, maxTokens, system, schemas, func(delta string) {
 				notify(obs, "text", map[string]any{"delta": delta})
 			})
 		} else {
-			resp, err = client.Create(sessionID, MainModel, messages, maxTokens, system, tools.SchemasFor(filterQuery, es))
+			resp, err = client.Create(sessionID, MainModel, messages, maxTokens, system, schemas)
 		}
 		if err != nil {
 			result.Reply = fmt.Sprintf("(error: %v)", err)
+			result.Status = "error"
 			return result
 		}
 
@@ -195,13 +198,11 @@ func RunLoop(
 					raw = "[image loaded into visual context]"
 				}
 				status = toolOutputStatus(raw)
-				if status == "error" {
-					batchFailed = true
-				}
 				output = prepareToolOutput(traceHome, sessionID, i, tc.Name, raw)
 				dedup[key] = output
 				dedupStatus[key] = status
 			}
+			batchFailed = batchFailed || status == "error"
 			event := map[string]any{"tool": tc.Name, "args": args, "output": output, "status": status}
 			result.ToolCalls = append(result.ToolCalls, ToolCall{Name: tc.Name, Args: args, Output: output})
 			notify(obs, "tool", event)
@@ -297,7 +298,7 @@ func formatToolResults(results []map[string]any) string {
 	for _, r := range results {
 		out += fmt.Sprintf("[tool_result: %v]\n", r["content"])
 	}
-	return out
+	return out + "[Continue working if any requested step remains. Call the next tool now; do not narrate a future action. Call complete_task alone only when the task is complete or genuinely blocked on required user input or approval.]\n"
 }
 
 // logTrace appends a trace event to traces/YYYY-MM-DD.jsonl

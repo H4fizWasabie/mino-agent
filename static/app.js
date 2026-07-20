@@ -120,19 +120,19 @@ async function removeProvider(name){
 }
 async function startOAuth(name){
   const provider=oauthProviders[name]||{}, status=document.getElementById("oauth-status");
-  oauthMessage="Starting "+(provider.display_name||name)+" login…"; if(status) status.textContent=oauthMessage;
+  oauthMessage="Starting "+(provider.display_name||name)+" login"; if(status) status.textContent=oauthMessage;
   try {
     if(provider.auth_type==="device_code"){
       const r=await postJSON("/api/oauth/device/"+encodeURIComponent(name),{});
       oauthMessage="Enter code "+r.user_code+" at "+r.verification_url; if(status) status.textContent=oauthMessage;
       if(r.verification_url) window.open(r.verification_url, "_blank");
-      for(let i=0;i<60;i++){
-        await new Promise(resolve=>setTimeout(resolve,5000));
+      for(let i=0;i<180;i++){
+        await new Promise(resolve=>setTimeout(resolve,(r.interval||5)*1000));
         const poll=await (await fetch("/api/oauth/device/"+encodeURIComponent(name)+"?device_code="+encodeURIComponent(r.device_code))).json();
         if(poll.ok){ oauthMessage=(provider.display_name||name)+" login complete."; await refresh(); return; }
         if(!poll.pending) throw new Error(poll.error||"login failed");
       }
-      oauthMessage="Login is still pending. Try again when ready.";
+      oauthMessage="Login pending. Try again.";
     } else if(provider.auth_type==="codex_device"){
       const r=await postJSON("/api/oauth/login/"+encodeURIComponent(name),{});
       if(!r.ok) throw new Error(r.message||"login start failed");
@@ -144,7 +144,7 @@ async function startOAuth(name){
         if(poll.ok){ oauthMessage=(provider.display_name||name)+" login complete."; await refresh(); return; }
         if(!poll.pending) throw new Error(poll.error||"login failed");
       }
-      oauthMessage="Login is still pending. Try again when ready.";
+      oauthMessage="Login pending. Try again.";
     } else {
       const r=await postJSON("/api/oauth/login/"+encodeURIComponent(name),{});
       if(r.url) window.open(r.url, "_blank");
@@ -352,11 +352,18 @@ function applyStreamEvent(pending, ev){
       tool: ev.tool, args: ev.args, output: ev.output,
       status: (ev.output||"").toLowerCase().startsWith("error") ? "error" : "ok",
       summary: (ev.output || "").split(". ")[0].slice(0,120)});
-    pending.stream = "";   // a new assistant turn begins after the tool result
+    pending.stream = "";
+  } else if (ev.kind === "completion"){
+    // complete_task protocol: streamed text is provisional, status+reply are final
+    pending.pending = false;
+    pending.reply = (ev.reply || "");
+    pending.status = ev.status;
+    pending.stream = "";
   } else if (ev.kind === "done"){
-    pending.pending = false; pending.stream = "";
+    pending.pending = false;
     if (ev.error) pending.reply = "Error: " + ev.error;
-    else Object.assign(pending, ev);   // reply, tools, gate, iterations, latency_ms, consolidation
+    else if (!pending.reply) Object.assign(pending, ev);
+    pending.stream = "";
   }
 }
 
