@@ -874,7 +874,11 @@ func handleProvidersAPI(w http.ResponseWriter, r *http.Request) {
 		if body.APIKey != "" && dashCore.AuthStore != nil {
 			dashCore.AuthStore.Set(body.Name, body.APIKey)
 		}
-		dashCore.Client.ReloadProviders(dashCore.Settings.Home)
+		if dashCore.Client != nil {
+			dashCore.Client.ReloadProviders(dashCore.Settings.Home)
+		} else {
+			go func() { time.Sleep(500 * time.Millisecond); os.Exit(0) }()
+		}
 		json.NewEncoder(w).Encode(map[string]any{"ok": true})
 	case "DELETE":
 		name := r.URL.Query().Get("name")
@@ -902,7 +906,9 @@ func handleProvidersAPI(w http.ResponseWriter, r *http.Request) {
 		if dashCore.AuthStore != nil {
 			dashCore.AuthStore.Delete(name)
 		}
-		dashCore.Client.ReloadProviders(dashCore.Settings.Home)
+		if dashCore.Client != nil {
+			dashCore.Client.ReloadProviders(dashCore.Settings.Home)
+		}
 		json.NewEncoder(w).Encode(map[string]any{"ok": true})
 	default:
 		http.Error(w, "POST or DELETE", 405)
@@ -1026,7 +1032,11 @@ func handleOAuthDevice(w http.ResponseWriter, r *http.Request) {
 			}
 			if done {
 				dashCore.OAuth.EnsureProvider(dashCore.OAuth.providerMap["codex"])
-				dashCore.Client.ReloadProviders(dashCore.Settings.Home)
+				if dashCore.Client != nil {
+					dashCore.Client.ReloadProviders(dashCore.Settings.Home)
+				} else {
+					go func() { time.Sleep(500 * time.Millisecond); os.Exit(0) }()
+				}
 			}
 			json.NewEncoder(w).Encode(map[string]any{"ok": done, "pending": !done})
 			return
@@ -1111,9 +1121,11 @@ func handleSettingsAPI(w http.ResponseWriter, r *http.Request) {
 		envData += fmt.Sprintf("TELEGRAM_BOT_TOKEN=%s\n", body.TelegramToken)
 	}
 	os.WriteFile(envPath, []byte(envData), 0600)
-	// pick up changes without restart
+	// pick up changes without restart, or restart if first provider
 	if dashCore.Client != nil {
 		dashCore.Client.ReloadProviders(home)
+	} else {
+		go func() { time.Sleep(500 * time.Millisecond); os.Exit(0) }()
 	}
 	json.NewEncoder(w).Encode(map[string]any{"ok": true, "message": "Saved."})
 }
