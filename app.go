@@ -110,9 +110,8 @@ func NewCore() *Core {
 	tools.Register(MakeReloadPluginsTool(s.Home, tools, mcpBridge))
 
 	// Tool filter: use embeddings to send only relevant tools per turn
-	coreTools := []string{"recall", "save_note", "read_file", "write_file", "edit_file", "bash",
-		"request_approval", "resolve_approval", "schedule_task", "list_scheduled", "search_web"}
-	toolFilter := NewToolFilter(coreTools, 25) // top 25 + 11 core = max 36 tools/turn
+	coreTools := []string{"recall", "save_note", "read_file", "bash", "request_approval", "resolve_approval"}
+	toolFilter := NewToolFilter(coreTools, 8) // top 8 + 6 core = max 14 tools/turn
 	if mem.embedder != nil {
 		toolFilter.Index(tools.Schemas(), mem.embedder)
 		slog.Info("tool filter indexed", "tools", len(tools.Schemas()))

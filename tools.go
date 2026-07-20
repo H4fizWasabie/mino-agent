@@ -249,7 +249,7 @@ func makeReadTool() *Tool {
 func makeWriteTool() *Tool {
 	return &Tool{
 		Name:        "write_file",
-		Description: "Write content to a file. Creates or overwrites.",
+		Description: "Write or save content to a file. Creates, overwrites, or appends. For saving notes, reminders, drafts, logs, or any text the user wants stored. Use when user asks to: write, save, create file, store, output, export, persist, dump to file.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -273,7 +273,7 @@ func makeWriteTool() *Tool {
 func makeEditTool() *Tool {
 	return &Tool{
 		Name:        "edit_file",
-		Description: "Edit a file. Use 'edits' array for multiple replacements: [{\"oldText\":\"...\",\"newText\":\"...\"}]. Or use single oldText/newText for one replacement. oldText must match exactly and be unique in the file.",
+		Description: "Edit, modify, or update a file. Make targeted replacements in existing files. Use when user asks to: edit, change, modify, update, fix, replace, patch, correct, tweak, rewrite a file.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -489,7 +489,7 @@ func makeMessagesTool(home string) *Tool {
 func makeSearchTool() *Tool {
 	return &Tool{
 		Name:        "search_web",
-		Description: "Search the web. Uses Tavily if TAVILY_API_KEY is set, otherwise DuckDuckGo (keyless).",
+		Description: "Search the internet for information. Uses Tavily if configured, otherwise free DuckDuckGo. Use when user asks to: search, find online, google, look up, research, what is, who is, latest news, current events.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -558,7 +558,7 @@ func tavilySearch(query, key string) string {
 func makeFetchURLTool() *Tool {
 	return &Tool{
 		Name:        "fetch_url",
-		Description: "Fetch a web page and return its text content. Use after search_web to read full pages.",
+		Description: "Fetch and read a web page. Returns text content. Use after searching the web, or when user provides a URL. Use when user asks to: fetch, read URL, download page, open link, get content, view website.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -816,7 +816,7 @@ func makePatternTool(home string, mem *Memory) *Tool {
 func makeScheduleTool(home string) *Tool {
 	return &Tool{
 		Name:        "schedule_task",
-		Description: "Schedule a recurring task. Mino will run the prompt at the specified time. Use for reminders, health checks, reports, or any repeating automation. The prompt can use tools like bash, read_file, or extension tools.",
+		Description: "Schedule a reminder, recurring task, or cron job. Mino runs the prompt at the specified time automatically. Use when user asks to: remind, schedule, notify, alert, every morning, daily, hourly, at 9am, cron, recurring, periodic, later.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -836,7 +836,7 @@ func makeScheduleTool(home string) *Tool {
 func makeListScheduleTool(home string) *Tool {
 	return &Tool{
 		Name:        "list_scheduled",
-		Description: "List all scheduled tasks from schedule.json",
+		Description: "List all scheduled reminders, recurring tasks, and cron jobs. Use when user asks: what's scheduled, upcoming tasks, reminders, what's pending, show schedule.",
 		Schema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -1068,7 +1068,7 @@ func makeResolveApprovalTool(home string) *Tool {
 func makeGenerateImageTool(home string) *Tool {
 	return &Tool{
 		Name:        "generate_image",
-		Description: "Generate an image from a text prompt using Pollinations.ai (free, no API key needed). Returns the file path of the saved image.",
+		Description: "Generate an image or picture from a text prompt using Pollinations.ai (free, no key). Use when user asks to: generate image, create picture, draw, make art, visualize, illustrate, render.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
