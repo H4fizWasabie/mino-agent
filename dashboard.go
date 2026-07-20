@@ -931,18 +931,6 @@ func handleOAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if provider == "codex" {
-		key, err := dashCore.OAuth.HandleCodexLogin()
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		dashCore.AuthStore.Set(provider, key)
-		dashCore.OAuth.EnsureProvider(dashCore.OAuth.providerMap["codex"])
-		json.NewEncoder(w).Encode(map[string]any{"ok": true, "message": "Codex API key extracted."})
-		return
-	}
-
 	authURL, err := dashCore.OAuth.BeginPKCE(provider)
 	if err != nil {
 		http.Error(w, err.Error(), 400)

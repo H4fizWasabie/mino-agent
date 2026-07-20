@@ -125,6 +125,15 @@ func (e *OAuthEngine) BeginPKCE(providerName string) (authURL string, err error)
 	if len(p.Scopes) > 0 {
 		q.Set("scope", strings.Join(p.Scopes, " "))
 	}
+	// append provider-specific extra params (e.g. codex_cli_simplified_flow=true)
+	if extra, ok := p.Extra["extra_params"].(string); ok && extra != "" {
+		for _, pair := range strings.Split(extra, "&") {
+			kv := strings.SplitN(pair, "=", 2)
+			if len(kv) == 2 {
+				q.Set(kv[0], kv[1])
+			}
+		}
+	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil
 }
@@ -414,43 +423,6 @@ func (e *OAuthEngine) EnsureProvider(p *OAuthProvider) {
 	if data, err := json.MarshalIndent(existing, "", "  "); err == nil {
 		os.WriteFile(providersPath, data, 0644)
 	}
-}
-
-// HandleCodexLogin reads credentials from ~/.codex/auth.json (set up by `codex login` CLI).
-// If not found, prompts the user to run codex login first.
-func (e *OAuthEngine) HandleCodexLogin() (string, error) {
-	p := e.providerMap["codex"]
-	if p == nil {
-		return "", fmt.Errorf("codex provider not configured")
-	}
-	// try reading Codex CLI's auth file
-	codexHome := os.Getenv("CODEX_HOME")
-	if codexHome == "" {
-		codexHome = filepath.Join(os.Getenv("HOME"), ".codex")
-	}
-	authPath := filepath.Join(codexHome, "auth.json")
-	data, err := os.ReadFile(authPath)
-	if err != nil {
-		// try running codex login
-		cmd := exec.Command("codex", "login")
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			return "", fmt.Errorf("codex login failed: %w — install codex CLI or paste API key in Settings", err)
-		}
-		data, err = os.ReadFile(authPath)
-		if err != nil {
-			return "", fmt.Errorf("codex auth not found after login: %w", err)
-		}
-	}
-	var auth struct {
-		OpenAIAPIKey string `json:"openai_api_key"`
-	}
-	json.Unmarshal(data, &auth)
-	if auth.OpenAIAPIKey == "" {
-		return "", fmt.Errorf("no openai_api_key in %s — run 'codex login' first", authPath)
-	}
-	return auth.OpenAIAPIKey, nil
 }
 
 // HandleGeminiADC runs gcloud auth application-default login for Gemini.
