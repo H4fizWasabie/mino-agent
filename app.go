@@ -37,9 +37,9 @@ func NewCore() *Core {
 	authStore := LoadAuthStore(s.Home)
 	client, err := NewProviderManager(s.Home, s, authStore)
 	if err != nil {
-		if dashboardRequested() && needsOnboarding(s.Home) {
+		if needsOnboarding(s.Home) {
 			slog.Info("dashboard awaiting provider setup")
-		} else {
+		} else if !dashboardRequested() {
 			fmt.Fprintln(os.Stderr, "Welcome to Mino! Set up your API key to get started:")
 			fmt.Fprintln(os.Stderr, "")
 			fmt.Fprintln(os.Stderr, "  Option 1 — Quick start with env vars:")
