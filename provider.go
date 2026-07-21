@@ -210,7 +210,7 @@ func parseResponse(r io.Reader) (*LLMResponse, error) {
 			OutputTokens: result.Usage.CompletionTokens,
 		},
 		Content:   blocks,
-		FinalText: choice.Message.Content,
+		FinalText: content,
 	}, nil
 }
 
@@ -235,7 +235,8 @@ func parseSSEStream(r io.Reader, onText func(string)) (*LLMResponse, error) {
 		var chunk struct {
 			Choices []struct {
 				Delta struct {
-					Content   string `json:"content"`
+					Content          string `json:"content"`
+					ReasoningContent string `json:"reasoning_content"`
 					ToolCalls []struct {
 						Index    int    `json:"index"`
 						ID       string `json:"id"`
@@ -259,10 +260,14 @@ func parseSSEStream(r io.Reader, onText func(string)) (*LLMResponse, error) {
 		}
 
 		for _, choice := range chunk.Choices {
-			if choice.Delta.Content != "" {
-				fullText.WriteString(choice.Delta.Content)
+			deltaText := choice.Delta.Content
+			if deltaText == "" && choice.Delta.ReasoningContent != "" {
+				deltaText = choice.Delta.ReasoningContent
+			}
+			if deltaText != "" {
+				fullText.WriteString(deltaText)
 				if onText != nil {
-					onText(choice.Delta.Content)
+					onText(deltaText)
 				}
 			}
 			for _, tc := range choice.Delta.ToolCalls {

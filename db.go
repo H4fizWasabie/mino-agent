@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"path/filepath"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 // CurrentSchemaVersion is incremented when the schema changes in a way
@@ -78,7 +78,7 @@ var schemaStatements = []string{
 
 func Connect(home string) *sql.DB {
 	path := filepath.Join(home, "state.db")
-	db, err := sql.Open("sqlite3", path+"?_journal_mode=WAL&_foreign_keys=on")
+	db, err := sql.Open("sqlite", path+"?_journal_mode=WAL&_foreign_keys=on")
 	if err != nil {
 		panic(err)
 	}

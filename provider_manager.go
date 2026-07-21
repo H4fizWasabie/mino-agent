@@ -150,6 +150,10 @@ func (m *ProviderManager) resolveKey(p ProviderConfig) (string, error) {
 		if k := os.Getenv(p.APIKeyEnv); k != "" {
 			return k, nil
 		}
+		// ponytail: also check mino.env so agent can add keys mid-session
+		if k := readEnvFile(p.APIKeyEnv); k != "" {
+			return k, nil
+		}
 	}
 	if m.authStore != nil {
 		entry, ok := m.authStore.GetEntry(p.Name)

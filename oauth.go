@@ -44,8 +44,6 @@ type pendingOAuth struct {
 	deviceCode   string // for polling
 	interval     int
 	expiresAt    time.Time
-	geminiCmd    *exec.Cmd      // running gcloud process for ADC login
-	geminiStdin  io.WriteCloser // stdin pipe for gcloud
 }
 
 // OAuthEngine handles browser-based login flows.
@@ -592,97 +590,6 @@ func exchangeCodexToken(form url.Values) (AuthEntry, error) {
 	}
 	return AuthEntry{Type: "oauth", Key: token.AccessToken, Refresh: token.RefreshToken,
 		ExpiresAt: time.Now().Add(time.Duration(token.ExpiresIn) * time.Second).Unix(), AccountID: accountID}, nil
-}
-
-// BeginGeminiADC starts gcloud ADC login and returns the auth URL.
-// The gcloud process stays alive waiting for the user's redirect URL on stdin.
-func (e *OAuthEngine) BeginGeminiADC() (authURL string, state string, err error) {
-	cmd := exec.Command("gcloud", "auth", "application-default", "login", "--no-browser")
-	stdin, _ := cmd.StdinPipe()
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	if err := cmd.Start(); err != nil {
-		return "", "", fmt.Errorf("gcloud auth start: %w", err)
-	}
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		text := buf.String()
-		// gcloud ≥372 prints --remote-bootstrap="URL"
-		if idx := strings.Index(text, "--remote-bootstrap=\""); idx >= 0 {
-			start := idx + len("--remote-bootstrap=\"")
-			if end := strings.IndexByte(text[start:], '"'); end >= 0 {
-				authURL = text[start : start+end]
-				break
-			}
-		}
-		for _, line := range strings.Split(text, "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "https://") && !strings.Contains(line, "--remote-bootstrap") {
-				authURL = line
-				break
-			}
-		}
-		if authURL != "" {
-			break
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	if authURL == "" {
-		cmd.Process.Kill()
-		cmd.Wait()
-		return "", "", fmt.Errorf("could not find URL in gcloud output: %s", buf.String())
-	}
-	state = randHex(16)
-	e.mu.Lock()
-	e.pending[state] = &pendingOAuth{
-		provider:    "gemini",
-		state:       state,
-		createdAt:   time.Now(),
-		geminiCmd:   cmd,
-		geminiStdin: stdin,
-	}
-	e.mu.Unlock()
-	go func() {
-		time.Sleep(10 * time.Minute)
-		e.mu.Lock()
-		if p, ok := e.pending[state]; ok && p.geminiCmd != nil {
-			p.geminiStdin.Close()
-			p.geminiCmd.Process.Kill()
-			delete(e.pending, state)
-		}
-		e.mu.Unlock()
-	}()
-	return authURL, state, nil
-}
-
-// CompleteGeminiADC feeds the user's browser redirect URL to the waiting gcloud process.
-func (e *OAuthEngine) CompleteGeminiADC(state, redirectURL string) error {
-	e.mu.Lock()
-	pending, ok := e.pending[state]
-	delete(e.pending, state)
-	e.mu.Unlock()
-	if !ok || pending.geminiCmd == nil {
-		return fmt.Errorf("no pending gemini login for state %s", state)
-	}
-	fmt.Fprintln(pending.geminiStdin, redirectURL)
-	pending.geminiStdin.Close()
-	done := make(chan error, 1)
-	go func() { done <- pending.geminiCmd.Wait() }()
-	select {
-	case err := <-done:
-		if err != nil {
-			return fmt.Errorf("gcloud failed: %w", err)
-		}
-		e.authStore.Set("gemini", "adc-credentials")
-		if p := e.providerMap["gemini"]; p != nil {
-			e.EnsureProvider(p)
-		}
-		return nil
-	case <-time.After(30 * time.Second):
-		pending.geminiCmd.Process.Kill()
-		return fmt.Errorf("gcloud timed out")
-	}
 }
 
 // Providers returns the list of configured OAuth providers.

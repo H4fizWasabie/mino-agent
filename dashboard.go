@@ -945,36 +945,6 @@ func handleOAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if provider == "gemini" {
-		// Step 2: user submits the redirect URL from their local browser
-		if r.Method == "POST" && r.URL.Query().Get("step") == "complete" {
-			var body struct {
-				State       string `json:"state"`
-				RedirectURL string `json:"redirect_url"`
-			}
-			json.NewDecoder(r.Body).Decode(&body)
-			if err := dashCore.OAuth.CompleteGeminiADC(body.State, body.RedirectURL); err != nil {
-				json.NewEncoder(w).Encode(map[string]any{"ok": false, "message": err.Error()})
-				return
-			}
-			json.NewEncoder(w).Encode(map[string]any{"ok": true, "message": "Logged in to Google Gemini!"})
-			return
-		}
-		// Step 1: start ADC login, return URL
-		authURL, state, err := dashCore.OAuth.BeginGeminiADC()
-		if err != nil {
-			json.NewEncoder(w).Encode(map[string]any{"ok": false, "message": err.Error()})
-			return
-		}
-		json.NewEncoder(w).Encode(map[string]any{
-			"ok":      true,
-			"url":     authURL,
-			"state":   state,
-			"message": "Open this URL in your browser. After login, Google will redirect you to localhost — copy the FULL redirect URL from the address bar and paste it back.",
-		})
-		return
-	}
-
 	if provider == "codex" {
 		verificationURL, userCode, deviceCode, interval, err := dashCore.OAuth.BeginCodexDeviceLogin()
 		if err != nil {
@@ -1068,6 +1038,7 @@ func handleSettingsAPI(w http.ResponseWriter, r *http.Request) {
 		Model         string `json:"model"`
 		SmallModel    string `json:"small_model"`
 		TelegramToken string `json:"telegram_token"`
+		TavilyKey     string `json:"tavily_key"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	// api_key is optional (keyless providers like Ollama)
@@ -1119,6 +1090,10 @@ func handleSettingsAPI(w http.ResponseWriter, r *http.Request) {
 		home, body.APIKey, body.BaseURL, body.Model, body.SmallModel)
 	if body.TelegramToken != "" {
 		envData += fmt.Sprintf("TELEGRAM_BOT_TOKEN=%s\n", body.TelegramToken)
+	}
+	if body.TavilyKey != "" {
+		envData += fmt.Sprintf("TAVILY_API_KEY=%s\n", body.TavilyKey)
+		os.Setenv("TAVILY_API_KEY", body.TavilyKey)
 	}
 	os.WriteFile(envPath, []byte(envData), 0600)
 	// pick up changes without restart, or restart if first provider

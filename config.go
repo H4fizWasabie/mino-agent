@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 // Settings — matches Core's config.py exactly. Every knob is an env var.
@@ -33,6 +35,8 @@ func LoadSettings() *Settings {
 			home = filepath.Join(hd, ".mino")
 		}
 	}
+	// load mino.env into process env (systemd-style, picks up dashboard-saved keys)
+	loadEnvFile(filepath.Join(home, "mino.env"))
 	return &Settings{
 		Provider:         envOr("MINO_PROVIDER", "openai"),
 		APIKey:           os.Getenv("MINO_API_KEY"),
@@ -80,4 +84,29 @@ func envFloat(key string, fallback float64) float64 {
 		}
 	}
 	return fallback
+}
+
+// loadEnvFile reads KEY=VALUE lines from mino.env and sets them in the process
+// environment if not already set. Lets dashboard-saved keys survive restarts.
+func loadEnvFile(path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key, val := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+		if key != "" && os.Getenv(key) == "" {
+			os.Setenv(key, val)
+		}
+	}
 }

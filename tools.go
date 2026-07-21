@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"database/sql"
@@ -489,7 +490,7 @@ func makeMessagesTool(home string) *Tool {
 func makeSearchTool() *Tool {
 	return &Tool{
 		Name:        "search_web",
-		Description: "Search the internet for information. Uses Tavily if configured, otherwise free DuckDuckGo. Use when user asks to: search, find online, google, look up, research, what is, who is, latest news, current events.",
+		Description: "Search the internet for information. Requires a Tavily API key (set TAVILY_API_KEY env var or add in dashboard settings). Use when user asks to: search, find online, google, look up, research, what is, who is, latest news, current events.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -505,10 +506,39 @@ func makeSearchTool() *Tool {
 }
 
 func webSearch(query string) string {
-	if key := os.Getenv("TAVILY_API_KEY"); key != "" {
+	key := os.Getenv("TAVILY_API_KEY")
+	if key == "" {
+		// ponytail: also check mino.env so agent can add key without restart
+		key = readEnvFile("TAVILY_API_KEY")
+	}
+	if key != "" {
 		return tavilySearch(query, key)
 	}
-	return duckDuckGoSearch(query)
+	return "Error: web search requires a Tavily API key. Get one at https://tavily.com, then set TAVILY_API_KEY in your environment or dashboard settings."
+}
+
+// readEnvFile reads a single key from mino.env. Lets the agent add keys
+// mid-session without a restart.
+func readEnvFile(targetKey string) string {
+	home := os.Getenv("MINO_HOME")
+	if home == "" {
+		hd, _ := os.UserHomeDir()
+		home = filepath.Join(hd, ".mino")
+	}
+	f, err := os.Open(filepath.Join(home, "mino.env"))
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 && strings.TrimSpace(parts[0]) == targetKey {
+			return strings.TrimSpace(parts[1])
+		}
+	}
+	return ""
 }
 
 func tavilySearch(query, key string) string {
@@ -923,32 +953,6 @@ func appendICS(path, title, start, end, attendees, notes string) {
 		defer f.Close()
 		f.WriteString(b.String())
 	}
-}
-
-func duckDuckGoSearch(query string) string {
-	// keyless DuckDuckGo HTML search
-	url := "https://html.duckduckgo.com/html/?q=" + strings.ReplaceAll(query, " ", "+")
-	resp, err := httpGet(url)
-	if err != nil {
-		return fmt.Sprintf("Search failed: %v", err)
-	}
-	// simple extraction of result snippets
-	var results []string
-	parts := strings.Split(resp, `class="result__snippet"`)
-	for i := 1; i < len(parts) && i <= 5; i++ {
-		text := parts[i]
-		if idx := strings.Index(text, "</"); idx > 0 {
-			text = text[:idx]
-		}
-		text = strings.TrimSpace(text)
-		if text != "" {
-			results = append(results, text)
-		}
-	}
-	if len(results) == 0 {
-		return "No results found."
-	}
-	return fmt.Sprintf("Search results for '%s':\n%s", query, strings.Join(results, "\n- "))
 }
 
 var httpClient = &http.Client{Timeout: 10 * time.Second}
