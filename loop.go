@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -30,6 +31,8 @@ const (
 - Use status "complete" only when every requested step is verified complete.
 - Use status "blocked" only when required user input, approval, or an unavailable external dependency prevents further safe progress.
 - If work remains, call the next tool instead.
+- TOOL HYGIENE: Prefer write_file over bash echo for file creation. Prefer read_file over bash cat. If a specialized tool exists for your task, use it — bash is the fallback, not the default.
+- Before claiming "file created" in complete_task, verify the file exists. If it does not exist, fix it first. The harness may reject completion with unverified file claims.
 - IMPORTANT: complete_task.reply must contain the FULL answer including any jokes, lists, code, or content the user requested. NEVER wrap it with meta-commentary like "Hope that helped!" — put the actual content in the reply field.`
 )
 
@@ -82,6 +85,7 @@ func RunLoop(
 	dedup := make(map[string]string) // tool dedup: key → cached output
 	dedupStatus := make(map[string]string)
 	lastActionFailed := false
+	lastFileOutput := "" // track last file-writing output for completion verification
 
 	defer func() {
 		decision, reason := "skip", "recall tool not invoked"
@@ -161,6 +165,13 @@ func RunLoop(
 			status, reply = strings.ToLower(strings.TrimSpace(status)), strings.TrimSpace(reply)
 			if (status == "complete" || status == "blocked") && reply != "" && (status == "blocked" || !lastActionFailed) {
 				result.Status, result.Reply = status, reply
+				// Verify claimed files exist before accepting completion
+				if status == "complete" {
+					if correction := verifyFileClaims(reply, lastFileOutput); correction != "" {
+						messages = append(messages, Message{Role: "user", Content: correction})
+						continue
+					}
+				}
 				notify(obs, "completion", map[string]any{"status": status})
 				logTrace(traceHome, "task_completion", map[string]any{"status": status})
 				return result
@@ -203,6 +214,9 @@ func RunLoop(
 				dedupStatus[key] = status
 			}
 			batchFailed = batchFailed || status == "error"
+			if tc.Name == "write_file" || (tc.Name == "bash" && strings.Contains(output, "/")) {
+				lastFileOutput = output
+			}
 			event := map[string]any{"tool": tc.Name, "args": args, "output": output, "status": status}
 			result.ToolCalls = append(result.ToolCalls, ToolCall{Name: tc.Name, Args: args, Output: output})
 			notify(obs, "tool", event)
@@ -324,4 +338,26 @@ func logTrace(home, eventType string, data map[string]any) {
 	defer f.Close()
 	f.Write(b)
 	f.Write([]byte("\n"))
+}
+
+// verifyFileClaims checks if the last tool created a file that doesn't exist.
+// Only fires when the model claims completion but the file is missing.
+func verifyFileClaims(reply string, lastToolOutput string) string {
+	// ponytail: check the actual tool output, not the model's natural-language reply
+	if lastToolOutput == "" {
+		return ""
+	}
+	// Extract path from tool outputs like "Wrote N bytes to /path" or "/path/to/file"
+	re := regexp.MustCompile(`(?:Wrote \d+ bytes to |to )?(/\S+)`)
+	matches := re.FindStringSubmatch(lastToolOutput)
+	if len(matches) < 2 {
+		return ""
+	}
+	path := matches[1]
+	// Clean trailing punctuation
+	path = strings.TrimRight(path, ".,;:!?")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return fmt.Sprintf("Error: you claimed to have written %s but the file does not exist. Use the appropriate tool to actually create the file, then verify before calling complete_task again.", path)
+	}
+	return ""
 }

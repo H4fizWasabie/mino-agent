@@ -299,6 +299,7 @@ func makeCodegraphSyncTool() *Tool {
 func seedBuiltinSkills(home string) {
 	os.MkdirAll(filepath.Join(home, "skills", "coding"), 0700)
 	os.MkdirAll(filepath.Join(home, "mcp.d"), 0700)
+	os.MkdirAll(filepath.Join(home, "oauth.d"), 0700)
 
 	// coding skill
 	skillPath := filepath.Join(home, "skills", "coding", "SKILL.md")
@@ -310,6 +311,22 @@ func seedBuiltinSkills(home string) {
 	mcpPath := filepath.Join(home, "mcp.d", "context7.json")
 	if _, err := os.Stat(mcpPath); os.IsNotExist(err) {
 		os.WriteFile(mcpPath, []byte(`{"name":"context7","command":"npx","args":["-y","@upstash/context7-mcp"]}`), 0644)
+	}
+
+	// OAuth providers — seed from embedded bundle so dashboard shows login buttons
+	os.MkdirAll(filepath.Join(home, "oauth.d"), 0700)
+	entries, err := embeddedOAuth.ReadDir("oauth.d")
+	if err == nil {
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			dst := filepath.Join(home, "oauth.d", e.Name())
+			if _, err := os.Stat(dst); os.IsNotExist(err) {
+				data, _ := embeddedOAuth.ReadFile("oauth.d/" + e.Name())
+				os.WriteFile(dst, data, 0644)
+			}
+		}
 	}
 }
 

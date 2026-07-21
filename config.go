@@ -44,7 +44,7 @@ func LoadSettings() *Settings {
 		Model:            envOr("MINO_MODEL", "deepseek-v4-flash-free"),
 		SmallModel:       envOr("MINO_SMALL_MODEL", "deepseek-v4-flash-free"),
 		Home:             home,
-		MaxIter:          envInt("MINO_MAX_ITERATIONS", 10),
+		MaxIter:          envInt("MINO_MAX_ITERATIONS", 25),
 		MaxTokens:        envInt("MINO_MAX_TOKENS", 2048),
 		TopK:             envInt("MINO_RETRIEVAL_TOP_K", 4),
 		ConsolidateEvery: envInt("MINO_CONSOLIDATE_EVERY", 6),

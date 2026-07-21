@@ -207,7 +207,7 @@ func BuildRegistry(db *sql.DB, home string, mem *Memory) *Registry {
 func makeReadTool() *Tool {
 	return &Tool{
 		Name:        "read_file",
-		Description: "Read contents of a file. Returns file content.",
+		Description: "Read contents of a file. Prefer this over bash cat/head/tail — handles large files and binary content safely.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -250,7 +250,7 @@ func makeReadTool() *Tool {
 func makeWriteTool() *Tool {
 	return &Tool{
 		Name:        "write_file",
-		Description: "Write or save content to a file. Creates, overwrites, or appends. For saving notes, reminders, drafts, logs, or any text the user wants stored. Use when user asks to: write, save, create file, store, output, export, persist, dump to file.",
+		Description: "Write or save content to a file. Creates, overwrites, or appends. Prefer this over bash echo/redirect — handles special characters safely and never truncates. Use when user asks to: write, save, create file, store, output, export, persist, dump to file.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -333,7 +333,7 @@ func makeEditTool() *Tool {
 func makeBashTool() *Tool {
 	return &Tool{
 		Name:        "bash",
-		Description: "Execute a bash command. Returns stdout and stderr. Timeout: 30s.",
+		Description: "Execute a bash command. Returns stdout and stderr. Timeout: 30s. For creating files, prefer write_file. For reading files, prefer read_file. Use bash only for commands that have no specialized tool (mkdir, mv, cp, chmod, go build, python, etc).",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

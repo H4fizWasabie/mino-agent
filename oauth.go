@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
+	"embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -18,6 +19,9 @@ import (
 	"sync"
 	"time"
 )
+
+//go:embed oauth.d/*.json
+var embeddedOAuth embed.FS
 
 // OAuthProvider config — one JSON file in oauth.d/ per provider.
 type OAuthProvider struct {
@@ -72,7 +76,27 @@ func LoadOAuthEngine(home string, authStore *AuthStore, redirectBaseURL string) 
 func (e *OAuthEngine) loadProviders() {
 	dir := filepath.Join(e.home, "oauth.d")
 	entries, err := os.ReadDir(dir)
-	if err != nil {
+	// Fall back to embedded provider configs (bundled at build time)
+	if err != nil || len(entries) == 0 {
+		bundled, err := embeddedOAuth.ReadDir("oauth.d")
+		if err == nil {
+			for _, entry := range bundled {
+				if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+					continue
+				}
+				data, err := embeddedOAuth.ReadFile("oauth.d/" + entry.Name())
+				if err != nil {
+					continue
+				}
+				var p OAuthProvider
+				if json.Unmarshal(data, &p) != nil || p.Name == "" {
+					continue
+				}
+				e.providerMap[p.Name] = &p
+			}
+			slog.Info("oauth providers loaded from embedded bundle", "count", len(e.providerMap))
+			return
+		}
 		return // no providers configured
 	}
 	for _, entry := range entries {
