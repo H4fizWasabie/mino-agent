@@ -3,27 +3,29 @@
 One binary. One SQLite file. Your own AI assistant.
 
 [![DeepWiki](https://img.shields.io/badge/DeepWiki-Architecture%20Docs-blue)](https://deepwiki.com/H4fizWasabie/mino-agent)
+![Version](https://img.shields.io/badge/version-v1.0.0-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-- **Dashboard** — chat, memory, tools, file browser
-- **Telegram** — chat on the go
-- **Tools** — file ops, calendar, notes, web search, image generation, recall
-- **Extensions** — plug in external tools via HTTP
-- **MCP** — Model Context Protocol servers (filesystem, databases, etc.)
-- **Skills** — save repeatable workflows as markdown files
+- **Dashboard** — chat, memory, tools, database, ops
+- **Telegram** — same agent, any device
+- **10 coding tools** — list_files, grep, glob, git, graphify, codegraph, read/write/edit, bash
+- **OAuth login** — Claude, Codex (ChatGPT), GitHub Copilot, xAI/Grok
+- **Web search** — Tavily API (free tier available)
+- **Memory** — SQLite + FTS5 semantic search, auto-consolidation
+- **Guardrails** — prefers specialized tools over bash, verifies file claims before completion
+- **MCP + Extensions** — plug in external tools via HTTP or stdio
 
 ## Quickstart
 
 ```bash
-# Download (requires Go 1.22+)
 git clone https://github.com/H4fizWasabie/mino-agent.git
 cd mino-agent
-go build -tags sqlite_fts5 -o mino .
-
-# Run — dashboard opens in your browser automatically
+go build -o mino .
 ./mino
+# Browser opens → fill one form → done
 ```
 
-No API key? The onboarding page lets you add one. No terminal needed.
+No build tags, no CGo, no system dependencies. Pure Go SQLite with FTS5 baked in.
 
 ![Onboarding](onboarding.jpeg)
 
@@ -31,17 +33,7 @@ No API key? The onboarding page lets you add one. No terminal needed.
 
 ```bash
 sudo cp mino /usr/local/bin/
-hash -r
 mino
-```
-
-**Advanced: CLI mode**
-
-```bash
-export MINO_API_KEY=sk-...
-export MINO_BASE_URL=https://api.openai.com/v1
-export MINO_MODEL=gpt-4.1-mini
-./mino cli
 ```
 
 ## Commands
@@ -53,74 +45,62 @@ export MINO_MODEL=gpt-4.1-mini
 | `mino version` | Show version |
 | `mino update` | Self-update from GitHub releases |
 
-No API keys? The dashboard has an onboarding page to set them up. No more panics.
-
 ## Configuration
 
 | Env | Default | Description |
 |-----|---------|-------------|
 | `MINO_HOME` | `~/.mino` | State directory (DB, config, traces) |
 | `MINO_API_KEY` | — | OpenAI-compatible API key |
-| `MINO_BASE_URL` | `https://api.openai.com/v1` | API base URL |
-| `MINO_MODEL` | `gpt-4o-mini` | Main model |
-| `MINO_SMALL_MODEL` | `gpt-4o-mini` | Model for background tasks |
+| `MINO_BASE_URL` | — | API base URL |
+| `MINO_MODEL` | `deepseek-v4-flash-free` | Main model |
+| `MINO_SMALL_MODEL` | `deepseek-v4-flash-free` | Model for background tasks |
 | `MINO_DASHBOARD_PORT` | `7779` | Dashboard port |
-| `MINO_DASHBOARD_HOST` | (all interfaces) | Bind address (e.g. `127.0.0.1` or Tailscale IP) |
-| `MINO_MAX_ITERATIONS` | `10` | Max tool calls per turn |
-| `MINO_MAX_TOKENS` | `4096` | Max output tokens |
-| `MINO_CONTEXT_CHARS` | `100000` | Context window budget in chars |
+| `MINO_DASHBOARD_HOST` | (all interfaces) | Bind address |
+| `MINO_MAX_ITERATIONS` | `25` | Max tool calls per turn |
+| `MINO_MAX_TOKENS` | `2048` | Max output tokens per call |
+| `MINO_CONTEXT_CHARS` | `100000` | Context window budget |
 | `TELEGRAM_BOT_TOKEN` | — | Optional Telegram bot token |
-| `HF_TOKEN` | — | HuggingFace token (for FLUX.1-schnell, optional) |
-| `TAVILY_API_KEY` | — | Optional — enriches web search (falls back to DuckDuckGo) |
-| `MINO_OPENROUTER_KEY` | — | OpenRouter key (for embeddings, fallback search) |
+| `TAVILY_API_KEY` | — | Web search (free key at tavily.com) |
+| `MINO_OPENROUTER_KEY` | — | Embeddings (free tier available) |
 
 See `.env.example` for a copy-paste template.
 
-## Architecture
+## Providers
 
-```
-Mino is ~2000 lines of Go:
+Mino works with any OpenAI-compatible API. Configure via the dashboard or `~/.mino/providers.json`:
 
-main.go          — entry point, wires everything
-loop.go          — agent loop: reason → act → observe
-session.go       — SOUL.md, system prompt, context assembly
-memory.go        — SQLite + FTS5 retrieval, consolidation
-tools.go         — built-in tools (file, calendar, notes, search, image gen)
-provider.go      — OpenAI-compatible client + SSE streaming
-provider_manager.go — priority, retry, fallback, circuit breaking
-telegram.go      — Telegram bot gateway
-telegram_format.go — Markdown→HTML formatting for Telegram
-dashboard.go     — web UI + REST API
-mcp.go           — MCP bridge (stdio-based servers)
-skill.go         — skill loader (SKILL.md files)
-extensions.go    — HTTP extension protocol
-checkpoint.go    — task survival across restarts
-scheduler.go     — cron engine for proactive tasks
-artifacts.go     — large output management
+### API key
+
+```json
+{
+  "providers": [
+    {
+      "name": "my-provider",
+      "priority": 1,
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-4o-mini",
+      "small_model": "gpt-4o-mini"
+    }
+  ]
+}
 ```
 
-## Free AI stack
+Set the key in the dashboard onboarding form, or write to `~/.mino/auth.json`:
 
-Mino can run entirely on free tiers:
-
-- **LLM**: [Google Gemma 4](https://openrouter.ai/google/gemma-4-31b-it) (free on OpenRouter, no cost)
-- **Image gen**: [Pollinations.ai](https://pollinations.ai) (free, no key)
-- **Embeddings**: via OpenRouter (free tier available)
-- **Web search**: DuckDuckGo (built-in, keyless). Optional Tavily upgrade for richer results.
-- **URL fetch**: pipes HTML through markitdown — preserves tables, headings, links for better LLM reading
-
-## Local LLMs
-
-Run models on your own hardware — no API keys, no internet:
-
-### Ollama
-
-```bash
-# Install: https://ollama.com
-ollama pull llama3.1:8b
+```json
+{
+  "my-provider": {
+    "type": "api_key",
+    "key": "sk-..."
+  }
+}
 ```
 
-Create `~/.mino/providers.json`:
+### OAuth (no API key needed)
+
+Mino ships with OAuth configs for Claude, Codex (ChatGPT), GitHub Copilot, and xAI/Grok. Login from the Settings page — no API key required.
+
+### Local LLMs (Ollama, LM Studio, vLLM)
 
 ```json
 {
@@ -137,7 +117,41 @@ Create `~/.mino/providers.json`:
 }
 ```
 
-`""` for `api_key_env` means no auth required. Works with LM Studio, vLLM, and any OpenAI-compatible local server too.
+Empty `api_key_env` means no auth. Works with any OpenAI-compatible local server.
+
+## Architecture
+
+```
+mino (~2500 lines of Go)
+
+main.go              — entry point, CLI routing
+loop.go              — agent loop: observe → reason → act → repeat
+session.go           — SOUL.md, system prompt, context assembly
+memory.go            — SQLite + FTS5 retrieval, consolidation
+tools.go             — built-in tools (file, bash, calendar, notes, search, image)
+provider.go          — OpenAI + Anthropic + Codex clients, SSE streaming
+provider_manager.go  — priority, retry, fallback, circuit breaking
+oauth.go             — PKCE + device-code OAuth, embedded provider configs
+dashboard.go         — web UI + REST API
+telegram.go          — Telegram bot gateway
+mcp.go               — MCP bridge (stdio-based servers)
+skill.go             — skill loader (SKILL.md files)
+extensions.go        — HTTP extension protocol
+checkpoint.go        — task survival across restarts
+scheduler.go         — cron engine for proactive tasks
+artifacts.go         — large output management
+adapters.go          — working memory, patterns, embeddings
+```
+
+## Free AI stack
+
+Mino can run entirely on free tiers:
+
+- **LLM**: Any free model via OpenRouter or OpenCode Zen
+- **Image gen**: [Pollinations.ai](https://pollinations.ai) (free, no key)
+- **Embeddings**: via OpenRouter (free tier available)
+- **Web search**: Tavily (free tier: 1000 searches/month)
+- **URL fetch**: pipes HTML through readability extraction
 
 ## Extensions
 
@@ -153,19 +167,16 @@ Mino discovers tools via `GET /tools` and proxies calls via `POST /execute`.
 
 ### minowrap — universal tool adapter
 
-Add any CLI command as a tool in one JSON line. Ships with Mino:
+Add any CLI command as a tool in one JSON line:
 
 ```json
-// ~/.minowrap/tools.json
 [
   {"name": "disk_usage", "description": "Show disk usage for a path", "run": "df -h {path}"},
   {"name": "deploy", "description": "Deploy the app", "run": "curl -X POST https://api.example.com/deploy"}
 ]
 ```
 
-Template args like `{path}` auto-generate JSON Schema. Mino discovers them on next `reload_plugins` call. No restart, no coding, any language.
-
-See the [extension protocol](extensions.go) for details.
+Template args like `{path}` auto-generate JSON Schema. Mino discovers them on next `reload_plugins` call.
 
 ## MCP servers
 
@@ -180,3 +191,7 @@ Tools are prefixed as `MCP_<server>_<tool>`.
 ## License
 
 MIT
+
+---
+
+Built with [Mino](https://github.com/H4fizWasabie/mino-agent) — the same agent that wrote parts of this README.
