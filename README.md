@@ -17,17 +17,37 @@ One binary. One SQLite file. Your own AI assistant.
 
 ## Quickstart
 
+**No Go, no dependencies — just download and run:**
+
+```bash
+# Linux (x86-64)
+curl -L https://github.com/H4fizWasabie/mino-agent/releases/latest/download/mino-linux-amd64 -o mino
+chmod +x mino
+./mino
+
+# macOS (Apple Silicon)
+curl -L https://github.com/H4fizWasabie/mino-agent/releases/latest/download/mino-darwin-arm64 -o mino
+chmod +x mino
+./mino
+
+# macOS (Intel)
+curl -L https://github.com/H4fizWasabie/mino-agent/releases/latest/download/mino-darwin-amd64 -o mino
+chmod +x mino
+./mino
+```
+
+Windows: download `mino-windows-amd64.exe` from the [releases page](https://github.com/H4fizWasabie/mino-agent/releases/latest), rename to `mino.exe`, run in terminal.
+
+**Or build from source (needs Go 1.25+):**
+
 ```bash
 git clone https://github.com/H4fizWasabie/mino-agent.git
 cd mino-agent
 go build -o mino .
 ./mino
-# Browser opens → fill one form → done
 ```
 
-No build tags, no CGo, no system dependencies. Pure Go SQLite with FTS5 baked in.
-
-![Onboarding](onboarding.jpeg)
+Browser opens → fill one form → done. No build tags, no CGo, no system dependencies.
 
 **Want it available everywhere?**
 
