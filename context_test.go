@@ -41,7 +41,7 @@ func TestReadFileReturnsRequestedInlineSlice(t *testing.T) {
 	}
 }
 
-func TestContextMessagesKeepsHeadAndTail(t *testing.T) {
+func TestContextMessagesKeepsTailOnly(t *testing.T) {
 	s := &Session{history: []Message{
 		{Role: "user", Content: "goal"}, {Role: "assistant", Content: "ack"},
 		{Role: "user", Content: strings.Repeat("m", 100)}, {Role: "assistant", Content: "middle"},
@@ -52,8 +52,12 @@ func TestContextMessagesKeepsHeadAndTail(t *testing.T) {
 	for _, m := range got {
 		joined += m.Content
 	}
-	if !strings.Contains(joined, "goal") || !strings.Contains(joined, "tail question") || !strings.Contains(joined, "tail answer") || !strings.Contains(joined, "compacted") {
+	// most recent tail should be present; old head should not be forced
+	if !strings.Contains(joined, "tail question") || !strings.Contains(joined, "tail answer") || !strings.Contains(joined, "compacted") {
 		t.Fatalf("context = %q", joined)
+	}
+	if strings.Contains(joined, "goal") {
+		t.Fatalf("stale first exchange should not be forced into context: %q", joined)
 	}
 	if len(joined) > 120 {
 		t.Fatalf("context exceeded budget: %d", len(joined))

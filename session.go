@@ -158,18 +158,17 @@ func (s *Session) ContextMessages(maxChars int) []Message {
 		return history
 	}
 	marker := "[Earlier conversation is retained but compacted. Use recall when details matter.]"
-	used := len(history[0].Content) + len(history[1].Content)
+	used := len(marker)
 	start := len(history)
-	for start-2 >= 2 {
+	for start-2 >= 0 {
 		pair := len(history[start-2].Content) + len(history[start-1].Content)
-		if used+len(marker)+pair > maxChars {
+		if used+pair > maxChars {
 			break
 		}
 		start -= 2
 		used += pair
 	}
-	out := append([]Message{}, history[:2]...)
-	out = append(out, Message{Role: "assistant", Content: marker})
+	out := []Message{{Role: "assistant", Content: marker}}
 	out = append(out, history[start:]...)
 	return out
 }
