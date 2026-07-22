@@ -81,7 +81,6 @@ func RunLoop(
 	es *EmbeddingStore,
 ) *LoopResult {
 	result := &LoopResult{}
-	system = strings.TrimSpace(system) + "\n\n" + completionPrompt
 	dedup := make(map[string]string) // tool dedup: key → cached output
 	dedupStatus := make(map[string]string)
 	lastActionFailed := false

@@ -1,0 +1,12 @@
+{
+  "name": "xai",
+  "display_name": "xAI (Grok)",
+  "auth_type": "pkce",
+  "authorize_url": "https://auth.x.ai/authorize",
+  "token_url": "https://auth.x.ai/oauth/token",
+  "client_id": "xai_claude_code",
+  "scopes": ["openid", "offline_access"],
+  "api_base_url": "https://api.x.ai/v1",
+  "models": ["grok-code-fast-1", "grok-4.1"],
+  "extra": {}
+}

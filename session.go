@@ -76,6 +76,7 @@ func (s *Session) BuildSystem(userMessage string) string {
 	now := time.Now().Format("Monday, 2006-01-02 15:04 MST")
 	parts := []string{
 		loadSoul(s.settings.Home),
+		"\n" + completionPrompt,
 		fmt.Sprintf("\nRight now it is %s.", now),
 	}
 

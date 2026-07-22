@@ -126,6 +126,10 @@ func (c *Client) create(model, reasoning string, messages []Message, maxTokens i
 	req, _ := http.NewRequest("POST", url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	if c.isOpenRouter() {
+		req.Header.Set("HTTP-Referer", "https://github.com/H4fizWasabie/mino-agent")
+		req.Header.Set("X-Title", "Mino")
+	}
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -332,6 +336,10 @@ type ToolDef struct {
 
 func (c *Client) isAnthropic() bool {
 	return strings.Contains(c.baseURL, "anthropic.com")
+}
+
+func (c *Client) isOpenRouter() bool {
+	return strings.Contains(c.baseURL, "openrouter.ai")
 }
 
 func (c *Client) createAnthropic(model string, messages []Message, maxTokens int, system string, tools []ToolDef, stream bool, onText func(string)) (*LLMResponse, error) {

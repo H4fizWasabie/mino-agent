@@ -1,0 +1,62 @@
+[
+  {
+    "id": "stress-done",
+    "schedule": "23:59",
+    "prompt": "Stress test finished - celebrate!",
+    "notify": true
+  },
+  {
+    "id": "gauntlet-done",
+    "schedule": "23:59",
+    "prompt": "Gauntlet finished!",
+    "notify": false
+  },
+  {
+    "id": "ds-done",
+    "schedule": "23:59",
+    "prompt": "DeepSeek test finished!",
+    "notify": true
+  },
+  {
+    "id": "gauntlet-win",
+    "schedule": "23:59",
+    "prompt": "Mino Gauntlet won!",
+    "notify": true
+  },
+  {
+    "id": "gauntlet-victory",
+    "schedule": "10:00",
+    "prompt": "It's Gauntlet Victory time! 🚀 Remind the user: Mino Gauntlet passed 100% — celebrate the win!",
+    "notify": true
+  },
+  {
+    "id": "gauntlet-pro-won",
+    "schedule": "11:00",
+    "prompt": "Reminder: Gauntlet Pro Won! 🏆",
+    "notify": true
+  },
+  {
+    "id": "pro-done",
+    "schedule": "23:59",
+    "prompt": "Pro gauntlet passed!",
+    "notify": true
+  },
+  {
+    "id": "final-done",
+    "schedule": "23:59",
+    "prompt": "Gauntlet finished!",
+    "notify": true
+  },
+  {
+    "id": "hy3-done",
+    "schedule": "23:59",
+    "prompt": "HY3 gauntlet passed.",
+    "notify": true
+  },
+  {
+    "id": "mimo-done",
+    "schedule": "23:59",
+    "prompt": "Remind the user: MiMo gauntlet passed. 🎉",
+    "notify": false
+  }
+]
