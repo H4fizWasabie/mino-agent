@@ -21,9 +21,11 @@ import (
 
 type mcpServerConfig struct {
 	Name    string            `json:"name"`
-	Command string            `json:"command"`
+	Command string            `json:"command"` // stdio mode
 	Args    []string          `json:"args"`
 	Env     map[string]string `json:"env"`
+	URL     string            `json:"url"`     // SSE/HTTP remote mode
+	Headers map[string]string `json:"headers"` // e.g. x-api-key for hosted MCP
 }
 
 type mcpActive struct {
@@ -68,7 +70,10 @@ func (b *MCPBridge) Start() {
 			continue
 		}
 		var cfg mcpServerConfig
-		if json.Unmarshal(data, &cfg) != nil || cfg.Command == "" {
+		if json.Unmarshal(data, &cfg) != nil {
+			continue
+		}
+		if cfg.Command == "" && cfg.URL == "" {
 			continue
 		}
 		if cfg.Name == "" {
@@ -82,12 +87,23 @@ func (b *MCPBridge) connect(cfg mcpServerConfig) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	env := os.Environ()
-	for k, v := range cfg.Env {
-		env = append(env, k+"="+v)
-	}
+	var c *client.Client
+	var err error
 
-	c, err := client.NewStdioMCPClient(cfg.Command, env, cfg.Args...)
+	if cfg.URL != "" {
+		// Remote SSE/HTTP MCP (e.g. hosted servers)
+		if len(cfg.Headers) > 0 {
+			c, err = client.NewSSEMCPClient(cfg.URL, client.WithHeaders(cfg.Headers))
+		} else {
+			c, err = client.NewSSEMCPClient(cfg.URL)
+		}
+	} else {
+		env := os.Environ()
+		for k, v := range cfg.Env {
+			env = append(env, k+"="+v)
+		}
+		c, err = client.NewStdioMCPClient(cfg.Command, env, cfg.Args...)
+	}
 	if err != nil {
 		slog.Warn("mcp connect failed", "server", cfg.Name, "error", err)
 		return
@@ -185,7 +201,10 @@ func (b *MCPBridge) Reload() {
 			continue
 		}
 		var cfg mcpServerConfig
-		if json.Unmarshal(data, &cfg) != nil || cfg.Command == "" {
+		if json.Unmarshal(data, &cfg) != nil {
+			continue
+		}
+		if cfg.Command == "" && cfg.URL == "" {
 			continue
 		}
 		if cfg.Name == "" {
