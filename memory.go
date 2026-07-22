@@ -209,6 +209,37 @@ func (m *Memory) ConsolidateDue() int {
 	return written
 }
 
+// ConsolidateIfFull triggers consolidation when unconsolidated chars exceed 80%
+// of the context budget for any session. Use between the 6-hour full passes.
+func (m *Memory) ConsolidateIfFull(contextChars int) int {
+	if m.client == nil || contextChars <= 0 {
+		return 0
+	}
+	threshold := contextChars * 80 / 100
+	m.consolidateMu.Lock()
+	defer m.consolidateMu.Unlock()
+	rows, err := m.db.Query(`SELECT session_id, SUM(length(content)) AS chars
+		FROM chat_log WHERE consolidated = 0
+		GROUP BY session_id HAVING chars >= ?`, threshold)
+	if err != nil {
+		return 0
+	}
+	var sessions []string
+	for rows.Next() {
+		var id string
+		var chars int
+		if rows.Scan(&id, &chars) == nil {
+			sessions = append(sessions, id)
+		}
+	}
+	rows.Close()
+	written := 0
+	for _, sid := range sessions {
+		written += m.consolidateSession(sid)
+	}
+	return written
+}
+
 func (m *Memory) consolidateSession(sid string) int {
 	// ponytail: LIMIT 200 bounds the prompt; a longer backlog drains over later passes
 	rows, err := m.db.Query("SELECT id, role, content FROM chat_log WHERE consolidated = 0 AND session_id = ? ORDER BY id LIMIT 200", sid)

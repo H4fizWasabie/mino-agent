@@ -47,8 +47,9 @@ func (t *Tool) ToAPI() map[string]any {
 // --- Registry (matches Core's ToolRegistry) ---
 
 type Registry struct {
-	tools  map[string]*Tool
-	filter *ToolFilter
+	tools        map[string]*Tool
+	filter       *ToolFilter
+	maxDescChars int
 }
 
 func NewRegistry() *Registry {
@@ -94,9 +95,13 @@ func (r *Registry) Catalog() []ToolInfo {
 func (r *Registry) Schemas() []ToolDef {
 	schemas := make([]ToolDef, 0, len(r.tools))
 	for _, t := range r.tools {
+		desc := t.Description
+		if r.maxDescChars > 0 && len(desc) > r.maxDescChars {
+			desc = desc[:r.maxDescChars] + "..."
+		}
 		schemas = append(schemas, ToolDef{
 			Name:        t.Name,
-			Description: t.Description,
+			Description: desc,
 			Parameters:  t.Schema,
 		})
 	}
@@ -1221,4 +1226,9 @@ func (r *Registry) SchemasFor(message string, es *EmbeddingStore) []ToolDef {
 // SetFilter attaches a tool filter to the registry.
 func (r *Registry) SetFilter(f *ToolFilter) {
 	r.filter = f
+}
+
+// SetMaxDescChars caps tool description length (0 = no limit).
+func (r *Registry) SetMaxDescChars(n int) {
+	r.maxDescChars = n
 }

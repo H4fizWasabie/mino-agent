@@ -60,15 +60,24 @@ func NewCore() *Core {
 	}
 	mem.skills = NewSkillLoader(s.Home, mem.embedder)
 	tools := BuildRegistry(db, s.Home, mem)
+	tools.SetMaxDescChars(s.MaxToolDescChars)
 	LoadExtensions(s.Home, tools) // discover + register extension tools
 
 	if s.ConsolidateEvery > 0 {
-		go func() { // single loop = no consolidation races (DECISIONS.md 3)
+		go func() { // 6-hour full consolidation pass
 			for {
 				if n := mem.ConsolidateDue(); n > 0 {
 					slog.Info("consolidation", "new_facts", n)
 				}
 				time.Sleep(6 * time.Hour)
+			}
+		}()
+		go func() { // 5-minute threshold check — triggers when context nears 80% full
+			for {
+				if n := mem.ConsolidateIfFull(s.ContextChars); n > 0 {
+					slog.Info("consolidation (threshold)", "new_facts", n)
+				}
+				time.Sleep(5 * time.Minute)
 			}
 		}()
 	}
