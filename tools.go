@@ -1102,7 +1102,7 @@ func makeGenerateImageTool(home string) *Tool {
 			if err := os.WriteFile(path, data, 0600); err != nil {
 				return fmt.Sprintf("Generated but save failed: %v", err)
 			}
-			return fmt.Sprintf("Image saved to %s", path)
+			return fmt.Sprintf("Image saved to %s\nPublic URL: %s", path, url)
 		},
 	}
 }
