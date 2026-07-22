@@ -147,30 +147,43 @@ func (s *Session) ContextMessages(maxChars int) []Message {
 	if maxChars <= 0 {
 		return history
 	}
-	if len(history) <= 2 {
-		return history
-	}
-	total := 0
-	for _, message := range history {
-		total += len(message.Content)
-	}
-	if total <= maxChars {
-		return history
-	}
-	marker := "[Earlier conversation is retained but compacted. Use recall when details matter.]"
-	used := len(marker)
-	start := len(history)
-	for start-2 >= 0 {
-		pair := len(history[start-2].Content) + len(history[start-1].Content)
-		if used+pair > maxChars {
-			break
+
+	// Turns-based truncation: keep only the last N exchanges (default 5 = 10 msgs).
+	// 0 = unlimited (backward compat). Always keep at least the last pair.
+	if s.settings.MaxHistoryTurns > 0 && len(history) > 2 {
+		keep := s.settings.MaxHistoryTurns * 2
+		if len(history) > keep {
+			marker := Message{Role: "assistant", Content: fmt.Sprintf("[%d earlier turns compacted. Use recall for details.]", (len(history)-keep)/2)}
+			history = append([]Message{marker}, history[len(history)-keep:]...)
 		}
-		start -= 2
-		used += pair
 	}
-	out := []Message{{Role: "assistant", Content: marker}}
-	out = append(out, history[start:]...)
-	return out
+
+	// Char-budget fallback: only when turns cap is disabled (0).
+	if s.settings.MaxHistoryTurns == 0 {
+		if len(history) <= 2 {
+			return history
+		}
+		total := 0
+		for _, message := range history {
+			total += len(message.Content)
+		}
+		if total <= maxChars {
+			return history
+		}
+		marker := "[Earlier conversation is retained but compacted. Use recall when details matter.]"
+		used := len(marker)
+		start := len(history)
+		for start-2 >= 0 {
+			pair := len(history[start-2].Content) + len(history[start-1].Content)
+			if used+pair > maxChars {
+				break
+			}
+			start -= 2
+			used += pair
+		}
+		history = append([]Message{{Role: "assistant", Content: marker}}, history[start:]...)
+	}
+	return history
 }
 
 func (s *Session) ContextFor(system, userMessage string) ([]Message, string) {

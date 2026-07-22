@@ -1167,9 +1167,10 @@ func (f *ToolFilter) Index(tools []ToolDef, es *EmbeddingStore) {
 }
 
 // Filter returns the top K tools relevant to the message, plus always-core tools.
+// Falls back to keyword matching when no embedding store is available.
 func (f *ToolFilter) Filter(message string, tools []ToolDef, es *EmbeddingStore) []ToolDef {
 	if es == nil || len(f.embeddings) == 0 {
-		return tools // no filter = send all
+		return f.keywordFilter(message, tools) // ponytail: keyword fallback, no API key needed
 	}
 	msgEmb, err := es.Embed(message)
 	if err != nil {
@@ -1205,6 +1206,55 @@ func (f *ToolFilter) Filter(message string, tools []ToolDef, es *EmbeddingStore)
 		}
 	}
 	// add core tools if not already picked
+	for _, t := range tools {
+		if f.core[t.Name] && !picked[t.Name] {
+			result = append(result, t)
+			picked[t.Name] = true
+		}
+	}
+	return result
+}
+
+// keywordFilter picks top K tools by keyword overlap with the message.
+// ponytail: zero-cost fallback when no embedding API key is set.
+func (f *ToolFilter) keywordFilter(message string, tools []ToolDef) []ToolDef {
+	msgLower := strings.ToLower(message)
+	msgWords := strings.Fields(msgLower)
+
+	type scored struct {
+		name  string
+		score int
+	}
+	var scores []scored
+	for _, t := range tools {
+		text := strings.ToLower(t.Name + " " + t.Description)
+		s := 0
+		for _, w := range msgWords {
+			if len(w) >= 3 && strings.Contains(text, w) {
+				s++
+			}
+		}
+		scores = append(scores, scored{name: t.Name, score: s})
+	}
+	sort.Slice(scores, func(i, j int) bool { return scores[i].score > scores[j].score })
+
+	picked := make(map[string]bool)
+	var result []ToolDef
+	for _, s := range scores {
+		if len(picked) >= f.topK {
+			break
+		}
+		if picked[s.name] {
+			continue
+		}
+		picked[s.name] = true
+		for _, t := range tools {
+			if t.Name == s.name {
+				result = append(result, t)
+				break
+			}
+		}
+	}
 	for _, t := range tools {
 		if f.core[t.Name] && !picked[t.Name] {
 			result = append(result, t)

@@ -42,7 +42,7 @@ func TestReadFileReturnsRequestedInlineSlice(t *testing.T) {
 }
 
 func TestContextMessagesKeepsTailOnly(t *testing.T) {
-	s := &Session{history: []Message{
+	s := &Session{settings: &Settings{MaxHistoryTurns: 0}, history: []Message{
 		{Role: "user", Content: "goal"}, {Role: "assistant", Content: "ack"},
 		{Role: "user", Content: strings.Repeat("m", 100)}, {Role: "assistant", Content: "middle"},
 		{Role: "user", Content: "tail question"}, {Role: "assistant", Content: "tail answer"},
@@ -103,5 +103,29 @@ func TestArtifactFromOutput(t *testing.T) {
 	got, ok := artifactFromOutput("[artifact: bash → 1234 chars at /tmp/mino/results/s/1/bash.txt; use read_file with offset and limit]")
 	if !ok || got.Label != "bash" || got.Size != 1234 || !strings.Contains(got.Path, "bash.txt") {
 		t.Fatalf("artifact = %#v, ok=%v", got, ok)
+	}
+}
+
+func TestContextMessagesKeepsLastNTurnsOnly(t *testing.T) {
+	s := &Session{settings: &Settings{MaxHistoryTurns: 2}, history: []Message{
+		{Role: "user", Content: "turn1-q"}, {Role: "assistant", Content: "turn1-a"},
+		{Role: "user", Content: "turn2-q"}, {Role: "assistant", Content: "turn2-a"},
+		{Role: "user", Content: "turn3-q"}, {Role: "assistant", Content: "turn3-a"},
+		{Role: "user", Content: "turn4-q"}, {Role: "assistant", Content: "turn4-a"},
+		{Role: "user", Content: "turn5-q"}, {Role: "assistant", Content: "turn5-a"},
+	}}
+	got := s.ContextMessages(100000)
+	joined := ""
+	for _, m := range got {
+		joined += m.Content
+	}
+	if !strings.Contains(joined, "turn4-q") || !strings.Contains(joined, "turn5-a") {
+		t.Fatalf("last 2 turns missing: %q", joined)
+	}
+	if strings.Contains(joined, "turn1") || strings.Contains(joined, "turn2") || strings.Contains(joined, "turn3") {
+		t.Fatalf("older turns leaked: %q", joined)
+	}
+	if !strings.Contains(joined, "3 earlier turns compacted") {
+		t.Fatalf("compaction marker missing: %q", joined)
 	}
 }

@@ -21,9 +21,10 @@ type Settings struct {
 	TopK             int
 	ConsolidateEvery int
 	MinSimilarity    float64
-	ContextChars     int
-	MaxToolDescChars int // trim tool descriptions exceeding this (0 = no limit)
-	Telegram         string
+	ContextChars      int
+	MaxHistoryTurns   int // keep only last N turns (0 = unlimited, default 5)
+	MaxToolDescChars  int // trim tool descriptions exceeding this (0 = no limit)
+	Telegram          string
 }
 
 func LoadSettings() *Settings {
@@ -51,6 +52,7 @@ func LoadSettings() *Settings {
 		ConsolidateEvery: envInt("MINO_CONSOLIDATE_EVERY", 6),
 		MinSimilarity:    envFloat("MINO_MIN_SIMILARITY", 0.45),
 		ContextChars:     envInt("MINO_CONTEXT_CHARS", 100000),
+		MaxHistoryTurns:  envInt("MINO_MAX_HISTORY_TURNS", 5),
 		MaxToolDescChars: envInt("MINO_MAX_TOOL_DESC_CHARS", 0),
 		Telegram:         os.Getenv("TELEGRAM_BOT_TOKEN"),
 	}
