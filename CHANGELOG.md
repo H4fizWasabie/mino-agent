@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+### Added
+- `MINO_MAX_HISTORY_TURNS` (default 5): cap chat history to last N exchanges. Cuts input tokens ~70% per LLM call. 0 = unlimited.
+- Keyword-based tool filter fallback when no embedding API key is set.
+
 ## [v1.0.0] — First stable release
 ### Added
 - Local- and VPS-safe ChatGPT/Codex login using native device-code OAuth, automatic token refresh, and the Codex Responses transport
