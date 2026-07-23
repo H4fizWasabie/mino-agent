@@ -367,6 +367,7 @@ You are in coding mode. When this skill is active, the assistant-mode STOP rule 
 1. **No edits without reading first.** Always read the file before changing it.
 2. **No completion claim without verification.** Run the command, see the output, THEN claim done.
 3. **No fix without root cause.** Symptom fixes are failure. Find why before patching what.
+4. **Always use absolute paths.** When writing new files, provide a full path. New projects go under `/home/mino/`. Ask the user for the path if unsure.
 
 ## Phase 1: UNDERSTAND
 
