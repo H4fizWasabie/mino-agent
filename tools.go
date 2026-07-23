@@ -184,6 +184,8 @@ func BuildRegistry(db *sql.DB, home string, mem *Memory, location ...*time.Locat
 
 	// notes (Core: notes.make_tool)
 	r.Register(makeNotesTool(db, mem))
+	r.Register(makeProjectGetTool(db))
+	r.Register(makeProjectUpdateTool(db))
 
 	// messages (Core: messages.make_tool)
 	r.Register(makeMessagesTool(home))
@@ -512,6 +514,84 @@ func makeNotesTool(db *sql.DB, mem *Memory) *Tool {
 				mem.embedder.Index("fact", subject+": "+content)
 			}
 			return fmt.Sprintf("Saved: %s — %s", subject, content)
+		},
+	}
+}
+
+func makeProjectGetTool(db *sql.DB) *Tool {
+	return &Tool{
+		Name:        "project_get",
+		Description: "Read the durable state of an ongoing project. Use only when the user names a project or asks to continue tracked work; skip for one-off tasks.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string", "description": "Exact project name"},
+			},
+			"required": []string{"name"},
+		},
+		Fn: func(args map[string]any) string {
+			name, _ := args["name"].(string)
+			var objective, status, blocker, nextAction, updated string
+			err := db.QueryRow("SELECT objective, status, blocker, next_action, updated_at FROM projects WHERE name = ?", name).
+				Scan(&objective, &status, &blocker, &nextAction, &updated)
+			if err == sql.ErrNoRows {
+				return fmt.Sprintf("No project state found for %q. Ask before creating a new project record.", name)
+			}
+			if err != nil {
+				return fmt.Sprintf("Error reading project %q: %v", name, err)
+			}
+			return fmt.Sprintf("Project %q\nobjective: %s\nstatus: %s\nblocker: %s\nnext_action: %s\nupdated_at: %s", name, objective, status, blocker, nextAction, updated)
+		},
+	}
+}
+
+func makeProjectUpdateTool(db *sql.DB) *Tool {
+	return &Tool{
+		Name:        "project_update",
+		Description: "Create or update durable project state after the user explicitly requests tracking or a verified milestone. Never invent a project or overwrite a major objective silently.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":        map[string]any{"type": "string", "description": "Exact project name"},
+				"objective":   map[string]any{"type": "string"},
+				"status":      map[string]any{"type": "string", "enum": []string{"active", "blocked", "complete", "paused"}},
+				"blocker":     map[string]any{"type": "string"},
+				"next_action": map[string]any{"type": "string"},
+			},
+			"required": []string{"name"},
+		},
+		Fn: func(args map[string]any) string {
+			name, _ := args["name"].(string)
+			if strings.TrimSpace(name) == "" {
+				return "Error: project name cannot be empty"
+			}
+			objective, _ := args["objective"].(string)
+			status, _ := args["status"].(string)
+			blocker, _ := args["blocker"].(string)
+			nextAction, _ := args["next_action"].(string)
+			var current [4]string
+			err := db.QueryRow("SELECT objective, status, blocker, next_action FROM projects WHERE name = ?", name).
+				Scan(&current[0], &current[1], &current[2], &current[3])
+			if err != nil && err != sql.ErrNoRows {
+				return fmt.Sprintf("Error reading project %q: %v", name, err)
+			}
+			if current[1] == "" {
+				current[1] = "active"
+			}
+			for i, value := range []string{objective, status, blocker, nextAction} {
+				if value != "" {
+					current[i] = value
+				}
+			}
+			_, err = db.Exec(`INSERT INTO projects (name, objective, status, blocker, next_action, updated_at)
+				VALUES (?, ?, ?, ?, ?, datetime('now'))
+				ON CONFLICT(name) DO UPDATE SET objective=excluded.objective, status=excluded.status,
+				blocker=excluded.blocker, next_action=excluded.next_action, updated_at=excluded.updated_at`,
+				name, current[0], current[1], current[2], current[3])
+			if err != nil {
+				return fmt.Sprintf("Error updating project %q: %v", name, err)
+			}
+			return fmt.Sprintf("Project state updated: %s", name)
 		},
 	}
 }

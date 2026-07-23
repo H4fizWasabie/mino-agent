@@ -79,6 +79,51 @@ func makeEvalTools(home string) *Registry {
 
 // --- Tests ---
 
+func TestProjectStateIsExplicitAndRoundTrips(t *testing.T) {
+	home := makeTestHome(t)
+	tools := makeEvalTools(home)
+	if got := tools.Execute("project_get", map[string]any{"name": "resume-builder"}); !strings.Contains(got, "No project state found") {
+		t.Fatalf("unexpected missing-state response: %q", got)
+	}
+	if got := tools.Execute("project_update", map[string]any{
+		"name": "resume-builder", "objective": "Improve the UI", "next_action": "Review on laptop",
+	}); !strings.Contains(got, "updated") {
+		t.Fatalf("update response: %q", got)
+	}
+	got := tools.Execute("project_get", map[string]any{"name": "resume-builder"})
+	for _, want := range []string{"Improve the UI", "active", "Review on laptop"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("project state missing %q: %s", want, got)
+		}
+	}
+	tools.Execute("project_update", map[string]any{"name": "resume-builder", "status": "blocked", "blocker": "Waiting for review"})
+	tools.Execute("project_update", map[string]any{"name": "resume-builder", "next_action": "Ask for review"})
+	got = tools.Execute("project_get", map[string]any{"name": "resume-builder"})
+	if !strings.Contains(got, "status: blocked") || !strings.Contains(got, "Ask for review") {
+		t.Fatalf("partial update reset project status: %s", got)
+	}
+}
+
+func TestProjectStateDoesNotAppearForUntrackedTasks(t *testing.T) {
+	home := makeTestHome(t)
+	tools := makeEvalTools(home)
+	if got := tools.Execute("project_get", map[string]any{"name": "one-off"}); !strings.Contains(got, "No project state found") {
+		t.Fatalf("unexpected implicit project creation: %q", got)
+	}
+}
+
+func TestProjectToolsRemainAvailableAsAPair(t *testing.T) {
+	f := NewToolFilter([]string{"project_get", "project_update"}, 0)
+	tools := []ToolDef{
+		{Name: "project_get", Description: "Read project state"},
+		{Name: "project_update", Description: "Update project state"},
+	}
+	got := f.Filter("update the project", tools, nil)
+	if len(got) != 2 {
+		t.Fatalf("project tool pair was filtered: %#v", got)
+	}
+}
+
 func TestScheduleTaskActuallyWritesJSON(t *testing.T) {
 	home := makeTestHome(t)
 	tools := makeEvalTools(home)

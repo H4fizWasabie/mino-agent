@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 ### Added
+- Optional SQLite-backed project state tools (`project_get` and `project_update`) for explicit, long-running project continuity without changing ordinary task flow.
 - `MINO_WORKSPACE` establishes a universal local editing boundary: local files are edited in place while remote files are staged, verified, and synchronized back once.
 - Runtime workspace context overrides legacy hardcoded paths without overwriting customized skill files during upgrades.
 - Explicit `MINO_TIMEZONE` (default `Asia/Kuala_Lumpur`) for authoritative local time in prompts, schedules, and calendar queries.
@@ -20,6 +21,7 @@
 - SQLite driver: mattn/go-sqlite3 → modernc.org/sqlite (pure Go, no CGo, FTS5 built-in)
 
 ### Fixed
+- Keep paired project read/write tools available together so a project update can be verified in the same task despite dynamic tool filtering.
 - Record a generic action receipt for every tool result (action identity, status, proof, and cache state), so the observe cycle can reuse successful evidence instead of repeating side effects.
 - Recover from output-truncated tool calls without executing malformed arguments; validate required tool fields, reject empty Bash commands, and keep checkpoints anchored to the original task instead of recursively nesting resume prompts.
 - Stop repeated-tool loops generically: observations now preserve the tool call, explicit `ok`/`error` status, and cache state; exact duplicate actions are never re-executed and three consecutive no-progress turns stop early.

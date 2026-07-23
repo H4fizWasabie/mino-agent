@@ -68,6 +68,14 @@ var schemaStatements = []string{
 		size INTEGER NOT NULL,
 		created_at TEXT DEFAULT (datetime('now'))
 	)`,
+	`CREATE TABLE IF NOT EXISTS projects (
+		name TEXT PRIMARY KEY,
+		objective TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT 'active',
+		blocker TEXT NOT NULL DEFAULT '',
+		next_action TEXT NOT NULL DEFAULT '',
+		updated_at TEXT DEFAULT (datetime('now'))
+	)`,
 	// Schema version tracking — _meta stores key/value pairs.
 	// Used by runMigrations() to gate versioned migrations.
 	`CREATE TABLE IF NOT EXISTS _meta (
