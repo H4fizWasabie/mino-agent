@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -58,5 +59,16 @@ func TestSkillCreateAndLifecycle(t *testing.T) {
 	hits = sl.Match("create the weekly report")
 	if len(hits) != 0 {
 		t.Fatalf("stale skill still matched: %d hits", len(hits))
+	}
+}
+
+func TestCodingSkillUsesWorkspaceAndChunkedWrites(t *testing.T) {
+	for _, want := range []string{"LOCAL WORKSPACE", "mode=overwrite", "mode=append", "sync back once"} {
+		if !strings.Contains(codingSkill, want) {
+			t.Fatalf("coding skill missing %q", want)
+		}
+	}
+	if strings.Contains(codingSkill, "/home/mino/") {
+		t.Fatal("coding skill hardcodes the VPS workspace")
 	}
 }

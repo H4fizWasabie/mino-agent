@@ -45,6 +45,12 @@ func (c *CheckpointManager) path() string {
 func (c *CheckpointManager) Save(goal string, round int, toolsUsed, discoveries []string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if data, err := os.ReadFile(c.path()); err == nil {
+		var existing TaskSnapshot
+		if json.Unmarshal(data, &existing) == nil && existing.Status == "active" && existing.Goal != "" {
+			goal = existing.Goal
+		}
+	}
 	snap := TaskSnapshot{
 		Goal:        goal,
 		Round:       round,

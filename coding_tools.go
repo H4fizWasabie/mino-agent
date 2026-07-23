@@ -299,7 +299,6 @@ func makeCodegraphSyncTool() *Tool {
 func seedBuiltinSkills(home string) {
 	os.MkdirAll(filepath.Join(home, "skills", "coding"), 0700)
 	os.MkdirAll(filepath.Join(home, "mcp.d"), 0700)
-	os.MkdirAll(filepath.Join(home, "oauth.d"), 0700)
 
 	// coding skill
 	skillPath := filepath.Join(home, "skills", "coding", "SKILL.md")
@@ -311,22 +310,6 @@ func seedBuiltinSkills(home string) {
 	mcpPath := filepath.Join(home, "mcp.d", "context7.json")
 	if _, err := os.Stat(mcpPath); os.IsNotExist(err) {
 		os.WriteFile(mcpPath, []byte(`{"name":"context7","command":"npx","args":["-y","@upstash/context7-mcp"]}`), 0644)
-	}
-
-	// OAuth providers — seed from embedded bundle so dashboard shows login buttons
-	os.MkdirAll(filepath.Join(home, "oauth.d"), 0700)
-	entries, err := embeddedOAuth.ReadDir("oauth.d")
-	if err == nil {
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-				continue
-			}
-			dst := filepath.Join(home, "oauth.d", e.Name())
-			if _, err := os.Stat(dst); os.IsNotExist(err) {
-				data, _ := embeddedOAuth.ReadFile("oauth.d/" + e.Name())
-				os.WriteFile(dst, data, 0644)
-			}
-		}
 	}
 }
 
@@ -367,7 +350,7 @@ You are in coding mode. When this skill is active, the assistant-mode STOP rule 
 1. **No edits without reading first.** Always read the file before changing it.
 2. **No completion claim without verification.** Run the command, see the output, THEN claim done.
 3. **No fix without root cause.** Symptom fixes are failure. Find why before patching what.
-4. **Always use absolute paths.** When writing new files, provide a full path. New projects go under `/home/mino/`. Ask the user for the path if unsure.
+4. **Always use absolute paths.** The system context provides the authoritative LOCAL WORKSPACE. Put new or staged projects there unless Abah names another path.
 
 ## Phase 1: UNDERSTAND
 
@@ -390,7 +373,9 @@ For any change affecting >1 file or >20 lines:
 
 1. One logical change at a time.
 2. read_file → edit_file (prefer over write_file for targeted edits).
-3. Small steps. Commit after each working change.
+3. Treat LOCAL WORKSPACE as the stable editing boundary on every installation. Edit existing local files in place. For a remote file, reuse a matching workspace copy or stage it locally, verify there, then sync back once.
+4. Never generate a large file in one tool call. Use targeted edit_file replacements, or write_file with mode=overwrite for the first chunk and mode=append for later chunks.
+5. Small steps. Commit after each working change.
 
 ## Phase 4: VERIFY
 

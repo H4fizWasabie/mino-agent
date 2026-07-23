@@ -37,10 +37,10 @@ func NewCore() *Core {
 	authStore := LoadAuthStore(s.Home)
 	client, err := NewProviderManager(s.Home, s, authStore)
 	if err != nil {
-		slog.Info("no provider configured, dashboard will show onboarding")
-		client = nil
-		fmt.Printf("\n  Mino dashboard → http://localhost:7779\n\n")
-		go OpenBrowser("http://localhost:7779")
+		if !dashboardRequested() || !needsOnboarding(s.Home) {
+			panic(err)
+		}
+		slog.Info("dashboard awaiting provider setup")
 	}
 
 	mem := NewMemory(db, client, s)
@@ -59,7 +59,7 @@ func NewCore() *Core {
 		PruneRecentFixes(s.Home, 7*24*time.Hour)
 	}
 	mem.skills = NewSkillLoader(s.Home, mem.embedder)
-	tools := BuildRegistry(db, s.Home, mem)
+	tools := BuildRegistry(db, s.Home, mem, s.Location())
 	tools.SetMaxDescChars(s.MaxToolDescChars)
 	LoadExtensions(s.Home, tools) // discover + register extension tools
 
@@ -91,13 +91,14 @@ func NewCore() *Core {
 	if redirectBase == "" {
 		redirectBase = "http://" + dashHost + ":" + dashPort
 	}
+	oauthEngine := LoadOAuthEngine(s.Home, authStore, redirectBase)
 
 	w := &Core{
 		Settings:  s,
 		DB:        db,
 		Client:    client,
 		AuthStore: authStore,
-		OAuth:     LoadOAuthEngine(s.Home, authStore, redirectBase),
+		OAuth:     oauthEngine,
 		Memory:    mem,
 		Tools:     tools,
 		Sessions:  NewSessionManager(s, mem),
@@ -119,7 +120,7 @@ func NewCore() *Core {
 	addDelegateTools(w)
 
 	// Scheduler: runs prompts through agent loop on schedule
-	w.Scheduler = NewScheduler(s.Home, func(prompt string, notify bool) {
+	w.Scheduler = NewScheduler(s.Home, s.Location(), func(prompt string, notify bool) {
 		result := w.RespondFor("scheduler", prompt, "scheduler", nil, false)
 		slog.Info("scheduled job done", "id", prompt[:min(40, len(prompt))], "reply", result.Reply[:min(80, len(result.Reply))])
 		if notify && w.notifyTelegram != nil {
@@ -144,7 +145,7 @@ func (w *Core) Respond(userMessage, source string, obs Observer, stream bool) *L
 func (w *Core) captureBot(bot *tgbotapi.BotAPI, chatID int64) {
 	w.notifyChatID = chatID
 	w.notifyTelegram = func(result *LoopResult) {
-		sendTelegramReply(bot, w.notifyChatID, result.Reply, result.ToolCalls)
+		sendTelegramReply(bot, w.notifyChatID, result.Reply, nil)
 	}
 }
 
@@ -165,7 +166,7 @@ func (w *Core) RespondFor(sessionID, userMessage, source string, obs Observer, s
 	conversation := w.Sessions.Get(sessionID)
 	conversation.mu.Lock()
 	defer conversation.mu.Unlock()
-	system := conversation.Session.BuildSystem(userMessage)
+	system := conversation.Session.BuildSystem(userMessage, source)
 	// inject resume prompt if there's an active task
 	if resume := conversation.Checkpoint.ResumePrompt(); resume != "" {
 		system += "\n\n" + resume
@@ -189,11 +190,14 @@ func (w *Core) RespondFor(sessionID, userMessage, source string, obs Observer, s
 	)
 
 	conversation.Session.AddExchange(userMessage, userContext, result.Reply, result.ToolCalls, source)
-	// clear checkpoint if task completed (no tool calls = final reply)
-	if len(result.ToolCalls) > 0 && result.Reply != "" {
-		conversation.Checkpoint.Clear()
-	}
+	settleCheckpoint(conversation.Checkpoint, result)
 	return result
+}
+
+func settleCheckpoint(checkpoint *CheckpointManager, result *LoopResult) {
+	if checkpoint != nil && result != nil && result.Status == "complete" {
+		checkpoint.Clear()
+	}
 }
 
 func (w *Core) Close() {

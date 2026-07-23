@@ -1,7 +1,7 @@
 package main
 
 // Mino — loop/agent.py — Core's exact loop.
-// The loop is ~95 lines: observe → reason → act → repeat.
+// The loop remains observe → plan → act once → record proof → observe → repeat.
 
 import (
 	"encoding/json"
@@ -31,6 +31,7 @@ const (
 - Use status "complete" only when every requested step is verified complete.
 - Use status "blocked" only when required user input, approval, or an unavailable external dependency prevents further safe progress.
 - If work remains, call the next tool instead.
+- Each side-effecting tool follows: plan one action, execute it once, use its action receipt as proof, then observe before deciding what comes next. Never repeat an action whose receipt is successful.
 - TOOL HYGIENE: Prefer write_file over bash echo for file creation. Prefer read_file over bash cat. If a specialized tool exists for your task, use it — bash is the fallback, not the default.
 - Before claiming "file created" in complete_task, verify the file exists. If it does not exist, fix it first. The harness may reject completion with unverified file claims.
 - IMPORTANT: complete_task.reply must contain the FULL answer including any jokes, lists, code, or content the user requested. NEVER wrap it with meta-commentary like "Hope that helped!" — put the actual content in the reply field.`
@@ -88,6 +89,7 @@ func RunLoop(
 	noProgress := 0
 	successfulObservation := false
 	finalizeOnly := false
+	checkpointGoal := lastUserContent(messages)
 
 	defer func() {
 		decision, reason := "skip", "recall tool not invoked"
@@ -156,6 +158,19 @@ func RunLoop(
 		toolUses := extractToolUses(resp.Content)
 		completionError := "Error: complete_task must be called alone with status complete or blocked and a non-empty reply."
 
+		if resp.Usage.OutputTokens >= maxTokens && (len(toolUses) == 0 || hasInvalidToolInput(toolUses)) {
+			noProgress++
+			successfulObservation, finalizeOnly = false, false
+			logTrace(traceHome, "no_progress", map[string]any{"iteration": i, "count": noProgress, "reason": "output ceiling truncated tool arguments"})
+			if noProgress >= maxNoProgress {
+				result.Status = "stalled"
+				result.Reply = "(I stopped after repeated output truncation. The task remains incomplete.)"
+				return result
+			}
+			messages = append(messages, Message{Role: "user", Content: "Your response hit the output ceiling and the tool arguments were incomplete. Do not retry the same large payload. Use smaller targeted edits, or split a large write into write_file chunks using mode=overwrite once and mode=append afterward."})
+			continue
+		}
+
 		// Plain text is provisional. Only complete_task can end the turn.
 		if len(toolUses) == 0 {
 			noProgress++
@@ -181,7 +196,6 @@ func RunLoop(
 			reply, _ := args["reply"].(string)
 			status, reply = strings.ToLower(strings.TrimSpace(status)), strings.TrimSpace(reply)
 			if (status == "complete" || status == "blocked") && reply != "" && (status == "blocked" || !lastActionFailed) {
-				result.Status, result.Reply = status, reply
 				// Verify claimed files exist before accepting completion
 				if status == "complete" {
 					if correction := verifyFileClaims(reply, lastFileOutput); correction != "" {
@@ -189,6 +203,7 @@ func RunLoop(
 						continue
 					}
 				}
+				result.Status, result.Reply = status, reply
 				notify(obs, "completion", map[string]any{"status": status})
 				logTrace(traceHome, "task_completion", map[string]any{"status": status})
 				return result
@@ -238,10 +253,11 @@ func RunLoop(
 			if tc.Name == "write_file" || (tc.Name == "bash" && strings.Contains(output, "/")) {
 				lastFileOutput = output
 			}
-			event := map[string]any{"tool": tc.Name, "args": args, "output": output, "status": status, "cached": cached}
+			output = appendActionReceipt(output, tc.Name, key, status, cached)
+			event := map[string]any{"tool": tc.Name, "args": args, "output": output, "status": status, "cached": cached, "action": key, "proof": status == "ok"}
 			result.ToolCalls = append(result.ToolCalls, ToolCall{Name: tc.Name, Args: args, Output: output})
 			notify(obs, "tool", event)
-			trace := map[string]any{"tool": tc.Name, "args": args, "status": status, "cached": cached}
+			trace := map[string]any{"tool": tc.Name, "args": args, "status": status, "cached": cached, "action": key, "proof": status == "ok"}
 			if status == "error" {
 				trace["output"] = output
 			}
@@ -252,7 +268,7 @@ func RunLoop(
 				for j, tc2 := range result.ToolCalls {
 					toolNames[j] = tc2.Name
 				}
-				chk.Save(system, i, toolNames, nil)
+				chk.Save(checkpointGoal, i, toolNames, nil)
 			}
 			toolResults = append(toolResults, map[string]any{
 				"type":        "tool_result",
@@ -327,6 +343,25 @@ func extractToolUses(blocks []ContentBlock) []ContentBlock {
 	return uses
 }
 
+func hasInvalidToolInput(uses []ContentBlock) bool {
+	for _, use := range uses {
+		args, ok := use.Input.(map[string]any)
+		if !ok || args == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func lastUserContent(messages []Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			return messages[i].Content
+		}
+	}
+	return ""
+}
+
 func assembleAssistantContent(blocks []ContentBlock) string {
 	var out strings.Builder
 	for _, b := range blocks {
@@ -363,6 +398,16 @@ func formatToolResults(results []map[string]any) string {
 	}
 	out.WriteString("[Continue only if a requested step remains. After status=ok, call a distinct next tool or call complete_task alone now. Never repeat a successful action.]\n")
 	return out.String()
+}
+
+// appendActionReceipt makes every tool result auditable and reusable by the
+// next observe cycle. The loop owns this protocol; tools only return evidence.
+func appendActionReceipt(output, tool, action, status string, cached bool) string {
+	receipt, _ := json.Marshal(map[string]any{
+		"tool": tool, "action": action, "status": status,
+		"proof": status == "ok", "cached": cached,
+	})
+	return output + "\n[action_receipt " + string(receipt) + "]"
 }
 
 // logTrace appends a trace event to traces/YYYY-MM-DD.jsonl

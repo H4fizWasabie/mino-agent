@@ -10,7 +10,7 @@ import (
 
 func TestBuildSystemUsesConfiguredTimezoneAndOffset(t *testing.T) {
 	home := t.TempDir()
-	s := NewSession(&Settings{Home: home, Timezone: "Asia/Kuala_Lumpur"}, nil)
+	s := NewSession(&Settings{Home: home, Workspace: "/srv/mino-work", Timezone: "Asia/Kuala_Lumpur"}, nil)
 	got := s.BuildSystem("what time is it?", "cli")
 	if !strings.Contains(got, "CURRENT TIME (authoritative):") || !strings.Contains(got, "Asia/Kuala_Lumpur") {
 		t.Fatalf("time context missing: %q", got)
@@ -18,11 +18,24 @@ func TestBuildSystemUsesConfiguredTimezoneAndOffset(t *testing.T) {
 	if !strings.Contains(got, "UTC+08:00") {
 		t.Fatalf("timezone offset missing: %q", got)
 	}
+	if !strings.Contains(got, "LOCAL WORKSPACE (authoritative): /srv/mino-work") {
+		t.Fatalf("workspace missing: %q", got)
+	}
 }
 
 func TestSettingsLocationFallsBackForInvalidTimezone(t *testing.T) {
 	if got := (&Settings{Timezone: "not/a-real-zone"}).Location(); got != time.Local {
 		t.Fatalf("invalid timezone location = %v, want local %v", got, time.Local)
+	}
+}
+
+func TestSettingsDefaultToUniversalWorkspaceAnd16KOutput(t *testing.T) {
+	t.Setenv("MINO_HOME", t.TempDir())
+	t.Setenv("MINO_WORKSPACE", "/srv/mino-work")
+	t.Setenv("MINO_MAX_TOKENS", "")
+	settings := LoadSettings()
+	if settings.Workspace != "/srv/mino-work" || settings.MaxTokens != 16384 {
+		t.Fatalf("workspace=%q max_tokens=%d", settings.Workspace, settings.MaxTokens)
 	}
 }
 

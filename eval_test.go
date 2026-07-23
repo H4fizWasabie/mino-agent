@@ -134,14 +134,14 @@ func TestNotifyCheckpointSavedAfterTool(t *testing.T) {
 		scriptedResp([]ContentBlock{finishBlock("complete", "done")}, "tool_use"),
 	}
 
-	RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 10, 2048, nil, false, chk, home, nil)
+	RunLoop(&fakeClient{script: script}, "eval", "", []Message{{Role: "user", Content: "checkpoint me"}}, tools, 10, 2048, nil, false, chk, home, nil)
 
 	data, _ := os.ReadFile(filepath.Join(home, "active_tasks", "eval-session.json"))
 	if len(data) == 0 {
 		t.Error("checkpoint not written after tool execution")
 	}
-	if snap := chk.Load(); snap == nil || len(snap.ToolsUsed) == 0 {
-		t.Error("checkpoint doesn't contain tool use record")
+	if snap := chk.Load(); snap == nil || len(snap.ToolsUsed) == 0 || snap.Goal != "checkpoint me" {
+		t.Errorf("checkpoint = %#v", snap)
 	}
 }
 
@@ -276,7 +276,7 @@ func TestSuccessfulToolObservationIsExplicit(t *testing.T) {
 	}
 	context := fake.messages[1]
 	got := context[len(context)-2].Content + "\n" + context[len(context)-1].Content
-	for _, want := range []string{`[tool_call: probe({"target":"laptop"})]`, "tool=probe status=ok cached=false", "After status=ok"} {
+	for _, want := range []string{`[tool_call: probe({"target":"laptop"})]`, "tool=probe status=ok cached=false", "action_receipt", `"proof":true`, "After status=ok"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("observation missing %q: %s", want, got)
 		}
@@ -303,7 +303,7 @@ func TestRepeatedSuccessfulToolExecutesOnce(t *testing.T) {
 		t.Fatalf("runs=%d result=%#v", runs, result)
 	}
 	got := fake.messages[2][len(fake.messages[2])-1].Content
-	if !strings.Contains(got, "cached=true") || !strings.Contains(got, "already ran") {
+	if !strings.Contains(got, "cached=true") || !strings.Contains(got, "already ran") || !strings.Contains(got, `"proof":true`) {
 		t.Fatalf("duplicate observation was not authoritative: %s", got)
 	}
 }
@@ -328,6 +328,68 @@ func TestRepeatedNoProgressStopsEarly(t *testing.T) {
 	}
 	if len(fake.toolSets[3]) != 1 || fake.toolSets[3][0].Name != completionToolName {
 		t.Fatalf("finalization turn tools=%#v", fake.toolSets[3])
+	}
+}
+
+func TestTruncatedToolArgumentsAreNotExecuted(t *testing.T) {
+	home := makeTestHome(t)
+	path := filepath.Join(home, "truncated.txt")
+	truncated := scriptedResp([]ContentBlock{toolBlock("write_file", nil)}, "length")
+	truncated.Usage.OutputTokens = 2048
+	fake := &fakeClient{script: []*LLMResponse{
+		truncated,
+		scriptedResp([]ContentBlock{finishBlock("complete", "Recovered.")}, "tool_use"),
+	}}
+
+	result := RunLoop(fake, "eval", "", []Message{{Role: "user", Content: "write " + path}}, makeEvalTools(home), 5, 2048, nil, false, nil, home, nil)
+	if result.Status != "complete" || len(result.ToolCalls) != 0 {
+		t.Fatalf("result=%#v", result)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("truncated tool call created %s", path)
+	}
+	got := fake.messages[1][len(fake.messages[1])-1].Content
+	if !strings.Contains(got, "output ceiling") || !strings.Contains(got, "mode=append") {
+		t.Fatalf("recovery prompt = %q", got)
+	}
+}
+
+func TestToolArgumentsAreValidated(t *testing.T) {
+	tools := NewRegistry()
+	tools.Register(makeBashTool())
+	tools.Register(makeWriteTool())
+	tests := []struct {
+		name string
+		tool string
+		args map[string]any
+	}{
+		{"nil object", "bash", nil},
+		{"missing required field", "bash", map[string]any{}},
+		{"empty bash command", "bash", map[string]any{"command": "  "}},
+		{"missing write content", "write_file", map[string]any{"path": "/tmp/unused"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tools.Execute(tt.tool, tt.args); !strings.HasPrefix(got, "Error:") {
+				t.Fatalf("Execute() = %q", got)
+			}
+		})
+	}
+}
+
+func TestWriteFileSupportsChunks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "large.html")
+	tool := NewRegistry()
+	tool.Register(makeWriteTool())
+	if got := tool.Execute("write_file", map[string]any{"path": path, "content": "first", "mode": "overwrite"}); !strings.HasPrefix(got, "Wrote ") {
+		t.Fatal(got)
+	}
+	if got := tool.Execute("write_file", map[string]any{"path": path, "content": "-second", "mode": "append"}); !strings.HasPrefix(got, "Appended ") {
+		t.Fatal(got)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "first-second" {
+		t.Fatalf("data=%q err=%v", data, err)
 	}
 }
 
@@ -416,6 +478,16 @@ func TestCheckpointClearsOnlyOnExplicitCompletion(t *testing.T) {
 	settleCheckpoint(checkpoint, &LoopResult{Status: "complete"})
 	if checkpoint.Load() != nil {
 		t.Fatal("completed task checkpoint was retained")
+	}
+}
+
+func TestCheckpointKeepsOriginalGoal(t *testing.T) {
+	checkpoint := NewCheckpointManager(t.TempDir(), "task")
+	checkpoint.Save("original task", 1, []string{"read_file"}, nil)
+	checkpoint.Save("system prompt\nYou were working on this before a restart", 2, []string{"read_file", "edit_file"}, nil)
+	snapshot := checkpoint.Load()
+	if snapshot == nil || snapshot.Goal != "original task" || snapshot.Round != 2 {
+		t.Fatalf("snapshot=%#v", snapshot)
 	}
 }
 

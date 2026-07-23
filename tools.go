@@ -113,7 +113,31 @@ func (r *Registry) Execute(name string, args map[string]any) string {
 	if !ok {
 		return fmt.Sprintf("Error: unknown tool '%s'", name)
 	}
+	if args == nil {
+		return fmt.Sprintf("Error: invalid arguments for %s: expected a JSON object", name)
+	}
+	for _, key := range requiredArgs(t.Schema) {
+		if _, ok := args[key]; !ok {
+			return fmt.Sprintf("Error: invalid arguments for %s: missing required field %q", name, key)
+		}
+	}
 	return t.Fn(args)
+}
+
+func requiredArgs(schema map[string]any) []string {
+	switch required := schema["required"].(type) {
+	case []string:
+		return required
+	case []any:
+		var keys []string
+		for _, key := range required {
+			if text, ok := key.(string); ok {
+				keys = append(keys, text)
+			}
+		}
+		return keys
+	}
+	return nil
 }
 
 func (r *Registry) Only(names ...string) *Registry {
@@ -128,8 +152,12 @@ func (r *Registry) Only(names ...string) *Registry {
 
 // --- BuildRegistry (matches Core's build_registry) ---
 
-func BuildRegistry(db *sql.DB, home string, mem *Memory) *Registry {
+func BuildRegistry(db *sql.DB, home string, mem *Memory, location ...*time.Location) *Registry {
 	r := NewRegistry()
+	loc := time.Local
+	if len(location) > 0 && location[0] != nil {
+		loc = location[0]
+	}
 
 	// file tools (coding)
 	r.Register(makeReadTool())
@@ -152,7 +180,7 @@ func BuildRegistry(db *sql.DB, home string, mem *Memory) *Registry {
 
 	// calendar tools (Core: calendar.make_tool + make_list_tool)
 	r.Register(makeCalendarTool(db, home))
-	r.Register(makeListCalendarTool(db))
+	r.Register(makeListCalendarTool(db, loc))
 
 	// notes (Core: notes.make_tool)
 	r.Register(makeNotesTool(db, mem))
@@ -255,23 +283,38 @@ func makeReadTool() *Tool {
 func makeWriteTool() *Tool {
 	return &Tool{
 		Name:        "write_file",
-		Description: "Write or save content to a file. Creates, overwrites, or appends. Prefer this over bash echo/redirect — handles special characters safely and never truncates. Use when user asks to: write, save, create file, store, output, export, persist, dump to file.",
+		Description: "Write or save content to a file. Use mode=overwrite for the first chunk and mode=append for later chunks when content may exceed the output budget. Prefer this over bash echo/redirect.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":    map[string]any{"type": "string", "description": "Path to the file"},
 				"content": map[string]any{"type": "string", "description": "Content to write"},
+				"mode":    map[string]any{"type": "string", "enum": []string{"overwrite", "append"}, "description": "Default overwrite. Use append for later chunks of a large file."},
 			},
 			"required": []string{"path", "content"},
 		},
 		Fn: func(args map[string]any) string {
 			path, _ := args["path"].(string)
 			content, _ := args["content"].(string)
+			mode, _ := args["mode"].(string)
 			os.MkdirAll(filepath.Dir(path), 0755)
-			if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+			verb := "Wrote"
+			if mode == "append" {
+				flags = os.O_CREATE | os.O_WRONLY | os.O_APPEND
+				verb = "Appended"
+			}
+			file, err := os.OpenFile(path, flags, 0644)
+			if err == nil {
+				_, err = file.WriteString(content)
+				if closeErr := file.Close(); err == nil {
+					err = closeErr
+				}
+			}
+			if err != nil {
 				return fmt.Sprintf("Error writing %s: %v", path, err)
 			}
-			return fmt.Sprintf("Wrote %d bytes to %s", len(content), path)
+			return fmt.Sprintf("%s %d bytes to %s", verb, len(content), path)
 		},
 	}
 }
@@ -286,7 +329,7 @@ func makeEditTool() *Tool {
 				"path":    map[string]any{"type": "string", "description": "Path to the file"},
 				"oldText": map[string]any{"type": "string", "description": "Exact text to replace (single-edit mode)"},
 				"newText": map[string]any{"type": "string", "description": "Replacement text (single-edit mode)"},
-				"edits": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"oldText": map[string]any{"type": "string"}, "newText": map[string]any{"type": "string"}}}, "description": "Array of {oldText, newText} for multiple replacements"},
+				"edits":   map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"oldText": map[string]any{"type": "string"}, "newText": map[string]any{"type": "string"}}}, "description": "Array of {oldText, newText} for multiple replacements"},
 			},
 			"required": []string{"path"},
 		},
@@ -348,6 +391,9 @@ func makeBashTool() *Tool {
 		},
 		Fn: func(args map[string]any) string {
 			cmd, _ := args["command"].(string)
+			if strings.TrimSpace(cmd) == "" {
+				return "Error: bash command cannot be empty"
+			}
 			out, err := runBash(cmd)
 			if err != nil {
 				return fmt.Sprintf("Error: %v\nOutput: %s", err, out)
@@ -397,7 +443,7 @@ func makeCalendarTool(db *sql.DB, home string) *Tool {
 	}
 }
 
-func makeListCalendarTool(db *sql.DB) *Tool {
+func makeListCalendarTool(db *sql.DB, location *time.Location) *Tool {
 	return &Tool{
 		Name:        "list_events",
 		Description: "List upcoming calendar events",
@@ -415,9 +461,11 @@ func makeListCalendarTool(db *sql.DB) *Tool {
 			if days < 1 {
 				days = 7
 			}
+			startDate := time.Now().In(location).Format("2006-01-02")
+			endDate := time.Now().In(location).AddDate(0, 0, days+1).Format("2006-01-02")
 			rows, err := db.Query(
-				"SELECT title, start FROM calendar_events WHERE start >= date('now') AND start <= date('now', '+' || ? || ' days') ORDER BY start LIMIT 20",
-				days,
+				"SELECT title, start FROM calendar_events WHERE start >= ? AND start < ? ORDER BY start LIMIT 20",
+				startDate, endDate,
 			)
 			if err != nil {
 				return "No upcoming events."
@@ -520,30 +568,6 @@ func webSearch(query string) string {
 		return tavilySearch(query, key)
 	}
 	return "Error: web search requires a Tavily API key. Get one at https://tavily.com, then set TAVILY_API_KEY in your environment or dashboard settings."
-}
-
-// readEnvFile reads a single key from mino.env. Lets the agent add keys
-// mid-session without a restart.
-func readEnvFile(targetKey string) string {
-	home := os.Getenv("MINO_HOME")
-	if home == "" {
-		hd, _ := os.UserHomeDir()
-		home = filepath.Join(hd, ".mino")
-	}
-	f, err := os.Open(filepath.Join(home, "mino.env"))
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) == 2 && strings.TrimSpace(parts[0]) == targetKey {
-			return strings.TrimSpace(parts[1])
-		}
-	}
-	return ""
 }
 
 func tavilySearch(query, key string) string {
@@ -960,7 +984,31 @@ func appendICS(path, title, start, end, attendees, notes string) {
 	}
 }
 
-var httpClient = &http.Client{Timeout: 10 * time.Second}
+// readEnvFile reads a single key from mino.env. Lets the agent add keys
+// mid-session without a restart.
+func readEnvFile(targetKey string) string {
+	home := os.Getenv("MINO_HOME")
+	if home == "" {
+		hd, _ := os.UserHomeDir()
+		home = filepath.Join(hd, ".mino")
+	}
+	f, err := os.Open(filepath.Join(home, "mino.env"))
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 && strings.TrimSpace(parts[0]) == targetKey {
+			return strings.TrimSpace(parts[1])
+		}
+	}
+	return ""
+}
+
+var httpClient = &http.Client{Timeout: 30 * time.Second}
 var imageClient = &http.Client{Timeout: 90 * time.Second}
 
 func httpGet(url string) (string, error) {

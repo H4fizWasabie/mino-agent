@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Settings — matches Core's config.py exactly. Every knob is an env var.
@@ -16,15 +17,17 @@ type Settings struct {
 	Model            string
 	SmallModel       string
 	Home             string
+	Workspace        string
 	MaxIter          int
 	MaxTokens        int
 	TopK             int
 	ConsolidateEvery int
 	MinSimilarity    float64
-	ContextChars      int
-	MaxHistoryTurns   int // keep only last N turns (0 = unlimited, default 5)
-	MaxToolDescChars  int // trim tool descriptions exceeding this (0 = no limit)
-	Telegram          string
+	ContextChars     int
+	MaxHistoryTurns  int // keep only last N turns (0 = unlimited, default 5)
+	MaxToolDescChars int // trim tool descriptions exceeding this (0 = no limit)
+	Telegram         string
+	Timezone         string // IANA timezone used for user-facing time and schedules
 }
 
 func LoadSettings() *Settings {
@@ -46,8 +49,9 @@ func LoadSettings() *Settings {
 		Model:            envOr("MINO_MODEL", "deepseek-v4-flash-free"),
 		SmallModel:       envOr("MINO_SMALL_MODEL", "deepseek-v4-flash-free"),
 		Home:             home,
+		Workspace:        envOr("MINO_WORKSPACE", defaultWorkspace()),
 		MaxIter:          envInt("MINO_MAX_ITERATIONS", 25),
-		MaxTokens:        envInt("MINO_MAX_TOKENS", 2048),
+		MaxTokens:        envInt("MINO_MAX_TOKENS", 16384),
 		TopK:             envInt("MINO_RETRIEVAL_TOP_K", 4),
 		ConsolidateEvery: envInt("MINO_CONSOLIDATE_EVERY", 6),
 		MinSimilarity:    envFloat("MINO_MIN_SIMILARITY", 0.45),
@@ -55,7 +59,27 @@ func LoadSettings() *Settings {
 		MaxHistoryTurns:  envInt("MINO_MAX_HISTORY_TURNS", 5),
 		MaxToolDescChars: envInt("MINO_MAX_TOOL_DESC_CHARS", 0),
 		Telegram:         os.Getenv("TELEGRAM_BOT_TOKEN"),
+		Timezone:         envOr("MINO_TIMEZONE", "Asia/Kuala_Lumpur"),
 	}
+}
+
+func defaultWorkspace() string {
+	if home, err := os.UserHomeDir(); err == nil {
+		return home
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		return cwd
+	}
+	return "."
+}
+
+func (s *Settings) Location() *time.Location {
+	if s != nil && s.Timezone != "" {
+		if loc, err := time.LoadLocation(s.Timezone); err == nil {
+			return loc
+		}
+	}
+	return time.Local
 }
 
 func (s *Settings) EnsureHome() string {

@@ -27,6 +27,7 @@ type ScheduledJob struct {
 // Scheduler runs scheduled prompts and forwards results.
 type Scheduler struct {
 	home     string
+	location *time.Location
 	callback func(prompt string, notify bool)
 	jobs     []ScheduledJob
 	lastRun  map[string]time.Time
@@ -35,9 +36,10 @@ type Scheduler struct {
 }
 
 // NewScheduler creates a scheduler. callback fires when a job is due.
-func NewScheduler(home string, callback func(prompt string, notify bool)) *Scheduler {
+func NewScheduler(home string, location *time.Location, callback func(prompt string, notify bool)) *Scheduler {
 	return &Scheduler{
 		home:     home,
+		location: location,
 		callback: callback,
 		lastRun:  make(map[string]time.Time),
 		stopCh:   make(chan struct{}),
@@ -98,7 +100,11 @@ func (s *Scheduler) tick() {
 	copy(jobs, s.jobs)
 	s.mu.Unlock()
 
-	now := time.Now()
+	location := s.location
+	if location == nil {
+		location = time.Local
+	}
+	now := time.Now().In(location)
 	for _, j := range jobs {
 		if s.shouldRun(j, now) {
 			s.lastRun[j.ID] = now

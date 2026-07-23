@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 ### Added
+- `MINO_WORKSPACE` establishes a universal local editing boundary: local files are edited in place while remote files are staged, verified, and synchronized back once.
+- Runtime workspace context overrides legacy hardcoded paths without overwriting customized skill files during upgrades.
 - Explicit `MINO_TIMEZONE` (default `Asia/Kuala_Lumpur`) for authoritative local time in prompts, schedules, and calendar queries.
 - `MINO_MAX_HISTORY_TURNS` (default 5): cap chat history to last N exchanges instead of unlimited char-budget.
   Cuts input tokens from ~37k to ~12k per LLM call. 0 = unlimited (old behavior).
@@ -10,13 +12,16 @@
 - Port OSS refinements: pure-Go SQLite, loadEnvFile, embedded OAuth fallback, schema versioning
 - Tavily key in dashboard onboarding, readEnvFile for mid-session key injection
 - Drop DuckDuckGo fallback; web search now requires Tavily API key
-- Coding skill guidance requiring absolute paths for new files and `/home/mino/` for new projects.
+- Coding skill guidance requiring absolute paths and the configured local workspace for new or staged projects.
 
 ### Changed
+- Raised the default model output ceiling to 16K and taught the coding workflow to use local project copies and chunk large writes before syncing remote files.
 - Reframed Overview as a responsive cognitive core: Mino's neural brain now illuminates live request, context, memory, tool, response, and trace paths while detailed telemetry remains in its dedicated views.
 - SQLite driver: mattn/go-sqlite3 → modernc.org/sqlite (pure Go, no CGo, FTS5 built-in)
 
 ### Fixed
+- Record a generic action receipt for every tool result (action identity, status, proof, and cache state), so the observe cycle can reuse successful evidence instead of repeating side effects.
+- Recover from output-truncated tool calls without executing malformed arguments; validate required tool fields, reject empty Bash commands, and keep checkpoints anchored to the original task instead of recursively nesting resume prompts.
 - Stop repeated-tool loops generically: observations now preserve the tool call, explicit `ok`/`error` status, and cache state; exact duplicate actions are never re-executed and three consecutive no-progress turns stop early.
 - Restore Codex GPT-5.6 model and reasoning choices in the dashboard for existing VPS sessions without requiring a new OAuth login.
 
