@@ -5,7 +5,26 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestBuildSystemUsesConfiguredTimezoneAndOffset(t *testing.T) {
+	home := t.TempDir()
+	s := NewSession(&Settings{Home: home, Timezone: "Asia/Kuala_Lumpur"}, nil)
+	got := s.BuildSystem("what time is it?", "cli")
+	if !strings.Contains(got, "CURRENT TIME (authoritative):") || !strings.Contains(got, "Asia/Kuala_Lumpur") {
+		t.Fatalf("time context missing: %q", got)
+	}
+	if !strings.Contains(got, "UTC+08:00") {
+		t.Fatalf("timezone offset missing: %q", got)
+	}
+}
+
+func TestSettingsLocationFallsBackForInvalidTimezone(t *testing.T) {
+	if got := (&Settings{Timezone: "not/a-real-zone"}).Location(); got != time.Local {
+		t.Fatalf("invalid timezone location = %v, want local %v", got, time.Local)
+	}
+}
 
 func TestCompactToolOutputWritesArtifact(t *testing.T) {
 	output := strings.Repeat("x", artifactInlineLimit+1)
@@ -127,5 +146,12 @@ func TestContextMessagesKeepsLastNTurnsOnly(t *testing.T) {
 	}
 	if !strings.Contains(joined, "3 earlier turns compacted") {
 		t.Fatalf("compaction marker missing: %q", joined)
+	}
+}
+
+func TestToolResultsRequireCompletionOrRealBlocker(t *testing.T) {
+	got := formatToolResults([]map[string]any{{"tool": "probe", "status": "error", "cached": false, "content": "Error: missing column"}})
+	if !strings.Contains(got, "distinct next tool") || !strings.Contains(got, "complete_task") {
+		t.Fatalf("tool result lacks completion reminder: %q", got)
 	}
 }

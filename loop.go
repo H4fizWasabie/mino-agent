@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 )
@@ -25,6 +24,7 @@ type LoopResult struct {
 
 const (
 	completionToolName = "complete_task"
+	maxNoProgress      = 3
 	completionPrompt   = `COMPLETION PROTOCOL (RUNTIME ENFORCED):
 - Ordinary assistant text is progress and cannot end the turn.
 - To answer the user, call complete_task ALONE with status and the final reply.
@@ -85,6 +85,9 @@ func RunLoop(
 	dedupStatus := make(map[string]string)
 	lastActionFailed := false
 	lastFileOutput := "" // track last file-writing output for completion verification
+	noProgress := 0
+	successfulObservation := false
+	finalizeOnly := false
 
 	defer func() {
 		decision, reason := "skip", "recall tool not invoked"
@@ -118,7 +121,10 @@ func RunLoop(
 			filterQuery += "\n" + messages[len(messages)-1].Content
 		}
 
-		schemas := append(tools.SchemasFor(filterQuery, es), completionTool)
+		schemas := []ToolDef{completionTool}
+		if !finalizeOnly {
+			schemas = append(tools.SchemasFor(filterQuery, es), completionTool)
+		}
 		if stream {
 			resp, err = client.Stream(sessionID, MainModel, messages, maxTokens, system, schemas, func(delta string) {
 				notify(obs, "text", map[string]any{"delta": delta})
@@ -152,8 +158,20 @@ func RunLoop(
 
 		// Plain text is provisional. Only complete_task can end the turn.
 		if len(toolUses) == 0 {
+			noProgress++
 			notify(obs, "progress", map[string]any{"text": "Still working..."})
-			messages = append(messages, Message{Role: "user", Content: "Your previous response did not complete the protocol. Continue working, or call complete_task alone with the final reply."})
+			logTrace(traceHome, "no_progress", map[string]any{"iteration": i, "count": noProgress, "reason": "no tool call"})
+			if noProgress >= maxNoProgress {
+				result.Status = "stalled"
+				result.Reply = "(I stopped after repeated no-progress responses before completing the task.)"
+				return result
+			}
+			prompt := "Your previous response did not complete the protocol. Call the next tool, or call complete_task alone with the final reply."
+			if successfulObservation {
+				prompt = "The previous tool observation was successful. Do not repeat or re-verify it. Call the next distinct tool only if work remains; otherwise call complete_task alone now."
+				finalizeOnly = noProgress >= maxNoProgress-1
+			}
+			messages = append(messages, Message{Role: "user", Content: prompt})
 			continue
 		}
 
@@ -183,23 +201,27 @@ func RunLoop(
 		// act: execute each tool; observe: feed results back
 		toolResults := make([]map[string]any, 0)
 		var turnImages []string
-		batchTools, batchFailed := 0, false
+		batchTools, batchFailed, newActions, cachedActions := 0, false, 0, 0
 		for _, tc := range toolUses {
 			args, _ := tc.Input.(map[string]any)
 			if tc.Name == completionToolName {
 				toolResults = append(toolResults, map[string]any{
 					"type": "tool_result", "tool_use_id": tc.ID,
-					"content": completionError,
+					"tool": tc.Name, "status": "error", "cached": false, "content": completionError,
 				})
 				continue
 			}
 			batchTools++
 			key := dedupKey(tc.Name, args)
 			var output, status string
-			if cached, ok := dedup[key]; ok {
-				output = "[already executed] " + cached
+			cached := false
+			if cachedOutput, ok := dedup[key]; ok {
+				output = "[already executed] " + cachedOutput
 				status = dedupStatus[key]
+				cachedActions++
+				cached = true
 			} else {
+				newActions++
 				raw := tools.Execute(tc.Name, args)
 				// view_image returns a data URL; attach it as vision content so
 				// the model sees the image instead of megabytes of base64 text.
@@ -216,10 +238,10 @@ func RunLoop(
 			if tc.Name == "write_file" || (tc.Name == "bash" && strings.Contains(output, "/")) {
 				lastFileOutput = output
 			}
-			event := map[string]any{"tool": tc.Name, "args": args, "output": output, "status": status}
+			event := map[string]any{"tool": tc.Name, "args": args, "output": output, "status": status, "cached": cached}
 			result.ToolCalls = append(result.ToolCalls, ToolCall{Name: tc.Name, Args: args, Output: output})
 			notify(obs, "tool", event)
-			trace := map[string]any{"tool": tc.Name, "args": args, "status": status}
+			trace := map[string]any{"tool": tc.Name, "args": args, "status": status, "cached": cached}
 			if status == "error" {
 				trace["output"] = output
 			}
@@ -235,13 +257,37 @@ func RunLoop(
 			toolResults = append(toolResults, map[string]any{
 				"type":        "tool_result",
 				"tool_use_id": tc.ID,
+				"tool":        tc.Name,
+				"status":      status,
+				"cached":      cached,
 				"content":     output,
 			})
 		}
 		if batchTools > 0 {
 			lastActionFailed = batchFailed
+			successfulObservation = !batchFailed
+		}
+		if newActions > 0 {
+			noProgress = 0
+			finalizeOnly = false
+		} else {
+			noProgress++
+			reason := "invalid completion"
+			if cachedActions > 0 {
+				reason = "cached duplicate action"
+			}
+			logTrace(traceHome, "no_progress", map[string]any{"iteration": i, "count": noProgress, "reason": reason})
 		}
 		messages = append(messages, Message{Role: "user", Content: formatToolResults(toolResults), Images: turnImages})
+		if noProgress >= maxNoProgress {
+			result.Status = "stalled"
+			result.Reply = "(I stopped after repeatedly attempting an action that had already run.)"
+			return result
+		}
+		if successfulObservation && noProgress >= maxNoProgress-1 {
+			finalizeOnly = true
+			messages = append(messages, Message{Role: "user", Content: "The requested action already succeeded and produced no new evidence when repeated. Finalize now by calling complete_task alone."})
+		}
 	}
 
 	result.Status = "iteration_limit"
@@ -282,36 +328,41 @@ func extractToolUses(blocks []ContentBlock) []ContentBlock {
 }
 
 func assembleAssistantContent(blocks []ContentBlock) string {
-	// simplified for OpenAI wire format — just the text
-	return extractText(blocks)
+	var out strings.Builder
+	for _, b := range blocks {
+		if b.Type == "text" {
+			out.WriteString(b.Text)
+		}
+		if b.Type == "tool_use" {
+			args, _ := json.Marshal(b.Input)
+			if len(args) > 600 {
+				args = append(args[:600], []byte("...")...)
+			}
+			fmt.Fprintf(&out, "\n[tool_call: %s(%s)]", b.Name, args)
+		}
+	}
+	return strings.TrimSpace(out.String())
 }
 
 // ponytail: global lock, per-account locks if throughput matters
 
 func dedupKey(name string, args map[string]any) string {
-	keys := make([]string, 0, len(args))
-	for k := range args {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	var sb strings.Builder
-	sb.WriteString(name)
-	sb.WriteByte(':')
-	for _, k := range keys {
-		sb.WriteString(k)
-		sb.WriteByte('=')
-		sb.WriteString(fmt.Sprint(args[k]))
-		sb.WriteByte(',')
-	}
-	return sb.String()
+	data, _ := json.Marshal(args)
+	return name + ":" + string(data)
 }
 
 func formatToolResults(results []map[string]any) string {
-	var out string
+	var out strings.Builder
+	duplicate := false
 	for _, r := range results {
-		out += fmt.Sprintf("[tool_result: %v]\n", r["content"])
+		fmt.Fprintf(&out, "[tool_result tool=%v status=%v cached=%v: %v]\n", r["tool"], r["status"], r["cached"], r["content"])
+		duplicate = duplicate || r["cached"] == true
 	}
-	return out + "[Continue working if any requested step remains. Call the next tool now; do not narrate a future action. Call complete_task alone only when the task is complete or genuinely blocked on required user input or approval.]\n"
+	if duplicate {
+		out.WriteString("[The exact action already ran. Its cached result is authoritative; do not execute or verify it again.]\n")
+	}
+	out.WriteString("[Continue only if a requested step remains. After status=ok, call a distinct next tool or call complete_task alone now. Never repeat a successful action.]\n")
+	return out.String()
 }
 
 // logTrace appends a trace event to traces/YYYY-MM-DD.jsonl
