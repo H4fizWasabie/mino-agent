@@ -108,6 +108,9 @@ func (c *Client) create(ctx context.Context, model, reasoning string, messages [
 		"max_completion_tokens": maxTokens,
 		"stream":                stream,
 	}
+	if reasoning != "" {
+		payload["reasoning_effort"] = reasoning
+	}
 	if tools != nil {
 		funcs := make([]map[string]any, 0)
 		for _, t := range tools {
