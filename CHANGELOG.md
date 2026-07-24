@@ -1,66 +1,64 @@
 # Changelog
 
 ## [Unreleased]
+
+## [v1.1.0] — Core Upgrade
+
 ### Added
-- Optional SQLite-backed project state tools (`project_get` and `project_update`) for explicit, long-running project continuity without changing ordinary task flow.
-- `MINO_WORKSPACE` establishes a universal local editing boundary: local files are edited in place while remote files are staged, verified, and synchronized back once.
-- Runtime workspace context overrides legacy hardcoded paths without overwriting customized skill files during upgrades.
-- Explicit `MINO_TIMEZONE` (default `Asia/Kuala_Lumpur`) for authoritative local time in prompts, schedules, and calendar queries.
-- `MINO_MAX_HISTORY_TURNS` (default 5): cap chat history to last N exchanges instead of unlimited char-budget.
-  Cuts input tokens from ~37k to ~12k per LLM call. 0 = unlimited (old behavior).
-- Keyword-based tool filter fallback when no embedding store is available (no OPENROUTER_KEY)
-- Port OSS guardrails: tool hygiene descriptions, TOOL HYGIENE prompt, verifyFileClaims, untrusted content rule
-- Port OSS refinements: pure-Go SQLite, loadEnvFile, embedded OAuth fallback, schema versioning
-- Tavily key in dashboard onboarding, readEnvFile for mid-session key injection
-- Drop DuckDuckGo fallback; web search now requires Tavily API key
-- Coding skill guidance requiring absolute paths and the configured local workspace for new or staged projects.
+- RTK integration: automatic Bash command rewriting for compact test, Git, search, and log output (RTK installs separately — falls back to plain Bash if not present)
+- Optional SQLite-backed project state tools (`project_get` and `project_update`)
+- `MINO_WORKSPACE` — universal local editing boundary
+- `MINO_TIMEZONE` for authoritative local time in prompts, schedules, and calendar
+- `MINO_MAX_HISTORY_TURNS` — cap chat history to last N exchanges (default 5, 0 = unlimited)
+- New config knobs: `MINO_BASH_TIMEOUT`, `MINO_CODING_TIMEOUT`, `MINO_SYNC_TIMEOUT`, `MINO_CONSOLIDATE_LIMIT`, `MINO_TELEGRAM_CHAT_ID`
+- Scheduler: input validation, atomic file writes, one-shot jobs, duplicate prevention
+- Keyword-based tool filter fallback when no embedding store is available
+- Deploy script (`deploy.sh`) with configurable `VPS_HOST`
+- Coding skill: absolute paths and workspace-aware staging guidance
 
 ### Changed
-- Raised the default model output ceiling to 16K and taught the coding workflow to use local project copies and chunk large writes before syncing remote files.
-- Reframed Overview as a responsive cognitive core: Mino's neural brain now illuminates live request, context, memory, tool, response, and trace paths while detailed telemetry remains in its dedicated views.
+- Richer loop: completion protocol enforcement, no-progress detection, improved tool hygiene
+- Raised default model output ceiling to 16K
 - SQLite driver: mattn/go-sqlite3 → modernc.org/sqlite (pure Go, no CGo, FTS5 built-in)
+- Dashboard: responsive Runtime Spine replacing static Overview
+- Tool budgets per-turn reduced to six core + eight relevant, lowering prompt overhead
 
 ### Fixed
-- Keep paired project read/write tools available together so a project update can be verified in the same task despite dynamic tool filtering.
-- Record a generic action receipt for every tool result (action identity, status, proof, and cache state), so the observe cycle can reuse successful evidence instead of repeating side effects.
-- Recover from output-truncated tool calls without executing malformed arguments; validate required tool fields, reject empty Bash commands, and keep checkpoints anchored to the original task instead of recursively nesting resume prompts.
-- Stop repeated-tool loops generically: observations now preserve the tool call, explicit `ok`/`error` status, and cache state; exact duplicate actions are never re-executed and three consecutive no-progress turns stop early.
-- Restore Codex GPT-5.6 model and reasoning choices in the dashboard for existing VPS sessions without requiring a new OAuth login.
+- Stop repeated-tool loops: observations preserve tool call, status, and cache state; exact duplicate actions never re-execute
+- Recover from output-truncated tool calls without malformed argument execution
+- Keep paired project read/write tools available together during dynamic filtering
+- Action receipts recorded for every tool result (identity, status, proof, cache state)
+
+## [v1.0.0] — Initial OSS Release
 
 ### Added
-- Runtime-enforced `complete_task` protocol: ordinary model text is provisional and every gateway receives a final reply only after explicit completion or a genuine blocker
-- VPS-safe ChatGPT/Codex login using native device-code OAuth, automatic token refresh, and the Codex Responses transport
-- Dashboard controls for adding and removing API-key providers and starting OAuth logins
-- **Keyless providers**: `api_key_env` can be empty in `providers.json` for local LLMs (Ollama, LM Studio) that don't require auth
-- **Native coding agent**: 10 discovery tools (list_files, grep, glob, git_diff/status, graphify_query/explain/path, codegraph_query/sync) for language-agnostic codebase navigation
-- **Coding skill**: auto-loaded phased workflow (understand→plan→edit→verify), overrides assistant STOP rule when active, mandates AGENTS.md read on first turn
-- **Multi-edit support**: edit_file accepts `edits` array for multiple replacements in one call
-- **Context7 MCP default**: auto-seeded config for up-to-date library documentation (no API key required)
-- **read_file 16KB limit**: increased from 4KB for real source files
-- **minowrap**: universal tool adapter — one JSON entry per tool, template args auto-generate JSON Schema, new tools appear instantly (Mino self-extends without restarts)
-- **`reload_plugins` tool**: hot-reloads extensions.json and mcp.d/ on demand, discovers new tools without restart
-- **`Reload()` on MCPBridge**: re-scans mcp.d/ for new server configs, skips already-connected servers
-- Graphify architecture index with semantic community labels and refreshed CodeGraph metadata
-- Vision-aware provider routing: `text_only` providers skipped for image turns; separate sticky bucket keeps text sessions on the main model
-- Telegram rich formatting: bold, code, fences, links, headings, bullets, strikethrough, pipe tables as aligned <pre>
-- Tool filter: embedding-based top-K tool selection per turn — only relevant tools sent to the LLM (cuts context waste)
-- `EmbedBatch`: batch embeddings in one request (86 tools in <2s vs 49s sequential)
-- Approval system: `request_approval` + `resolve_approval` tools for destructive operations (delete email, rm files, etc.)
-- Pending approvals injected into system prompt across all sessions
-- SELF-VERIFY prompt rule: LLM checks "did I call the tool?" before replying
-- `LLMClient` interface — test seam for `RunLoop`, enables deterministic evals
-- Eval test suite (9 tests): scripted fake LLM client, zero API cost, catches bluffs and regressions
-- `view_image` tool — loads images into LLM's visual context
-- `generate_image` tool via Pollinations.ai (free, no API key)
+- Runtime-enforced `complete_task` protocol
+- VPS-safe ChatGPT/Codex OAuth login with automatic token refresh
+- Dashboard: add/remove API-key providers, OAuth login controls
+- Keyless providers (`api_key_env` can be empty for Ollama, LM Studio)
+- Native coding agent: 10 discovery tools + phased coding skill
+- Multi-edit support: `edit_file` accepts `edits` array
+- Context7 MCP default (no API key required)
+- `read_file` 16KB limit (up from 4KB)
+- `minowrap`: universal tool adapter for self-extending tools
+- `reload_plugins` tool for hot-reloading extensions and MCP configs
+- Graphify architecture index with semantic community labels
+- Vision-aware provider routing (`text_only` providers skip image turns)
+- Telegram rich formatting: bold, code, fences, links, headings, tables
+- Tool filter: embedding-based top-K selection per turn
+- `EmbedBatch`: batch embeddings (86 tools in <2s)
+- Approval system: `request_approval` + `resolve_approval` for destructive ops
+- `LLMClient` interface — test seam for deterministic evals
+- Eval test suite (9 tests): scripted fake LLM, zero API cost
+- `view_image` and `generate_image` tools (Pollinations.ai, no key needed)
 
 ### Changed
-- Reduced the default per-turn tool budget to six core tools plus eight relevant tools, lowering prompt schema overhead.
-- Agent completion rules no longer stop after three tool calls; failed and artifact-backed results now drive recovery until completion or a genuine blocker
-- Telegram now keeps any reply accompanied by tool executions in the progress message and auto-continues until a no-tool final reply
-- Codex Responses requests omit the public-API-only `max_output_tokens` field rejected by the ChatGPT backend
-- Dashboard provider switching now selects Codex models and reasoning effort per session; Codex defaults to GPT-5.6 Sol with Luna for small-model work
-- **deploy.sh**: builds + ships minowrap alongside Mino, seeds tools.json, configures systemd unit
-- Telegram sends unified into sendTelegramReply: 4000-char HTML-safe chunking + plain-text fallback; notify path no longer truncates
+- Agent loop continues past 3 tool calls; drives recovery until completion or blocker
+- Telegram auto-continues until no-tool final reply
+- Codex Responses omit `max_output_tokens` for ChatGPT backend compatibility
+- Dashboard provider switching per session
+- `deploy.sh`: builds + ships minowrap, seeds tools.json
+- Telegram: 4000-char HTML-safe chunking + plain-text fallback
 - `RunLoop` accepts `LLMClient` interface instead of concrete `*ProviderManager`
 - Default soul includes SELF-VERIFY and tool truth rules
 
