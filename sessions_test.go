@@ -39,6 +39,21 @@ func TestSessionManagerKeepsGatewayConversationAcrossRestart(t *testing.T) {
 	db.Close()
 }
 
+func TestTelegramNotificationContextSurvivesRestart(t *testing.T) {
+	home := t.TempDir()
+	db := Connect(home)
+	settings := &Settings{Home: home, ContextChars: 100000}
+	mem := NewMemory(db, nil, settings)
+	first := NewSessionManager(settings, mem).Get("tg:42")
+	first.Session.AddNotification("Gmail cleanup found 20 promotional emails.")
+
+	restored := NewSessionManager(settings, mem).Get("tg:42")
+	if len(restored.Session.history) != 2 || !strings.Contains(restored.Session.history[1].Content, "Gmail cleanup") {
+		t.Fatalf("notification context was not restored: %#v", restored.Session.history)
+	}
+	db.Close()
+}
+
 func TestSessionListShowsGatewaySources(t *testing.T) {
 	db := Connect(t.TempDir())
 	defer db.Close()

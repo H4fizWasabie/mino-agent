@@ -151,7 +151,7 @@ func (m *Memory) SessionHistory(sessionID string) [][2]string {
 		rows.Scan(&role, &content)
 		if role == "user" {
 			pending = content
-		} else if pending != "" {
+		} else if role == "assistant" && pending != "" {
 			pairs = append(pairs, [2]string{pending, content})
 			pending = ""
 		}

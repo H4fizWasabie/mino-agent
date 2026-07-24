@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- Link Telegram reply-to messages and scheduler notifications into the Telegram session context so short follow-ups resolve against the message the user actually answered.
+
 ## [v1.1.0] — Core Upgrade
 
 ### Added

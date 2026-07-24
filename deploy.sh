@@ -45,7 +45,11 @@ ssh "$VPS_USER@$VPS" 'chmod +x /usr/local/bin/minowrap.new && mv /usr/local/bin/
 
 # 3. Push extensions
 echo "--- Pushing extensions ---"
-scp -r extensions/fileingest "$VPS_USER@$VPS:/home/mino/extensions/"
+if [ -d extensions/fileingest ]; then
+    scp -r extensions/fileingest "$VPS_USER@$VPS:/home/mino/extensions/"
+else
+    echo "No fileingest extension in this release; preserving the existing VPS sidecar"
+fi
 
 # 4. Seed minowrap tools.json if not exists
 echo "--- Seeding minowrap tools ---"
@@ -80,9 +84,10 @@ chown -R mino:mino /home/mino
 
 # 6. Push + enable systemd units
 echo "--- Setting up systemd ---"
-scp extensions/mino.service "$VPS_USER@$VPS:/etc/systemd/system/"
-scp extensions/mino-fileingest.service "$VPS_USER@$VPS:/etc/systemd/system/"
-scp extensions/minowrap.service "$VPS_USER@$VPS:/etc/systemd/system/"
+for unit in extensions/*.service; do
+    [ -f "$unit" ] || continue
+    scp "$unit" "$VPS_USER@$VPS:/etc/systemd/system/"
+done
 
 ssh "$VPS_USER@$VPS" '
     command -v sqlite3 >/dev/null || apt-get install -y -qq sqlite3
