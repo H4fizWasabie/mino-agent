@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 const defaultSoul = `You are Mino, a personal AI assistant.
@@ -78,20 +77,11 @@ func loadSoul(home string) string {
 
 // BuildSystem — Core's build_system():
 //
-//	SOUL.md + current time + pending approvals + relevant skill matches. Memory is pulled via recall.
+//	SOUL.md + pending approvals + relevant skill matches. Time is injected as user message for cache stability.
 func (s *Session) BuildSystem(userMessage, source string) string {
-	local := time.Now().In(s.settings.Location())
-	zone, offset := local.Zone()
-	zoneName := s.settings.Timezone
-	if zoneName == "" {
-		zoneName = local.Location().String()
-	}
-	date := local.Format("2006-01-02")
-	clock := local.Format("Monday, 2006-01-02 15:04:05")
 	parts := []string{
 		loadSoul(s.settings.Home),
 		"\n" + completionPrompt,
-		fmt.Sprintf("\nCURRENT TIME (authoritative): %s %s [%s, UTC%+03d:%02d]. Today is %s.\nUse this timezone for relative dates and times unless the user explicitly names another timezone. If timing matters, use the absolute date and time rather than guessing.", clock, zone, zoneName, offset/3600, (abs(offset)%3600)/60, date),
 		fmt.Sprintf("\nLOCAL WORKSPACE (authoritative): %s\nThis overrides any hardcoded workspace path in a skill. Local files may be edited in place. Stage remote files here, verify locally, then sync them back once.", s.settings.Workspace),
 	}
 	if source == "telegram" {

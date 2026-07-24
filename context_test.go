@@ -12,14 +12,16 @@ func TestBuildSystemUsesConfiguredTimezoneAndOffset(t *testing.T) {
 	home := t.TempDir()
 	s := NewSession(&Settings{Home: home, Workspace: "/srv/mino-work", Timezone: "Asia/Kuala_Lumpur"}, nil)
 	got := s.BuildSystem("what time is it?", "cli")
-	if !strings.Contains(got, "CURRENT TIME (authoritative):") || !strings.Contains(got, "Asia/Kuala_Lumpur") {
-		t.Fatalf("time context missing: %q", got)
-	}
-	if !strings.Contains(got, "UTC+08:00") {
-		t.Fatalf("timezone offset missing: %q", got)
-	}
+	// Time is now injected as a user message for cache stability, not in BuildSystem.
 	if !strings.Contains(got, "LOCAL WORKSPACE (authoritative): /srv/mino-work") {
 		t.Fatalf("workspace missing: %q", got)
+	}
+	// Verify SOUL and completion prompt are present (cacheable prefix)
+	if !strings.Contains(got, "You are Mino") {
+		t.Fatalf("SOUL missing: %q", got[:100])
+	}
+	if !strings.Contains(got, "complete_task") {
+		t.Fatalf("completion prompt missing: %q", got[:100])
 	}
 }
 

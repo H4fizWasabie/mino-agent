@@ -230,6 +230,12 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 	defer finish()
 	ctx = context.WithValue(ctx, turnMessageKey{}, userMessage)
 	system := conversation.Session.BuildSystem(userMessage, source)
+	// prepend time context as user message for cache-friendly system prompt
+	local := time.Now().In(w.Settings.Location())
+	zone, offset := local.Zone()
+	userMessage = fmt.Sprintf("[System time: %s %s (UTC%+03d:%02d). Today is %s.]\n\n%s",
+		local.Format("Monday, 2006-01-02 15:04:05"), zone, offset/3600, (abs(offset)%3600)/60,
+		local.Format("2006-01-02"), userMessage)
 	// inject resume prompt if there's an active task
 	if resume := conversation.Checkpoint.ResumePrompt(); resume != "" {
 		system += "\n\n" + resume
