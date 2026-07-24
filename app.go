@@ -128,7 +128,7 @@ func NewCore() *Core {
 
 	// Tool filter: use embeddings to send only relevant tools per turn
 	addDelegateTools(w)
-	coreTools := []string{"recall", "save_note", "read_file", "bash", "request_approval", "resolve_approval", "project_get", "project_update", "delegate"}
+	coreTools := []string{"recall", "save_note", "read_file", "write_file", "edit_file", "bash", "request_approval", "resolve_approval", "project_get", "project_update", "delegate", "restore_files"}
 	toolFilter := NewToolFilter(coreTools, 8) // top 8 + 8 core = max 16 tools/turn
 	if mem.embedder != nil {
 		toolFilter.Index(tools.Schemas(), mem.embedder)

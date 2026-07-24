@@ -27,6 +27,7 @@ type Settings struct {
 	MaxHistoryTurns    int // keep only last N turns (0 = unlimited, default 5)
 	MaxToolDescChars   int // trim tool descriptions exceeding this (0 = no limit)
 	MaxReadOnlyStreak  int // max consecutive read-only tool calls before nudge (default 5)
+	RollbackDir        string
 	BashTimeout      time.Duration
 	CodingTimeout    time.Duration
 	SyncTimeout      time.Duration
@@ -72,6 +73,7 @@ func LoadSettings() *Settings {
 		TelegramChatID:   envInt64("MINO_TELEGRAM_CHAT_ID", 0),
 		Timezone:          envOr("MINO_TIMEZONE", "Asia/Kuala_Lumpur"),
 		MaxReadOnlyStreak: envInt("MINO_MAX_READ_ONLY_STREAK", 5),
+		RollbackDir:       filepath.Join(home, "rollback"),
 	}
 }
 

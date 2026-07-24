@@ -31,6 +31,7 @@ type ToolFunc func(args map[string]any) string
 type ContextToolFunc func(context.Context, map[string]any) string
 type turnMessageKey struct{}
 type sessionIDKey struct{}
+type rollbackDirKey struct{}
 
 type ToolBehavior uint8
 
@@ -169,6 +170,9 @@ func (r *Registry) ExecuteContext(ctx context.Context, name string, args map[str
 	if err := validateObject(args, t.Schema); err != nil {
 		return fmt.Sprintf("Error: invalid arguments for %s: %v", name, err)
 	}
+	// snapshot before mutation for rollback
+	snapshotIfMutate(ctx, name, args)
+
 	start := time.Now()
 	var output string
 	if t.ContextFn != nil {
@@ -409,6 +413,9 @@ func BuildRegistry(db *sql.DB, home string, mem *Memory, location ...*time.Locat
 	r.Register(behaves(makeRequestApprovalTool(home), BehaviorMutate))
 	r.Register(behaves(makeResolveApprovalTool(home), BehaviorMutate))
 	r.Register(behaves(makeGenerateImageTool(home), BehaviorMutate))
+
+	// rollback — restore files from a session snapshot
+	r.Register(makeRollbackTool(home))
 
 	return r
 }
@@ -1927,4 +1934,94 @@ func (r *Registry) SetFilter(f *ToolFilter) {
 // SetMaxDescChars caps tool description length (0 = no limit).
 func (r *Registry) SetMaxDescChars(n int) {
 	r.maxDescChars = n
+}
+
+// --- Rollback ---
+
+// snapshotIfMutate saves the original file before write_file or edit_file touches it.
+func snapshotIfMutate(ctx context.Context, toolName string, args map[string]any) {
+	// only write_file and edit_file are tracked — bash mutations are a known gap.
+	// ponytail: bash rollback skipped, add when Mino uses destructive shell commands unsafely.
+	if toolName != "write_file" && toolName != "edit_file" {
+		return
+	}
+	path, ok := args["path"].(string)
+	if !ok || path == "" {
+		return
+	}
+	// Only snapshot if the file already exists — new files have nothing to roll back.
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return
+	}
+
+	rbDir, _ := ctx.Value(rollbackDirKey{}).(string)
+	if rbDir == "" {
+		return
+	}
+	snapshotPath := filepath.Join(rbDir, filepath.Clean(path))
+	if _, err := os.Stat(snapshotPath); err == nil {
+		return // already snapshotted in this session
+	}
+	os.MkdirAll(filepath.Dir(snapshotPath), 0700)
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	os.WriteFile(snapshotPath, src, 0644)
+}
+
+func makeRollbackTool(home string) *Tool {
+	return &Tool{
+		Name:        "restore_files",
+		Description: "Restore files to their state before a session. Use session_id to revert all write_file and edit_file changes made in that session. Use '--list' to see restorable sessions.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"session_id": map[string]any{"type": "string", "description": "Session ID to roll back, or '--list' to list available sessions"},
+			},
+			"required": []string{"session_id"},
+		},
+		Fn: func(args map[string]any) string {
+			sid, _ := args["session_id"].(string)
+			rbBase := filepath.Join(home, "rollback")
+			if sid == "--list" {
+				entries, err := os.ReadDir(rbBase)
+				if err != nil || len(entries) == 0 {
+					return "No file restoration snapshots available."
+				}
+				var buf strings.Builder
+				buf.WriteString("Restorable sessions:\n")
+				for _, e := range entries {
+					if e.IsDir() {
+						buf.WriteString("- " + e.Name() + "\n")
+					}
+				}
+				return buf.String()
+			}
+			srcDir := filepath.Join(rbBase, filepath.Clean(sid))
+			if _, err := os.Stat(srcDir); os.IsNotExist(err) {
+				return fmt.Sprintf("No file snapshot for session %s. Use restore_files --list to see restorable sessions.", sid)
+			}
+			count := 0
+			filepath.Walk(srcDir, func(snapPath string, info os.FileInfo, err error) error {
+				if err != nil || info.IsDir() {
+					return nil
+				}
+				rel, _ := filepath.Rel(srcDir, snapPath)
+				restorePath := filepath.Join(string(os.PathSeparator), rel)
+				data, err := os.ReadFile(snapPath)
+				if err != nil {
+					return nil
+				}
+				os.MkdirAll(filepath.Dir(restorePath), 0755)
+				if err := os.WriteFile(restorePath, data, 0644); err == nil {
+					count++
+				}
+				return nil
+			})
+			os.RemoveAll(srcDir)
+			return fmt.Sprintf("Restored %d files from session %s.", count, sid)
+		},
+	}
 }

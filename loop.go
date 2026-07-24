@@ -113,6 +113,8 @@ func RunLoopContext(
 		ctx = context.Background()
 	}
 	ctx = context.WithValue(ctx, sessionIDKey{}, sessionID)
+	rbDir := filepath.Join(traceHome, "rollback", sessionID)
+	ctx = context.WithValue(ctx, rollbackDirKey{}, rbDir)
 	result := &LoopResult{}
 	dedup := make(map[string]string) // tool dedup: key → cached output
 	dedupStatus := make(map[string]string)

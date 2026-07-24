@@ -5,6 +5,7 @@
 ### Added
 - `MINO_MAX_READ_ONLY_STREAK` env var — caps consecutive read-only tool calls before nudging toward mutation (default 5). Raise for coding-heavy sessions.
 - Text-embedded tool call fallback parser — models without native function calling can write `[tool_call: name({...})]` in text and the loop executes it as a real tool call.
+- File rollback system — `write_file` and `edit_file` snapshot originals before mutation. `restore_files` tool restores a session's files to pre-session state. `restore_files --list` shows restorable sessions.
 
 ### Changed
 - `maxReadOnlyStreak` changed from const to var, reads `MINO_MAX_READ_ONLY_STREAK` at init.
