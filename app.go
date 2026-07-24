@@ -139,6 +139,10 @@ func dashboardRequested() bool {
 	return os.Getenv("MINO_DASHBOARD_PORT") != "" || len(os.Args) > 1 && os.Args[1] == "dashboard"
 }
 
+func telegramDashboardEnabled() bool {
+	return dashboardRequested()
+}
+
 func (w *Core) Respond(userMessage, source string, obs Observer, stream bool) *LoopResult {
 	return w.RespondFor("default", userMessage, source, obs, stream)
 }

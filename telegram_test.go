@@ -44,3 +44,10 @@ func TestTelegramContentIncludesReplyContext(t *testing.T) {
 		t.Fatalf("reply context missing: %q", got)
 	}
 }
+
+func TestTelegramDashboardEnabledWhenPortConfigured(t *testing.T) {
+	t.Setenv("MINO_DASHBOARD_PORT", "7779")
+	if !telegramDashboardEnabled() {
+		t.Fatal("dashboard should run alongside Telegram when a port is configured")
+	}
+}

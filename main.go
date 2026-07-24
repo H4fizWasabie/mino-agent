@@ -42,8 +42,13 @@ func main() {
 	w.Scheduler.Start()
 	defer w.Scheduler.Stop()
 
-	// Telegram always takes priority (VPS/headless mode)
+	// Telegram runs alone unless a dashboard port is configured too.
 	if w.Settings.Telegram != "" {
+		if telegramDashboardEnabled() {
+			go RunTelegram(w)
+			RunDashboard(w)
+			return
+		}
 		RunTelegram(w)
 		return
 	}
