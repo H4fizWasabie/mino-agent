@@ -27,7 +27,6 @@ type LoopResult struct {
 const (
 	completionToolName = "complete_task"
 	maxNoProgress      = 3
-	maxReadOnlyStreak  = 5
 	completionPrompt   = `COMPLETION PROTOCOL (RUNTIME ENFORCED):
 - Ordinary assistant text is progress and cannot end the turn.
 - To answer the user, call complete_task ALONE with status and the final reply.
@@ -39,6 +38,9 @@ const (
 - Before claiming "file created" in complete_task, verify the file exists. If it does not exist, fix it first. The harness may reject completion with unverified file claims.
 - IMPORTANT: complete_task.reply must contain the FULL answer including any jokes, lists, code, or content the user requested. NEVER wrap it with meta-commentary like "Hope that helped!" — put the actual content in the reply field.`
 )
+
+// ponytail: env override, defaults to 5. Raise for coding-heavy sessions.
+var maxReadOnlyStreak = envInt("MINO_MAX_READ_ONLY_STREAK", 5)
 
 var completionTool = ToolDef{
 	Name:        completionToolName,
@@ -216,8 +218,11 @@ func RunLoopContext(
 
 		// assistant turn joins working memory
 		messages = append(messages, Message{Role: "assistant", Content: assembleAssistantContent(resp.Content)})
-		// extract tool uses
+		// extract tool uses; fall back to text-embedded [tool_call: ...] markers
 		toolUses := extractToolUses(resp.Content)
+		if len(toolUses) == 0 {
+			toolUses = extractTextToolUses(extractText(resp.Content))
+		}
 		completionError := "Error: complete_task must be called alone with status complete or blocked and a non-empty reply."
 
 		if resp.Usage.OutputTokens >= maxTokens && (len(toolUses) == 0 || hasInvalidToolInput(toolUses)) {
@@ -480,6 +485,82 @@ func extractToolUses(blocks []ContentBlock) []ContentBlock {
 		}
 	}
 	return uses
+}
+
+// extractTextToolUses parses text-embedded [tool_call: name({...})] markers.
+// Fallback for models that don't support native function calling.
+func extractTextToolUses(text string) []ContentBlock {
+	var uses []ContentBlock
+	marker := "[tool_call:"
+	for {
+		idx := strings.Index(text, marker)
+		if idx == -1 {
+			break
+		}
+		text = text[idx+len(marker):]
+		paren := strings.IndexByte(text, '(')
+		if paren == -1 {
+			break
+		}
+		name := strings.TrimSpace(text[:paren])
+		text = text[paren+1:]
+		if len(text) == 0 || text[0] != '{' {
+			break
+		}
+		argsJSON, rest := extractBalancedJSON(text)
+		if argsJSON == "" {
+			break
+		}
+		text = rest
+		var args map[string]any
+		if err := json.Unmarshal([]byte(argsJSON), &args); err == nil {
+			uses = append(uses, ContentBlock{
+				Type:  "tool_use",
+				ID:    fmt.Sprintf("txt_%d", len(uses)),
+				Name:  name,
+				Input: args,
+			})
+		}
+	}
+	return uses
+}
+
+// extractBalancedJSON extracts a brace-balanced JSON string, handling
+// nested objects, strings, and escapes. Returns the JSON and remaining text.
+func extractBalancedJSON(s string) (jsonStr string, remaining string) {
+	if len(s) == 0 || s[0] != '{' {
+		return "", s
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for i, c := range s {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if inString {
+			if c == '\\' {
+				escaped = true
+			}
+			if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[:i+1], s[i+1:]
+			}
+		}
+	}
+	return "", s
 }
 
 func hasInvalidToolInput(uses []ContentBlock) bool {

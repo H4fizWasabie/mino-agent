@@ -2,7 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+- `MINO_MAX_READ_ONLY_STREAK` env var — caps consecutive read-only tool calls before nudging toward mutation (default 5). Raise for coding-heavy sessions.
+- Text-embedded tool call fallback parser — models without native function calling can write `[tool_call: name({...})]` in text and the loop executes it as a real tool call.
+
 ### Changed
+- `maxReadOnlyStreak` changed from const to var, reads `MINO_MAX_READ_ONLY_STREAK` at init.
 - Restore the live Runtime Spine dashboard visualization so the public `mino-agent` repository matches the current Mino frontend.
 - Run Telegram and the dashboard together when a dashboard port is configured.
 - Link Telegram reply-to messages and scheduler notifications into the Telegram session context so short follow-ups resolve against the message the user actually answered.
