@@ -1719,7 +1719,7 @@ func turnExplicitlyApproves(ctx context.Context) bool {
 	if message == "yes" || message == "y" {
 		return true
 	}
-	for _, phrase := range []string{"approve", "approved", "proceed", "go ahead", "confirm"} {
+	for _, phrase := range []string{"approve", "approved", "proceed", "go ahead", "confirm", "do it", "send it", "ok", "sure", "done"} {
 		if strings.Contains(message, phrase) {
 			return true
 		}
