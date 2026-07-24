@@ -412,133 +412,79 @@ function wireDock(){
   syncChatLogs();
 }
 
-// --- Mino Runtime Blueprint: one live engineering sheet assembled from
-// correspondence, memory evidence, specialist tools, and operational proof.
+// --- Mino Runtime Spine: the whole process, driven only by real dashboard data.
 function archSVG(d){
-  const s = d.stats;
-  const latest = (d.turns||[])[0] || {};
-  const attrs = (view,nid,title,sub) => `data-node="${nid}" tabindex="0" role="link"
-    aria-label="${title}: ${sub}" onclick="location.hash='${view}'"
-    onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();location.hash='${view}'}"`;
-  const wire = (path,id,cls="") => `<path class="dossier-wire ${cls}" data-edge="${id}" d="${path}" marker-end="url(#dossier-arrow)"/>`;
-  const module = (x,y,w,h,kicker,title,sub,view,nid,mark,cls="") =>
-    `<g class="node dossier-node ${cls}" ${attrs(view,nid,title,sub)}><title>${title}: ${sub}</title>
-      <rect class="target node-panel" x="${x}" y="${y}" width="${w}" height="${h}" rx="11"/>
-      <path class="module-bracket" d="M${x+8} ${y+22}V${y+8}H${x+22}M${x+w-22} ${y+h-8}H${x+w-8}V${y+h-22}"/>
-      <rect class="module-index" x="${x+13}" y="${y+15}" width="28" height="28" rx="7"/>
-      <text class="module-mark" x="${x+27}" y="${y+33}" text-anchor="middle">${mark}</text>
-      <text class="dossier-kicker" x="${x+52}" y="${y+20}">${kicker}</text>
-      <text class="module-title" x="${x+52}" y="${y+40}">${title}</text>
-      <text class="module-sub" x="${x+52}" y="${y+57}">${sub}</text></g>`;
-  const chip = (x,y,w,title,count,view,nid,mark) =>
-    `<g class="node dossier-node evidence-node" ${attrs(view,nid,title,`${count}`)}><title>${title}: ${count}</title>
-      <rect class="target evidence-chip" x="${x}" y="${y}" width="${w}" height="44" rx="7"/>
-      <path class="evidence-rule" d="M${x+5} ${y+5}V${y+39}"/>
-      <text class="evidence-mark" x="${x+14}" y="${y+18}">${mark}</text><text class="evidence-title" x="${x+30}" y="${y+18}">${title}</text>
-      <text class="evidence-count" x="${x+w-10}" y="${y+18}" text-anchor="end">${count}</text><text class="evidence-sub" x="${x+30}" y="${y+33}">ATTACHED EVIDENCE</text></g>`;
-  const stamp = (x,y,title,sub,view,nid,mark) =>
-    `<g class="node dossier-node stamp-node" ${attrs(view,nid,title,sub)}><title>${title}: ${sub}</title>
-      <path class="stamp-ticks" d="M${x-31} ${y-18}V${y-31}H${x-18}M${x+18} ${y-31}H${x+31}V${y-18}M${x-31} ${y+18}V${y+31}H${x-18}M${x+18} ${y+31}H${x+31}V${y+18}"/>
-      <circle class="target stamp-ring" cx="${x}" cy="${y}" r="25"/><circle class="stamp-inner" cx="${x}" cy="${y}" r="19"/>
-      <text class="stamp-mark" x="${x}" y="${y+4}" text-anchor="middle">${mark}</text><text class="stamp-title" x="${x+36}" y="${y-3}">${title}</text>
-      <text class="stamp-sub" x="${x+36}" y="${y+13}">${sub}</text></g>`;
-  const words = (value,width=45) => {
-    const source = String(value||"").replace(/\s+/g," ").trim() || "Awaiting the next request";
-    const out=[]; let line="";
-    for (const word of source.split(" ")){
-      if (line && `${line} ${word}`.length > width){ out.push(line); line=word; if(out.length===2) break; }
-      else line=`${line} ${word}`.trim();
-    }
-    if(out.length<2 && line) out.push(line);
-    return out.slice(0,2).map((line,i)=>esc(line)+(i===1 && source.length>out.join(" ").length?"…":""));
+  const s=d.stats||{}, latest=(d.turns||[])[0]||{}, active=(d.active_tasks||[])[0]||null;
+  const catalog=((d.tools||{}).catalog||[]), llms=latest.llm_calls||[], lastLLM=llms[llms.length-1]||{};
+  const count=source=>catalog.filter(t=>t.source===source).length;
+  const builtinCount=count("builtin"), mcpCount=count("mcp"), extensionCount=count("extension");
+  const toolCount=catalog.length, sessions=(d.sessions||[]).length, tables=((d.db||{}).all_tables||[]).length;
+  const records=(d.facts||[]).length+(d.episodes||[]).length+(d.skills||[]).length;
+  const providerRaw=String(d.active_provider||d.provider||"provider"), modelRaw=String(d.model||"model");
+  const iteration=Number(active&&active.round || latest.iterations || 0);
+  const selected=lastLLM.selected_tools==null?"—":Number(lastLLM.selected_tools);
+  const completion=active?"RUNNING":String(latest.status||"idle").toUpperCase();
+  const fmt=n=>Number(n||0).toLocaleString(), fmtBytes=n=>n?`${(Number(n)/1048576).toFixed(1)} MB`:"0 MB";
+  const attr=value=>esc(value).replace(/"/g,"&quot;");
+  const short=(value,max,fallback)=>{const source=String(value||"").replace(/\s+/g," ").trim()||fallback;return esc(source.length>max?source.slice(0,max-1).trim()+"…":source)};
+  const attrs=(view,nid,title,sub)=>`data-node="${nid}" tabindex="0" role="link" aria-label="${attr(`${title}: ${sub}`)}" onclick="location.hash='${view}'" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();location.hash='${view}'}"`;
+  const defs=`<defs><linearGradient id="spine-stage" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#07101e"/><stop offset=".55" stop-color="#0a1730"/><stop offset="1" stop-color="#0b1023"/></linearGradient><linearGradient id="spine-loop" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#16295a"/><stop offset="1" stop-color="#10233e"/></linearGradient><pattern id="spine-grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" fill="none" stroke="#7890bc" stroke-width=".35" opacity=".12"/></pattern><filter id="core-glow" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter><marker id="core-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10Z" class="flow-head"/></marker></defs>`;
+  const wire=(path,id,cls="")=>`<path class="flow-wire ${cls}" data-edge="${id}" d="${path}" marker-end="url(#core-arrow)"/>`;
+  const node=(x,y,w,h,kicker,title,lines,view,nid,mark,cls="")=>`<g class="node core-node ${cls}" ${attrs(view,nid,title,lines.join(" · "))}><rect class="target spine-card" x="${x}" y="${y}" width="${w}" height="${h}" rx="12"/><circle class="card-mark" cx="${x+25}" cy="${y+27}" r="12"/><text class="card-symbol" x="${x+25}" y="${y+31}" text-anchor="middle">${mark}</text><text class="card-kicker" x="${x+45}" y="${y+20}">${kicker}</text><text class="card-title" x="${x+45}" y="${y+40}">${title}</text>${lines.map((line,i)=>`<text class="card-sub" x="${x+16}" y="${y+h-18+(i-lines.length+1)*14}">${line}</text>`).join("")}</g>`;
+  const mini=(x,y,w,label,nid,view,mark)=>`<g class="node core-node gateway-node" ${attrs(view,nid,label,"gateway")}><rect class="target spine-mini" x="${x}" y="${y}" width="${w}" height="38" rx="9"/><text class="mini-mark" x="${x+13}" y="${y+24}">${mark}</text><text class="mini-title" x="${x+32}" y="${y+24}">${label}</text></g>`;
+  const step=(x,y,w,n,label,hot=false)=>`<g class="loop-step ${hot?"current":""}"><rect x="${x}" y="${y}" width="${w}" height="28" rx="7"/><text x="${x+9}" y="${y+18}"><tspan>${n}</tspan> ${label}</text></g>`;
+  const loop=(x,y,w,h)=>`<g class="node core-node runloop-node" ${attrs("loop","loop","RunLoop",`iteration ${iteration}, ${selected} tools selected`)}><rect class="target runloop-card" x="${x}" y="${y}" width="${w}" height="${h}" rx="16"/><circle class="loop-pulse" cx="${x+22}" cy="${y+23}" r="5"/><text class="loop-kicker" x="${x+36}" y="${y+27}">RUNLOOP · ITERATION ${iteration||"—"}</text><text class="loop-state" x="${x+w-16}" y="${y+27}" text-anchor="end">${completion}</text><text class="loop-title" x="${x+18}" y="${y+58}">Observe → act → verify</text>${step(x+18,y+74,(w-44)/2,"01","SELECT TOOLS")}${step(x+26+(w-44)/2,y+74,(w-44)/2,"02","CALL MODEL")}${step(x+18,y+110,(w-44)/2,"03","EXECUTE")}${step(x+26+(w-44)/2,y+110,(w-44)/2,"04","VERIFY")}${step(x+18,y+146,w-36,"05","COMPLETE_TASK",completion==="RUNNING")}<text class="loop-sub" x="${x+18}" y="${y+h-15}">${selected} action schemas selected · ${fmt(latest.tokens_in)} in / ${fmt(latest.tokens_out)} out</text></g>`;
+  const metric=(x,y,w,label,value,sub,nid="telemetry")=>`<g class="node core-node metric-node" ${attrs("ops",nid,label,`${value} ${sub}`)}><rect class="target metric-card" x="${x}" y="${y}" width="${w}" height="62" rx="9"/><text class="metric-label" x="${x+12}" y="${y+17}">${label}</text><text class="metric-value" x="${x+12}" y="${y+39}">${value}</text><text class="metric-sub" x="${x+12}" y="${y+53}">${sub}</text></g>`;
+  const header=(x,y,w)=>`<g class="node core-node runtime-node" ${attrs("settings","settings","Mino core runtime",`${providerRaw} ${modelRaw}`)}><rect class="target runtime-panel" x="${x}" y="${y}" width="${w}" height="58" rx="11"/><circle class="runtime-dot" cx="${x+18}" cy="${y+20}" r="4"/><text class="runtime-copy" x="${x+30}" y="${y+23}">MINO · CORE PROCESS</text><text class="runtime-model" x="${x+16}" y="${y+45}">${short(providerRaw,18,"provider")} · ${short(modelRaw,34,"model")} · ${esc(d.reasoning||"default")}</text><text class="runtime-copy end" x="${x+w-16}" y="${y+23}" text-anchor="end">${active?"TURN ACTIVE":"ONLINE"}</text><text class="runtime-meta" x="${x+w-16}" y="${y+45}" text-anchor="end">${sessions} SESSIONS · ${fmt(s.turns)} TRACED TURNS</text></g>`;
+  const telemetry=(x,y,w,mobile=false)=>{
+    const values=[
+      ["TOKENS",`${fmt(latest.tokens_in||s.tokens_in)} / ${fmt(latest.tokens_out||s.tokens_out)}`,latest.tokens_in?"last turn · in / out":"usage log · in / out","tokens"],
+      ["LATENCY",secs(latest.latency_ms||s.latency_avg),latest.latency_ms?"last turn":`p95 ${secs(s.latency_p95)}`,"latency"],
+      ["EVALUATION",completion,latest.status?"complete_task status":"awaiting first turn","evaluation"],
+      ["TOOL ERRORS",fmt(s.tool_errors),`${fmt(s.tool_calls)} recorded calls`,"errors"],
+      ["RETRIEVAL",`${fmt(s.gate_retrieves)} / ${fmt(s.gate_skips)}`,"retrieve / skip","retrieval"],
+      ["TRACES",fmt(s.trace_files),`${money(s.total_cost||0)} estimated`,"trace"],
+    ];
+    if(mobile){const cardW=(w-6)/2;return values.map((m,i)=>metric(x+(i%2)*(cardW+6),y+Math.floor(i/2)*70,cardW,...m)).join("");}
+    return values.map((m,i)=>metric(x+i*(w+8),y,w,...m)).join("");
   };
-  const request = words(latest.user_message);
-  const response = words(latest.reply,50);
-  const requestText = request.map((line,i)=>`<tspan x="357" dy="${i?18:0}">${line}</tspan>`).join("");
-  const responseText = response.map((line,i)=>`<tspan x="355" dy="${i?17:0}">${line}</tspan>`).join("");
-  const caseNo = String(s.turns||0).padStart(4,"0");
-  const toolCount = ((d.tools||{}).catalog||[]).length;
-  const defs = `<defs>
-    <linearGradient id="dossier-bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#06111f"/><stop offset=".52" stop-color="#08213a"/><stop offset="1" stop-color="#071523"/></linearGradient>
-    <linearGradient id="case-sheet" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#0d2a47"/><stop offset="1" stop-color="#091c31"/></linearGradient>
-    <linearGradient id="holo-scan" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#67e8f9" stop-opacity="0"/><stop offset=".5" stop-color="#67e8f9" stop-opacity=".42"/><stop offset="1" stop-color="#67e8f9" stop-opacity="0"/></linearGradient>
-    <pattern id="dossier-grid" width="11" height="11" patternUnits="userSpaceOnUse"><path d="M11 0H0V11" fill="none" stroke="#4b7ba4" stroke-width=".32"/><path d="M55 0H0V55" fill="none" stroke="#64a4ca" stroke-width=".62"/></pattern>
-    <pattern id="blueprint-hatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><path d="M0 0V7" stroke="#78a9c7" stroke-width=".45" opacity=".25"/></pattern>
-    <filter id="dossier-glow" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="2.3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-    <marker id="dossier-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10Z" class="wire-head"/></marker>
-  </defs>`;
-  const core = (x,y,compact=false) => `<g class="node dossier-node mino-core" ${attrs("loop","llm","Mino case handler","reasoning on this dossier")}>
-    <title>Mino: reasoning on this dossier</title><path class="core-axis" d="M${x-(compact?45:51)} ${y}H${x+(compact?45:51)}M${x} ${y-(compact?45:51)}V${y+(compact?45:51)}"/><circle class="core-scan" cx="${x}" cy="${y}" r="${compact?37:43}"/>
-    <circle class="target assistant-core" cx="${x}" cy="${y}" r="${compact?30:35}"/><circle class="assistant-head" cx="${x}" cy="${y-(compact?7:8)}" r="${compact?8:9}"/>
-    <path class="assistant-body" d="M${x-(compact?16:18)} ${y+(compact?18:21)}Q${x} ${y+(compact?1:2)} ${x+(compact?16:18)} ${y+(compact?18:21)}"/>
-    <text class="assistant-name" x="${x}" y="${y+(compact?55:64)}" text-anchor="middle">MINO</text><text class="assistant-role" x="${x}" y="${y+(compact?68:78)}" text-anchor="middle">RUNTIME CORE</text></g>`;
-  const archive = (compact=false) => compact ? `<g class="archive-block">
-      <text class="dossier-kicker" x="38" y="563">MEMORY EVIDENCE INDEX</text>
-      <g class="node dossier-node gate-node" ${attrs("memory/overview","gate","Memory gate",`${s.gate_skips} skip · ${s.gate_retrieves} retrieve`)}><rect class="target archive-gate" x="30" y="578" width="360" height="48" rx="8"/><text class="gate-symbol" x="49" y="607">◇</text><text class="archive-title" x="72" y="598">RETRIEVAL GATE</text><text class="archive-sub" x="72" y="614">${s.gate_skips} SKIP · ${s.gate_retrieves} RETRIEVE</text></g>
-      ${chip(30,638,112,"Skills",(d.skills||[]).length,"memory/skills","procedural","S")}${chip(154,638,112,"Facts",(d.facts||[]).length,"memory/semantic","semantic","F")}${chip(278,638,112,"Episodes",(d.episodes||[]).length,"memory/episodic","episodic","E")}
-      <g class="node dossier-node consolidation-node" ${attrs("memory/consolidation","consolidation","Consolidation",`${d.chat_pending||0} queued`)}><rect class="target archive-consolidation" x="30" y="694" width="236" height="43" rx="7"/><text class="archive-title" x="44" y="712">CONSOLIDATION</text><text class="archive-sub" x="44" y="727">${d.chat_pending||0} QUEUED · ${esc(d.consolidate_every)}</text></g></g>` : `<g class="archive-block">
-      <rect class="archive-shell" x="28" y="333" width="229" height="260" rx="13"/><path class="archive-hatch" d="M29 348H256V378H29Z"/><text class="dossier-kicker" x="45" y="358">MEMORY EVIDENCE INDEX</text><text class="archive-code" x="239" y="358" text-anchor="end">M-04</text>
-      <g class="node dossier-node gate-node" ${attrs("memory/overview","gate","Memory gate",`${s.gate_skips} skip · ${s.gate_retrieves} retrieve`)}><rect class="target archive-gate" x="43" y="373" width="199" height="53" rx="8"/><text class="gate-symbol" x="58" y="403">◇</text><text class="archive-title" x="82" y="394">RETRIEVAL GATE</text><text class="archive-sub" x="82" y="411">${s.gate_skips} SKIP · ${s.gate_retrieves} RETRIEVE</text></g>
-      ${chip(43,438,199,"Skills",(d.skills||[]).length,"memory/skills","procedural","S")}${chip(43,489,199,"Facts",(d.facts||[]).length,"memory/semantic","semantic","F")}${chip(43,540,199,"Episodes",(d.episodes||[]).length,"memory/episodic","episodic","E")}
-      <g class="node dossier-node consolidation-node" ${attrs("memory/consolidation","consolidation","Consolidation",`${d.chat_pending||0} queued`)}><rect class="target archive-consolidation" x="43" y="599" width="199" height="34" rx="7"/><text class="archive-title" x="55" y="620">CONSOLIDATE · ${d.chat_pending||0} QUEUED</text></g></g>`;
+  const toolLines=[`${builtinCount} built-ins · ${mcpCount} MCP`,`${extensionCount} sidecar tools · ${toolCount} total`];
+  const sqliteLines=[`${tables} tables · ${fmtBytes((d.db||{}).size)}`,`${records} memory records · WAL state`];
+  const taskLabel=active?short(active.goal,24,"active task"):short(latest.user_message,24,"waiting for a turn");
 
-  if (window.innerWidth < 720) return `<div class="arch-wrap dossier-wrap"><svg viewBox="0 0 420 820" class="arch dossier-arch arch-compact" role="img" aria-labelledby="dossier-title dossier-desc">
-    <title id="dossier-title">Mino live runtime blueprint</title><desc id="dossier-desc">A live engineering sheet showing correspondence, context, Mino reasoning, memory evidence, tools, reply dispatch, and operational proof.</desc>
-    ${defs}<rect class="dossier-stage" x="4" y="4" width="412" height="812" rx="22"/><rect class="dossier-grid" x="5" y="5" width="410" height="810" rx="21"/>
-    <path class="blueprint-ruler" d="M22 45H398M22 47V42M66 47V42M110 47V42M154 47V42M198 47V42M242 47V42M286 47V42M330 47V42M374 47V42"/>
-    <text class="dossier-brand" x="25" y="29">MINO // RUNTIME BLUEPRINT</text><text class="dossier-live" x="395" y="29" text-anchor="end">SHEET ${caseNo}</text>
-    ${wire("M174 92H205","e-gw-wm")}${wire("M294 123V179","e-wm-loop")}${wire("M210 510V578","e-reply-save","dashed")}${wire("M330 501H382V766H345","e-reply-trace")}
-    ${wire("M210 578V538H275V500","e-gate-wm","dashed")}${wire("M86 638V626","e-gate-proc","dashed")}${wire("M210 638V626","e-gate-sem","dashed")}${wire("M334 638V626","e-gate-epi","dashed")}${wire("M266 716H278V660","e-consol-sem","dashed")}
-    ${module(22,58,152,72,"CORRESPONDENCE","Gateway",`${(d.sessions||[]).length} open threads`,"gateway","gateway","IN","compact-module")}
-    ${module(205,58,193,72,"CONTEXT PACKET","Assembled",`${s.turns} turns available`,"memory/overview","wm","CX","compact-module")}
-    <g class="case-stack"><rect class="case-shadow back" x="35" y="166" width="350" height="342" rx="5"/><rect class="case-shadow mid" x="29" y="160" width="350" height="342" rx="5"/><path class="case-sheet" d="M23 176V151H150L168 168H391V518H23Z"/>
-      <path class="case-rule" d="M42 223H372M42 360H372M42 435H372"/><rect class="case-scanline" x="27" y="185" width="360" height="3"/>
-      <text class="sheet-tab" x="42" y="164">SHEET 03 / RESPONSE ASSEMBLY</text><text class="dossier-kicker" x="43" y="192">CURRENT REQUEST</text><text class="case-state" x="368" y="192" text-anchor="end">● LIVE</text>
-      <text class="request-copy" x="43" y="212">${request.map((line,i)=>`<tspan x="43" dy="${i?17:0}">${line}</tspan>`).join("")}</text>
-      ${core(112,302,true)}
-      <text class="dossier-kicker" x="174" y="271">PROCESSOR / MINO</text><text class="case-heading" x="174" y="292">Context under review</text>
-      <path class="analysis-line" d="M174 310H342M174 324H318M174 338H352"/><circle class="analysis-cursor" cx="357" cy="338" r="3"/>
-      <g class="node dossier-node tools-node" ${attrs("tools","tools","Specialist tools",`${toolCount} available`)}><rect class="target tool-attachment" x="259" y="368" width="112" height="53" rx="8"/><text class="attachment-clip" x="273" y="388">⌘</text><text class="archive-title" x="294" y="387">TOOLS</text><text class="archive-sub" x="294" y="403">${toolCount} AVAILABLE</text></g>
-      <g class="node dossier-node reply-node" ${attrs("loop","reply","Reply dispatch","back to you")}><rect class="target dispatch-button" x="43" y="448" width="328" height="51" rx="8"/><text class="dispatch-label" x="57" y="468">RESPONSE READY</text><text class="dispatch-copy" x="57" y="486">${esc(response[0]||"Awaiting response")}</text><text class="dispatch-enter" x="354" y="478" text-anchor="end">ENTER ↵</text></g>
-    </g>
-    ${archive(true)}
-    ${stamp(305,766,"Trace",`${s.trace_files} files`,"ops/traces","trace","T")}${stamp(75,776,"Release",d.eval_report?d.eval_report.deterministic:"make gate","ops/release","release","R")}
-    <g class="node dossier-node stamp-node" ${attrs("ops/release","eval","Evaluate","tests and judge")}><circle class="target stamp-ring" cx="190" cy="776" r="25"/><circle class="stamp-inner" cx="190" cy="776" r="19"/><text class="stamp-mark" x="190" y="780" text-anchor="middle">E</text></g>
-  </svg></div>`;
+  if(window.innerWidth<720)return `<div class="arch-wrap core-wrap"><svg viewBox="0 0 420 1750" class="arch core-arch compact" role="img" aria-labelledby="spine-title spine-desc"><title id="spine-title">Mino Runtime Spine</title><desc id="spine-desc">A vertical live map of Mino gateways, session, context, RunLoop, provider, tools, SQLite state, verification telemetry, and external sidecars.</desc>${defs}<rect class="core-stage" x="7" y="7" width="406" height="1362" rx="22"/><rect class="core-grid" x="8" y="8" width="404" height="1360" rx="21"/>${header(24,22,372)}
+    <text class="boundary-label" x="25" y="104">REQUEST SPINE</text>${wire("M210 174V211","e-gw-session")}${wire("M210 299V408","e-session-context")}${wire("M210 493V527","e-context-loop")}${wire("M210 739V772","e-loop-provider")}${wire("M210 857V892","e-loop-tools")}${wire("M210 988V1022","e-tools-db")}${wire("M210 1107V1142","e-db-trace")}
+    <g class="node core-node gateway-stack" ${attrs("gateway","gateway","Gateways",`${sessions} sessions`)}><rect class="target spine-card" x="45" y="119" width="330" height="55" rx="12"/><text class="card-kicker" x="61" y="140">INGRESS</text><text class="gateway-list" x="61" y="160">TELEGRAM  ·  DASHBOARD  ·  SCHEDULER</text></g>
+    ${node(65,211,290,88,"TURN STATE","Session",[taskLabel,`${sessions} known threads`],"gateway","session","S")}${wire("M155 299V323","e-session-cancel","dashed")}${wire("M265 299V323","e-session-checkpoint","dashed")}
+    ${node(45,323,155,70,"CONTROL","Cancel",["context signal"],"activetasks","cancel","×","control-card")}${node(220,323,155,70,"SURVIVAL","Checkpoint",[`${(d.active_tasks||[]).length} active`],"activetasks","checkpoint","C","control-card")}
+    ${node(65,408,290,85,"ASSEMBLY","Context",[`${fmt(d.chat_pending)} pending messages`,`${records} recall records ready`],"memory/overview","context","C")}${loop(45,527,330,212)}
+    ${node(65,772,290,85,"MODEL ROUTER","Provider",[`${short(providerRaw,18,"provider")} · ${short(modelRaw,24,"model")}`,`${esc(d.reasoning||"default")} reasoning`],"settings","provider","P")}
+    ${node(65,892,290,96,"EXECUTION","Tool Registry",toolLines,"tools","tools","⌘")}
+    ${node(65,1022,290,85,"PERSISTENCE","SQLite",sqliteLines,"database","sqlite","DB")}
+    <text class="boundary-label" x="25" y="1135">OBSERVABILITY RAIL</text>${telemetry(28,1150,364,true)}
+    <text class="external-label" x="22" y="1398">OUTSIDE CORE · NETWORK BOUNDARIES</text>${wire("M210 857V1417","e-provider-remote","external")}${wire("M210 988V1537","e-tools-sidecars","external")}
+    ${node(45,1417,330,90,"REMOTE","Model API",[`${short(providerRaw,20,"provider")} endpoint`,"request / response"],"settings","remote","↗","external-card")}
+    ${node(45,1537,330,82,"HTTP SIDECAR","minowrap",["universal tool adapter"],"tools","minowrap","M","external-card")}
+    ${node(45,1643,330,82,"HTTP SIDECAR","fileingest",["document intake service"],"tools","fileingest","F","external-card")}</svg></div>`;
 
-  return `<div class="arch-wrap dossier-wrap"><svg viewBox="0 0 1040 660" class="arch dossier-arch" role="img" aria-labelledby="dossier-title dossier-desc">
-    <title id="dossier-title">Mino live runtime blueprint</title><desc id="dossier-desc">A live engineering sheet showing correspondence, context, Mino reasoning, memory evidence, tools, reply dispatch, and operational proof.</desc>
-    ${defs}<rect class="dossier-stage" x="5" y="5" width="1030" height="650" rx="23"/><rect class="dossier-grid" x="6" y="6" width="1028" height="648" rx="22"/>
-    <path class="blueprint-ruler" d="M29 52H1011M29 55V48M84 55V48M139 55V48M194 55V48M249 55V48M304 55V48M359 55V48M414 55V48M469 55V48M524 55V48M579 55V48M634 55V48M689 55V48M744 55V48M799 55V48M854 55V48M909 55V48M964 55V48M1011 55V48"/>
-    <text class="dossier-brand" x="30" y="36">MINO // LIVE RUNTIME BLUEPRINT</text><text class="dossier-live" x="1010" y="36" text-anchor="end">SHEET ${caseNo} · ${s.turns} TURNS · REV 02</text>
-    <path class="registration-mark" d="M28 68V55H41M999 55H1012V68M28 626V639H41M999 639H1012V626"/>
-    ${wire("M225 133H263V169H300","e-gw-wm")}${wire("M225 263H273V287H323","e-wm-loop")}
-    ${wire("M242 399H272V310H322","e-gate-wm","dashed")}${wire("M142 438V426","e-gate-proc","dashed")}${wire("M142 489V477","e-gate-sem","dashed")}${wire("M142 540V528","e-gate-epi","dashed")}${wire("M242 616H278V511H324","e-reply-save","dashed")}${wire("M242 616V512","e-consol-sem","dashed")}
-    ${wire("M742 474H780V440H819","e-reply-trace")}
-    ${module(28,82,197,101,"CORRESPONDENCE","Gateway",`${(d.sessions||[]).length} open threads · every channel`,"gateway","gateway","IN")}
-    ${module(28,207,197,101,"CONTEXT PACKET","Assembled",`${s.turns} traced turns available`,"memory/overview","wm","CX")}
-    ${archive(false)}
-    <g class="case-stack"><rect class="case-shadow back" x="315" y="84" width="440" height="520" rx="6"/><rect class="case-shadow mid" x="307" y="77" width="440" height="520" rx="6"/>
-      <path class="case-sheet" d="M299 104V70H470L493 92H758V609H299Z"/>
-      <path class="case-rule" d="M324 180H733M324 392H733M324 486H733"/><rect class="case-scanline" x="304" y="112" width="449" height="4"/>
-      <text class="sheet-tab" x="322" y="84">SHEET 03 / RESPONSE ASSEMBLY</text><text class="dossier-kicker" x="324" y="111">ACTIVE REQUEST</text><text class="case-state" x="730" y="111" text-anchor="end">● LIVE · PRIORITY NORMAL</text>
-      <text class="request-copy" x="324" y="137">${requestText}</text><text class="case-id" x="730" y="159" text-anchor="end">RUNTIME SHEET / ${caseNo}</text>
-      ${core(386,286)}
-      <text class="dossier-kicker" x="457" y="237">PROCESSOR / MINO</text><text class="case-heading" x="457" y="262">Context under review</text>
-      <text class="case-note" x="457" y="284">One assistant coordinates the evidence, tools,</text><text class="case-note" x="457" y="302">and final response inside this live record.</text>
-      <path class="analysis-line" d="M457 330H690M457 347H650M457 364H708"/><circle class="analysis-cursor" cx="714" cy="364" r="3"/>
-      <text class="dossier-kicker" x="324" y="421">ATTACHED MATERIAL</text>
-      <rect class="attachment-slot" x="324" y="435" width="185" height="35" rx="6"/><text class="attachment-slot-label" x="339" y="456">MEMORY EVIDENCE</text><text class="attachment-slot-count" x="493" y="456" text-anchor="end">${(d.facts||[]).length+(d.episodes||[]).length}</text>
-      <g class="node dossier-node tools-node" ${attrs("tools","tools","Specialist tools",`${toolCount} available`)}><rect class="target tool-attachment" x="520" y="422" width="212" height="48" rx="7"/><text class="attachment-clip" x="538" y="452">⌘</text><text class="archive-title" x="565" y="443">SPECIALIST TOOLS</text><text class="archive-sub" x="565" y="459">${toolCount} AVAILABLE · RESULTS ATTACH HERE</text></g>
-      <g class="node dossier-node reply-node" ${attrs("loop","reply","Reply dispatch","back to you")}><rect class="target dispatch-button" x="324" y="502" width="408" height="82" rx="9"/><text class="dispatch-label" x="343" y="526">APPROVED RESPONSE</text>
-        <text class="dispatch-copy" x="343" y="549">${responseText}</text><rect class="enter-key" x="644" y="524" width="70" height="42" rx="7"/><text class="dispatch-enter" x="679" y="549" text-anchor="middle">ENTER ↵</text></g>
-    </g>
-    <g class="ops-proof"><text class="dossier-kicker" x="800" y="94">VERIFICATION RAIL</text>
-      ${module(788,110,220,101,"SPECIALIST NETWORK","Tools",`${toolCount} available capabilities`,"tools","tools","⌘","tools-module")}
-      ${stamp(823,275,"Trace",`${s.trace_files} files`,"ops/traces","trace","T")}${stamp(823,355,"Evaluate","tests + judge","ops/release","eval","E")}${stamp(823,435,"Release",d.eval_report?d.eval_report.deterministic:"make gate","ops/release","release","R")}
-      <path class="proof-rail" d="M823 300V330M823 380V410"/>
-      <text class="proof-note" x="800" y="515">Every completed turn leaves</text><text class="proof-note" x="800" y="532">a trace, an evaluation path, and</text><text class="proof-note" x="800" y="549">a deliberate release record.</text></g>
-  </svg></div>`;
+  return `<div class="arch-wrap core-wrap"><svg viewBox="0 0 1200 760" class="arch core-arch" role="img" aria-labelledby="spine-title spine-desc"><title id="spine-title">Mino Runtime Spine</title><desc id="spine-desc">A live overview of Mino's gateways, session, context, RunLoop, provider, tool registry, SQLite state, verification telemetry, and external sidecars.</desc>${defs}<rect class="core-stage" x="7" y="7" width="943" height="746" rx="22"/><rect class="core-grid" x="8" y="8" width="941" height="744" rx="21"/>${header(27,22,903)}
+    <text class="boundary-label" x="30" y="105">MINO REQUEST FLOW</text><text class="external-label" x="975" y="105">EXTERNAL SERVICES</text>
+    ${wire("M168 149H204V173","e-gw-session")}${wire("M168 195H204","e-gw-session")}${wire("M168 241H204V217","e-gw-session")}${wire("M344 199H379","e-session-context")}${wire("M519 199H544","e-context-loop")}${wire("M754 199H784","e-loop-provider")}${wire("M929 199H974","e-provider-remote","external")}${wire("M649 313V373","e-loop-tools")}${wire("M559 429H520V501","e-tools-db","dashed")}${wire("M449 249V291","e-context-checkpoint","dashed")}${wire("M274 249V291","e-session-cancel","dashed")}${wire("M449 353V501","e-checkpoint-db","dashed")}${wire("M749 429H974V373","e-tools-sidecars","external")}${wire("M749 449H974V487","e-tools-sidecars","external")}${wire("M464 591V617","e-db-trace","dashed")}
+    ${mini(35,130,133,"TELEGRAM","telegram","gateway","T")}${mini(35,176,133,"DASHBOARD","dashboard","gateway","D")}${mini(35,222,133,"SCHEDULER","scheduler","settings","S")}
+    ${node(204,151,140,98,"TURN STATE","Session",[taskLabel,`${sessions} known threads`],"gateway","session","S")}
+    ${node(379,151,140,98,"ASSEMBLY","Context",[`${fmt(d.chat_pending)} pending messages`,`${records} recall records`],"memory/overview","context","C")}
+    ${loop(544,96,210,217)}
+    ${node(784,151,145,98,"MODEL ROUTER","Provider",[`${short(providerRaw,15,"provider")} · ${short(modelRaw,18,"model")}`,`${esc(d.reasoning||"default")} reasoning`],"settings","provider","P")}
+    ${node(194,291,155,76,"CONTROL","Cancel",["context signal"],"activetasks","cancel","×","control-card")}
+    ${node(369,291,155,76,"SURVIVAL","Checkpoint",[`${(d.active_tasks||[]).length} active · round ${iteration||"—"}`],"activetasks","checkpoint","C","control-card")}
+    ${node(559,373,190,112,"EXECUTION","Tool Registry",toolLines,"tools","tools","⌘")}
+    ${node(359,501,210,90,"PERSISTENCE","SQLite",sqliteLines,"database","sqlite","DB")}
+    <text class="boundary-label" x="30" y="614">OBSERVABILITY · TRACE LOGS</text>${telemetry(29,628,142)}
+    ${node(974,139,207,104,"REMOTE","Model API",[`${short(providerRaw,18,"provider")} endpoint`,"tokens · latency · response"],"settings","remote","↗","external-card")}
+    <g class="sidecar-boundary"><rect x="965" y="320" width="225" height="269" rx="16"/><text class="sidecar-label" x="983" y="344">HTTP TOOL SIDECARS · ${extensionCount} TOOLS</text></g>
+    ${node(978,359,199,98,"SIDECAR","minowrap",["universal tool adapter","tools.json · :9876"],"tools","minowrap","M","external-card")}
+    ${node(978,473,199,98,"SIDECAR","fileingest",["document intake service","HTTP · :9103"],"tools","fileingest","F","external-card")}
+    <text class="core-caption" x="600" y="742" text-anchor="middle">ONLY THE CURRENT TRACE STAGE ANIMATES · CLICK ANY NODE TO INSPECT IT</text></svg></div>`;
 }
 
 // --- sub-tabs: keep long pages short by splitting them into hash-routed tabs
@@ -844,7 +790,7 @@ function settingsView(d){
       el.innerHTML=list.length?list.map(p=>{ const name=encodeURIComponent(p.name).replace(/'/g,"%27"); return `<article><div><strong>${esc(p.display_name||p.name)}</strong><small>${esc((p.models||[]).join(" · "))}</small></div>${p.logged_in?`<span class="status-chip good">logged in</span>`:`<button class="oauth-btn" onclick="startOAuth(decodeURIComponent('${name}'))">Login with ${esc(p.display_name||p.name)}</button>`}</article>`; }).join(""):`<div class="surface-empty compact"><strong>No OAuth providers available</strong></div>`;
     } catch(e){ el.innerHTML=`<div class="surface-empty compact"><strong>OAuth unavailable</strong><p>${esc(e.message)}</p></div>`; }
   },0);
-  return `<section class="settings-hero"><div><span class="section-kicker">RUNTIME CONFIGURATION</span><h2>Simple, visible, restart-bound.</h2><p>Manage provider priority, credentials, and OAuth connections from one local surface.</p></div><div class="settings-runtime"><span class="runtime-kicker"><i></i> ACTIVE RUNTIME</span><strong>${esc(d.provider)} · ${esc(d.model)}</strong><small>${esc(d.home)}</small></div></section>
+  return `<section class="settings-hero"><div><span class="section-kicker">RUNTIME CONFIGURATION</span><h2>Simple, visible, restart-bound.</h2><p>Manage provider priority, credentials, and OAuth connections from one local surface.</p></div><div class="settings-runtime"><span class="runtime-kicker"><i></i> ACTIVE RUNTIME</span><strong>${esc(d.active_provider||d.provider)} · ${esc(d.model)}</strong><span class="provider-clickable" onclick="toggleProviderMenu(event)" title="Switch provider, model, or reasoning">${esc(d.reasoning||"default")} reasoning · ${(d.sessions||[]).length} conversations <i class="dropdown-arrow">▾</i></span><small>${esc(d.home)}</small></div></section>
     <div class="overview-section-head"><div><span class="section-kicker">PROVIDER CHAIN</span><h2>Priority and health</h2></div><button class="oauth-btn" onclick="showAddProvider()">+ Add Provider</button></div>
     <form id="add-provider-form" class="add-provider-form" hidden onsubmit="event.preventDefault();addProvider()"><input id="provider-name" placeholder="Name" required><input id="provider-base-url" type="url" placeholder="Base URL" required><input id="provider-model" placeholder="Model" required><input id="provider-small-model" placeholder="Small model"><input id="provider-api-key" type="password" placeholder="API key (optional)"><input id="provider-priority" type="number" min="1" value="10" placeholder="Priority"><button type="submit">Add</button><span id="provider-form-status" aria-live="polite"></span></form>
     ${providers.length?`<div class="provider-stack">${providers.map((p,i)=>{ const name=encodeURIComponent(p.name).replace(/'/g,"%27"); return `<article><span class="provider-priority">${p.priority}</span><div class="provider-main"><div><strong>${esc(p.name)}</strong><span class="status-chip ${p.key_set?"good":"warn"}">${p.key_set?"key set":"key missing"}</span></div><p>${esc(p.model)}${p.small_model?` · small ${esc(p.small_model)}`:""}</p><small>${esc(p.base_url)}</small></div><button class="provider-remove" title="Remove provider" aria-label="Remove provider" onclick="removeProvider(decodeURIComponent('${name}'))">✕</button>${i<providers.length-1?`<span class="fallback-arrow">↓ fallback</span>`:""}</article>`; }).join("")}</div>`:`<div class="surface-empty"><span>◇</span><strong>No provider snapshot available</strong><p>Add a provider to providers.json.</p></div>`}
@@ -862,7 +808,7 @@ function activeTasksView(d){
 function onboardingView(){
   const field=(label,id,placeholder,type="text",hint="")=>`<label class="onboarding-field"><span>${label}</span><input id="${id}" type="${type}" placeholder="${esc(placeholder)}" onfocus="markEditing()" oninput="markEditing()"><small>${hint}</small></label>`;
   return `<div class="onboarding-shell"><aside><div class="onboarding-mark"><span>✦</span></div><span class="section-kicker">WELCOME TO MINO</span><h2>Your personal AI system starts here.</h2><p>Connect one OpenAI-compatible provider. Mino will create a local home, keep its state in SQLite, and restart into the command center.</p><div class="onboarding-points"><div><span>01</span><p><strong>Private state</strong><small>One local SQLite file</small></p></div><div><span>02</span><p><strong>Provider resilience</strong><small>Priority and fallback ready</small></p></div><div><span>03</span><p><strong>Everywhere access</strong><small>Dashboard and optional Telegram</small></p></div></div></aside>
-    <section class="onboarding-form"><div><span class="section-kicker">PROVIDER SETUP</span><h3>Connect the first model</h3><p>Keys are written to the server environment file and never returned by the dashboard API.</p></div><div class="form-grid">${field("Provider name","onb-provider","mimo","text","A short label for this connection")}${field("API key","onb-apikey","sk-...","password","Stored in mino.env")}${field("Base URL","onb-baseurl","https://api.openai.com/v1","url","OpenAI-compatible endpoint")}${field("Main model","onb-model","mimo-v2.5","text","Used for conversations and tools")}${field("Small model","onb-small","mimo-v2.5","text","Optional background work")}${field("Telegram token","onb-tgtoken","123456:ABC-DEF...","password","Optional — connect later if preferred")}${field("Tavily API key","onb-tavily","tvly-...","password","For web search — get free key at tavily.com")}</div><button id="onb-save" class="onboarding-submit" onclick="saveOnboarding()">Save configuration <span>→</span></button><div id="onb-msg" class="onboarding-message" aria-live="polite"></div><small class="onboarding-footnote">Mino restarts once after saving. The dashboard reconnects automatically.</small></section></div>`;
+    <section class="onboarding-form"><div><span class="section-kicker">PROVIDER SETUP</span><h3>Connect the first model</h3><p>Keys are written to the server environment file and never returned by the dashboard API.</p></div><div class="form-grid">${field("Provider name","onb-provider","mimo","text","A short label for this connection")}${field("API key","onb-apikey","sk-...","password","Stored in mino.env")}${field("Base URL","onb-baseurl","https://api.openai.com/v1","url","OpenAI-compatible endpoint")}${field("Main model","onb-model","mimo-v2.5","text","Used for conversations and tools")}${field("Small model","onb-small","mimo-v2.5","text","Optional background work")}${field("Telegram token","onb-tgtoken","123456:ABC-DEF...","password","Optional — connect later if preferred")}</div><button id="onb-save" class="onboarding-submit" onclick="saveOnboarding()">Save configuration <span>→</span></button><div id="onb-msg" class="onboarding-message" aria-live="polite"></div><small class="onboarding-footnote">Mino restarts once after saving. The dashboard reconnects automatically.</small></section></div>`;
 }
 
 const VIEWS = {
@@ -896,35 +842,8 @@ const VIEWS = {
     return h;
   },
   overview(d){
-    const s = d.stats;
-    const u = d.usage || {total_cost:0};
-    const turns = d.turns || [], facts = (d.facts||[]).length, episodes = (d.episodes||[]).length;
-    const sessions = (d.sessions||[]).length;
-    const latest = turns[0];
-    const memoryTotal = facts + episodes;
-    const latestLabel = latest ? esc((latest.ts||"").replace("T"," ").slice(0,16)) : "Awaiting first turn";
-    const metric = (value,label,detail,cls="") => `<div class="overview-metric ${cls}"><span>${label}</span><strong>${value}</strong><small>${detail}</small></div>`;
-    return `<section class="overview-hero">
-      <div><div class="eyebrow">PERSONAL AI SYSTEM</div><h2 class="overview-title">Mino is awake.</h2>
-        <p class="overview-lede">Your conversations, memory, tools, and learning loops share one live workspace.</p>
-        <div class="overview-links"><a href="#gateway">Open gateway <span>→</span></a><a href="#memory">Inspect memory <span>→</span></a></div>
-      </div><div class="overview-runtime"><span class="runtime-kicker"><i></i> RUNTIME STATUS</span><strong>Operational</strong>
-        <span class="provider-clickable" onclick="toggleProviderMenu(event)" title="Click to switch provider">${esc(d.active_provider||d.provider)} · ${esc(d.model)} · ${esc(d.reasoning||"default")} <i class="dropdown-arrow">▾</i></span><small>${sessions} active conversation${sessions===1?"":"s"} · ${esc(d.home)}</small></div>
-    </section>
-    <section class="overview-metrics" aria-label="Mino runtime summary">
-      ${metric(s.turns,"Total turns",`${s.tool_calls} tool calls`,"primary")}
-      ${metric(secs(s.latency_avg),"Average turn",`p95 ${secs(s.latency_p95)}`)}
-      ${metric(money(u.total_cost),"Estimated spend",`${(u.total_in||0).toLocaleString()} input tokens`,"money")}
-      ${metric(memoryTotal,"Memory records",`${facts} facts · ${episodes} episodes`)}
-      ${metric(d.chat_pending||0,"Queued work",d.chat_pending?"pending consolidation":"queue is clear")}
-    </section>
-    <section class="overview-signal"><div class="overview-section-head"><div><span class="section-kicker">SIGNAL</span><h2>Retrieval gate</h2></div><span class="section-note">records whether recall entered each turn</span></div>
-      <div class="signal-body">${gateSplit(s)}</div>
-    </section>
-    <section class="overview-universe"><div class="overview-section-head"><div><span class="section-kicker">LIVE SYSTEM</span><h2>Runtime blueprint</h2></div><span class="section-note">open any subsystem to inspect it <span class="arch-status"></span></span></div>${archSVG(d)}</section>
-    <section class="overview-latest"><div class="overview-section-head"><div><span class="section-kicker">RECENT ACTIVITY</span><h2>Latest turn</h2></div><span class="section-note">${latestLabel}</span></div>
-      ${latest?turnCard(latest):'<div class="card empty">No turns yet — send a message from the chat dock to wake Mino.</div>'}
-    </section>`;
+    return `<section class="cover-intro"><div><span class="section-kicker">MINO RUNTIME SPINE</span><h2>The entire process, live.</h2><p>Follow every turn from gateway to verified completion, with state, tools, sidecars, and telemetry in one map.</p></div><div class="cover-status"><span><i></i> Operational</span><span class="arch-status"></span><a href="#settings">Runtime settings →</a></div></section>
+      <section class="overview-cover">${archSVG(d)}</section>`;
   },
   loop(d){
     const turns=d.turns||[], calls=turns.reduce((n,t)=>n+(t.llm_calls||[]).length,0), tools=turns.reduce((n,t)=>n+(t.tools||[]).length,0);
@@ -1014,15 +933,15 @@ const VIEWS = {
   },
 };
 
-// ---- Live Universe animation: light up the map as a turn flows through,
-// driven by the trace stream so ANY gateway (browser, phone, CLI) triggers it.
+// ---- Live Runtime Spine animation: illuminate only the active trace stage,
+// driven by the event stream so any gateway can move the same process map.
 const STAGE = {
-  turn_start:    {nodes:["gateway","wm"],            edges:["e-gw-wm"],                 label:"message in"},
-  gate:          {nodes:["gate"],                    edges:["e-gate-wm"],               label:"retrieval gate"},
-  llm:           {nodes:["llm"],                     edges:["e-wm-loop"],               label:"agent reasons"},
-  tool:          {nodes:["tools"],                   edges:[],                          label:"tool runs"},
-  turn_end:      {nodes:["reply","trace"],           edges:["e-reply-trace","e-reply-save"], label:"reply"},
-  consolidation: {nodes:["consolidation","semantic"],edges:["e-consol-sem"],            label:"consolidating memory"},
+  turn_start: {nodes:["gateway","session","context"], edges:["e-gw-session","e-session-context"], label:"assembling turn"},
+  llm:        {nodes:["loop","provider","remote"],     edges:["e-context-loop","e-loop-provider","e-provider-remote"], label:"model pass"},
+  tool:       {nodes:["loop","tools"],                 edges:["e-loop-tools"], label:"executing tool"},
+  completion: {nodes:["loop","evaluation"],            edges:[], label:"verifying completion"},
+  gate:       {nodes:["retrieval","sqlite"],           edges:["e-tools-db"], label:"evaluating recall"},
+  turn_end:   {nodes:["evaluation","trace"],           edges:["e-db-trace"], label:"turn recorded"},
 };
 let evCursor = null, evQueue = [], playing = false, animating = false;
 
@@ -1039,8 +958,8 @@ function animateStage(ev){
   spec.nodes.forEach(n => hot(`[data-node="${n}"]`, "hot", 1000));
   spec.edges.forEach(e => hot(`[data-edge="${e}"]`, "live", 1000));
   if (ev.type==="gate" && ev.decision==="retrieve"){
-    ["procedural","semantic","episodic"].forEach(n => hot(`[data-node="${n}"]`,"hot",1000));
-    ["e-gate-proc","e-gate-sem","e-gate-epi"].forEach(e => hot(`[data-edge="${e}"]`,"live",1000));
+    ["context","sqlite","retrieval"].forEach(n => hot(`[data-node="${n}"]`,"hot",1000));
+    hot(`[data-edge="e-tools-db"]`,"live",1000);
   }
 }
 function playNext(){
