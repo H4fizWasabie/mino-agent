@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Changed
+- Restore the live Runtime Spine dashboard visualization so the public `mino-agent` repository matches the current Mino frontend.
 - Run Telegram and the dashboard together when a dashboard port is configured.
 - Link Telegram reply-to messages and scheduler notifications into the Telegram session context so short follow-ups resolve against the message the user actually answered.
 
