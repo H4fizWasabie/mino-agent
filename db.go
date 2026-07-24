@@ -68,6 +68,18 @@ var schemaStatements = []string{
 		size INTEGER NOT NULL,
 		created_at TEXT DEFAULT (datetime('now'))
 	)`,
+	`CREATE TABLE IF NOT EXISTS tool_calls (
+		id INTEGER PRIMARY KEY,
+		session_id TEXT NOT NULL DEFAULT '',
+		tool_name TEXT NOT NULL,
+		args TEXT NOT NULL DEFAULT '',
+		output_summary TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT 'ok',
+		iteration INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT DEFAULT (datetime('now'))
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(session_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_tool_calls_name ON tool_calls(tool_name)`,
 	`CREATE TABLE IF NOT EXISTS projects (
 		name TEXT PRIMARY KEY,
 		objective TEXT NOT NULL DEFAULT '',

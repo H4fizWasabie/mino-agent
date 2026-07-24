@@ -5,6 +5,7 @@ package main
 //   [{"id":"morning-brief","schedule":"07:00","prompt":"Brief me on today","notify":true}]
 //
 // ponytail: simple HH:MM schedule only, no robfig/cron dependency.
+// Schedule format: "HH:MM" (daily at that UTC time) or "every Nh" / "every Nm".
 // Add cron expressions via robfig/cron if needed.
 
 import (

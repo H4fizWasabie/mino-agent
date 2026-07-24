@@ -110,6 +110,7 @@ func RunLoopContext(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx = context.WithValue(ctx, sessionIDKey{}, sessionID)
 	result := &LoopResult{}
 	dedup := make(map[string]string) // tool dedup: key → cached output
 	dedupStatus := make(map[string]string)

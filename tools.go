@@ -30,6 +30,7 @@ import (
 type ToolFunc func(args map[string]any) string
 type ContextToolFunc func(context.Context, map[string]any) string
 type turnMessageKey struct{}
+type sessionIDKey struct{}
 
 type ToolBehavior uint8
 
@@ -65,6 +66,12 @@ type Registry struct {
 	tools        map[string]*Tool
 	filter       *ToolFilter
 	maxDescChars int
+	logDB        *sql.DB // optional: if set, ExecuteContext logs to tool_calls table
+}
+
+// SetLogDB enables tool-call logging to the tool_calls table.
+func (r *Registry) SetLogDB(db *sql.DB) {
+	r.logDB = db
 }
 
 func NewRegistry() *Registry {
@@ -162,10 +169,32 @@ func (r *Registry) ExecuteContext(ctx context.Context, name string, args map[str
 	if err := validateObject(args, t.Schema); err != nil {
 		return fmt.Sprintf("Error: invalid arguments for %s: %v", name, err)
 	}
+	start := time.Now()
+	var output string
 	if t.ContextFn != nil {
-		return t.ContextFn(ctx, args)
+		output = t.ContextFn(ctx, args)
+	} else {
+		output = t.Fn(args)
 	}
-	return t.Fn(args)
+	// log to tool_calls table if DB is configured
+	if r.logDB != nil {
+		status := toolOutputStatus(output)
+		summary := output
+		if len(summary) > 200 {
+			summary = summary[:200]
+		}
+		argsJSON, _ := json.Marshal(args)
+		sid := ""
+		if v := ctx.Value(sessionIDKey{}); v != nil {
+			sid, _ = v.(string)
+		}
+		r.logDB.Exec(
+			"INSERT INTO tool_calls (session_id, tool_name, args, output_summary, status) VALUES (?,?,?,?,?)",
+			sid, name, string(argsJSON), summary, status,
+		)
+		_ = start // silence unused warning
+	}
+	return output
 }
 
 func validateObject(value map[string]any, schema map[string]any) error {

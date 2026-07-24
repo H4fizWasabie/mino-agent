@@ -29,6 +29,17 @@ var (
 	dashCursor  int64
 )
 
+const maxDashEvents = 500 // ring buffer cap to prevent unbounded growth
+
+func pushDashEvent(e map[string]any) {
+	dashEventMu.Lock()
+	dashEventQ = append(dashEventQ, e)
+	if len(dashEventQ) > maxDashEvents {
+		dashEventQ = dashEventQ[len(dashEventQ)-maxDashEvents:]
+	}
+	dashEventMu.Unlock()
+}
+
 func RunDashboard(w *Core) {
 	dashCore = w
 
@@ -171,15 +182,11 @@ func handleChatStream(w http.ResponseWriter, r *http.Request) {
 		case "done":
 			stageType = "turn_end"
 		}
-		dashEventMu.Lock()
-		dashEventQ = append(dashEventQ, map[string]any{"type": stageType, "decision": data["decision"]})
-		dashEventMu.Unlock()
+		pushDashEvent(map[string]any{"type": stageType, "decision": data["decision"]})
 	}
 
 	// emit turn_start for architecture SVG
-	dashEventMu.Lock()
-	dashEventQ = append(dashEventQ, map[string]any{"type": "turn_start"})
-	dashEventMu.Unlock()
+	pushDashEvent(map[string]any{"type": "turn_start"})
 
 	result := dashCore.RespondForContext(r.Context(), sid, body.Message, "dashboard", obs, true)
 
@@ -196,9 +203,7 @@ func handleChatStream(w http.ResponseWriter, r *http.Request) {
 	doneEv["kind"] = "done"
 
 	// publish turn_end + done
-	dashEventMu.Lock()
-	dashEventQ = append(dashEventQ, map[string]any{"type": "turn_end"})
-	dashEventMu.Unlock()
+	pushDashEvent(map[string]any{"type": "turn_end"})
 
 	b, _ := json.Marshal(doneEv)
 	fmt.Fprintf(w, "data: %s\n\n", b)
