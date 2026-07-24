@@ -127,15 +127,14 @@ func NewCore() *Core {
 	tools.Register(MakeReloadPluginsTool(s.Home, tools, mcpBridge))
 
 	// Tool filter: use embeddings to send only relevant tools per turn
-	coreTools := []string{"recall", "save_note", "read_file", "bash", "request_approval", "resolve_approval", "project_get", "project_update"}
+	addDelegateTools(w)
+	coreTools := []string{"recall", "save_note", "read_file", "bash", "request_approval", "resolve_approval", "project_get", "project_update", "delegate"}
 	toolFilter := NewToolFilter(coreTools, 8) // top 8 + 8 core = max 16 tools/turn
 	if mem.embedder != nil {
 		toolFilter.Index(tools.Schemas(), mem.embedder)
 		slog.Info("tool filter indexed", "tools", len(tools.Schemas()))
 	}
 	tools.SetFilter(toolFilter)
-
-	addDelegateTools(w)
 
 	// Scheduler: runs prompts through agent loop on schedule
 	w.Scheduler = NewScheduler(s.Home, s.Location(), func(prompt string, notify bool) {
