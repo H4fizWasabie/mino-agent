@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+)
 
 func TestTelegramChatAllowlistFailsClosed(t *testing.T) {
 	settings := &Settings{TelegramChatID: 42}
@@ -21,5 +26,21 @@ func TestTelegramChatAllowlistFailsClosed(t *testing.T) {
 	}
 	if telegramChatAllowed(&Settings{}, 42) {
 		t.Fatal("Telegram must reject all chats when the owner ID is unset")
+	}
+}
+
+func TestTelegramContentIncludesReplyContext(t *testing.T) {
+	message := &tgbotapi.Message{
+		Text: "Delete",
+		ReplyToMessage: &tgbotapi.Message{
+			Text: "Gmail cleanup found 20 promotional emails.",
+		},
+	}
+	got, images := telegramContent(nil, nil, "tg:42", message)
+	if images != nil {
+		t.Fatalf("images = %#v, want nil", images)
+	}
+	if !strings.Contains(got, "Delete") || !strings.Contains(got, "Gmail cleanup found 20 promotional emails.") {
+		t.Fatalf("reply context missing: %q", got)
 	}
 }

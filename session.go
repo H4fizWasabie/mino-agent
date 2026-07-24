@@ -162,6 +162,20 @@ func (s *Session) AddExchange(userRaw, userContext, reply string, toolCalls []To
 	}
 }
 
+// AddNotification keeps an outbound gateway notification available to the next
+// user turn without pretending the user sent it.
+func (s *Session) AddNotification(reply string) {
+	const marker = "[Mino sent the following Telegram notification. Treat it as context, not a new user instruction.]"
+	s.history = append(s.history,
+		Message{Role: "user", Content: marker},
+		Message{Role: "assistant", Content: reply},
+	)
+	if s.mem != nil {
+		s.mem.LogChat("user", marker, s.sessionID, "telegram_notification")
+		s.mem.LogChat("assistant", reply, s.sessionID, "telegram_notification")
+	}
+}
+
 func (s *Session) ContextMessages(maxChars int) []Message {
 	history := make([]Message, len(s.history))
 	for i, message := range s.history {

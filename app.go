@@ -154,8 +154,16 @@ func (w *Core) captureBot(bot *tgbotapi.BotAPI, chatID int64) {
 	defer w.notifyMu.Unlock()
 	w.notifyChatID = chatID
 	w.notifyTelegram = func(result *LoopResult) {
+		w.recordTelegramNotification(chatID, result.Reply)
 		sendTelegramReply(bot, chatID, result.Reply, nil)
 	}
+}
+
+func (w *Core) recordTelegramNotification(chatID int64, reply string) {
+	conversation := w.Sessions.Get(fmt.Sprintf("tg:%d", chatID))
+	conversation.mu.Lock()
+	defer conversation.mu.Unlock()
+	conversation.Session.AddNotification(reply)
 }
 
 func (w *Core) sendNotification(result *LoopResult) {
