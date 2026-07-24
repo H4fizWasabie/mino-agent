@@ -7,12 +7,14 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 )
@@ -67,19 +69,19 @@ func NewClient(apiKey, baseURL string) *Client {
 }
 
 func (c *Client) Create(model string, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
-	return c.create(model, "", messages, maxTokens, system, tools, false, nil)
+	return c.create(context.Background(), model, "", messages, maxTokens, system, tools, false, nil)
 }
 
 func (c *Client) Stream(model string, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
-	return c.create(model, "", messages, maxTokens, system, tools, true, onText)
+	return c.create(context.Background(), model, "", messages, maxTokens, system, tools, true, onText)
 }
 
-func (c *Client) create(model, reasoning string, messages []Message, maxTokens int, system string, tools []ToolDef, stream bool, onText func(string)) (*LLMResponse, error) {
+func (c *Client) create(ctx context.Context, model, reasoning string, messages []Message, maxTokens int, system string, tools []ToolDef, stream bool, onText func(string)) (*LLMResponse, error) {
 	if c.isCodex() {
-		return c.createCodex(model, reasoning, messages, system, tools, onText)
+		return c.createCodex(ctx, model, reasoning, messages, system, tools, onText)
 	}
 	if c.isAnthropic() {
-		return c.createAnthropic(model, messages, maxTokens, system, tools, stream, onText)
+		return c.createAnthropic(ctx, model, messages, maxTokens, system, tools, stream, onText)
 	}
 
 	oaiMsgs := make([]map[string]any, 0)
@@ -123,13 +125,9 @@ func (c *Client) create(model, reasoning string, messages []Message, maxTokens i
 
 	body, _ := json.Marshal(payload)
 	url := c.baseURL + "/chat/completions"
-	req, _ := http.NewRequest("POST", url, bytes.NewReader(body))
+	req, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	if c.isOpenRouter() {
-		req.Header.Set("HTTP-Referer", "https://github.com/H4fizWasabie/mino-agent")
-		req.Header.Set("X-Title", "Mino")
-	}
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -214,7 +212,7 @@ func parseResponse(r io.Reader) (*LLMResponse, error) {
 			OutputTokens: result.Usage.CompletionTokens,
 		},
 		Content:   blocks,
-		FinalText: content,
+		FinalText: choice.Message.Content,
 	}, nil
 }
 
@@ -239,8 +237,7 @@ func parseSSEStream(r io.Reader, onText func(string)) (*LLMResponse, error) {
 		var chunk struct {
 			Choices []struct {
 				Delta struct {
-					Content          string `json:"content"`
-					ReasoningContent string `json:"reasoning_content"`
+					Content   string `json:"content"`
 					ToolCalls []struct {
 						Index    int    `json:"index"`
 						ID       string `json:"id"`
@@ -256,7 +253,9 @@ func parseSSEStream(r io.Reader, onText func(string)) (*LLMResponse, error) {
 				CompletionTokens int `json:"completion_tokens"`
 			} `json:"usage"`
 		}
-		json.Unmarshal([]byte(data), &chunk)
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			return nil, fmt.Errorf("parse stream chunk: %w", err)
+		}
 
 		if chunk.Usage != nil {
 			usage.InputTokens = chunk.Usage.PromptTokens
@@ -264,14 +263,10 @@ func parseSSEStream(r io.Reader, onText func(string)) (*LLMResponse, error) {
 		}
 
 		for _, choice := range chunk.Choices {
-			deltaText := choice.Delta.Content
-			if deltaText == "" && choice.Delta.ReasoningContent != "" {
-				deltaText = choice.Delta.ReasoningContent
-			}
-			if deltaText != "" {
-				fullText.WriteString(deltaText)
+			if choice.Delta.Content != "" {
+				fullText.WriteString(choice.Delta.Content)
 				if onText != nil {
-					onText(deltaText)
+					onText(choice.Delta.Content)
 				}
 			}
 			for _, tc := range choice.Delta.ToolCalls {
@@ -290,12 +285,16 @@ func parseSSEStream(r io.Reader, onText func(string)) (*LLMResponse, error) {
 			}
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
 
 	blocks := make([]ContentBlock, 0)
 	if text := fullText.String(); text != "" {
 		blocks = append(blocks, ContentBlock{Type: "text", Text: text})
 	}
-	for _, st := range tools {
+	for _, index := range sortedIndexes(tools) {
+		st := tools[index]
 		var args map[string]any
 		json.Unmarshal([]byte(st.Args), &args)
 		blocks = append(blocks, ContentBlock{
@@ -324,6 +323,15 @@ type streamTool struct {
 	Args string
 }
 
+func sortedIndexes[T any](items map[int]T) []int {
+	indexes := make([]int, 0, len(items))
+	for index := range items {
+		indexes = append(indexes, index)
+	}
+	sort.Ints(indexes)
+	return indexes
+}
+
 // --- Tool definition (matches Core's input_schema dict) ---
 
 type ToolDef struct {
@@ -338,11 +346,7 @@ func (c *Client) isAnthropic() bool {
 	return strings.Contains(c.baseURL, "anthropic.com")
 }
 
-func (c *Client) isOpenRouter() bool {
-	return strings.Contains(c.baseURL, "openrouter.ai")
-}
-
-func (c *Client) createAnthropic(model string, messages []Message, maxTokens int, system string, tools []ToolDef, stream bool, onText func(string)) (*LLMResponse, error) {
+func (c *Client) createAnthropic(ctx context.Context, model string, messages []Message, maxTokens int, system string, tools []ToolDef, stream bool, onText func(string)) (*LLMResponse, error) {
 	// build Anthropic Messages API payload
 	var anthropicTools []map[string]any
 	if tools != nil {
@@ -399,7 +403,7 @@ func (c *Client) createAnthropic(model string, messages []Message, maxTokens int
 	startTime := time.Now()
 	body, _ := json.Marshal(payload)
 	url := c.baseURL + "/v1/messages"
-	req, _ := http.NewRequest("POST", url, bytes.NewReader(body))
+	req, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", c.apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
@@ -516,7 +520,9 @@ func parseAnthropicStream(r io.Reader, onText func(string)) (*LLMResponse, error
 				} `json:"usage"`
 			} `json:"message"`
 		}
-		json.Unmarshal([]byte(data), &event)
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			return nil, fmt.Errorf("parse anthropic stream event: %w", err)
+		}
 
 		switch event.Type {
 		case "content_block_start":
@@ -552,6 +558,9 @@ func parseAnthropicStream(r io.Reader, onText func(string)) (*LLMResponse, error
 			// stream complete
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
 
 	// collapse text blocks into one
 	var textBlocks []ContentBlock
@@ -564,7 +573,8 @@ func parseAnthropicStream(r io.Reader, onText func(string)) (*LLMResponse, error
 	if finalText != "" {
 		textBlocks = append(textBlocks, ContentBlock{Type: "text", Text: finalText})
 	}
-	for _, st := range tools {
+	for _, index := range sortedIndexes(tools) {
+		st := tools[index]
 		var input map[string]any
 		json.Unmarshal([]byte(st.Input), &input)
 		textBlocks = append(textBlocks, ContentBlock{Type: "tool_use", ID: st.ID, Name: st.Name, Input: input})

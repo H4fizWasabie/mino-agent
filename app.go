@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"log/slog"
 	"os"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -14,6 +17,7 @@ import (
 // This is the assembly diagram in code.
 
 type Core struct {
+	notifyMu       sync.RWMutex
 	notifyTelegram func(result *LoopResult)
 	notifyChatID   int64
 	Settings       *Settings
@@ -123,8 +127,8 @@ func NewCore() *Core {
 	w.Scheduler = NewScheduler(s.Home, s.Location(), func(prompt string, notify bool) {
 		result := w.RespondFor("scheduler", prompt, "scheduler", nil, false)
 		slog.Info("scheduled job done", "id", prompt[:min(40, len(prompt))], "reply", result.Reply[:min(80, len(result.Reply))])
-		if notify && w.notifyTelegram != nil {
-			w.notifyTelegram(result)
+		if notify {
+			w.sendNotification(result)
 		}
 	})
 
@@ -143,29 +147,63 @@ func (w *Core) Respond(userMessage, source string, obs Observer, stream bool) *L
 // user message only — AddExchange persists text, so they never enter history.
 
 func (w *Core) captureBot(bot *tgbotapi.BotAPI, chatID int64) {
+	if !telegramChatAllowed(w.Settings, chatID) {
+		return
+	}
+	w.notifyMu.Lock()
+	defer w.notifyMu.Unlock()
 	w.notifyChatID = chatID
 	w.notifyTelegram = func(result *LoopResult) {
-		sendTelegramReply(bot, w.notifyChatID, result.Reply, nil)
+		sendTelegramReply(bot, chatID, result.Reply, nil)
 	}
+}
+
+func (w *Core) sendNotification(result *LoopResult) {
+	w.notifyMu.RLock()
+	notify := w.notifyTelegram
+	w.notifyMu.RUnlock()
+	if notify != nil {
+		notify(result)
+	}
+}
+
+func (w *Core) telegramChatID() int64 {
+	w.notifyMu.RLock()
+	defer w.notifyMu.RUnlock()
+	return w.notifyChatID
 }
 
 // restoreTelegramChatID recovers the last known chat ID from DB after restart.
 func (w *Core) restoreTelegramChatID() {
+	if w.Settings == nil || w.Settings.TelegramChatID <= 0 {
+		return
+	}
 	var sid string
 	if err := w.DB.QueryRow("SELECT session_id FROM chat_log WHERE source = 'telegram' ORDER BY id DESC LIMIT 1").Scan(&sid); err == nil {
 		var chatID int64
-		if _, err := fmt.Sscanf(sid, "tg:%d", &chatID); err == nil && chatID > 0 {
+		if _, err := fmt.Sscanf(sid, "tg:%d", &chatID); err == nil && chatID == w.Settings.TelegramChatID {
+			w.notifyMu.Lock()
 			w.notifyChatID = chatID
+			w.notifyMu.Unlock()
 			return
 		}
 	}
+	w.notifyMu.Lock()
 	w.notifyChatID = 0
+	w.notifyMu.Unlock()
 }
 
 func (w *Core) RespondFor(sessionID, userMessage, source string, obs Observer, stream bool, images ...string) *LoopResult {
+	return w.RespondForContext(context.Background(), sessionID, userMessage, source, obs, stream, images...)
+}
+
+func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage, source string, obs Observer, stream bool, images ...string) *LoopResult {
 	conversation := w.Sessions.Get(sessionID)
 	conversation.mu.Lock()
 	defer conversation.mu.Unlock()
+	ctx, finish := conversation.beginTurn(parent)
+	defer finish()
+	ctx = context.WithValue(ctx, turnMessageKey{}, userMessage)
 	system := conversation.Session.BuildSystem(userMessage, source)
 	// inject resume prompt if there's an active task
 	if resume := conversation.Checkpoint.ResumePrompt(); resume != "" {
@@ -181,7 +219,8 @@ func (w *Core) RespondFor(sessionID, userMessage, source string, obs Observer, s
 	if w.Memory != nil {
 		es = w.Memory.embedder
 	}
-	result := RunLoop(
+	result := RunLoopContext(
+		ctx,
 		w.Client, conversation.Session.sessionID, system, messages, w.Tools,
 		w.Settings.MaxIter, w.Settings.MaxTokens, obs, stream,
 		conversation.Checkpoint,
@@ -190,16 +229,23 @@ func (w *Core) RespondFor(sessionID, userMessage, source string, obs Observer, s
 	)
 
 	conversation.Session.AddExchange(userMessage, userContext, result.Reply, result.ToolCalls, source)
-	settleCheckpoint(conversation.Checkpoint, result)
 	return result
 }
 
-func settleCheckpoint(checkpoint *CheckpointManager, result *LoopResult) {
-	if checkpoint != nil && result != nil && result.Status == "complete" {
-		checkpoint.Clear()
+func (w *Core) CancelTurn(sessionID string) bool {
+	return w.Sessions.Get(sessionID).cancelTurn()
+}
+
+func isStopMessage(message string) bool {
+	switch strings.ToLower(strings.TrimSpace(message)) {
+	case "stop", "cancel", "stop task", "cancel task", "never mind", "nevermind":
+		return true
+	default:
+		return false
 	}
 }
 
 func (w *Core) Close() {
+	closeTrace(w.Settings.Home)
 	w.DB.Close()
 }

@@ -203,7 +203,10 @@ func (m *Memory) ConsolidateDue() int {
 	}
 	rows.Close()
 	written := 0
-	for _, sid := range sessions {
+	for i, sid := range sessions {
+		if m.cfg.ConsolidateLimit > 0 && i >= m.cfg.ConsolidateLimit {
+			break
+		}
 		written += m.consolidateSession(sid)
 	}
 	return written
@@ -234,7 +237,10 @@ func (m *Memory) ConsolidateIfFull(contextChars int) int {
 	}
 	rows.Close()
 	written := 0
-	for _, sid := range sessions {
+	for i, sid := range sessions {
+		if m.cfg.ConsolidateLimit > 0 && i >= m.cfg.ConsolidateLimit {
+			break
+		}
 		written += m.consolidateSession(sid)
 	}
 	return written

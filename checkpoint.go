@@ -9,7 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
+
+const checkpointMaxAge = 30 * 24 * time.Hour
 
 // TaskSnapshot saved after each tool execution.
 type TaskSnapshot struct {
@@ -18,6 +21,7 @@ type TaskSnapshot struct {
 	ToolsUsed   []string `json:"tools_used"`
 	Discoveries []string `json:"discoveries"`
 	Status      string   `json:"status"` // "active" or "complete"
+	UpdatedAt   string   `json:"updated_at"`
 }
 
 // CheckpointManager handles save/load/clear.
@@ -45,11 +49,8 @@ func (c *CheckpointManager) path() string {
 func (c *CheckpointManager) Save(goal string, round int, toolsUsed, discoveries []string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if data, err := os.ReadFile(c.path()); err == nil {
-		var existing TaskSnapshot
-		if json.Unmarshal(data, &existing) == nil && existing.Status == "active" && existing.Goal != "" {
-			goal = existing.Goal
-		}
+	if existing := readActiveCheckpoint(c.path()); existing != nil && existing.Goal != "" {
+		goal = existing.Goal
 	}
 	snap := TaskSnapshot{
 		Goal:        goal,
@@ -57,10 +58,15 @@ func (c *CheckpointManager) Save(goal string, round int, toolsUsed, discoveries 
 		ToolsUsed:   toolsUsed,
 		Discoveries: discoveries,
 		Status:      "active",
+		UpdatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}
 	data, _ := json.MarshalIndent(snap, "", "  ")
-	if err := os.WriteFile(c.path(), data, 0644); err != nil {
+	tmp := c.path() + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
 		slog.Warn("checkpoint save failed", "session", c.sessionID, "error", err)
+	} else if err := os.Rename(tmp, c.path()); err != nil {
+		slog.Warn("checkpoint replace failed", "session", c.sessionID, "error", err)
+		os.Remove(tmp)
 	}
 }
 
@@ -68,18 +74,7 @@ func (c *CheckpointManager) Save(goal string, round int, toolsUsed, discoveries 
 func (c *CheckpointManager) Load() *TaskSnapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	data, err := os.ReadFile(c.path())
-	if err != nil {
-		return nil
-	}
-	var snap TaskSnapshot
-	if err := json.Unmarshal(data, &snap); err != nil {
-		return nil
-	}
-	if snap.Status != "active" {
-		return nil
-	}
-	return &snap
+	return readActiveCheckpoint(c.path())
 }
 
 // ResumePrompt builds the injection message for the system prompt.
@@ -92,21 +87,10 @@ func (c *CheckpointManager) ResumePrompt() string {
 	return "You were working on this before a restart:\n" + string(data) + "\n\nContinue."
 }
 
-// Clear marks the task complete and removes the file.
+// Clear retires a completed task.
 func (c *CheckpointManager) Clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// read directly instead of calling Load (avoids deadlock)
-	data, err := os.ReadFile(c.path())
-	if err != nil {
-		return
-	}
-	var snap TaskSnapshot
-	if json.Unmarshal(data, &snap) == nil && snap.Status == "active" {
-		snap.Status = "complete"
-		data, _ = json.MarshalIndent(snap, "", "  ")
-		os.WriteFile(c.path(), data, 0644)
-	}
 	os.Remove(c.path())
 }
 
@@ -122,14 +106,31 @@ func ListActiveTasks(home string) []TaskSnapshot {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
-		if err != nil {
-			continue
-		}
-		var snap TaskSnapshot
-		if json.Unmarshal(data, &snap) == nil && snap.Status == "active" {
-			tasks = append(tasks, snap)
+		if snap := readActiveCheckpoint(filepath.Join(dir, e.Name())); snap != nil {
+			tasks = append(tasks, *snap)
 		}
 	}
 	return tasks
+}
+
+func readActiveCheckpoint(path string) *TaskSnapshot {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var snap TaskSnapshot
+	if json.Unmarshal(data, &snap) != nil || snap.Status != "active" {
+		return nil
+	}
+	updated, err := time.Parse(time.RFC3339, snap.UpdatedAt)
+	if err != nil {
+		if info, statErr := os.Stat(path); statErr == nil {
+			updated = info.ModTime()
+		}
+	}
+	if updated.IsZero() || time.Since(updated) > checkpointMaxAge {
+		os.Remove(path)
+		return nil
+	}
+	return &snap
 }

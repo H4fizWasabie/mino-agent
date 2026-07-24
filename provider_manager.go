@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -37,8 +38,24 @@ type ProviderConfig struct {
 type providerFile struct {
 	Providers []ProviderConfig `json:"providers"`
 }
+
 var codexModels = []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5", "gpt-5.6-luna"}
 var codexReasoningLevels = []string{"default", "low", "medium", "high", "xhigh"}
+
+// Keep an existing VPS configuration compatible with the current Codex UI.
+// This avoids requiring a fresh OAuth login just to refresh model metadata.
+func normalizeProvider(p ProviderConfig) ProviderConfig {
+	if p.Name != "codex" {
+		return p
+	}
+	if len(p.Models) == 0 {
+		p.Models = append([]string(nil), codexModels...)
+	}
+	if len(p.ReasoningLevels) == 0 {
+		p.ReasoningLevels = append([]string(nil), codexReasoningLevels...)
+	}
+	return p
+}
 
 type providerState struct {
 	failures  int
@@ -124,13 +141,25 @@ func loadProviders(home string, legacy *Settings) ([]ProviderConfig, error) {
 
 func (m *ProviderManager) Create(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
 	return m.call(session, routeRole(role, messages), func(c *Client, model, reasoning string) (*LLMResponse, error) {
-		return c.create(model, reasoning, messages, maxTokens, system, tools, false, nil)
+		return c.create(context.Background(), model, reasoning, messages, maxTokens, system, tools, false, nil)
+	})
+}
+
+func (m *ProviderManager) CreateContext(ctx context.Context, session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
+	return m.callContext(ctx, session, routeRole(role, messages), func(c *Client, model, reasoning string) (*LLMResponse, error) {
+		return c.create(ctx, model, reasoning, messages, maxTokens, system, tools, false, nil)
 	})
 }
 
 func (m *ProviderManager) Stream(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
 	return m.call(session, routeRole(role, messages), func(c *Client, model, reasoning string) (*LLMResponse, error) {
-		return c.create(model, reasoning, messages, maxTokens, system, tools, true, onText)
+		return c.create(context.Background(), model, reasoning, messages, maxTokens, system, tools, true, onText)
+	})
+}
+
+func (m *ProviderManager) StreamContext(ctx context.Context, session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
+	return m.callContext(ctx, session, routeRole(role, messages), func(c *Client, model, reasoning string) (*LLMResponse, error) {
+		return c.create(ctx, model, reasoning, messages, maxTokens, system, tools, true, onText)
 	})
 }
 
@@ -148,10 +177,6 @@ func routeRole(role ModelRole, messages []Message) ModelRole {
 func (m *ProviderManager) resolveKey(p ProviderConfig) (string, error) {
 	if p.APIKeyEnv != "" {
 		if k := os.Getenv(p.APIKeyEnv); k != "" {
-			return k, nil
-		}
-		// ponytail: also check mino.env so agent can add keys mid-session
-		if k := readEnvFile(p.APIKeyEnv); k != "" {
 			return k, nil
 		}
 	}
@@ -202,6 +227,49 @@ func (m *ProviderManager) call(session string, role ModelRole, call func(*Client
 			lastErr = err
 			if attempt < 2 {
 				m.sleep(time.Duration(1<<attempt) * time.Second)
+			}
+		}
+		m.failure(session, role, p.Name)
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("all %s providers failed: %w", role, lastErr)
+	}
+	return nil, fmt.Errorf("all %s providers failed", role)
+}
+
+func (m *ProviderManager) callContext(ctx context.Context, session string, role ModelRole, call func(*Client, string, string) (*LLMResponse, error)) (*LLMResponse, error) {
+	var lastErr error
+	for _, p := range m.candidates(session, role) {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		key, err := m.resolveKey(p)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		client := m.clients[p.Name]
+		if client != nil {
+			client.apiKey = key
+		}
+		for attempt := 0; attempt < 3; attempt++ {
+			resp, err := call(client, modelFor(p, role), p.ReasoningEffort)
+			if err == nil {
+				m.success(session, role, p.Name)
+				return resp, nil
+			}
+			lastErr = err
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if attempt < 2 {
+				timer := time.NewTimer(time.Duration(1<<attempt) * time.Second)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return nil, ctx.Err()
+				case <-timer.C:
+				}
 			}
 		}
 		m.failure(session, role, p.Name)
@@ -394,20 +462,7 @@ func (m *ProviderManager) ProviderNames() []string {
 	return names
 }
 
-// normalizeProvider fills in missing model/reasoning metadata for known providers.
-func normalizeProvider(p ProviderConfig) ProviderConfig {
-	if p.Name == "codex" {
-		if len(p.Models) == 0 {
-			p.Models = append([]string(nil), codexModels...)
-		}
-		if len(p.ReasoningLevels) == 0 {
-			p.ReasoningLevels = append([]string(nil), codexReasoningLevels...)
-		}
-	}
-	return p
-}
-
-// ReloadProviders re-reads providers.json without restarting Mino.
+// ReloadProviders re-reads providers.json and adds any new providers.
 func (m *ProviderManager) ReloadProviders(home string) error {
 	configs, err := loadProviders(home, nil)
 	if err != nil {
@@ -433,9 +488,9 @@ func (m *ProviderManager) ReloadProviders(home string) error {
 			continue
 		}
 		key, _ := m.resolveKey(p)
-		client := NewClient(key, p.BaseURL)
-		client.usageLogPath = filepath.Join(home, "usage.jsonl")
-		m.clients[p.Name] = client
+		c := NewClient(key, p.BaseURL)
+		c.usageLogPath = filepath.Join(home, "usage.jsonl")
+		m.clients[p.Name] = c
 		m.state[p.Name] = &providerState{}
 		m.providers = append(m.providers, p)
 	}

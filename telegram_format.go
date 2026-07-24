@@ -1,6 +1,6 @@
 package main
 
-// Markdown → Telegram HTML, ported from Crow's telegram_rich.py.
+// Markdown → Telegram HTML formatting.
 // Telegram HTML mode supports <b> <i> <u> <s> <code> <pre> <a>
 // <blockquote> <tg-spoiler> — no tables or lists, so pipe tables
 // render as aligned <pre> and list items as • lines.
@@ -183,7 +183,7 @@ func renderPipeTable(rows []string) string {
 }
 
 // chunkHTML splits html into ≤max-byte chunks at the last close-tag
-// boundary, else last newline, else a hard cut. Port of Crow's
+// boundary, else last newline, else a hard cut.
 // _safe_html_chunks. max is bytes: ≥ char count in UTF-8, so a 4000-byte
 // cap always satisfies Telegram's 4096-char limit.
 func chunkHTML(html string, max int) []string {

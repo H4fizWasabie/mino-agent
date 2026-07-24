@@ -42,7 +42,7 @@
 - **`Reload()` on MCPBridge**: re-scans mcp.d/ for new server configs, skips already-connected servers
 - Graphify architecture index with semantic community labels and refreshed CodeGraph metadata
 - Vision-aware provider routing: `text_only` providers skipped for image turns; separate sticky bucket keeps text sessions on the main model
-- Telegram rich formatting: bold, code, fences, links, headings, bullets, strikethrough, pipe tables as aligned <pre> (ported from Crow's pipeline)
+- Telegram rich formatting: bold, code, fences, links, headings, bullets, strikethrough, pipe tables as aligned <pre>
 - Tool filter: embedding-based top-K tool selection per turn — only relevant tools sent to the LLM (cuts context waste)
 - `EmbedBatch`: batch embeddings in one request (86 tools in <2s vs 49s sequential)
 - Approval system: `request_approval` + `resolve_approval` tools for destructive operations (delete email, rm files, etc.)

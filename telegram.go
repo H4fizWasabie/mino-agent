@@ -25,6 +25,10 @@ func RunTelegram(w *Core) {
 		slog.Error("TELEGRAM_BOT_TOKEN not set")
 		return
 	}
+	if w.Settings == nil || w.Settings.TelegramChatID <= 0 {
+		slog.Error("MINO_TELEGRAM_CHAT_ID not set; Telegram gateway disabled")
+		return
+	}
 
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
@@ -34,7 +38,7 @@ func RunTelegram(w *Core) {
 	slog.Info("telegram bot started", "username", bot.Self.UserName)
 
 	w.restoreTelegramChatID()
-	w.captureBot(bot, w.notifyChatID) // restore from DB or 0; real chatID captured below
+	w.captureBot(bot, w.telegramChatID()) // restore from DB or 0; real chatID captured below
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 	updates := bot.GetUpdatesChan(u)
@@ -43,57 +47,70 @@ func RunTelegram(w *Core) {
 		if update.Message == nil {
 			continue
 		}
+		go handleTelegramMessage(w, bot, update.Message)
+	}
+}
 
-		chatID := update.Message.Chat.ID
-		w.captureBot(bot, chatID) // capture for proactive notifications
-		sid := fmt.Sprintf("tg:%d", chatID)
-		text, images := telegramContent(bot, w, sid, update.Message)
-		if text == "" && len(images) == 0 {
-			continue
+func handleTelegramMessage(w *Core, bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
+	chatID := message.Chat.ID
+	if !telegramChatAllowed(w.Settings, chatID) {
+		slog.Warn("telegram message rejected", "chat_id", chatID)
+		return
+	}
+	w.captureBot(bot, chatID)
+	sid := fmt.Sprintf("tg:%d", chatID)
+	text, images := telegramContent(bot, w, sid, message)
+	if text == "" && len(images) == 0 {
+		return
+	}
+	if isStopMessage(text) {
+		reply := "No active task."
+		if w.CancelTurn(sid) {
+			reply = "Stopped."
 		}
+		sendTelegramReply(bot, chatID, reply, nil)
+		return
+	}
 
-		bot.Send(tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping))
+	bot.Send(tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping))
 
-		// progress observer: send tool-call status to Telegram so user knows Mino is working
-		var statusMsg tgbotapi.Message
-		statusSent := false
-		showProgress := func(progress string) {
-			progress = strings.TrimSpace(progress)
-			if progress == "" {
-				return
-			}
-			if !statusSent {
-				statusMsg, _ = bot.Send(tgbotapi.NewMessage(chatID, progress))
-				statusSent = true
-			} else if statusMsg.MessageID != 0 {
-				bot.Send(tgbotapi.NewEditMessageText(chatID, statusMsg.MessageID, progress))
-			}
+	// progress observer: send tool-call status to Telegram so user knows Mino is working
+	var statusMsg tgbotapi.Message
+	statusSent := false
+	showProgress := func(progress string) {
+		progress = strings.TrimSpace(progress)
+		if progress == "" {
+			return
 		}
-		obs := func(kind string, data map[string]any) {
-			switch kind {
-			case "tool":
-				toolName, _ := data["tool"].(string)
-				showProgress(fmt.Sprintf("Running %s...", toolName))
-			case "progress":
-				progress, _ := data["text"].(string)
-				showProgress(progress)
-			}
-		}
-
-		result := w.RespondFor(sid, text, "telegram", obs, false, images...)
-
-		sendTelegramReply(bot, chatID, result.Reply, result.ToolCalls)
-
-		// auto-continue: if Mino hit the iteration limit (still mid-task),
-		// feed "continue" back in so multi-step tasks complete without user prodding.
-		// ponytail: max 10 auto-continues to prevent infinite loops.
-		for auto := 0; auto < 10 && result.Iterations >= w.Settings.MaxIter; auto++ {
-			slog.Info("telegram auto-continue", "auto", auto+1, "iterations", result.Iterations)
-			bot.Send(tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping))
-			result = w.RespondFor(sid, "continue", "telegram", nil, false)
-			sendTelegramReply(bot, chatID, result.Reply, result.ToolCalls)
+		if !statusSent {
+			statusMsg, _ = bot.Send(tgbotapi.NewMessage(chatID, progress))
+			statusSent = true
+		} else if statusMsg.MessageID != 0 {
+			bot.Send(tgbotapi.NewEditMessageText(chatID, statusMsg.MessageID, progress))
 		}
 	}
+	obs := func(kind string, data map[string]any) {
+		switch kind {
+		case "tool":
+			toolName, _ := data["tool"].(string)
+			showProgress(fmt.Sprintf("Running %s...", toolName))
+		case "progress":
+			progress, _ := data["text"].(string)
+			showProgress(progress)
+		}
+	}
+
+	result := w.RespondFor(sid, text, "telegram", obs, false, images...)
+
+	// RunLoop returns only an explicit completion, blocker, cancellation, or hard failure.
+	if statusSent && statusMsg.MessageID != 0 {
+		bot.Send(tgbotapi.NewDeleteMessage(chatID, statusMsg.MessageID))
+	}
+	sendTelegramReply(bot, chatID, result.Reply, nil)
+}
+
+func telegramChatAllowed(settings *Settings, chatID int64) bool {
+	return settings != nil && settings.TelegramChatID > 0 && chatID == settings.TelegramChatID
 }
 
 var imageMimes = map[string]bool{"image/png": true, "image/jpeg": true, "image/webp": true, "image/gif": true}

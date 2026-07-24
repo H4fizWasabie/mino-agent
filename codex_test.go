@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -56,9 +57,7 @@ func TestCodexDeviceLoginStoresOAuthSession(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]string{"authorization_code": "code-1", "code_verifier": "verifier-1"})
 		case "/token":
 			if r.FormValue("redirect_uri") != codexDeviceRedirect {
-				t.Errorf("unexpected redirect URI: %q", r.FormValue("redirect_uri"))
-				http.Error(w, "bad redirect", http.StatusBadRequest)
-				return
+				t.Fatalf("unexpected redirect URI: %q", r.FormValue("redirect_uri"))
 			}
 			json.NewEncoder(w).Encode(map[string]any{"access_token": access, "refresh_token": "refresh-1", "expires_in": 3600})
 		default:
@@ -71,7 +70,7 @@ func TestCodexDeviceLoginStoresOAuthSession(t *testing.T) {
 	home := t.TempDir()
 	store := LoadAuthStore(home)
 	engine := LoadOAuthEngine(home, store, "http://localhost")
-	engine.providerMap["codex"] = &OAuthProvider{Name: "codex", APIBaseURL: "https://chatgpt.com/backend-api/codex", Models: []string{"gpt-5.4"}}
+	engine.providerMap["codex"] = &OAuthProvider{Name: "codex", APIBaseURL: "https://chatgpt.com/backend-api/codex", Models: []string{"gpt-5.5"}}
 	verifyURL, userCode, deviceCode, interval, err := engine.BeginCodexDeviceLogin()
 	if err != nil {
 		t.Fatal(err)
@@ -100,9 +99,7 @@ func TestCodexOAuthRefresh(t *testing.T) {
 	access := testCodexToken("account-new")
 	server := newCodexTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.FormValue("grant_type") != "refresh_token" || r.FormValue("refresh_token") != "refresh-old" {
-			t.Errorf("unexpected refresh form: %v", r.Form)
-			http.Error(w, "bad refresh", http.StatusBadRequest)
-			return
+			t.Fatalf("unexpected refresh form: %v", r.Form)
 		}
 		json.NewEncoder(w).Encode(map[string]any{"access_token": access, "refresh_token": "refresh-new", "expires_in": 3600})
 	}))
@@ -128,27 +125,19 @@ func TestCodexResponsesTransport(t *testing.T) {
 	token := testCodexToken("account-123")
 	server := newCodexTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/codex/responses" {
-			t.Errorf("unexpected path: %s", r.URL.Path)
-			http.NotFound(w, r)
-			return
+			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		if r.Header.Get("Authorization") != "Bearer "+token || r.Header.Get("chatgpt-account-id") != "account-123" {
-			t.Error("missing Codex auth headers")
-			http.Error(w, "missing headers", http.StatusUnauthorized)
-			return
+			t.Fatalf("missing Codex auth headers")
 		}
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Errorf("decode request: %v", err)
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
+			t.Fatal(err)
 		}
 		reasoning, _ := body["reasoning"].(map[string]any)
 		_, hasMaxTokens := body["max_output_tokens"]
 		if body["stream"] != true || body["instructions"] != "system" || reasoning["effort"] != "high" || hasMaxTokens {
-			t.Errorf("unexpected request body: %v", body)
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
+			t.Fatalf("unexpected request body: %v", body)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprintln(w, `data: {"type":"response.output_text.delta","delta":"Hello"}`)
@@ -162,7 +151,7 @@ func TestCodexResponsesTransport(t *testing.T) {
 
 	client := NewClient(token, server.URL+"/codex")
 	var streamed strings.Builder
-	response, err := client.create("gpt-5.6-sol", "high", []Message{{Role: "user", Content: "hello"}}, 100, "system", []ToolDef{{Name: "read_file"}}, true, func(delta string) { streamed.WriteString(delta) })
+	response, err := client.create(context.Background(), "gpt-5.6-sol", "high", []Message{{Role: "user", Content: "hello"}}, 100, "system", []ToolDef{{Name: "read_file"}}, true, func(delta string) { streamed.WriteString(delta) })
 	if err != nil {
 		t.Fatal(err)
 	}

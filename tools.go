@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -26,6 +28,16 @@ import (
 
 // ToolFunc is the callable — matches Core's fn: Callable[..., str]
 type ToolFunc func(args map[string]any) string
+type ContextToolFunc func(context.Context, map[string]any) string
+type turnMessageKey struct{}
+
+type ToolBehavior uint8
+
+const (
+	BehaviorUnknown ToolBehavior = iota
+	BehaviorObserve
+	BehaviorMutate
+)
 
 // Tool matches Core's Tool dataclass
 type Tool struct {
@@ -33,6 +45,9 @@ type Tool struct {
 	Description string
 	Schema      map[string]any // JSON Schema (input_schema)
 	Fn          ToolFunc
+	ContextFn   ContextToolFunc
+	Behavior    ToolBehavior
+	Classify    func(map[string]any) ToolBehavior
 }
 
 // ToAPI matches Core's to_api() — the shape for the Messages API tools=
@@ -58,6 +73,22 @@ func NewRegistry() *Registry {
 
 func (r *Registry) Register(t *Tool) {
 	r.tools[t.Name] = t
+}
+
+func (r *Registry) BehaviorFor(name string, args map[string]any) ToolBehavior {
+	t, ok := r.tools[name]
+	if !ok {
+		return BehaviorUnknown
+	}
+	if t.Classify != nil {
+		return t.Classify(args)
+	}
+	return t.Behavior
+}
+
+func behaves(t *Tool, behavior ToolBehavior) *Tool {
+	t.Behavior = behavior
+	return t
 }
 
 type ToolInfo struct {
@@ -95,20 +126,32 @@ func (r *Registry) Catalog() []ToolInfo {
 func (r *Registry) Schemas() []ToolDef {
 	schemas := make([]ToolDef, 0, len(r.tools))
 	for _, t := range r.tools {
-		desc := t.Description
-		if r.maxDescChars > 0 && len(desc) > r.maxDescChars {
-			desc = desc[:r.maxDescChars] + "..."
-		}
-		schemas = append(schemas, ToolDef{
-			Name:        t.Name,
-			Description: desc,
-			Parameters:  t.Schema,
-		})
+		schemas = append(schemas, r.toolDef(t))
 	}
 	return schemas
 }
 
+func (r *Registry) Schema(name string) (ToolDef, bool) {
+	t, ok := r.tools[name]
+	if !ok {
+		return ToolDef{}, false
+	}
+	return r.toolDef(t), true
+}
+
+func (r *Registry) toolDef(t *Tool) ToolDef {
+	desc := t.Description
+	if r.maxDescChars > 0 && len(desc) > r.maxDescChars {
+		desc = desc[:r.maxDescChars] + "..."
+	}
+	return ToolDef{Name: t.Name, Description: desc, Parameters: t.Schema}
+}
+
 func (r *Registry) Execute(name string, args map[string]any) string {
+	return r.ExecuteContext(context.Background(), name, args)
+}
+
+func (r *Registry) ExecuteContext(ctx context.Context, name string, args map[string]any) string {
 	t, ok := r.tools[name]
 	if !ok {
 		return fmt.Sprintf("Error: unknown tool '%s'", name)
@@ -116,12 +159,101 @@ func (r *Registry) Execute(name string, args map[string]any) string {
 	if args == nil {
 		return fmt.Sprintf("Error: invalid arguments for %s: expected a JSON object", name)
 	}
-	for _, key := range requiredArgs(t.Schema) {
-		if _, ok := args[key]; !ok {
-			return fmt.Sprintf("Error: invalid arguments for %s: missing required field %q", name, key)
-		}
+	if err := validateObject(args, t.Schema); err != nil {
+		return fmt.Sprintf("Error: invalid arguments for %s: %v", name, err)
+	}
+	if t.ContextFn != nil {
+		return t.ContextFn(ctx, args)
 	}
 	return t.Fn(args)
+}
+
+func validateObject(value map[string]any, schema map[string]any) error {
+	for _, key := range requiredArgs(schema) {
+		if field, ok := value[key]; !ok || field == nil {
+			return fmt.Errorf("missing required field %q", key)
+		}
+	}
+	properties, _ := schema["properties"].(map[string]any)
+	for key, field := range value {
+		property, ok := properties[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if err := validateValue(field, property); err != nil {
+			return fmt.Errorf("field %q %v", key, err)
+		}
+	}
+	return nil
+}
+
+func validateValue(value any, schema map[string]any) error {
+	expected, _ := schema["type"].(string)
+	valid := true
+	switch expected {
+	case "string":
+		_, valid = value.(string)
+	case "boolean":
+		_, valid = value.(bool)
+	case "number":
+		valid = isJSONNumber(value, false)
+	case "integer":
+		valid = isJSONNumber(value, true)
+	case "object":
+		object, ok := value.(map[string]any)
+		valid = ok
+		if ok {
+			if err := validateObject(object, schema); err != nil {
+				return err
+			}
+		}
+	case "array":
+		array, ok := value.([]any)
+		valid = ok
+		if ok {
+			if itemSchema, ok := schema["items"].(map[string]any); ok {
+				for i, item := range array {
+					if err := validateValue(item, itemSchema); err != nil {
+						return fmt.Errorf("item %d %v", i, err)
+					}
+				}
+			}
+		}
+	}
+	if !valid {
+		return fmt.Errorf("must be %s", expected)
+	}
+	if enum, ok := schema["enum"].([]string); ok {
+		text, _ := value.(string)
+		for _, allowed := range enum {
+			if text == allowed {
+				return nil
+			}
+		}
+		return fmt.Errorf("must be one of %q", enum)
+	}
+	if enum, ok := schema["enum"].([]any); ok {
+		for _, allowed := range enum {
+			if fmt.Sprint(value) == fmt.Sprint(allowed) {
+				return nil
+			}
+		}
+		return fmt.Errorf("must be one of %v", enum)
+	}
+	return nil
+}
+
+func isJSONNumber(value any, integer bool) bool {
+	switch number := value.(type) {
+	case float64:
+		return !integer || math.Trunc(number) == number
+	case float32:
+		return !integer || float32(math.Trunc(float64(number))) == number
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return true
+	default:
+		return false
+	}
 }
 
 func requiredArgs(schema map[string]any) []string {
@@ -155,47 +287,62 @@ func (r *Registry) Only(names ...string) *Registry {
 func BuildRegistry(db *sql.DB, home string, mem *Memory, location ...*time.Location) *Registry {
 	r := NewRegistry()
 	loc := time.Local
+	bashTimeout, codingTimeout, syncTimeout := 2*time.Minute, 2*time.Minute, 5*time.Minute
 	if len(location) > 0 && location[0] != nil {
 		loc = location[0]
 	}
+	if mem != nil && mem.cfg != nil {
+		if mem.cfg.BashTimeout > 0 {
+			bashTimeout = mem.cfg.BashTimeout
+		}
+		if mem.cfg.CodingTimeout > 0 {
+			codingTimeout = mem.cfg.CodingTimeout
+		}
+		if mem.cfg.SyncTimeout > 0 {
+			syncTimeout = mem.cfg.SyncTimeout
+		}
+	}
 
 	// file tools (coding)
-	r.Register(makeReadTool())
-	r.Register(makeViewImageTool())
-	r.Register(makeWriteTool())
-	r.Register(makeEditTool())
-	r.Register(makeBashTool())
+	r.Register(behaves(makeReadTool(), BehaviorObserve))
+	r.Register(behaves(makeViewImageTool(), BehaviorObserve))
+	r.Register(behaves(makeWriteTool(), BehaviorMutate))
+	r.Register(behaves(makeEditTool(), BehaviorMutate))
+	r.Register(behaves(makeSyncFileToolFor(syncTimeout), BehaviorMutate))
+	bash := makeBashToolFor(home, bashTimeout)
+	bash.Classify = classifyBash
+	r.Register(bash)
 
 	// coding discovery tools
-	r.Register(makeListFilesTool())
-	r.Register(makeGrepTool())
-	r.Register(makeGlobTool())
-	r.Register(makeGitDiffTool())
-	r.Register(makeGitStatusTool())
-	r.Register(makeGraphifyQueryTool())
-	r.Register(makeGraphifyExplainTool())
-	r.Register(makeGraphifyPathTool())
-	r.Register(makeCodegraphQueryTool())
-	r.Register(makeCodegraphSyncTool())
+	r.Register(behaves(makeListFilesTool(codingTimeout), BehaviorObserve))
+	r.Register(behaves(makeGrepTool(codingTimeout), BehaviorObserve))
+	r.Register(behaves(makeGlobTool(codingTimeout), BehaviorObserve))
+	r.Register(behaves(makeGitDiffTool(codingTimeout), BehaviorObserve))
+	r.Register(behaves(makeGitStatusTool(codingTimeout), BehaviorObserve))
+	r.Register(behaves(makeGraphifyQueryTool(codingTimeout), BehaviorObserve))
+	r.Register(behaves(makeGraphifyExplainTool(codingTimeout), BehaviorObserve))
+	r.Register(behaves(makeGraphifyPathTool(codingTimeout), BehaviorObserve))
+	r.Register(behaves(makeCodegraphQueryTool(codingTimeout), BehaviorObserve))
+	r.Register(behaves(makeCodegraphSyncTool(codingTimeout), BehaviorMutate))
 
 	// calendar tools (Core: calendar.make_tool + make_list_tool)
-	r.Register(makeCalendarTool(db, home))
-	r.Register(makeListCalendarTool(db, loc))
+	r.Register(behaves(makeCalendarTool(db, home), BehaviorMutate))
+	r.Register(behaves(makeListCalendarTool(db, loc), BehaviorObserve))
 
 	// notes (Core: notes.make_tool)
-	r.Register(makeNotesTool(db, mem))
-	r.Register(makeProjectGetTool(db))
-	r.Register(makeProjectUpdateTool(db))
+	r.Register(behaves(makeNotesTool(db, mem), BehaviorMutate))
+	r.Register(behaves(makeProjectGetTool(db), BehaviorObserve))
+	r.Register(behaves(makeProjectUpdateTool(db), BehaviorMutate))
 
 	// messages (Core: messages.make_tool)
-	r.Register(makeMessagesTool(home))
+	r.Register(behaves(makeMessagesTool(home), BehaviorMutate))
 
 	// web search (Core: search.make_tool)
-	r.Register(makeSearchTool())
-	r.Register(makeFetchURLTool())
+	r.Register(behaves(makeSearchTool(), BehaviorObserve))
+	r.Register(behaves(makeFetchURLTool(), BehaviorObserve))
 
 	// recall — original pull-based memory retrieval
-	r.Register(&Tool{
+	r.Register(behaves(&Tool{
 		Name:        "recall",
 		Description: "Search your memory for facts about the user. Call before answering personal questions.",
 		Schema: map[string]any{
@@ -216,28 +363,28 @@ func BuildRegistry(db *sql.DB, home string, mem *Memory, location ...*time.Locat
 			}
 			return results
 		},
-	})
+	}, BehaviorObserve))
 
 	// memory self-management (Core: memory_admin tools)
 	if mem != nil {
-		r.Register(makeManageMemoryTool(mem))
-		r.Register(makeUpdateSoulTool(home))
-		r.Register(makeCreateSkillTool(home, mem))
-		r.Register(makeWorkingMemoryTool(home, mem))
-		r.Register(makePatternTool(home, mem))
-		r.Register(makeScheduleTool(home))
-		r.Register(makeListScheduleTool(home))
+		r.Register(behaves(makeManageMemoryTool(mem), BehaviorMutate))
+		r.Register(behaves(makeUpdateSoulTool(home), BehaviorMutate))
+		r.Register(behaves(makeCreateSkillTool(home, mem), BehaviorMutate))
+		r.Register(behaves(makeWorkingMemoryTool(home, mem), BehaviorMutate))
+		r.Register(behaves(makePatternTool(home, mem), BehaviorMutate))
+		r.Register(behaves(makeScheduleTool(home), BehaviorMutate))
+		r.Register(behaves(makeListScheduleTool(home), BehaviorObserve))
 	}
 
 	// image generation (OpenRouter images API)
-	r.Register(makeRequestApprovalTool(home))
-	r.Register(makeResolveApprovalTool(home))
-	r.Register(makeGenerateImageTool(home))
+	r.Register(behaves(makeRequestApprovalTool(home), BehaviorMutate))
+	r.Register(behaves(makeResolveApprovalTool(home), BehaviorMutate))
+	r.Register(behaves(makeGenerateImageTool(home), BehaviorMutate))
 
 	return r
 }
 
-// --- File tools (read, write, edit, bash) ---
+// --- File tools (read, write, edit, sync, bash) ---
 
 func makeReadTool() *Tool {
 	return &Tool{
@@ -380,35 +527,301 @@ func makeEditTool() *Tool {
 	}
 }
 
-func makeBashTool() *Tool {
+type fileProof struct {
+	Bytes  int64  `json:"bytes"`
+	SHA256 string `json:"sha256"`
+}
+
+func makeSyncFileTool() *Tool {
+	return makeSyncFileToolFor(5 * time.Minute)
+}
+
+func makeSyncFileToolFor(timeout time.Duration) *Tool {
+	run := func(ctx context.Context, args map[string]any) string {
+		if timeout <= 0 {
+			timeout = 5 * time.Minute
+		}
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		source, _ := args["source"].(string)
+		destination, _ := args["destination"].(string)
+		sourceRemote, destinationRemote := isRemotePath(source), isRemotePath(destination)
+		if sourceRemote && destinationRemote {
+			return "Error: sync_file requires at least one local endpoint; stage remote-to-remote transfers locally"
+		}
+		before, err := proofForPathContext(ctx, source)
+		if err != nil {
+			return fmt.Sprintf("Error: cannot verify source %s: %v", source, err)
+		}
+		if sourceRemote || destinationRemote {
+			if out, err := exec.CommandContext(ctx, "scp", "--", source, destination).CombinedOutput(); err != nil {
+				return fmt.Sprintf("Error: scp failed: %v\nOutput: %s", err, strings.TrimSpace(string(out)))
+			}
+		} else if err := copyLocalFile(source, destination); err != nil {
+			return fmt.Sprintf("Error: copy failed: %v", err)
+		}
+		after, err := proofForPathContext(ctx, destination)
+		if err != nil {
+			return fmt.Sprintf("Error: cannot verify destination %s: %v", destination, err)
+		}
+		if before != after {
+			return fmt.Sprintf("Error: transfer verification mismatch: source=%+v destination=%+v", before, after)
+		}
+		receipt, _ := json.Marshal(map[string]any{
+			"source": source, "destination": destination,
+			"bytes": after.Bytes, "sha256": after.SHA256, "verified": true,
+		})
+		return "sync_receipt " + string(receipt)
+	}
 	return &Tool{
-		Name:        "bash",
-		Description: "Execute a bash command. Returns stdout and stderr. Timeout: 30s. For creating files, prefer write_file. For reading files, prefer read_file. Use bash only for commands that have no specialized tool (mkdir, mv, cp, chmod, go build, python, etc).",
+		Name:        "sync_file",
+		Description: fmt.Sprintf("Copy one file between local paths or between this machine and user@host:path. Verifies byte count and SHA-256 at both ends. Timeout: %s. Prefer this over bash scp.", timeout),
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"command": map[string]any{"type": "string", "description": "Bash command to execute"},
+				"source":      map[string]any{"type": "string", "description": "Local path or user@host:path"},
+				"destination": map[string]any{"type": "string", "description": "Local path or user@host:path"},
+			},
+			"required": []string{"source", "destination"},
+		},
+		Fn:        func(args map[string]any) string { return run(context.Background(), args) },
+		ContextFn: run,
+	}
+}
+
+func copyLocalFile(source, destination string) error {
+	if filepath.Clean(source) == filepath.Clean(destination) {
+		return nil
+	}
+	src, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	info, err := src.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file", source)
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
+		return err
+	}
+	dst, err := os.OpenFile(destination, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(dst, src)
+	closeErr := dst.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
+}
+
+func proofForPath(path string) (fileProof, error) {
+	return proofForPathContext(context.Background(), path)
+}
+
+func proofForPathContext(ctx context.Context, path string) (fileProof, error) {
+	if host, remotePath, ok := splitRemotePath(path); ok {
+		if strings.HasPrefix(host, "-") {
+			return fileProof{}, fmt.Errorf("invalid remote host")
+		}
+		command := "sha256sum -- " + shellQuote(remotePath) + " && wc -c < " + shellQuote(remotePath)
+		out, err := exec.CommandContext(ctx, "ssh", "--", host, command).CombinedOutput()
+		if err != nil {
+			return fileProof{}, fmt.Errorf("ssh proof failed: %v: %s", err, strings.TrimSpace(string(out)))
+		}
+		fields := strings.Fields(string(out))
+		if len(fields) < 3 {
+			return fileProof{}, fmt.Errorf("invalid remote proof: %s", strings.TrimSpace(string(out)))
+		}
+		var size int64
+		if _, err := fmt.Sscan(fields[len(fields)-1], &size); err != nil {
+			return fileProof{}, fmt.Errorf("invalid remote byte count: %w", err)
+		}
+		return fileProof{Bytes: size, SHA256: fields[0]}, nil
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return fileProof{}, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return fileProof{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return fileProof{}, fmt.Errorf("%s is not a regular file", path)
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return fileProof{}, err
+	}
+	return fileProof{Bytes: info.Size(), SHA256: fmt.Sprintf("%x", hash.Sum(nil))}, nil
+}
+
+func isRemotePath(path string) bool {
+	_, _, ok := splitRemotePath(path)
+	return ok
+}
+
+func splitRemotePath(path string) (host, remotePath string, ok bool) {
+	colon := strings.Index(path, ":")
+	if colon <= 0 || colon == len(path)-1 || strings.Contains(path[:colon], "/") {
+		return "", "", false
+	}
+	return path[:colon], path[colon+1:], true
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func makeBashTool() *Tool {
+	return makeBashToolFor("", 2*time.Minute)
+}
+
+func makeBashToolFor(home string, timeout time.Duration) *Tool {
+	if timeout <= 0 {
+		timeout = 2 * time.Minute
+	}
+	run := func(ctx context.Context, args map[string]any) string {
+		cmd, _ := args["command"].(string)
+		if strings.TrimSpace(cmd) == "" {
+			return "Error: bash command cannot be empty"
+		}
+		if isShellCopyCommand(cmd) {
+			return "Error: use sync_file for local or remote file copies so destination proof is recorded"
+		}
+		approvalPath := ""
+		if reason := dangerousBashReason(cmd); reason != "" {
+			approvalID, _ := args["approval_id"].(string)
+			var err error
+			approvalPath, err = approvedBashPlan(home, approvalID, cmd)
+			if err != nil {
+				return fmt.Sprintf("[APPROVAL_REQUIRED] %s. Call request_approval with the exact command, wait for the user's explicit approval, then retry bash with approval_id.", reason)
+			}
+		}
+		out, err := runBashContext(ctx, timeout, rewriteBashWithRTK(ctx, cmd))
+		if err != nil {
+			return fmt.Sprintf("Error: %v\nOutput: %s", err, out)
+		}
+		if approvalPath != "" {
+			os.Remove(approvalPath)
+		}
+		if len(out) > 1<<20 {
+			out = out[:1<<20] + fmt.Sprintf("\n... (truncated at 1 MiB, %d bytes total)", len(out))
+		}
+		if out == "" {
+			return "(no output)"
+		}
+		return out
+	}
+	return &Tool{
+		Name:        "bash",
+		Description: fmt.Sprintf("Execute a bash command. Supported commands use RTK to reduce output tokens. Timeout: %s. Destructive commands require explicit user approval_id. Prefer write_file, read_file, and sync_file.", timeout),
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"command":     map[string]any{"type": "string", "description": "Bash command to execute"},
+				"approval_id": map[string]any{"type": "string", "description": "Approved action ID required for destructive commands"},
 			},
 			"required": []string{"command"},
 		},
-		Fn: func(args map[string]any) string {
-			cmd, _ := args["command"].(string)
-			if strings.TrimSpace(cmd) == "" {
-				return "Error: bash command cannot be empty"
-			}
-			out, err := runBash(cmd)
-			if err != nil {
-				return fmt.Sprintf("Error: %v\nOutput: %s", err, out)
-			}
-			if len(out) > 1<<20 {
-				out = out[:1<<20] + fmt.Sprintf("\n... (truncated at 1 MiB, %d bytes total)", len(out))
-			}
-			if out == "" {
-				return "(no output)"
-			}
-			return out
-		},
+		Fn:        func(args map[string]any) string { return run(context.Background(), args) },
+		ContextFn: run,
 	}
+}
+
+func classifyBash(args map[string]any) ToolBehavior {
+	command, _ := args["command"].(string)
+	if strings.ContainsAny(command, "\n;&|><`") || strings.Contains(command, "$(") {
+		return BehaviorUnknown
+	}
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return BehaviorUnknown
+	}
+	switch filepath.Base(fields[0]) {
+	case "pwd", "ls", "grep", "stat", "sha256sum", "wc", "head", "tail", "file", "realpath", "readlink":
+		return BehaviorObserve
+	case "rg":
+		if !strings.Contains(command, "--pre") {
+			return BehaviorObserve
+		}
+	case "find":
+		if !strings.Contains(command, "-delete") && !strings.Contains(command, "-exec") && !strings.Contains(command, "-ok") {
+			return BehaviorObserve
+		}
+	case "sed":
+		if strings.Contains(command, " -n") && !strings.Contains(command, " -i") {
+			return BehaviorObserve
+		}
+	case "git":
+		if len(fields) > 1 && (fields[1] == "status" || fields[1] == "diff" || fields[1] == "log" || fields[1] == "show") {
+			return BehaviorObserve
+		}
+	}
+	return BehaviorUnknown
+}
+
+var destructiveBashPatterns = []struct {
+	re     *regexp.Regexp
+	reason string
+}{
+	{regexp.MustCompile(`(?i)(?:^|[\s;&|()])(?:\\|[^\s;&|()]*/)?(?:rm|rmdir|unlink|shred)(?:\s|$)`), "file deletion requires approval"},
+	{regexp.MustCompile(`(?i)(?:^|[\s;&|()])(?:\\|[^\s;&|()]*/)?(?:mkfs(?:\.\w+)?|wipefs|fdisk|parted)(?:\s|$)`), "disk modification requires approval"},
+	{regexp.MustCompile(`(?i)(?:^|[\s;&|()])(?:\\|[^\s;&|()]*/)?(?:shutdown|reboot|poweroff|halt)(?:\s|$)`), "host shutdown requires approval"},
+	{regexp.MustCompile(`(?i)\bgit\s+(?:reset\s+--hard|clean\s+-[a-z]*f|push\b[^\n]*(?:--force|-f\b))`), "destructive Git operation requires approval"},
+	{regexp.MustCompile(`(?i)\b(?:drop|truncate)\s+(?:table|database)\b`), "destructive database operation requires approval"},
+	{regexp.MustCompile(`(?i)\bchmod\s+(?:-R\s+)?777\b`), "world-writable permission change requires approval"},
+}
+
+func dangerousBashReason(command string) string {
+	for _, pattern := range destructiveBashPatterns {
+		if pattern.re.MatchString(command) {
+			return pattern.reason
+		}
+	}
+	return ""
+}
+
+func approvalHome(home string) string {
+	if home != "" {
+		return home
+	}
+	if configured := os.Getenv("MINO_HOME"); configured != "" {
+		return configured
+	}
+	if userHome, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(userHome, ".mino")
+	}
+	return ".mino"
+}
+
+func safeActionID(actionID string) bool {
+	return regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`).MatchString(actionID)
+}
+
+func approvedBashPlan(home, actionID, command string) (string, error) {
+	if !safeActionID(actionID) {
+		return "", fmt.Errorf("invalid approval ID")
+	}
+	path := filepath.Join(approvalHome(home), "approved", actionID+".json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	var approval struct {
+		ExecPlan string `json:"exec_plan"`
+	}
+	if json.Unmarshal(data, &approval) != nil || !strings.Contains(approval.ExecPlan, command) {
+		return "", fmt.Errorf("approved plan does not contain the exact command")
+	}
+	return path, nil
 }
 
 // --- Tool factories (match Core's make_tool patterns) ---
@@ -963,6 +1376,7 @@ func makeScheduleTool(home string) *Tool {
 				"schedule": map[string]any{"type": "string", "description": "When to run: HH:MM (daily) or 'every NhNm' (interval, e.g. 'every 1h' or 'every 30m')"},
 				"prompt":   map[string]any{"type": "string", "description": "The prompt Mino will run at the scheduled time. Can include tool instructions like 'run bash: df -h and report if disk > 80%'"},
 				"notify":   map[string]any{"type": "boolean", "description": "Whether to send a notification when this runs"},
+				"once":     map[string]any{"type": "boolean", "description": "Remove the task after its first successful trigger"},
 			},
 			"required": []string{"id", "schedule", "prompt"},
 		},
@@ -994,7 +1408,11 @@ func makeListScheduleTool(home string) *Tool {
 			var out strings.Builder
 			out.WriteString("Scheduled tasks:\n")
 			for _, j := range jobs {
-				out.WriteString(fmt.Sprintf("- %s: %s → %s\n", j.ID, j.Schedule, j.Prompt))
+				mode := ""
+				if j.Once {
+					mode = " (once)"
+				}
+				out.WriteString(fmt.Sprintf("- %s: %s%s → %s\n", j.ID, j.Schedule, mode, j.Prompt))
 			}
 			return out.String()
 		},
@@ -1004,10 +1422,23 @@ func makeListScheduleTool(home string) *Tool {
 // --- helpers ---
 
 func addScheduledJob(home string, args map[string]any) string {
+	scheduleFileMu.Lock()
+	defer scheduleFileMu.Unlock()
 	id, _ := args["id"].(string)
 	schedule, _ := args["schedule"].(string)
 	prompt, _ := args["prompt"].(string)
 	notify, _ := args["notify"].(bool)
+	once, _ := args["once"].(bool)
+	id, schedule, prompt = strings.TrimSpace(id), strings.TrimSpace(schedule), strings.TrimSpace(prompt)
+	if !safeActionID(id) {
+		return "Error: schedule id must use only letters, numbers, dots, dashes, or underscores"
+	}
+	if prompt == "" {
+		return "Error: schedule prompt cannot be empty"
+	}
+	if err := validateSchedule(schedule); err != nil {
+		return "Error: invalid schedule: " + err.Error()
+	}
 
 	path := filepath.Join(home, "schedule.json")
 	var jobs []ScheduledJob
@@ -1018,23 +1449,43 @@ func addScheduledJob(home string, args map[string]any) string {
 	found := false
 	for i, j := range jobs {
 		if j.ID == id {
-			jobs[i] = ScheduledJob{ID: id, Schedule: schedule, Prompt: prompt, Notify: notify}
+			jobs[i] = ScheduledJob{ID: id, Schedule: schedule, Prompt: prompt, Notify: notify, Once: once}
 			found = true
 			break
 		}
+		if j.Schedule == schedule && strings.EqualFold(strings.TrimSpace(j.Prompt), prompt) {
+			return fmt.Sprintf("Error: duplicate schedule already exists as '%s'", j.ID)
+		}
 	}
 	if !found {
-		jobs = append(jobs, ScheduledJob{ID: id, Schedule: schedule, Prompt: prompt, Notify: notify})
+		jobs = append(jobs, ScheduledJob{ID: id, Schedule: schedule, Prompt: prompt, Notify: notify, Once: once})
 	}
 
-	data, _ = json.MarshalIndent(jobs, "", "  ")
-	os.WriteFile(path, data, 0644)
+	if err := writeScheduleFile(home, jobs); err != nil {
+		return "Error saving schedule: " + err.Error()
+	}
 	return fmt.Sprintf("Scheduled '%s' at %s: %s", id, schedule, prompt)
 }
 
-// ponytail: 30s hardcoded timeout, configurable if needed
 func runBash(cmd string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	return runBashContext(context.Background(), 2*time.Minute, cmd)
+}
+
+func rewriteBashWithRTK(parent context.Context, command string) string {
+	if _, err := exec.LookPath("rtk"); err != nil {
+		return command
+	}
+	ctx, cancel := context.WithTimeout(parent, time.Second)
+	defer cancel()
+	out, _ := exec.CommandContext(ctx, "rtk", "rewrite", command).Output()
+	if rewritten := strings.TrimSpace(string(out)); rewritten != "" {
+		return rewritten
+	}
+	return command
+}
+
+func runBashContext(parent context.Context, timeout time.Duration, cmd string) (string, error) {
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	c := exec.CommandContext(ctx, "bash", "-c", cmd)
 	out, err := c.CombinedOutput()
@@ -1147,6 +1598,9 @@ func makeRequestApprovalTool(home string) *Tool {
 		},
 		Fn: func(args map[string]any) string {
 			actionID, _ := args["action_id"].(string)
+			if !safeActionID(actionID) {
+				return "Error: action_id must use only letters, numbers, dots, dashes, or underscores"
+			}
 			title, _ := args["title"].(string)
 			details, _ := args["details"].(string)
 			execPlan, _ := args["exec_plan"].(string)
@@ -1166,6 +1620,46 @@ func makeRequestApprovalTool(home string) *Tool {
 }
 
 func makeResolveApprovalTool(home string) *Tool {
+	resolve := func(ctx context.Context, args map[string]any) string {
+		actionID, _ := args["action_id"].(string)
+		if !safeActionID(actionID) {
+			return "Error: invalid action_id"
+		}
+		decision, _ := args["decision"].(string)
+		reason, _ := args["reason"].(string)
+		if decision != "approve" && decision != "reject" {
+			return "Error: decision must be approve or reject"
+		}
+		if decision == "approve" && !turnExplicitlyApproves(ctx) {
+			return "Error: approval must come from an explicit user message such as approve, yes, proceed, or go ahead"
+		}
+		path := filepath.Join(home, "pending", actionID+".json")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Sprintf("No pending approval found for '%s'", actionID)
+		}
+		var req map[string]any
+		if json.Unmarshal(data, &req) != nil {
+			return "Error: pending approval is invalid"
+		}
+		if decision == "approve" {
+			os.MkdirAll(filepath.Join(home, "approved"), 0700)
+			req["approved_at"] = time.Now().Format(time.RFC3339)
+			approved, _ := json.Marshal(req)
+			approvedPath := filepath.Join(home, "approved", actionID+".json")
+			if err := os.WriteFile(approvedPath, approved, 0600); err != nil {
+				return "Error saving approval: " + err.Error()
+			}
+			os.Remove(path)
+			execPlan, _ := req["exec_plan"].(string)
+			return fmt.Sprintf("APPROVED: %s\n\nExec plan:\n%s\n\nUse approval_id=%s for the exact destructive bash command.", req["title"], execPlan, actionID)
+		}
+		os.Remove(path)
+		if reason != "" {
+			return fmt.Sprintf("REJECTED: %s — %s", req["title"], reason)
+		}
+		return fmt.Sprintf("REJECTED: %s", req["title"])
+	}
 	return &Tool{
 		Name:        "resolve_approval",
 		Description: "Check or resolve a pending approval. Use BEFORE executing any action that was previously approved. If decision is 'approve', the exec_plan is returned so you can carry it out. If 'reject', the request is deleted.",
@@ -1178,28 +1672,23 @@ func makeResolveApprovalTool(home string) *Tool {
 			},
 			"required": []string{"action_id", "decision"},
 		},
-		Fn: func(args map[string]any) string {
-			actionID, _ := args["action_id"].(string)
-			decision, _ := args["decision"].(string)
-			reason, _ := args["reason"].(string)
-			path := filepath.Join(home, "pending", actionID+".json")
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return fmt.Sprintf("No pending approval found for '%s'", actionID)
-			}
-			var req map[string]any
-			json.Unmarshal(data, &req)
-			os.Remove(path)
-			if decision == "approve" {
-				execPlan, _ := req["exec_plan"].(string)
-				return fmt.Sprintf("APPROVED: %s\n\nExec plan:\n%s", req["title"], execPlan)
-			}
-			if reason != "" {
-				return fmt.Sprintf("REJECTED: %s — %s", req["title"], reason)
-			}
-			return fmt.Sprintf("REJECTED: %s", req["title"])
-		},
+		Fn:        func(args map[string]any) string { return resolve(context.Background(), args) },
+		ContextFn: resolve,
 	}
+}
+
+func turnExplicitlyApproves(ctx context.Context) bool {
+	message, _ := ctx.Value(turnMessageKey{}).(string)
+	message = strings.ToLower(strings.TrimSpace(message))
+	if message == "yes" || message == "y" {
+		return true
+	}
+	for _, phrase := range []string{"approve", "approved", "proceed", "go ahead", "confirm"} {
+		if strings.Contains(message, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 func makeGenerateImageTool(home string) *Tool {

@@ -1,2 +1,13 @@
-/mino
+.pi/
+.mino/
+mino
 /mino-*
+codegraph.json
+API_KEYS.md
+.reasonix/
+reasonix.toml
+__pycache__/
+client_secret_*.json
+extensions/minowrap/minowrap
+.mino-test/
+graphify-out/

@@ -1,10 +1,33 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestLoadProvidersRestoresCodexChoices(t *testing.T) {
+	home := t.TempDir()
+	data, _ := json.Marshal(providerFile{Providers: []ProviderConfig{{
+		Name: "codex", BaseURL: "https://chatgpt.com/backend-api/codex", Model: "gpt-5.5",
+	}}})
+	if err := os.WriteFile(filepath.Join(home, "providers.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	providers, err := loadProviders(home, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(providers) != 1 || len(providers[0].Models) != 4 {
+		t.Fatalf("models = %#v", providers[0].Models)
+	}
+	if len(providers[0].ReasoningLevels) != 5 || providers[0].ReasoningLevels[3] != "high" {
+		t.Fatalf("reasoning levels = %#v", providers[0].ReasoningLevels)
+	}
+}
 
 func testManager() *ProviderManager {
 	return &ProviderManager{

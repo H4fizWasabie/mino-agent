@@ -9,9 +9,11 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -22,6 +24,7 @@ type ScheduledJob struct {
 	Schedule string `json:"schedule"` // "HH:MM" or "every Nm" e.g. "every 30m"
 	Prompt   string `json:"prompt"`
 	Notify   bool   `json:"notify"`
+	Once     bool   `json:"once,omitempty"`
 }
 
 // Scheduler runs scheduled prompts and forwards results.
@@ -33,7 +36,10 @@ type Scheduler struct {
 	lastRun  map[string]time.Time
 	mu       sync.Mutex
 	stopCh   chan struct{}
+	snapshot string
 }
+
+var scheduleFileMu sync.Mutex
 
 // NewScheduler creates a scheduler. callback fires when a job is due.
 func NewScheduler(home string, location *time.Location, callback func(prompt string, notify bool)) *Scheduler {
@@ -58,10 +64,30 @@ func (s *Scheduler) loadJobs() {
 		slog.Warn("bad schedule.json", "error", err)
 		return
 	}
+	valid := jobs[:0]
+	seen := make(map[string]bool)
+	for _, job := range jobs {
+		switch {
+		case !safeActionID(job.ID):
+			slog.Warn("invalid scheduled job id", "id", job.ID)
+		case seen[job.ID]:
+			slog.Warn("duplicate scheduled job id", "id", job.ID)
+		case validateSchedule(job.Schedule) != nil:
+			slog.Warn("invalid scheduled job", "id", job.ID, "schedule", job.Schedule)
+		default:
+			seen[job.ID] = true
+			valid = append(valid, job)
+		}
+	}
 	s.mu.Lock()
-	s.jobs = jobs
+	if string(data) == s.snapshot {
+		s.mu.Unlock()
+		return
+	}
+	s.jobs = append([]ScheduledJob(nil), valid...)
+	s.snapshot = string(data)
 	s.mu.Unlock()
-	slog.Info("schedule loaded", "jobs", len(jobs))
+	slog.Info("schedule loaded", "jobs", len(valid))
 }
 
 // Start begins the ticker loop (checks every 30s)
@@ -112,8 +138,67 @@ func (s *Scheduler) tick() {
 			if s.callback != nil {
 				s.callback(j.Prompt, j.Notify)
 			}
+			if j.Once {
+				s.remove(j.ID)
+			}
 		}
 	}
+}
+
+func validateSchedule(schedule string) error {
+	if strings.HasPrefix(schedule, "every ") {
+		duration, err := time.ParseDuration(strings.TrimSpace(strings.TrimPrefix(schedule, "every ")))
+		if err != nil || duration <= 0 {
+			return fmt.Errorf("invalid interval")
+		}
+		return nil
+	}
+	if _, err := time.Parse("15:04", schedule); err != nil {
+		return fmt.Errorf("expected HH:MM or every duration")
+	}
+	return nil
+}
+
+func (s *Scheduler) remove(id string) {
+	scheduleFileMu.Lock()
+	defer scheduleFileMu.Unlock()
+	s.mu.Lock()
+	jobs := make([]ScheduledJob, 0, len(s.jobs))
+	for _, job := range s.jobs {
+		if job.ID != id {
+			jobs = append(jobs, job)
+		}
+	}
+	if writeScheduleFile(s.home, jobs) == nil {
+		s.jobs = jobs
+		s.snapshot = ""
+		delete(s.lastRun, id)
+	}
+	s.mu.Unlock()
+}
+
+func writeScheduleFile(home string, jobs []ScheduledJob) error {
+	path := filepath.Join(home, "schedule.json")
+	data, err := json.MarshalIndent(jobs, "", "  ")
+	if err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(home, "schedule-*.json")
+	if err != nil {
+		return err
+	}
+	name := file.Name()
+	defer os.Remove(name)
+	if err := file.Chmod(0644); err == nil {
+		_, err = file.Write(data)
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(name, path)
 }
 
 func (s *Scheduler) shouldRun(j ScheduledJob, now time.Time) bool {

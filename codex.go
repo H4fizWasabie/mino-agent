@@ -6,6 +6,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -39,7 +40,7 @@ func codexAccountID(token string) (string, error) {
 	return accountID, nil
 }
 
-func (c *Client) createCodex(model, reasoning string, messages []Message, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
+func (c *Client) createCodex(ctx context.Context, model, reasoning string, messages []Message, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
 	accountID, err := codexAccountID(c.apiKey)
 	if err != nil {
 		return nil, err
@@ -78,7 +79,7 @@ func (c *Client) createCodex(model, reasoning string, messages []Message, system
 	if !strings.HasSuffix(endpoint, "/responses") {
 		endpoint += "/responses"
 	}
-	req, _ := http.NewRequest("POST", endpoint, bytes.NewReader(body))
+	req, _ := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("chatgpt-account-id", accountID)
 	req.Header.Set("OpenAI-Beta", "responses=experimental")

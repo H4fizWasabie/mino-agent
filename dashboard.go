@@ -1,7 +1,6 @@
 package main
 
-// Mino — ops/dashboard.py + waku/gateway/telegram.py
-// Serves Core's exact static files + API endpoints.
+// Dashboard — HTTP server serving static files + API endpoints.
 
 import (
 	"database/sql"
@@ -100,20 +99,18 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 	if sid == "" {
 		sid = "default"
 	}
-	result := dashCore.RespondFor(sid, body.Message, "dashboard", nil, false)
-
-	tools := make([]map[string]any, 0)
-	for _, tc := range result.ToolCalls {
-		tools = append(tools, map[string]any{
-			"tool": tc.Name, "args": tc.Args, "output": tc.Output,
-			"status": "ok", "summary": tc.Output,
-		})
+	if isStopMessage(body.Message) {
+		stopped := dashCore.CancelTurn(sid)
+		json.NewEncoder(w).Encode(map[string]any{"reply": map[bool]string{true: "Stopped.", false: "No active task."}[stopped], "status": "cancelled", "iterations": 0})
+		return
 	}
+	result := dashCore.RespondForContext(r.Context(), sid, body.Message, "dashboard", nil, false)
 
 	json.NewEncoder(w).Encode(map[string]any{
 		"reply":      result.Reply,
+		"status":     result.Status,
 		"iterations": result.Iterations,
-		"tools":      tools,
+		"tools":      dashboardTools(result.ToolCalls),
 	})
 }
 
@@ -151,6 +148,14 @@ func handleChatStream(w http.ResponseWriter, r *http.Request) {
 	if sid == "" {
 		sid = "default"
 	}
+	if isStopMessage(body.Message) {
+		stopped := dashCore.CancelTurn(sid)
+		reply := map[bool]string{true: "Stopped.", false: "No active task."}[stopped]
+		data, _ := json.Marshal(map[string]any{"kind": "done", "reply": reply, "status": "cancelled", "iterations": 0})
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+		return
+	}
 
 	obs := func(kind string, data map[string]any) {
 		data["kind"] = kind
@@ -176,23 +181,17 @@ func handleChatStream(w http.ResponseWriter, r *http.Request) {
 	dashEventQ = append(dashEventQ, map[string]any{"type": "turn_start"})
 	dashEventMu.Unlock()
 
-	result := dashCore.RespondFor(sid, body.Message, "dashboard", obs, true)
+	result := dashCore.RespondForContext(r.Context(), sid, body.Message, "dashboard", obs, true)
 
 	// done event — Core format: flat fields, no 'data' wrapper
 	doneEv := map[string]any{
 		"reply":      result.Reply,
+		"status":     result.Status,
 		"iterations": result.Iterations,
 		"latency_ms": 0,
 	}
 	if len(result.ToolCalls) > 0 {
-		tools := make([]map[string]any, len(result.ToolCalls))
-		for i, tc := range result.ToolCalls {
-			tools[i] = map[string]any{
-				"tool": tc.Name, "args": tc.Args, "output": tc.Output,
-				"status": toolOutputStatus(tc.Output), "summary": tc.Output,
-			}
-		}
-		doneEv["tools"] = tools
+		doneEv["tools"] = dashboardTools(result.ToolCalls)
 	}
 	doneEv["kind"] = "done"
 
@@ -204,6 +203,17 @@ func handleChatStream(w http.ResponseWriter, r *http.Request) {
 	b, _ := json.Marshal(doneEv)
 	fmt.Fprintf(w, "data: %s\n\n", b)
 	flusher.Flush()
+}
+
+func dashboardTools(calls []ToolCall) []map[string]any {
+	tools := make([]map[string]any, len(calls))
+	for i, call := range calls {
+		tools[i] = map[string]any{
+			"tool": call.Name, "args": call.Args, "output": call.Output,
+			"status": toolOutputStatus(call.Output), "summary": call.Output,
+		}
+	}
+	return tools
 }
 
 // --- API: Session ---
@@ -534,13 +544,28 @@ func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 		},
 		"db":               databaseSnapshot(db, dashCore.Settings.Home, allTables),
 		"settings":         map[string]any{"providers": providerSnapshot(), "config_file": filepath.Join(dashCore.Settings.Home, "providers.json")},
-		"eval_report":      nil,
+		"eval_report":      evalReport(dashCore.Settings.Home),
 		"wake_scans":       []any{},
 		"reports":          []any{},
 		"active_tasks":     activeTasks,
 		"needs_onboarding": needsOnboarding(dashCore.Settings.Home),
 	}
 	json.NewEncoder(w).Encode(resp)
+}
+
+// evalReport reads a release-evidence record written by the certification gate.
+// It is deliberately separate from usage and traces: operational completion is
+// not a claim that a model-produced answer was independently judged correct.
+func evalReport(home string) map[string]any {
+	data, err := os.ReadFile(filepath.Join(home, "eval_report.json"))
+	if err != nil {
+		return nil
+	}
+	var report map[string]any
+	if json.Unmarshal(data, &report) != nil || report["deterministic"] == nil || report["judge"] == nil {
+		return nil
+	}
+	return report
 }
 
 func databaseSnapshot(db *sql.DB, home string, all []string) map[string]any {
@@ -874,11 +899,7 @@ func handleProvidersAPI(w http.ResponseWriter, r *http.Request) {
 		if body.APIKey != "" && dashCore.AuthStore != nil {
 			dashCore.AuthStore.Set(body.Name, body.APIKey)
 		}
-		if dashCore.Client != nil {
-			dashCore.Client.ReloadProviders(dashCore.Settings.Home)
-		} else {
-			go func() { time.Sleep(500 * time.Millisecond); os.Exit(0) }()
-		}
+		dashCore.Client.ReloadProviders(dashCore.Settings.Home)
 		json.NewEncoder(w).Encode(map[string]any{"ok": true})
 	case "DELETE":
 		name := r.URL.Query().Get("name")
@@ -906,9 +927,7 @@ func handleProvidersAPI(w http.ResponseWriter, r *http.Request) {
 		if dashCore.AuthStore != nil {
 			dashCore.AuthStore.Delete(name)
 		}
-		if dashCore.Client != nil {
-			dashCore.Client.ReloadProviders(dashCore.Settings.Home)
-		}
+		dashCore.Client.ReloadProviders(dashCore.Settings.Home)
 		json.NewEncoder(w).Encode(map[string]any{"ok": true})
 	default:
 		http.Error(w, "POST or DELETE", 405)
@@ -945,6 +964,36 @@ func handleOAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if provider == "gemini" {
+		// Step 2: user submits the redirect URL from their local browser
+		if r.Method == "POST" && r.URL.Query().Get("step") == "complete" {
+			var body struct {
+				State       string `json:"state"`
+				RedirectURL string `json:"redirect_url"`
+			}
+			json.NewDecoder(r.Body).Decode(&body)
+			if err := dashCore.OAuth.CompleteGeminiADC(body.State, body.RedirectURL); err != nil {
+				json.NewEncoder(w).Encode(map[string]any{"ok": false, "message": err.Error()})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"ok": true, "message": "Logged in to Google Gemini!"})
+			return
+		}
+		// Step 1: start ADC login, return URL
+		authURL, state, err := dashCore.OAuth.BeginGeminiADC()
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]any{"ok": false, "message": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok":      true,
+			"url":     authURL,
+			"state":   state,
+			"message": "Open this URL in your browser. After login, Google will redirect you to localhost — copy the FULL redirect URL from the address bar and paste it back.",
+		})
+		return
+	}
+
 	if provider == "codex" {
 		verificationURL, userCode, deviceCode, interval, err := dashCore.OAuth.BeginCodexDeviceLogin()
 		if err != nil {
@@ -952,9 +1001,12 @@ func handleOAuthLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		json.NewEncoder(w).Encode(map[string]any{
-			"ok": true, "url": verificationURL, "user_code": userCode,
-			"device_code": deviceCode, "interval": interval,
-			"message": "Open the link and enter the code.",
+			"ok":          true,
+			"url":         verificationURL,
+			"user_code":   userCode,
+			"device_code": deviceCode,
+			"interval":    interval,
+			"message":     "Open the link and enter the code.",
 		})
 		return
 	}
@@ -997,16 +1049,12 @@ func handleOAuthDevice(w http.ResponseWriter, r *http.Request) {
 		if provider == "codex" {
 			done, err := dashCore.OAuth.PollCodexDeviceLogin(deviceCode)
 			if err != nil {
-				json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": err.Error()})
+				json.NewEncoder(w).Encode(map[string]any{"ok": false, "pending": true, "error": err.Error()})
 				return
 			}
 			if done {
 				dashCore.OAuth.EnsureProvider(dashCore.OAuth.providerMap["codex"])
-				if dashCore.Client != nil {
-					dashCore.Client.ReloadProviders(dashCore.Settings.Home)
-				} else {
-					go func() { time.Sleep(500 * time.Millisecond); os.Exit(0) }()
-				}
+				dashCore.Client.ReloadProviders(dashCore.Settings.Home)
 			}
 			json.NewEncoder(w).Encode(map[string]any{"ok": done, "pending": !done})
 			return
@@ -1086,8 +1134,8 @@ func handleSettingsAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	// write mino.env so systemd picks it up
 	envPath := filepath.Join(home, "mino.env")
-	envData := fmt.Sprintf("MINO_HOME=%s\nMINO_API_KEY=%s\nMINO_BASE_URL=%s\nMINO_MODEL=%s\nMINO_SMALL_MODEL=%s\n",
-		home, body.APIKey, body.BaseURL, body.Model, body.SmallModel)
+	envData := fmt.Sprintf("MINO_HOME=%s\nMINO_API_KEY=%s\nMINO_BASE_URL=%s\nMINO_MODEL=%s\nMINO_SMALL_MODEL=%s\nMINO_TIMEZONE=%s\n",
+		home, body.APIKey, body.BaseURL, body.Model, body.SmallModel, dashCore.Settings.Timezone)
 	if body.TelegramToken != "" {
 		envData += fmt.Sprintf("TELEGRAM_BOT_TOKEN=%s\n", body.TelegramToken)
 	}
@@ -1096,11 +1144,9 @@ func handleSettingsAPI(w http.ResponseWriter, r *http.Request) {
 		os.Setenv("TAVILY_API_KEY", body.TavilyKey)
 	}
 	os.WriteFile(envPath, []byte(envData), 0600)
-	// pick up changes without restart, or restart if first provider
+	// pick up changes without restart
 	if dashCore.Client != nil {
 		dashCore.Client.ReloadProviders(home)
-	} else {
-		go func() { time.Sleep(500 * time.Millisecond); os.Exit(0) }()
 	}
 	json.NewEncoder(w).Encode(map[string]any{"ok": true, "message": "Saved."})
 }
@@ -1232,6 +1278,10 @@ func usageStats(home string) map[string]any {
 	// pricing: MiMo ≈ $2/$15 per million
 	cost := tokensIn/1e6*2.0 + tokensOut/1e6*15.0
 
+	evalReports := 0
+	if evalReport(home) != nil {
+		evalReports = 1
+	}
 	return map[string]any{
 		"turns":          turns,
 		"tool_calls":     toolCalls,
@@ -1244,7 +1294,7 @@ func usageStats(home string) map[string]any {
 		"latency_avg":    int(avgLatency),
 		"latency_p95":    int(p95),
 		"trace_files":    traceFiles,
-		"eval_reports":   0,
+		"eval_reports":   evalReports,
 	}
 }
 
@@ -1421,6 +1471,7 @@ func traceTurns(home string) []map[string]any {
 					}
 				}
 				current["reply"] = ev["reply"]
+				current["status"] = ev["status"]
 				current["iterations"] = ev["iterations"]
 				current["llm_calls"] = llmCalls
 				current["tools"] = tools

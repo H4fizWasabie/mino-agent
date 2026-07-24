@@ -35,6 +35,7 @@ You are in coding mode. When this skill is active, the assistant-mode STOP rule 
 1. **No edits without reading first.** Always read the file before changing it.
 2. **No completion claim without verification.** Run the command, see the output, THEN claim done.
 3. **No fix without root cause.** Symptom fixes are failure. Find why before patching what.
+4. **Always use absolute paths.** The system context provides the authoritative LOCAL WORKSPACE. Put new or staged projects there unless the user specifies another path.
 
 ## Phase 1: UNDERSTAND
 
@@ -57,13 +58,15 @@ For any change affecting >1 file or >20 lines:
 
 1. One logical change at a time.
 2. read_file → edit_file (prefer over write_file for targeted edits).
-3. Small steps. Commit after each working change.
+3. Treat LOCAL WORKSPACE as the stable editing boundary on every installation. Edit existing local files in place. For a remote file, reuse a matching workspace copy or stage it locally, verify there, then sync back once.
+4. Never generate a large file in one tool call. Use targeted edit_file replacements, or write_file with mode=overwrite for the first chunk and mode=append for later chunks.
+5. Small steps. Commit after each working change.
 
 ## Phase 4: VERIFY
 
 Before saying "done":
 
-1. **Run tests**: bash the test command for the language (e.g., go test ./..., pytest, cargo test).
+1. **Run tests**: bash the normal test command (e.g., go test ./..., pytest, cargo test). Mino automatically rewrites supported noisy commands through RTK; do not add manual output truncation.
 2. **Check diff**: git_diff to confirm what changed.
 3. **If tests fail**: read error → fix root cause → re-verify. Symptom patches are failure.
 4. **Update index**: codegraph_sync and bash "graphify update ." after changes.

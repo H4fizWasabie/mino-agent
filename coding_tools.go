@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,10 +14,12 @@ import (
 // coding_tools.go — language-agnostic coding tools.
 // All tools shell out to CLI binaries following the same pattern as runBash.
 
-const codingTimeout = 30 * time.Second
-
 func runCoding(binary string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), codingTimeout)
+	return runCodingContext(context.Background(), 2*time.Minute, binary, args...)
+}
+
+func runCodingContext(parent context.Context, timeout time.Duration, binary string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Dir = "" // relative paths resolve from working directory
@@ -26,18 +29,35 @@ func runCoding(binary string, args ...string) (string, error) {
 
 // ponytail: if primary binary not found, try fallback
 func runCodingFallback(primary string, primaryArgs []string, fallback string, fallbackArgs []string) string {
-	out, err := runCoding(primary, primaryArgs...)
+	return runCodingFallbackContext(context.Background(), 2*time.Minute, primary, primaryArgs, fallback, fallbackArgs)
+}
+
+func runCodingFallbackContext(ctx context.Context, timeout time.Duration, primary string, primaryArgs []string, fallback string, fallbackArgs []string) string {
+	out, err := runCodingContext(ctx, timeout, primary, primaryArgs...)
 	if err == nil {
 		return trimOutput(string(out))
 	}
 	if !isNotFound(err) {
 		return fmt.Sprintf("Error: %v\n%s", err, trimOutput(string(out)))
 	}
-	out, err = runCoding(fallback, fallbackArgs...)
+	out, err = runCodingContext(ctx, timeout, fallback, fallbackArgs...)
 	if err != nil {
 		return fmt.Sprintf("Error: %v\n%s", err, trimOutput(string(out)))
 	}
 	return trimOutput(out)
+}
+
+func codingToolTimeout(values []time.Duration) time.Duration {
+	if len(values) > 0 && values[0] > 0 {
+		return values[0]
+	}
+	return 2 * time.Minute
+}
+
+func contextualTool(tool *Tool, run ContextToolFunc) *Tool {
+	tool.ContextFn = run
+	tool.Fn = func(args map[string]any) string { return run(context.Background(), args) }
+	return tool
 }
 
 func isNotFound(err error) bool {
@@ -59,8 +79,24 @@ func trimOutput(s string) string {
 	return s
 }
 
-func makeListFilesTool() *Tool {
-	return &Tool{
+func makeListFilesTool(timeout ...time.Duration) *Tool {
+	deadline := codingToolTimeout(timeout)
+	run := func(ctx context.Context, args map[string]any) string {
+		dir, _ := args["path"].(string)
+		if dir == "" {
+			dir = "."
+		}
+		depth := 2
+		if d, ok := args["depth"].(float64); ok && d > 0 {
+			depth = int(d)
+		}
+		out, err := runCodingContext(ctx, deadline, "find", dir, "-maxdepth", fmt.Sprint(depth), "-not", "-path", "*/\\.*", "-not", "-path", "*/node_modules/*")
+		if err != nil {
+			out, _ = runCodingContext(ctx, deadline, "ls", "-la", dir)
+		}
+		return trimOutput(out)
+	}
+	return contextualTool(&Tool{
 		Name:        "list_files",
 		Description: "List files in a directory. Use to explore project structure before reading.",
 		Schema: map[string]any{
@@ -70,27 +106,23 @@ func makeListFilesTool() *Tool {
 				"depth": map[string]any{"type": "integer", "description": "How deep to descend (default: 2)"},
 			},
 		},
-		Fn: func(args map[string]any) string {
-			dir, _ := args["path"].(string)
-			if dir == "" {
-				dir = "."
-			}
-			depth := 2
-			if d, ok := args["depth"].(float64); ok && d > 0 {
-				depth = int(d)
-			}
-			out, err := runCoding("find", dir, "-maxdepth", fmt.Sprint(depth), "-not", "-path", "*/\\.*", "-not", "-path", "*/node_modules/*")
-			if err != nil {
-				// fallback: ls -la (depth 1 only)
-				out, _ = runCoding("ls", "-la", dir)
-			}
-			return trimOutput(string(out))
-		},
-	}
+	}, run)
 }
 
-func makeGrepTool() *Tool {
-	return &Tool{
+func makeGrepTool(timeout ...time.Duration) *Tool {
+	deadline := codingToolTimeout(timeout)
+	run := func(ctx context.Context, args map[string]any) string {
+		pattern, _ := args["pattern"].(string)
+		dir, _ := args["path"].(string)
+		if dir == "" {
+			dir = "."
+		}
+		return runCodingFallbackContext(ctx, deadline,
+			"rg", []string{"--no-heading", "-n", pattern, dir},
+			"grep", []string{"-rn", pattern, dir},
+		)
+	}
+	return contextualTool(&Tool{
 		Name:        "grep",
 		Description: "Search for a text pattern in files. Uses ripgrep (rg) if available, falls back to grep.",
 		Schema: map[string]any{
@@ -101,22 +133,24 @@ func makeGrepTool() *Tool {
 			},
 			"required": []string{"pattern"},
 		},
-		Fn: func(args map[string]any) string {
-			pattern, _ := args["pattern"].(string)
-			dir, _ := args["path"].(string)
-			if dir == "" {
-				dir = "."
-			}
-			return runCodingFallback(
-				"rg", []string{"--no-heading", "-n", pattern, dir},
-				"grep", []string{"-rn", pattern, dir},
-			)
-		},
-	}
+	}, run)
 }
 
-func makeGlobTool() *Tool {
-	return &Tool{
+func makeGlobTool(timeout ...time.Duration) *Tool {
+	deadline := codingToolTimeout(timeout)
+	run := func(ctx context.Context, args map[string]any) string {
+		pattern, _ := args["pattern"].(string)
+		dir, _ := args["path"].(string)
+		if dir == "" {
+			dir = "."
+		}
+		out, err := runCodingContext(ctx, deadline, "find", dir, "-name", pattern, "-not", "-path", "*/\\.*", "-not", "-path", "*/node_modules/*")
+		if err != nil {
+			return fmt.Sprintf("Error: %v", err)
+		}
+		return trimOutput(out)
+	}
+	return contextualTool(&Tool{
 		Name:        "glob",
 		Description: "Find files matching a glob pattern. Use to locate files by name (e.g., '*.go', '**/*_test.go').",
 		Schema: map[string]any{
@@ -127,23 +161,24 @@ func makeGlobTool() *Tool {
 			},
 			"required": []string{"pattern"},
 		},
-		Fn: func(args map[string]any) string {
-			pattern, _ := args["pattern"].(string)
-			dir, _ := args["path"].(string)
-			if dir == "" {
-				dir = "."
-			}
-			out, err := runCoding("find", dir, "-name", pattern, "-not", "-path", "*/\\.*", "-not", "-path", "*/node_modules/*")
-			if err != nil {
-				return fmt.Sprintf("Error: %v", err)
-			}
-			return trimOutput(string(out))
-		},
-	}
+	}, run)
 }
 
-func makeGitDiffTool() *Tool {
-	return &Tool{
+func makeGitDiffTool(timeout ...time.Duration) *Tool {
+	deadline := codingToolTimeout(timeout)
+	run := func(ctx context.Context, args map[string]any) string {
+		staged, _ := args["staged"].(bool)
+		gitArgs := []string{"diff"}
+		if staged {
+			gitArgs = append(gitArgs, "--cached")
+		}
+		out, err := runCodingContext(ctx, deadline, "git", gitArgs...)
+		if err != nil {
+			return fmt.Sprintf("Error: %v\n%s", err, trimOutput(out))
+		}
+		return trimOutput(out)
+	}
+	return contextualTool(&Tool{
 		Name:        "git_diff",
 		Description: "Show git diff (unstaged changes). Use 'staged' param for staged changes. Use after editing to verify what changed.",
 		Schema: map[string]any{
@@ -152,43 +187,39 @@ func makeGitDiffTool() *Tool {
 				"staged": map[string]any{"type": "boolean", "description": "Show staged changes instead of unstaged (default: false)"},
 			},
 		},
-		Fn: func(args map[string]any) string {
-			staged, _ := args["staged"].(bool)
-			var out string
-			var err error
-			if staged {
-				out, err = runCoding("git", "diff", "--cached")
-			} else {
-				out, err = runCoding("git", "diff")
-			}
-			if err != nil {
-				return fmt.Sprintf("Error: %v\n%s", err, trimOutput(out))
-			}
-			return trimOutput(out)
-		},
-	}
+	}, run)
 }
 
-func makeGitStatusTool() *Tool {
-	return &Tool{
+func makeGitStatusTool(timeout ...time.Duration) *Tool {
+	deadline := codingToolTimeout(timeout)
+	run := func(ctx context.Context, _ map[string]any) string {
+		out, err := runCodingContext(ctx, deadline, "git", "status", "--short")
+		if err != nil {
+			return fmt.Sprintf("Error: %v\n%s", err, trimOutput(out))
+		}
+		return trimOutput(out)
+	}
+	return contextualTool(&Tool{
 		Name:        "git_status",
 		Description: "Show git working tree status (short format). Use to see what files changed, are staged, or untracked.",
 		Schema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
 		},
-		Fn: func(args map[string]any) string {
-			out, err := runCoding("git", "status", "--short")
-			if err != nil {
-				return fmt.Sprintf("Error: %v\n%s", err, trimOutput(string(out)))
-			}
-			return trimOutput(string(out))
-		},
-	}
+	}, run)
 }
 
-func makeGraphifyQueryTool() *Tool {
-	return &Tool{
+func makeGraphifyQueryTool(timeout ...time.Duration) *Tool {
+	deadline := codingToolTimeout(timeout)
+	run := func(ctx context.Context, args map[string]any) string {
+		q, _ := args["question"].(string)
+		out, err := runCodingContext(ctx, deadline, "graphify", "query", q)
+		if err != nil {
+			return fmt.Sprintf("graphify query failed (is graphify installed and graphify-out/ present?): %v", err)
+		}
+		return trimOutput(out)
+	}
+	return contextualTool(&Tool{
 		Name:        "graphify_query",
 		Description: "Query the knowledge graph for codebase questions. Use BEFORE grep or read_file — answers are token-efficient. Requires graphify-out/ to exist.",
 		Schema: map[string]any{
@@ -198,19 +229,20 @@ func makeGraphifyQueryTool() *Tool {
 			},
 			"required": []string{"question"},
 		},
-		Fn: func(args map[string]any) string {
-			q, _ := args["question"].(string)
-			out, err := runCoding("graphify", "query", q)
-			if err != nil {
-				return fmt.Sprintf("graphify query failed (is graphify installed and graphify-out/ present?): %v", err)
-			}
-			return trimOutput(string(out))
-		},
-	}
+	}, run)
 }
 
-func makeGraphifyExplainTool() *Tool {
-	return &Tool{
+func makeGraphifyExplainTool(timeout ...time.Duration) *Tool {
+	deadline := codingToolTimeout(timeout)
+	run := func(ctx context.Context, args map[string]any) string {
+		concept, _ := args["concept"].(string)
+		out, err := runCodingContext(ctx, deadline, "graphify", "explain", concept)
+		if err != nil {
+			return fmt.Sprintf("graphify explain failed: %v", err)
+		}
+		return trimOutput(out)
+	}
+	return contextualTool(&Tool{
 		Name:        "graphify_explain",
 		Description: "Get a plain-language explanation of a concept/function/module from the knowledge graph.",
 		Schema: map[string]any{
@@ -220,19 +252,21 @@ func makeGraphifyExplainTool() *Tool {
 			},
 			"required": []string{"concept"},
 		},
-		Fn: func(args map[string]any) string {
-			c, _ := args["concept"].(string)
-			out, err := runCoding("graphify", "explain", c)
-			if err != nil {
-				return fmt.Sprintf("graphify explain failed: %v", err)
-			}
-			return trimOutput(string(out))
-		},
-	}
+	}, run)
 }
 
-func makeGraphifyPathTool() *Tool {
-	return &Tool{
+func makeGraphifyPathTool(timeout ...time.Duration) *Tool {
+	deadline := codingToolTimeout(timeout)
+	run := func(ctx context.Context, args map[string]any) string {
+		src, _ := args["source"].(string)
+		tgt, _ := args["target"].(string)
+		out, err := runCodingContext(ctx, deadline, "graphify", "path", src, tgt)
+		if err != nil {
+			return fmt.Sprintf("graphify path failed: %v", err)
+		}
+		return trimOutput(out)
+	}
+	return contextualTool(&Tool{
 		Name:        "graphify_path",
 		Description: "Find the relationship or shortest path between two concepts in the knowledge graph.",
 		Schema: map[string]any{
@@ -243,20 +277,20 @@ func makeGraphifyPathTool() *Tool {
 			},
 			"required": []string{"source", "target"},
 		},
-		Fn: func(args map[string]any) string {
-			src, _ := args["source"].(string)
-			tgt, _ := args["target"].(string)
-			out, err := runCoding("graphify", "path", src, tgt)
-			if err != nil {
-				return fmt.Sprintf("graphify path failed: %v", err)
-			}
-			return trimOutput(string(out))
-		},
-	}
+	}, run)
 }
 
-func makeCodegraphQueryTool() *Tool {
-	return &Tool{
+func makeCodegraphQueryTool(timeout ...time.Duration) *Tool {
+	deadline := codingToolTimeout(timeout)
+	run := func(ctx context.Context, args map[string]any) string {
+		search, _ := args["search"].(string)
+		out, err := runCodingContext(ctx, deadline, "codegraph", "query", search)
+		if err != nil {
+			return fmt.Sprintf("codegraph query failed (is codegraph installed?): %v", err)
+		}
+		return trimOutput(out)
+	}
+	return contextualTool(&Tool{
 		Name:        "codegraph_query",
 		Description: "Search for symbols (functions, types, methods) in the codebase. Use for finding definitions and references.",
 		Schema: map[string]any{
@@ -266,33 +300,26 @@ func makeCodegraphQueryTool() *Tool {
 			},
 			"required": []string{"search"},
 		},
-		Fn: func(args map[string]any) string {
-			s, _ := args["search"].(string)
-			out, err := runCoding("codegraph", "query", s)
-			if err != nil {
-				return fmt.Sprintf("codegraph query failed (is codegraph installed?): %v", err)
-			}
-			return trimOutput(string(out))
-		},
-	}
+	}, run)
 }
 
-func makeCodegraphSyncTool() *Tool {
-	return &Tool{
+func makeCodegraphSyncTool(timeout ...time.Duration) *Tool {
+	deadline := codingToolTimeout(timeout)
+	run := func(ctx context.Context, _ map[string]any) string {
+		out, err := runCodingContext(ctx, deadline, "codegraph", "sync")
+		if err != nil {
+			return fmt.Sprintf("codegraph sync failed: %v", err)
+		}
+		return trimOutput(out)
+	}
+	return contextualTool(&Tool{
 		Name:        "codegraph_sync",
 		Description: "Re-index the codebase for semantic search. Call after making code changes to keep the index fresh.",
 		Schema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
 		},
-		Fn: func(args map[string]any) string {
-			out, err := runCoding("codegraph", "sync")
-			if err != nil {
-				return fmt.Sprintf("codegraph sync failed: %v", err)
-			}
-			return trimOutput(string(out))
-		},
-	}
+	}, run)
 }
 
 // seedBuiltinSkills writes default skill and MCP config files if they don't exist.
@@ -313,112 +340,5 @@ func seedBuiltinSkills(home string) {
 	}
 }
 
-const codingSkill = `---
-name: coding
-description: "Full coding agent discipline — understand, plan, edit, verify. Use when writing, fixing, refactoring, or debugging code in any language."
-triggers:
-  - code
-  - fix
-  - refactor
-  - debug
-  - test
-  - build
-  - implement
-  - bug
-  - error
-  - deploy
-  - .go
-  - .py
-  - .js
-  - .ts
-  - .rs
-  - .rb
-  - .java
-  - .c
-  - .cpp
-  - .sh
-  - Makefile
-  - Dockerfile
----
-
-# Coding Agent
-
-You are in coding mode. When this skill is active, the assistant-mode STOP rule ("after 3 tool calls, STOP") does NOT apply. Coding tasks may require more tool calls — keep going until the task is done and verified.
-
-## Iron Laws
-
-1. **No edits without reading first.** Always read the file before changing it.
-2. **No completion claim without verification.** Run the command, see the output, THEN claim done.
-3. **No fix without root cause.** Symptom fixes are failure. Find why before patching what.
-4. **Always use absolute paths.** The system context provides the authoritative LOCAL WORKSPACE. Put new or staged projects there unless Abah names another path.
-
-## Phase 1: UNDERSTAND
-
-Goal: know the codebase before touching it.
-
-1. **Read project rules FIRST**: your first tool call MUST be read_file on AGENTS.md or CLAUDE.md if present. These contain critical project instructions.
-2. **Check graphify**: if graphify-out/ exists, graphify_query first — saves tokens.
-3. **Find relevant code**: codegraph_query for symbols, grep for patterns, glob for files.
-4. **Read before edit**: always read_file the target before edit_file. read_file returns up to 16000 bytes per call — use offset for large files.
-
-## Phase 2: PLAN (multi-file changes)
-
-For any change affecting >1 file or >20 lines:
-
-1. State approach in 1-2 lines.
-2. List files that change.
-3. For complex tasks: write a quick plan, ask confirmation.
-
-## Phase 3: EDIT
-
-1. One logical change at a time.
-2. read_file → edit_file (prefer over write_file for targeted edits).
-3. Treat LOCAL WORKSPACE as the stable editing boundary on every installation. Edit existing local files in place. For a remote file, reuse a matching workspace copy or stage it locally, verify there, then sync back once.
-4. Never generate a large file in one tool call. Use targeted edit_file replacements, or write_file with mode=overwrite for the first chunk and mode=append for later chunks.
-5. Small steps. Commit after each working change.
-
-## Phase 4: VERIFY
-
-Before saying "done":
-
-1. **Run tests**: bash the test command for the language (e.g., go test ./..., pytest, cargo test).
-2. **Check diff**: git_diff to confirm what changed.
-3. **If tests fail**: read error → fix root cause → re-verify. Symptom patches are failure.
-4. **Update index**: codegraph_sync and bash "graphify update ." after changes.
-
-## Debugging Sub-Protocol
-
-When facing a bug, test failure, or unexpected behavior:
-
-1. **Read error carefully** — stack traces, line numbers, error codes.
-2. **Reproduce** — can you trigger it reliably?
-3. **Check recent changes** — git_diff, git log.
-4. **Form ONE hypothesis** — "I think X because Y."
-5. **Test minimally** — smallest possible change to verify.
-6. **Fix root cause**, not symptom.
-7. **If 3+ fixes fail** — question the architecture, don't patch again.
-
-## Tool Reference
-
-| Goal | Tool |
-|------|------|
-| Understand codebase | graphify_query, graphify_explain, graphify_path |
-| Find symbols | codegraph_query |
-| Find patterns | grep |
-| Find files | glob, list_files |
-| Read code | read_file |
-| Edit code | edit_file, write_file |
-| Multi-edit | edit_file with edits: [{oldText, newText}, ...] |
-| Run commands | bash |
-| Check changes | git_diff, git_status |
-| Update index | codegraph_sync, bash "graphify update ." |
-| Library docs | MCP_context7_resolve_library_id, MCP_context7_query_docs |
-
-## Language-Specific Test Commands
-
-- Go: go test ./... or go test <pkg>
-- Python: pytest or python -m pytest
-- TypeScript/JS: npm test or npx jest
-- Rust: cargo test
-- Shell: shellcheck <script> or bash -n <script>
-`
+//go:embed assets/coding.SKILL.md
+var codingSkill string

@@ -76,8 +76,6 @@ var schemaStatements = []string{
 		next_action TEXT NOT NULL DEFAULT '',
 		updated_at TEXT DEFAULT (datetime('now'))
 	)`,
-	// Schema version tracking — _meta stores key/value pairs.
-	// Used by runMigrations() to gate versioned migrations.
 	`CREATE TABLE IF NOT EXISTS _meta (
 		key TEXT PRIMARY KEY,
 		value TEXT NOT NULL
@@ -112,11 +110,34 @@ func Connect(home string) *sql.DB {
 			panic(fmt.Sprintf("rebuild %s: %v (build with -tags sqlite_fts5)", table, err))
 		}
 	}
+	runMigrations(db)
 	_ = migrateChatLog(db)
 	_ = migrateFacts(db)
 	_ = migrateEpisodes(db)
-	runMigrations(db)
 	return db
+}
+
+// runMigrations gates versioned schema migrations by the _meta.schema_version key.
+// Legacy databases (no _meta table yet) start at version 0.
+// Each migration runs only if current < its target version, then bumps the version.
+func runMigrations(db *sql.DB) {
+	var current int
+	err := db.QueryRow("SELECT value FROM _meta WHERE key = 'schema_version'").Scan(&current)
+	if err != nil {
+		current = 0 // fresh DB or pre-versioning DB
+		db.Exec("INSERT OR IGNORE INTO _meta (key, value) VALUES ('schema_version', '0')")
+	}
+
+	// Example for future migrations:
+	// if current < 2 {
+	//     db.Exec("ALTER TABLE ... ADD COLUMN ...")
+	//     current = 2
+	// }
+
+	if current != CurrentSchemaVersion {
+		db.Exec("UPDATE _meta SET value = ? WHERE key = 'schema_version'", fmt.Sprint(CurrentSchemaVersion))
+		slog.Info("schema migrated", "from", current, "to", CurrentSchemaVersion)
+	}
 }
 
 func migrateChatLog(db *sql.DB) error {
@@ -198,27 +219,4 @@ func migrateEpisodes(db *sql.DB) error {
 		}
 	}
 	return nil
-}
-
-// runMigrations gates versioned schema migrations by the _meta.schema_version key.
-// Legacy databases (no _meta table yet) start at version 0.
-// Each migration runs only if current < its target version, then bumps the version.
-func runMigrations(db *sql.DB) {
-	var current int
-	err := db.QueryRow("SELECT value FROM _meta WHERE key = 'schema_version'").Scan(&current)
-	if err != nil {
-		current = 0 // fresh DB or pre-versioning DB
-		db.Exec("INSERT OR IGNORE INTO _meta (key, value) VALUES ('schema_version', '0')")
-	}
-
-	// Example for future migrations:
-	// if current < 2 {
-	//     db.Exec("ALTER TABLE ... ADD COLUMN ...")
-	//     current = 2
-	// }
-
-	if current != CurrentSchemaVersion {
-		db.Exec("UPDATE _meta SET value = ? WHERE key = 'schema_version'", fmt.Sprint(CurrentSchemaVersion))
-		slog.Info("schema migrated", "from", current, "to", CurrentSchemaVersion)
-	}
 }

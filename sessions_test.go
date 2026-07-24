@@ -65,6 +65,27 @@ func TestSessionListShowsGatewaySources(t *testing.T) {
 	}
 }
 
+func TestAddExchangePersistsFullToolArguments(t *testing.T) {
+	home := t.TempDir()
+	db := Connect(home)
+	defer db.Close()
+	settings := &Settings{Home: home, ContextChars: 100000}
+	mem := NewMemory(db, nil, settings)
+	session := NewSession(settings, mem)
+	session.Switch("full-args")
+	content := strings.Repeat("payload-", 120) + "tail-marker"
+	session.AddExchange("write it", "write it", "done", []ToolCall{{
+		Name: "write_file", Args: map[string]any{"path": "/tmp/file", "content": content}, Output: "ok",
+	}}, "test")
+	var persisted string
+	if err := db.QueryRow("SELECT content FROM chat_log WHERE session_id = 'full-args' AND role = 'assistant'").Scan(&persisted); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(persisted, "tail-marker") {
+		t.Fatal("persisted tool arguments were truncated")
+	}
+}
+
 // The old Telegram/dashboard race was fixed by funneling every gateway through
 // RespondFor with a per-conversation mutex. This pins that guarantee.
 func TestRespondForSerializesSameSession(t *testing.T) {
@@ -76,7 +97,7 @@ func TestRespondForSerializesSameSession(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond) // widen the race window
 		inFlight.Add(-1)
-		fmt.Fprint(w, `{"choices":[{"message":{"content":"","tool_calls":[{"id":"1","function":{"name":"complete_task","arguments":"{\"status\":\"complete\",\"reply\":\"ok\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+		fmt.Fprint(w, openAICompletionJSON("ok"))
 	}))
 	defer ts.Close()
 
@@ -113,6 +134,45 @@ func TestRespondForSerializesSameSession(t *testing.T) {
 	}
 }
 
+func TestCancelTurnInterruptsProviderRequest(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- struct{}{}
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer ts.Close()
+
+	s := &Settings{Home: t.TempDir(), MaxIter: 3, MaxTokens: 100, ContextChars: 100000, TopK: 4}
+	s.EnsureHome()
+	db := Connect(s.Home)
+	defer db.Close()
+	mem := NewMemory(db, nil, s)
+	w := &Core{Settings: s, DB: db, Client: fakePM(ts.URL), Memory: mem,
+		Tools: NewRegistry(), Sessions: NewSessionManager(s, mem)}
+
+	done := make(chan *LoopResult, 1)
+	go func() {
+		done <- w.RespondFor("cancel-me", "Investigate this", "test", nil, false)
+	}()
+	<-started
+	if !w.CancelTurn("cancel-me") {
+		t.Fatal("active turn was not cancellable")
+	}
+	select {
+	case result := <-done:
+		if result.Status != "cancelled" || result.Reply != "Stopped." {
+			t.Fatalf("result = %#v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled provider request did not return")
+	}
+	close(release)
+}
+
 // Images must reach the API as vision parts for the current turn only —
 // leaking base64 into history would blow the context budget every turn after.
 func TestImagesAttachToCurrentTurnOnly(t *testing.T) {
@@ -120,7 +180,7 @@ func TestImagesAttachToCurrentTurnOnly(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		bodies = append(bodies, string(b))
-		fmt.Fprint(w, `{"choices":[{"message":{"content":"","tool_calls":[{"id":"1","function":{"name":"complete_task","arguments":"{\"status\":\"complete\",\"reply\":\"ok\"}"}}]},"finish_reason":"tool_calls"}],"usage":{}}`)
+		fmt.Fprint(w, openAICompletionJSON("ok"))
 	}))
 	defer ts.Close()
 
@@ -157,7 +217,7 @@ func TestViewImageBecomesVisionContent(t *testing.T) {
 			fmt.Fprintf(w, `{"choices":[{"message":{"content":"","tool_calls":[{"id":"1","function":{"name":"view_image","arguments":%s}}]},"finish_reason":"tool_calls"}],"usage":{}}`, args)
 			return
 		}
-		fmt.Fprint(w, `{"choices":[{"message":{"content":"","tool_calls":[{"id":"2","function":{"name":"complete_task","arguments":"{\"status\":\"complete\",\"reply\":\"a scanned invoice\"}"}}]},"finish_reason":"tool_calls"}],"usage":{}}`)
+		fmt.Fprint(w, openAICompletionJSON("a scanned invoice"))
 	}))
 	defer ts.Close()
 
@@ -184,4 +244,10 @@ func fakePM(url string) *ProviderManager {
 		state:     map[string]*providerState{"fake": {}},
 		sticky:    map[string]string{}, now: time.Now, sleep: func(time.Duration) {},
 	}
+}
+
+func openAICompletionJSON(reply string) string {
+	args, _ := json.Marshal(map[string]string{"status": "complete", "reply": reply})
+	encoded, _ := json.Marshal(string(args))
+	return fmt.Sprintf(`{"choices":[{"message":{"content":"","tool_calls":[{"id":"finish","function":{"name":"complete_task","arguments":%s}}]},"finish_reason":"tool_calls"}],"usage":{}}`, encoded)
 }

@@ -1,12 +1,40 @@
 package main
 
-import "sync"
+import (
+	"context"
+	"sync"
+)
 
 // Conversation owns the mutable state for one long-running gateway session.
 type Conversation struct {
 	Session    *Session
 	Checkpoint *CheckpointManager
 	mu         sync.Mutex
+	activeMu   sync.Mutex
+	cancel     context.CancelFunc
+}
+
+func (c *Conversation) beginTurn(parent context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(parent)
+	c.activeMu.Lock()
+	c.cancel = cancel
+	c.activeMu.Unlock()
+	return ctx, func() {
+		cancel()
+		c.activeMu.Lock()
+		c.cancel = nil
+		c.activeMu.Unlock()
+	}
+}
+
+func (c *Conversation) cancelTurn() bool {
+	c.activeMu.Lock()
+	defer c.activeMu.Unlock()
+	if c.cancel == nil {
+		return false
+	}
+	c.cancel()
+	return true
 }
 
 type SessionManager struct {

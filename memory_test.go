@@ -103,6 +103,49 @@ func TestToolOutputStatus(t *testing.T) {
 	}
 }
 
+func TestDashboardToolStatusUsesRuntimeOutput(t *testing.T) {
+	tools := dashboardTools([]ToolCall{
+		{Name: "read_file", Output: "contents"},
+		{Name: "edit_file", Output: "Error: old text not found"},
+	})
+	if tools[0]["status"] != "ok" || tools[1]["status"] != "error" {
+		t.Fatalf("dashboard statuses = %#v", tools)
+	}
+}
+
+func TestStreamedToolCallsKeepProviderOrder(t *testing.T) {
+	openAI := strings.Join([]string{
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"b","function":{"name":"second","arguments":"{}"}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"first","arguments":"{}"}}]}}]}`,
+		`data: [DONE]`,
+	}, "\n")
+	anthropic := strings.Join([]string{
+		`data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"b","name":"second"}}`,
+		`data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","text":"{}"}}`,
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"a","name":"first"}}`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","text":"{}"}}`,
+	}, "\n")
+	tests := []struct {
+		name  string
+		parse func() (*LLMResponse, error)
+	}{
+		{"openai", func() (*LLMResponse, error) { return parseSSEStream(strings.NewReader(openAI), nil) }},
+		{"anthropic", func() (*LLMResponse, error) { return parseAnthropicStream(strings.NewReader(anthropic), nil) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response, err := tt.parse()
+			if err != nil {
+				t.Fatal(err)
+			}
+			uses := extractToolUses(response.Content)
+			if len(uses) != 2 || uses[0].Name != "first" || uses[1].Name != "second" {
+				t.Fatalf("tool order = %#v", uses)
+			}
+		})
+	}
+}
+
 func TestTraceTelemetryUsesRecordedDecisionsAndStatuses(t *testing.T) {
 	home := t.TempDir()
 	if err := os.Mkdir(filepath.Join(home, "traces"), 0700); err != nil {
@@ -112,11 +155,12 @@ func TestTraceTelemetryUsesRecordedDecisionsAndStatuses(t *testing.T) {
 		`{"type":"turn_start","ts":"2026-07-18T01:00:00Z","user_message":"remember me"}`,
 		`{"type":"tool","ts":"2026-07-18T01:00:01Z","tool":"recall","status":"ok"}`,
 		`{"type":"gate","ts":"2026-07-18T01:00:02Z","decision":"retrieve","reason":"recall tool invoked"}`,
-		`{"type":"turn_end","ts":"2026-07-18T01:00:03Z","reply":"done","iterations":2}`,
+		`{"type":"turn_end","ts":"2026-07-18T01:00:03Z","reply":"done","status":"complete","iterations":2}`,
 		`{"type":"turn_start","ts":"2026-07-18T02:00:00Z","user_message":"search"}`,
+		`{"type":"llm","ts":"2026-07-18T02:00:01Z","iteration":1,"in":120,"out":30,"selected_tools":8}`,
 		`{"type":"tool","ts":"2026-07-18T02:00:01Z","tool":"web_search","status":"error","output":"Extension error: timeout"}`,
 		`{"type":"gate","ts":"2026-07-18T02:00:02Z","decision":"skip","reason":"recall tool not invoked"}`,
-		`{"type":"turn_end","ts":"2026-07-18T02:00:03Z","reply":"failed","iterations":1}`,
+		`{"type":"turn_end","ts":"2026-07-18T02:00:03Z","reply":"failed","status":"blocked","iterations":1}`,
 	}, "\n") + "\n"
 	path := filepath.Join(home, "traces", time.Now().Format("2006-01-02")+".jsonl")
 	if err := os.WriteFile(path, []byte(trace), 0600); err != nil {
@@ -131,6 +175,42 @@ func TestTraceTelemetryUsesRecordedDecisionsAndStatuses(t *testing.T) {
 	if len(turns) != 2 || turns[0]["gate"].(map[string]any)["decision"] != "skip" || turns[1]["gate"].(map[string]any)["decision"] != "retrieve" {
 		t.Fatalf("turn gates were not reconstructed: %#v", turns)
 	}
+	if turns[0]["status"] != "blocked" || turns[0]["llm_calls"].([]map[string]any)[0]["selected_tools"] != float64(8) {
+		t.Fatalf("turn verification telemetry was not reconstructed: %#v", turns[0])
+	}
+}
+
+func TestRunLoopTraceIncludesSelectedToolCount(t *testing.T) {
+	home := t.TempDir()
+	if err := os.Mkdir(filepath.Join(home, "traces"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	tools := NewRegistry()
+	tools.Register(&Tool{
+		Name: "observe",
+		Schema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		Fn: func(map[string]any) string { return "ok" },
+	})
+	client := &fakeClient{script: []*LLMResponse{scriptedResp(
+		[]ContentBlock{finishBlock("complete", "done")},
+		"tool_use",
+	)}}
+	result := RunLoop(client, "trace", "", nil, tools, 2, 2048, nil, false, nil, home, nil)
+	if result.Status != "complete" {
+		t.Fatalf("loop status = %q", result.Status)
+	}
+	for _, event := range traceEvents(home) {
+		if event["type"] == "llm" {
+			if event["selected_tools"] != float64(1) {
+				t.Fatalf("selected_tools = %v, want 1", event["selected_tools"])
+			}
+			return
+		}
+	}
+	t.Fatal("llm trace event not written")
 }
 
 func TestUsageStatsIgnoresErrorTextInChatHistory(t *testing.T) {
@@ -476,5 +556,33 @@ func TestConsolidateDue(t *testing.T) {
 	db.QueryRow("SELECT COUNT(*) FROM facts").Scan(&facts)
 	if facts != 1 {
 		t.Fatalf("facts = %d after dup pass, want 1", facts)
+	}
+}
+
+func TestConsolidateDueLimitsLLMCallsPerPass(t *testing.T) {
+	calls := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"facts\":[{\"subject\":\"User\",\"content\":\"Has a durable preference\"}],\"episode\":\"A useful conversation\"}"},"finish_reason":"stop"}],"usage":{}}`)
+	}))
+	defer ts.Close()
+
+	home := t.TempDir()
+	db := Connect(home)
+	defer db.Close()
+	cfg := &Settings{Home: home, ConsolidateEvery: 1, ConsolidateLimit: 1, TopK: 4}
+	mem := NewMemory(db, fakePM(ts.URL), cfg)
+	for _, session := range []string{"a", "b"} {
+		mem.LogChat("user", "remember this", session, "test")
+		mem.LogChat("assistant", "noted", session, "test")
+	}
+	mem.ConsolidateDue()
+	if calls != 1 {
+		t.Fatalf("LLM calls = %d, want 1", calls)
+	}
+	var pending int
+	db.QueryRow("SELECT COUNT(*) FROM chat_log WHERE consolidated = 0").Scan(&pending)
+	if pending != 2 {
+		t.Fatalf("pending rows = %d, want one session left for the next pass", pending)
 	}
 }

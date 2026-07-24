@@ -1,8 +1,9 @@
 package main
 
 // MCP bridge (Model Context Protocol, DECISIONS.md §8).
-// Pure Go — loads server configs from ~/.mino/mcp.d/, connects via stdio,
-// discovers tools, and registers them prefixed as MCP_<server>_<tool>.
+// Pure Go — loads server configs from ~/.mino/mcp.d/, connects via stdio
+// or HTTP (SSE/StreamableHTTP), discovers tools, and registers them
+// prefixed as MCP_<server>_<tool>.
 
 import (
 	"context"
@@ -16,16 +17,17 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/client"
+	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
 type mcpServerConfig struct {
 	Name    string            `json:"name"`
-	Command string            `json:"command"` // stdio mode
-	Args    []string          `json:"args"`
-	Env     map[string]string `json:"env"`
-	URL     string            `json:"url"`     // SSE/HTTP remote mode
-	Headers map[string]string `json:"headers"` // e.g. x-api-key for hosted MCP
+	Command string            `json:"command"` // stdio transport
+	Args    []string          `json:"args"`    // stdio transport
+	Env     map[string]string `json:"env"`     // stdio transport
+	URL     string            `json:"url"`     // HTTP transport (SSE/streamable)
+	Headers map[string]string `json:"headers"` // HTTP transport headers (e.g. x-api-key)
 }
 
 type mcpActive struct {
@@ -91,12 +93,12 @@ func (b *MCPBridge) connect(cfg mcpServerConfig) {
 	var err error
 
 	if cfg.URL != "" {
-		// Remote SSE/HTTP MCP (e.g. hosted servers)
+		// HTTP transport (StreamableHTTP, which falls back to SSE)
+		var opts []transport.StreamableHTTPCOption
 		if len(cfg.Headers) > 0 {
-			c, err = client.NewSSEMCPClient(cfg.URL, client.WithHeaders(cfg.Headers))
-		} else {
-			c, err = client.NewSSEMCPClient(cfg.URL)
+			opts = append(opts, transport.WithHTTPHeaders(cfg.Headers))
 		}
+		c, err = client.NewStreamableHttpClient(cfg.URL, opts...)
 	} else {
 		env := os.Environ()
 		for k, v := range cfg.Env {

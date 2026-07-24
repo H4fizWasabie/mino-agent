@@ -63,7 +63,7 @@ func TestSkillCreateAndLifecycle(t *testing.T) {
 }
 
 func TestCodingSkillUsesWorkspaceAndChunkedWrites(t *testing.T) {
-	for _, want := range []string{"LOCAL WORKSPACE", "mode=overwrite", "mode=append", "sync back once"} {
+	for _, want := range []string{"LOCAL WORKSPACE", "mode=overwrite", "mode=append", "sync back once", "automatically rewrites supported noisy commands through RTK"} {
 		if !strings.Contains(codingSkill, want) {
 			t.Fatalf("coding skill missing %q", want)
 		}

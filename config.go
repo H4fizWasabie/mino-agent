@@ -26,7 +26,12 @@ type Settings struct {
 	ContextChars     int
 	MaxHistoryTurns  int // keep only last N turns (0 = unlimited, default 5)
 	MaxToolDescChars int // trim tool descriptions exceeding this (0 = no limit)
+	BashTimeout      time.Duration
+	CodingTimeout    time.Duration
+	SyncTimeout      time.Duration
+	ConsolidateLimit int
 	Telegram         string
+	TelegramChatID   int64  // only this Telegram chat may control Mino or receive notifications
 	Timezone         string // IANA timezone used for user-facing time and schedules
 }
 
@@ -58,7 +63,12 @@ func LoadSettings() *Settings {
 		ContextChars:     envInt("MINO_CONTEXT_CHARS", 100000),
 		MaxHistoryTurns:  envInt("MINO_MAX_HISTORY_TURNS", 5),
 		MaxToolDescChars: envInt("MINO_MAX_TOOL_DESC_CHARS", 0),
+		BashTimeout:      envDuration("MINO_BASH_TIMEOUT", 2*time.Minute),
+		CodingTimeout:    envDuration("MINO_CODING_TIMEOUT", 2*time.Minute),
+		SyncTimeout:      envDuration("MINO_SYNC_TIMEOUT", 5*time.Minute),
+		ConsolidateLimit: envInt("MINO_CONSOLIDATE_LIMIT", 2),
 		Telegram:         os.Getenv("TELEGRAM_BOT_TOKEN"),
+		TelegramChatID:   envInt64("MINO_TELEGRAM_CHAT_ID", 0),
 		Timezone:         envOr("MINO_TIMEZONE", "Asia/Kuala_Lumpur"),
 	}
 }
@@ -105,10 +115,28 @@ func envInt(key string, fallback int) int {
 	return fallback
 }
 
+func envInt64(key string, fallback int64) int64 {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
 func envFloat(key string, fallback float64) float64 {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.ParseFloat(v, 64); err == nil {
 			return n
+		}
+	}
+	return fallback
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
 		}
 	}
 	return fallback
