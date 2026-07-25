@@ -1,0 +1,23 @@
+[
+  {
+    "name": "read file on request",
+    "prompt": "Read the contents of eval/cases.json and tell me what's in it.",
+    "expected_tool": "read_file",
+    "must_not_loop": true,
+    "must_complete_in_n": 60
+  },
+  {
+    "name": "search web for fact",
+    "prompt": "Search the web for 'Mino AI agent GitHub' and tell me the first result.",
+    "expected_tool": "search_web",
+    "must_not_loop": true,
+    "must_complete_in_n": 60
+  },
+  {
+    "name": "recall memory",
+    "prompt": "Recall anything you know about me from memory.",
+    "expected_tool": "recall",
+    "must_not_loop": true,
+    "must_complete_in_n": 60
+  }
+]

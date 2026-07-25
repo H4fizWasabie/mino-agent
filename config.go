@@ -87,6 +87,13 @@ func defaultWorkspace() string {
 	return "."
 }
 
+func (s *Settings) DashboardPort() string {
+	if port := os.Getenv("MINO_DASHBOARD_PORT"); port != "" {
+		return port
+	}
+	return "7779"
+}
+
 func (s *Settings) Location() *time.Location {
 	if s != nil && s.Timezone != "" {
 		if loc, err := time.LoadLocation(s.Timezone); err == nil {

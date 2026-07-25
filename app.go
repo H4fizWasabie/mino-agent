@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"path/filepath"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"log/slog"
@@ -63,9 +64,10 @@ func NewCore() *Core {
 		PruneRecentFixes(s.Home, 7*24*time.Hour)
 	}
 	mem.skills = NewSkillLoader(s.Home, mem.embedder)
-	tools := BuildRegistry(db, s.Home, mem, s.Location())
+	tools := BuildRegistry(db, s.Home, s.Workspace, mem, s.Location())
 	tools.SetMaxDescChars(s.MaxToolDescChars)
 	tools.SetLogDB(db) // enable tool_calls table logging
+	tools.SetAuditLog(filepath.Join(s.Home, "audit.jsonl")) // §8.4: immutable audit log
 	LoadExtensions(s.Home, tools) // discover + register extension tools
 
 	if s.ConsolidateEvery > 0 {
@@ -115,7 +117,7 @@ func NewCore() *Core {
 
 	// Tool filter: use embeddings to send only relevant tools per turn
 	addDelegateTools(w)
-	coreTools := []string{"recall", "save_note", "read_file", "write_file", "edit_file", "bash", "request_approval", "resolve_approval", "project_get", "project_update", "delegate", "restore_files"}
+	coreTools := []string{"recall", "save_note", "read_file", "write_file", "edit_file", "bash", "request_approval", "resolve_approval", "project_get", "project_update", "delegate", "fan_out", "restore_files"}
 	toolFilter := NewToolFilter(coreTools, 8) // top 8 + 8 core = max 16 tools/turn
 	if mem.embedder != nil {
 		toolFilter.Index(tools.Schemas(), mem.embedder)
@@ -131,6 +133,9 @@ func NewCore() *Core {
 			w.sendNotification(result)
 		}
 	})
+
+	// Alert checker (§18.1): error rate + dead man's switch, every 5 minutes
+	go checkAlerts(db, w.sendAlertMessage, 5*time.Minute)
 
 	return w
 }
@@ -176,6 +181,16 @@ func (w *Core) sendNotification(result *LoopResult) {
 	w.notifyMu.RUnlock()
 	if notify != nil {
 		notify(result)
+	}
+}
+
+// sendAlertMessage sends a plain text alert to Telegram if configured.
+func (w *Core) sendAlertMessage(msg string) {
+	w.notifyMu.RLock()
+	notify := w.notifyTelegram
+	w.notifyMu.RUnlock()
+	if notify != nil {
+		notify(&LoopResult{Reply: msg})
 	}
 }
 
@@ -264,6 +279,8 @@ func isStopMessage(message string) bool {
 }
 
 func (w *Core) Close() {
+	stopAlerts()
 	closeTrace(w.Settings.Home)
+	w.Tools.CloseAuditLog()
 	w.DB.Close()
 }

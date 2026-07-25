@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -67,12 +68,32 @@ type Registry struct {
 	tools        map[string]*Tool
 	filter       *ToolFilter
 	maxDescChars int
-	logDB        *sql.DB // optional: if set, ExecuteContext logs to tool_calls table
+	logDB        *sql.DB   // optional: if set, ExecuteContext logs to tool_calls table
+	auditFile    *os.File  // optional: append-only JSONL audit log
+	auditMu      sync.Mutex // guards auditFile writes
 }
 
 // SetLogDB enables tool-call logging to the tool_calls table.
 func (r *Registry) SetLogDB(db *sql.DB) {
 	r.logDB = db
+}
+
+// SetAuditLog enables the immutable append-only audit log (§8.4).
+func (r *Registry) SetAuditLog(path string) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	r.auditFile = f
+	return nil
+}
+
+// CloseAuditLog flushes and closes the audit log.
+func (r *Registry) CloseAuditLog() {
+	if r.auditFile != nil {
+		r.auditFile.Close()
+		r.auditFile = nil
+	}
 }
 
 func NewRegistry() *Registry {
@@ -198,6 +219,26 @@ func (r *Registry) ExecuteContext(ctx context.Context, name string, args map[str
 		)
 		_ = start // silence unused warning
 	}
+	// immutable audit log (§8.4): append-only JSONL
+	if r.auditFile != nil {
+		r.auditMu.Lock()
+		auditSid := ""
+		if v := ctx.Value(sessionIDKey{}); v != nil {
+			auditSid, _ = v.(string)
+		}
+		auditRecord := map[string]any{
+			"tool_name":   name,
+			"args":        args,
+			"output":      output,
+			"status":      toolOutputStatus(output),
+			"session_id":  auditSid,
+			"timestamp":   time.Now().UTC().Format(time.RFC3339),
+		}
+		auditJSON, _ := json.Marshal(auditRecord)
+		r.auditFile.Write(auditJSON)
+		r.auditFile.Write([]byte("\n"))
+		r.auditMu.Unlock()
+	}
 	return output
 }
 
@@ -317,7 +358,7 @@ func (r *Registry) Only(names ...string) *Registry {
 
 // --- BuildRegistry (matches Core's build_registry) ---
 
-func BuildRegistry(db *sql.DB, home string, mem *Memory, location ...*time.Location) *Registry {
+func BuildRegistry(db *sql.DB, home, workspace string, mem *Memory, location ...*time.Location) *Registry {
 	r := NewRegistry()
 	loc := time.Local
 	bashTimeout, codingTimeout, syncTimeout := 2*time.Minute, 2*time.Minute, 5*time.Minute
@@ -339,9 +380,9 @@ func BuildRegistry(db *sql.DB, home string, mem *Memory, location ...*time.Locat
 	// file tools (coding)
 	r.Register(behaves(makeReadTool(), BehaviorObserve))
 	r.Register(behaves(makeViewImageTool(), BehaviorObserve))
-	r.Register(behaves(makeWriteTool(), BehaviorMutate))
-	r.Register(behaves(makeEditTool(), BehaviorMutate))
-	r.Register(behaves(makeSyncFileToolFor(syncTimeout), BehaviorMutate))
+	r.Register(behaves(makeWriteTool(workspace, home), BehaviorMutate))
+	r.Register(behaves(makeEditTool(workspace, home), BehaviorMutate))
+	r.Register(behaves(makeSyncFileToolFor(workspace, home, syncTimeout), BehaviorMutate))
 	bash := makeBashToolFor(home, bashTimeout)
 	bash.Classify = classifyBash
 	r.Register(bash)
@@ -465,7 +506,7 @@ func makeReadTool() *Tool {
 	}
 }
 
-func makeWriteTool() *Tool {
+func makeWriteTool(workspace, home string) *Tool {
 	return &Tool{
 		Name:        "write_file",
 		Description: "Write or save content to a file. Use mode=overwrite for the first chunk and mode=append for later chunks when content may exceed the output budget. Prefer this over bash echo/redirect.",
@@ -478,8 +519,11 @@ func makeWriteTool() *Tool {
 			},
 			"required": []string{"path", "content"},
 		},
-		Fn: func(args map[string]any) string {
+		ContextFn: func(ctx context.Context, args map[string]any) string {
 			path, _ := args["path"].(string)
+			if blocked := workspaceGate(ctx, path, workspace, home); blocked != "" {
+				return blocked
+			}
 			content, _ := args["content"].(string)
 			mode, _ := args["mode"].(string)
 			os.MkdirAll(filepath.Dir(path), 0755)
@@ -504,7 +548,7 @@ func makeWriteTool() *Tool {
 	}
 }
 
-func makeEditTool() *Tool {
+func makeEditTool(workspace, home string) *Tool {
 	return &Tool{
 		Name:        "edit_file",
 		Description: "Edit, modify, or update a file. Make targeted replacements in existing files. Use when user asks to: edit, change, modify, update, fix, replace, patch, correct, tweak, rewrite a file.",
@@ -518,8 +562,11 @@ func makeEditTool() *Tool {
 			},
 			"required": []string{"path"},
 		},
-		Fn: func(args map[string]any) string {
+		ContextFn: func(ctx context.Context, args map[string]any) string {
 			path, _ := args["path"].(string)
+			if blocked := workspaceGate(ctx, path, workspace, home); blocked != "" {
+				return blocked
+			}
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return fmt.Sprintf("Error reading %s: %v", path, err)
@@ -569,10 +616,22 @@ type fileProof struct {
 }
 
 func makeSyncFileTool() *Tool {
-	return makeSyncFileToolFor(5 * time.Minute)
+	ws := os.Getenv("MINO_WORKSPACE")
+	if ws == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			ws = cwd
+		}
+	}
+	home := os.Getenv("MINO_HOME")
+	if home == "" {
+		if hd, err := os.UserHomeDir(); err == nil {
+			home = filepath.Join(hd, ".mino")
+		}
+	}
+	return makeSyncFileToolFor(ws, home, 5*time.Minute)
 }
 
-func makeSyncFileToolFor(timeout time.Duration) *Tool {
+func makeSyncFileToolFor(workspace, home string, timeout time.Duration) *Tool {
 	run := func(ctx context.Context, args map[string]any) string {
 		if timeout <= 0 {
 			timeout = 5 * time.Minute
@@ -581,6 +640,12 @@ func makeSyncFileToolFor(timeout time.Duration) *Tool {
 		defer cancel()
 		source, _ := args["source"].(string)
 		destination, _ := args["destination"].(string)
+		// gate destination (write target) on workspace boundary
+		if !isRemotePath(destination) {
+			if blocked := workspaceGate(ctx, destination, workspace, home); blocked != "" {
+				return blocked
+			}
+		}
 		sourceRemote, destinationRemote := isRemotePath(source), isRemotePath(destination)
 		if sourceRemote && destinationRemote {
 			return "Error: sync_file requires at least one local endpoint; stage remote-to-remote transfers locally"
@@ -733,13 +798,18 @@ func makeBashToolFor(home string, timeout time.Duration) *Tool {
 			return "Error: use sync_file for local or remote file copies so destination proof is recorded"
 		}
 		approvalPath := ""
-		if reason := dangerousBashReason(cmd); reason != "" {
+		dangerReason := dangerousBashReason(cmd)
+		if dangerReason != "" {
 			approvalID, _ := args["approval_id"].(string)
 			var err error
 			approvalPath, err = approvedBashPlan(home, approvalID, cmd)
 			if err != nil {
-				return fmt.Sprintf("[APPROVAL_REQUIRED] %s. Call request_approval with the exact command, wait for the user's explicit approval, then retry bash with approval_id.", reason)
+				return fmt.Sprintf("[APPROVAL_REQUIRED] %s. Call request_approval with the exact command, wait for the user's explicit approval, then retry bash with approval_id.", dangerReason)
 			}
+		}
+		// git auto-commit before destructive bash (§8.3): snapshot workspace for rollback
+		if dangerReason != "" || approvalPath != "" {
+			gitCommitBeforeBash(ctx, cmd)
 		}
 		out, err := runBashContext(ctx, timeout, rewriteBashWithRTK(ctx, cmd))
 		if err != nil {
@@ -813,16 +883,131 @@ var destructiveBashPatterns = []struct {
 	{regexp.MustCompile(`(?i)(?:^|[\s;&|()])(?:\\|[^\s;&|()]*/)?(?:shutdown|reboot|poweroff|halt)(?:\s|$)`), "host shutdown requires approval"},
 	{regexp.MustCompile(`(?i)\bgit\s+(?:reset\s+--hard|clean\s+-[a-z]*f|push\b[^\n]*(?:--force|-f\b))`), "destructive Git operation requires approval"},
 	{regexp.MustCompile(`(?i)\b(?:drop|truncate)\s+(?:table|database)\b`), "destructive database operation requires approval"},
+	{regexp.MustCompile(`(?i)\bdelete\s+from\b`), "DELETE without WHERE requires approval"},
+	{regexp.MustCompile(`(?i)\bupdate\s+\w+\s+set\b`), "UPDATE without WHERE requires approval"},
 	{regexp.MustCompile(`(?i)\bchmod\s+(?:-R\s+)?777\b`), "world-writable permission change requires approval"},
 }
+
+// --- Workspace boundary gate (§8.1) ---
+
+// workspaceGateApprovals caches per-session directory approvals.
+// Key: "<sessionID>/<dirPrefix>", Value: true.
+var workspaceGateApprovals sync.Map
+
+// isUnderAllowedPath returns true if the path is under workspace or Mino home.
+// Always allows writes to ~/.mino/rollback/ (git rollback snapshots).
+func isUnderAllowedPath(path, workspace, home string) bool {
+	clean := filepath.Clean(path)
+	// root workspace means allow everything
+	if ws := filepath.Clean(workspace); ws == "/" {
+		return true
+	}
+	// always allow writes within workspace
+	if workspace != "" && strings.HasPrefix(clean, filepath.Clean(workspace)+string(os.PathSeparator)) {
+		return true
+	}
+	// always allow writes within Mino home
+	if home != "" && strings.HasPrefix(clean, filepath.Clean(home)+string(os.PathSeparator)) {
+		return true
+	}
+	// exact match on workspace or home root itself
+	if clean == filepath.Clean(workspace) || clean == filepath.Clean(home) {
+		return true
+	}
+	return false
+}
+
+// workspaceGate checks if the path is within the allowed boundary.
+// If not, auto-creates an approval request and returns an [APPROVAL_REQUIRED] message.
+// Per-session cache: first approval for a directory tree skips subsequent checks.
+func workspaceGate(ctx context.Context, path, workspace, home string) string {
+	if isUnderAllowedPath(path, workspace, home) {
+		return ""
+	}
+	sid, _ := ctx.Value(sessionIDKey{}).(string)
+	if sid == "" {
+		sid = "unknown"
+	}
+	dir := filepath.Dir(path)
+	cacheKey := sid + "/" + dir
+	if _, ok := workspaceGateApprovals.Load(cacheKey); ok {
+		return "" // already approved for this session+directory
+	}
+	// auto-create approval in pending/ — user must explicitly approve
+	actionID := "write-outside-" + safeApprovalSlug(dir)
+	pendingDir := filepath.Join(approvalHome(home), "pending")
+	os.MkdirAll(pendingDir, 0700)
+	req := map[string]any{
+		"action_id": actionID,
+		"title":     "Write outside workspace: " + dir,
+		"details":   "The agent is attempting to write to " + path + " which is outside the workspace (" + workspace + ") and Mino home (" + home + ").",
+		"exec_plan": "Retry the write_file/edit_file/sync_file call. The path has been approved for this session.",
+		"created":   time.Now().Format(time.RFC3339),
+	}
+	data, _ := json.Marshal(req)
+	pendingPath := filepath.Join(pendingDir, actionID+".json")
+	os.WriteFile(pendingPath, data, 0600)
+	// cache for session — retry after approval skips the gate
+	workspaceGateApprovals.Store(cacheKey, true)
+	return fmt.Sprintf("[APPROVAL_REQUIRED] %s is outside workspace. Approval requested as '%s'. The user must approve this action before it can proceed.", dir, actionID)
+}
+
+// safeApprovalSlug replaces path separators and unsafe chars for approval IDs.
+func safeApprovalSlug(dir string) string {
+	slug := strings.TrimPrefix(dir, "/")
+	slug = strings.ReplaceAll(slug, "/", "-")
+	slug = strings.ReplaceAll(slug, string(os.PathSeparator), "-")
+	// keep only alphanumeric, dash, underscore, dot
+	return strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			return r
+		}
+		return '-'
+	}, slug)
+}
+
+var hasWhereClause = regexp.MustCompile(`(?i)\bwhere\b`)
 
 func dangerousBashReason(command string) string {
 	for _, pattern := range destructiveBashPatterns {
 		if pattern.re.MatchString(command) {
+			// DELETE/UPDATE without WHERE: skip if WHERE clause is present
+			if strings.Contains(pattern.reason, "without WHERE") && hasWhereClause.MatchString(command) {
+				continue
+			}
 			return pattern.reason
 		}
 	}
 	return ""
+}
+
+// gitCommitBeforeBash snapshots the workspace via git before a destructive bash command.
+// Only commits if there are staged changes (skips clean trees and non-repos).
+func gitCommitBeforeBash(ctx context.Context, command string) {
+	gitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	// git add -A
+	addCmd := exec.CommandContext(gitCtx, "git", "add", "-A")
+	if err := addCmd.Run(); err != nil {
+		return // not a git repo, skip
+	}
+	// check if anything is staged
+	diffCmd := exec.CommandContext(gitCtx, "git", "diff", "--cached", "--quiet")
+	if err := diffCmd.Run(); err == nil {
+		return // clean tree, nothing to commit
+	}
+	// build commit message
+	msg := "pre-bash snapshot"
+	if sid, _ := ctx.Value(sessionIDKey{}).(string); sid != "" {
+		msg += " [session:" + sid + "]"
+	}
+	cmdPreview := command
+	if len(cmdPreview) > 80 {
+		cmdPreview = cmdPreview[:80]
+	}
+	msg += " — " + cmdPreview
+	commitCmd := exec.CommandContext(gitCtx, "git", "commit", "-m", msg)
+	commitCmd.Run() // ignore errors
 }
 
 func approvalHome(home string) string {

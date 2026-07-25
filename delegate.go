@@ -11,31 +11,30 @@ import (
 // delegateCacheTTL is how long a cached delegate result lives.
 const delegateCacheTTL = 1 * time.Hour
 
-func addDelegateTools(w *Core) {
-	run := func(prompt, contextBrief string) string {
-		// check cache first
-		if cached := delegateCacheLookup(w.DB, prompt); cached != "" {
-			return cached
-		}
-
-		id := fmt.Sprintf("delegate-%d", time.Now().UnixNano())
-		// worker tools: read, search, fetch for investigation; recall for context; save_note to persist findings
-		tools := w.Tools.Only("read_file", "bash", "search_web", "fetch_url", "recall", "save_note")
-
-		system := loadSoul(w.Settings.Home) + "\n\nYou are an ephemeral worker. Investigate the request, use only the available tools, and return a concise answer."
-		if contextBrief != "" {
-			system += "\n\nContext from the main agent:\n" + contextBrief
-		}
-		system += "\n\nRules:\n- Use recall to check if relevant facts already exist.\n- Use save_note to persist findings the main agent will need.\n- Do not create schedules or send notifications.\n- Return a single concise answer, not a conversation."
-
-		result := RunLoop(w.Client, id, system, []Message{{Role: "user", Content: prompt}}, tools, min(10, w.Settings.MaxIter), w.Settings.MaxTokens, nil, false, nil, w.Settings.Home, nil)
-		output := compactToolOutput(w.Settings.Home, id, 1, "delegate", result.Reply)
-
-		// cache the result
-		delegateCacheStore(w.DB, prompt, output)
-
-		return output
+// runDelegate is the shared worker execution used by both delegate and fan_out.
+func runDelegate(w *Core, prompt, contextBrief string) string {
+	// check cache first
+	if cached := delegateCacheLookup(w.DB, prompt); cached != "" {
+		return cached
 	}
+
+	id := fmt.Sprintf("delegate-%d", time.Now().UnixNano())
+	tools := w.Tools.Only("read_file", "bash", "search_web", "fetch_url", "recall", "save_note")
+
+	system := loadSoul(w.Settings.Home) + "\n\nYou are an ephemeral worker. Investigate the request, use only the available tools, and return a concise answer."
+	if contextBrief != "" {
+		system += "\n\nContext from the main agent:\n" + contextBrief
+	}
+	system += "\n\nRules:\n- Use recall to check if relevant facts already exist.\n- Use save_note to persist findings the main agent will need.\n- Do not create schedules or send notifications.\n- Return a single concise answer, not a conversation."
+
+	result := RunLoop(w.Client, id, system, []Message{{Role: "user", Content: prompt}}, tools, min(10, w.Settings.MaxIter), w.Settings.MaxTokens, nil, false, nil, w.Settings.Home, nil)
+	output := compactToolOutput(w.Settings.Home, id, 1, "delegate", result.Reply)
+
+	delegateCacheStore(w.DB, prompt, output)
+	return output
+}
+
+func addDelegateTools(w *Core) {
 
 	w.Tools.Register(&Tool{
 		Name: "delegate",
@@ -51,7 +50,54 @@ func addDelegateTools(w *Core) {
 		Fn: func(args map[string]any) string {
 			prompt, _ := args["prompt"].(string)
 			contextBrief, _ := args["context"].(string)
-			return run(prompt, contextBrief)
+			return runDelegate(w, prompt, contextBrief)
+		},
+	})
+
+	// fan_out (§15): dispatch N delegates concurrently, collect results
+	w.Tools.Register(&Tool{
+		Name: "fan_out",
+		Description: "Dispatch multiple delegate workers in parallel. Each prompt runs in its own isolated context. Results are collected and returned in order. Use when you need to investigate several independent questions at once.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"prompts": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "List of investigation prompts, one per worker"},
+				"context": map[string]any{"type": "string", "description": "Optional shared context for all workers"},
+			},
+			"required": []string{"prompts"},
+		},
+		Fn: func(args map[string]any) string {
+			promptsRaw, _ := args["prompts"].([]any)
+			contextBrief, _ := args["context"].(string)
+			if len(promptsRaw) == 0 {
+				return "Error: prompts must be a non-empty array"
+			}
+			type indexedResult struct {
+				i      int
+				output string
+			}
+			ch := make(chan indexedResult, len(promptsRaw))
+			// cap concurrency at 10 to avoid overwhelming the provider
+			sem := make(chan struct{}, 10)
+			for i, p := range promptsRaw {
+				prompt, _ := p.(string)
+				go func(idx int, pr string) {
+					sem <- struct{}{}
+					defer func() { <-sem }()
+					ch <- indexedResult{idx, runDelegate(w, pr, contextBrief)}
+				}(i, prompt)
+			}
+			results := make([]string, len(promptsRaw))
+			for range promptsRaw {
+				r := <-ch
+				results[r.i] = r.output
+			}
+			var b strings.Builder
+			for i, out := range results {
+				prompt, _ := promptsRaw[i].(string)
+				b.WriteString(fmt.Sprintf("[%d/%d] %s: %s\n", i+1, len(results), prompt, out))
+			}
+			return b.String()
 		},
 	})
 }

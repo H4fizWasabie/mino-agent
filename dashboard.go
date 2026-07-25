@@ -73,6 +73,8 @@ func RunDashboard(w *Core) {
 	http.HandleFunc("/api/oauth/providers", handleOAuthProviders)
 	http.HandleFunc("/api/oauth/login/", handleOAuthLogin)
 	http.HandleFunc("/api/oauth/device/", handleOAuthDevice)
+	http.HandleFunc("/health", handleHealth)
+	http.HandleFunc("/metrics", handleMetrics)
 
 	// Telegram runs in main — don't double-start here
 
@@ -1502,4 +1504,44 @@ func traceTurns(home string) []map[string]any {
 		turns = turns[:50]
 	}
 	return turns
+}
+
+// --- Health and metrics endpoints (§18.2) ---
+
+var processStartTime = time.Now()
+
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":         "ok",
+		"version":        Version,
+		"uptime_seconds": int(time.Since(processStartTime).Seconds()),
+	})
+}
+
+func handleMetrics(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	var b strings.Builder
+	// uptime
+	b.WriteString(fmt.Sprintf("mino_uptime_seconds %d\n", int(time.Since(processStartTime).Seconds())))
+	// tool calls from DB
+	if dashCore != nil && dashCore.DB != nil {
+		rows, err := dashCore.DB.Query(`SELECT tool_name, status, COUNT(*) FROM tool_calls WHERE created_at > datetime('now', '-1 hour') GROUP BY tool_name, status`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var name, status string
+				var count int
+				if rows.Scan(&name, &status, &count) == nil {
+					b.WriteString(fmt.Sprintf("mino_tool_calls_total{tool_name=%q,status=%q} %d\n", name, status, count))
+				}
+			}
+		}
+		// active sessions
+		var sessions int
+		if dashCore.DB.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&sessions) == nil {
+			b.WriteString(fmt.Sprintf("mino_active_sessions %d\n", sessions))
+		}
+	}
+	w.Write([]byte(b.String()))
 }

@@ -4,7 +4,10 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -20,6 +23,9 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "eval":
+			s := LoadSettings()
+			os.Exit(RunEval(s.Home))
 		}
 	}
 
@@ -41,6 +47,11 @@ func main() {
 	defer w.Close()
 	w.Scheduler.Start()
 	defer w.Scheduler.Stop()
+
+	// Auto-open browser on first run (onboarding §16)
+	if needsOnboarding(w.Settings.Home) {
+		go autoOpenBrowser(w.Settings.DashboardPort())
+	}
 
 	// Telegram runs alone unless a dashboard port is configured too.
 	if w.Settings.Telegram != "" {
@@ -84,4 +95,21 @@ func runCLI(w *Core) {
 		result := w.Respond(input, "cli", nil, false)
 		fmt.Printf("\n%s\n", result.Reply)
 	}
+}
+
+// autoOpenBrowser opens the dashboard URL in the default browser.
+// Runs in a goroutine with a short delay to let the HTTP server start.
+func autoOpenBrowser(port string) {
+	time.Sleep(500 * time.Millisecond)
+	url := "http://localhost:" + port
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "linux":
+		cmd = exec.Command("xdg-open", url)
+	case "darwin":
+		cmd = exec.Command("open", url)
+	default:
+		return // windows/other: skip
+	}
+	cmd.Start()
 }

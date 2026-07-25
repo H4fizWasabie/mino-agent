@@ -76,7 +76,7 @@ func makeTestHome(t *testing.T) string {
 func makeEvalTools(home string) *Registry {
 	db := Connect(home)
 	mem := NewMemory(db, nil, &Settings{Home: home, TopK: 4, ConsolidateEvery: 0})
-	return BuildRegistry(db, home, mem)
+	return BuildRegistry(db, home, "/", mem)
 }
 
 // --- Tests ---
@@ -506,8 +506,8 @@ func TestTruncatedToolArgumentsAreNotExecuted(t *testing.T) {
 func TestToolArgumentsAreValidated(t *testing.T) {
 	tools := NewRegistry()
 	tools.Register(makeBashTool())
-	tools.Register(makeWriteTool())
-	tools.Register(makeEditTool())
+	tools.Register(makeWriteTool("/", "/"))
+	tools.Register(makeEditTool("/", "/"))
 	tools.Register(makeReadTool())
 	tests := []struct {
 		name string
@@ -535,7 +535,7 @@ func TestToolArgumentsAreValidated(t *testing.T) {
 func TestWriteFileSupportsChunks(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "large.html")
 	tool := NewRegistry()
-	tool.Register(makeWriteTool())
+	tool.Register(makeWriteTool("/", "/"))
 	if got := tool.Execute("write_file", map[string]any{"path": path, "content": "first", "mode": "overwrite"}); !strings.HasPrefix(got, "Wrote ") {
 		t.Fatal(got)
 	}
@@ -549,6 +549,7 @@ func TestWriteFileSupportsChunks(t *testing.T) {
 }
 
 func TestSyncFileReturnsVerifiedReceipt(t *testing.T) {
+	t.Setenv("MINO_WORKSPACE", "/")
 	dir := t.TempDir()
 	source := filepath.Join(dir, "source.html")
 	destination := filepath.Join(dir, "nested", "destination.html")
@@ -587,7 +588,7 @@ func TestRawSCPRequiresStructuredTransferProof(t *testing.T) {
 func TestToolBehaviorMetadata(t *testing.T) {
 	tools := NewRegistry()
 	tools.Register(behaves(makeReadTool(), BehaviorObserve))
-	tools.Register(behaves(makeWriteTool(), BehaviorMutate))
+	tools.Register(behaves(makeWriteTool("/", "/"), BehaviorMutate))
 	bash := makeBashTool()
 	bash.Classify = classifyBash
 	tools.Register(bash)
@@ -758,6 +759,7 @@ func TestScheduleRejectsInvalidAndExactDuplicate(t *testing.T) {
 }
 
 func TestCopyFailureMakesSyncToolAvailable(t *testing.T) {
+	t.Setenv("MINO_WORKSPACE", "/")
 	home := makeTestHome(t)
 	source := filepath.Join(home, "source")
 	destination := filepath.Join(home, "destination")

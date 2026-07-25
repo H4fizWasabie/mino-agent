@@ -141,11 +141,11 @@ func (c *Client) create(ctx context.Context, model, reasoning string, messages [
 
 	if stream {
 		resp, err := parseSSEStream(resp.Body, onText)
-		c.logUsage(model, resp, startTime)
+		c.logUsage(ctx, model, resp, startTime)
 		return resp, err
 	}
 	resp2, err := parseResponse(resp.Body)
-	c.logUsage(model, resp2, startTime)
+	c.logUsage(ctx, model, resp2, startTime)
 	return resp2, err
 }
 
@@ -420,11 +420,11 @@ func (c *Client) createAnthropic(ctx context.Context, model string, messages []M
 
 	if stream {
 		resp, err := parseAnthropicStream(resp.Body, onText)
-		c.logUsage(model, resp, startTime)
+		c.logUsage(ctx, model, resp, startTime)
 		return resp, err
 	}
 	resp2, err := parseAnthropicResponse(resp.Body)
-	c.logUsage(model, resp2, startTime)
+	c.logUsage(ctx, model, resp2, startTime)
 	return resp2, err
 }
 
@@ -597,14 +597,19 @@ func parseAnthropicStream(r io.Reader, onText func(string)) (*LLMResponse, error
 }
 
 // logUsage appends a usage record to usage.jsonl (Core format)
-func (c *Client) logUsage(model string, resp *LLMResponse, startTime time.Time) {
+func (c *Client) logUsage(ctx context.Context, model string, resp *LLMResponse, startTime time.Time) {
 	if resp == nil || c.usageLogPath == "" {
 		return
+	}
+	sid := ""
+	if v := ctx.Value(sessionIDKey{}); v != nil {
+		sid, _ = v.(string)
 	}
 	record := map[string]any{
 		"ts":         time.Now().UTC().Format(time.RFC3339),
 		"provider":   "openai",
 		"model":      model,
+		"session_id": sid,
 		"in":         resp.Usage.InputTokens,
 		"out":        resp.Usage.OutputTokens,
 		"latency_ms": time.Since(startTime).Milliseconds(),

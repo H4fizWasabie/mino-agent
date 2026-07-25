@@ -15,6 +15,8 @@ One binary. One SQLite file. Your own AI assistant.
 - **Guardrails** — prefers specialized tools over bash, verifies file claims before completion
 - **MCP + Extensions** — plug in external tools via HTTP or stdio
 
+📋 **[DECISIONS.md](DECISIONS.md)** — architecture decisions, philosophy, and what NOT to build.
+
 ## Quickstart
 
 **No Go, no dependencies — just download and run:**

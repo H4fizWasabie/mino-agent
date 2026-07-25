@@ -12,6 +12,8 @@ Mino keeps it simple. Less code = less bugs.
 
 ## Setup
 
+Read **[DECISIONS.md](DECISIONS.md)** before contributing. It explains the architecture, philosophy, and what NOT to build.
+
 ```bash
 git clone https://github.com/H4fizWasabie/mino-agent
 cd mino-agent
