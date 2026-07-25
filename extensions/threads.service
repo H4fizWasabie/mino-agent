@@ -1,0 +1,14 @@
+[Unit]
+Description=Mino Threads Extension
+After=network.target
+
+[Service]
+Type=simple
+User=mino
+EnvironmentFile=/home/mino/.mino/mino.env
+ExecStart=/usr/local/bin/threads-extension
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

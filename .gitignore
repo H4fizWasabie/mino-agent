@@ -11,3 +11,4 @@ client_secret_*.json
 extensions/minowrap/minowrap
 .mino-test/
 graphify-out/
+extensions/threads/threads-extension

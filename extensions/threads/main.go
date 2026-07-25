@@ -60,10 +60,24 @@ func main() {
 	http.HandleFunc("/callback", handleCallback) // OAuth redirect lands here
 
 	go func() {
-		slog.Info("threads extension listening", "port", port)
-		if err := http.ListenAndServe(":"+port, nil); err != nil {
-			slog.Error("server error", "error", err)
-			os.Exit(1)
+		certDir := os.Getenv("MINO_HOME")
+		if certDir == "" {
+			certDir = os.Getenv("HOME") + "/.mino"
+		}
+		certFile := filepath.Join(certDir, "localhost.crt")
+		keyFile := filepath.Join(certDir, "localhost.key")
+		if _, err := os.Stat(certFile); err == nil {
+			slog.Info("threads extension listening (TLS)", "port", port)
+			if err := http.ListenAndServeTLS(":"+port, certFile, keyFile, nil); err != nil {
+				slog.Error("server error", "error", err)
+				os.Exit(1)
+			}
+		} else {
+			slog.Info("threads extension listening", "port", port)
+			if err := http.ListenAndServe(":"+port, nil); err != nil {
+				slog.Error("server error", "error", err)
+				os.Exit(1)
+			}
 		}
 	}()
 
@@ -156,11 +170,14 @@ func handleAuth(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Set THREADS_APP_ID and THREADS_APP_SECRET", 500)
 		return
 	}
+	// Threads OAuth requires state param for security
+	state := fmt.Sprintf("%d", time.Now().UnixNano())
 	authURL := fmt.Sprintf(
-		"https://www.threads.net/oauth/authorize?client_id=%s&redirect_uri=%s&scope=%s&response_type=code",
+		"https://www.threads.net/oauth/authorize?client_id=%s&redirect_uri=%s&scope=%s&response_type=code&state=%s",
 		appID,
 		url.QueryEscape(redirectURI),
 		"threads_basic,threads_content_publish,threads_manage_replies",
+		state,
 	)
 	http.Redirect(w, r, authURL, 302)
 }
@@ -172,7 +189,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Exchange code for short-lived token
+	// Step 1: Exchange code for short-lived token via Threads endpoint
 	data := url.Values{
 		"client_id":     {appID},
 		"client_secret": {appSecret},
@@ -186,13 +203,18 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
 	var short struct {
 		AccessToken string `json:"access_token"`
 		UserID      string `json:"user_id"`
 	}
-	json.NewDecoder(resp.Body).Decode(&short)
+	json.Unmarshal(body, &short)
+	if short.AccessToken == "" {
+		http.Error(w, "token exchange failed: "+string(body), 500)
+		return
+	}
 
-	// Exchange for long-lived (60 day) token
+	// Step 2: Exchange for long-lived (60 day) token
 	llData := url.Values{
 		"client_secret": {appSecret},
 		"grant_type":    {"th_exchange_token"},
@@ -204,13 +226,17 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer llResp.Body.Close()
+	llBody, _ := io.ReadAll(llResp.Body)
 	var long struct {
 		AccessToken string `json:"access_token"`
 		ExpiresIn   int    `json:"expires_in"`
 	}
-	json.NewDecoder(llResp.Body).Decode(&long)
+	json.Unmarshal(llBody, &long)
+	if long.AccessToken == "" {
+		http.Error(w, "long-lived exchange failed: "+string(llBody), 500)
+		return
+	}
 
-	// Save it
 	tok := tokenData{
 		AccessToken:   long.AccessToken,
 		ThreadsUserID: short.UserID,
