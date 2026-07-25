@@ -90,7 +90,7 @@ func NewCore() *Core {
 	}
 
 	dashHost := os.Getenv("MINO_DASHBOARD_HOST")
-	dashPort := envOr("MINO_DASHBOARD_PORT", "7777")
+	dashPort := s.DashboardPort()
 	if dashHost == "" {
 		dashHost = "127.0.0.1"
 	}

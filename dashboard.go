@@ -79,13 +79,22 @@ func RunDashboard(w *Core) {
 
 	// Telegram runs in main — don't double-start here
 
-	port := "7777"
+	port := dashCore.Settings.DashboardPort()
 	if p := os.Getenv("MINO_DASHBOARD_PORT"); p != "" {
 		port = p
 	}
 	host := os.Getenv("MINO_DASHBOARD_HOST")
 	addr := net.JoinHostPort(host, port)
 	slog.Info("dashboard", "addr", addr)
+	url := "http://" + addr
+	if strings.HasPrefix(addr, ":") {
+		url = "http://localhost" + addr
+	}
+	if needsOnboarding(dashCore.Settings.Home) {
+		fmt.Printf("\n  Mino is ready!\n  Open: %s\n  First run — onboarding will guide you.\n\n", url)
+	} else {
+		fmt.Printf("\n  Mino is ready!\n  Open: %s\n\n", url)
+	}
 	http.ListenAndServe(addr, nil)
 }
 
