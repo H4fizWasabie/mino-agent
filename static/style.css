@@ -1,13 +1,13 @@
   :root{
     --bg:#f5f6fb;--panel:#ffffff;--line:#e4e7f0;--line2:#d4d9e6;
-    --ink:#171a2b;--ink2:#626a80;--ink3:#9299ad;
+    --ink:#171a2b;--ink2:#626a80;--ink3:#9299ad;--ink-dim:#9299ad;
     --accent:#5e6ad2;--accent-soft:#eef0ff;--accent-deep:#3f49ad;
     --good:#21845b;--good-soft:#e8f6ef;--bad:#c0392b;--bad-soft:#faeceb;
     --mono:ui-monospace,'SF Mono',Menlo,monospace;
   }
   @media (prefers-color-scheme:dark){:root{
     --bg:#0d1020;--panel:#15192c;--line:#252b46;--line2:#343c5c;
-    --ink:#eef1ff;--ink2:#a6aec8;--ink3:#69728e;
+    --ink:#eef1ff;--ink2:#a6aec8;--ink3:#69728e;--ink-dim:#69728e;
     --accent:#8994ff;--accent-soft:#20264b;--accent-deep:#aab2ff;
     --good:#4cc38a;--good-soft:#12291d;--bad:#e5655a;--bad-soft:#331714;
   }}
@@ -432,4 +432,4 @@
 .provider-option:hover { background:var(--accent-soft); }
 .provider-option.active { font-weight:600; color:var(--accent); }
 .provider-reasoning { margin-right:8px; padding:4px 6px; border:1px solid var(--line); border-radius:5px; background:var(--bg); color:var(--ink); font-size:11px; }
-.onb-provider-buttons{display:flex;flex-direction:column;gap:10px;margin:16px 0 20px}.onb-btn{display:flex;align-items:center;gap:12px;padding:14px 18px;border:2px solid var(--line);border-radius:10px;background:var(--bg);cursor:pointer;font-size:15px;font-weight:600;text-align:left;transition:border-color .15s}.onb-btn:hover{border-color:var(--accent)}.onb-btn-icon{font-size:22px;width:36px;text-align:center;flex-shrink:0}.onb-btn span{display:block;font-size:12px;font-weight:400;color:var(--ink-dim)}.onb-btn-alt{border-style:dashed}.onb-telegram{margin-top:16px;padding:12px;border:1px solid var(--line);border-radius:8px}.onb-telegram summary{cursor:pointer;font-weight:600;font-size:14px}
+.onb-provider-buttons{display:flex;flex-direction:column;gap:10px;margin:16px 0 20px}.onb-btn{display:flex;align-items:center;gap:12px;padding:14px 18px;border:2px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);cursor:pointer;font-size:15px;font-weight:600;text-align:left;transition:border-color .15s}.onb-btn:hover{border-color:var(--accent)}.onb-btn-icon{font-size:22px;width:36px;text-align:center;flex-shrink:0}.onb-btn span{display:block;font-size:12px;font-weight:400;color:var(--ink-dim)}.onb-btn-alt{border-style:dashed}.onb-telegram{margin-top:16px;padding:12px;border:1px solid var(--line);border-radius:8px}.onb-telegram summary{cursor:pointer;font-weight:600;font-size:14px}
