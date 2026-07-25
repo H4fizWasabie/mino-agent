@@ -810,7 +810,7 @@ func makeBashToolFor(home string, timeout time.Duration) *Tool {
 		}
 		// git auto-commit before destructive bash (§8.3): snapshot workspace for rollback
 		if dangerReason != "" || approvalPath != "" {
-			gitCommitBeforeBash(ctx, cmd)
+			gitCommitBeforeBash(ctx, cmd, home)
 		}
 		out, err := runBashContext(ctx, timeout, rewriteBashWithRTK(ctx, cmd))
 		if err != nil {
@@ -984,9 +984,22 @@ func dangerousBashReason(command string) string {
 
 // gitCommitBeforeBash snapshots the workspace via git before a destructive bash command.
 // Only commits if there are staged changes (skips clean trees and non-repos).
-func gitCommitBeforeBash(ctx context.Context, command string) {
+// Skips if the git repo root doesn't match the Mino home/workspace (prevents
+// test pollution — test temp dirs aren't git repos, so the project repo would be committed).
+func gitCommitBeforeBash(ctx context.Context, command string, home string) {
 	gitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+
+	// Only commit if the repo root is within Mino's home/workspace.
+	// During tests, the CWD is the project repo but the workspace is a temp dir.
+	root, err := exec.CommandContext(gitCtx, "git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return // not a git repo
+	}
+	repoRoot := strings.TrimSpace(string(root))
+	if home == "" || !strings.HasPrefix(repoRoot, strings.TrimRight(home, "/")) {
+		return // repo is outside Mino's home — don't touch it
+	}
 	// git add -A
 	addCmd := exec.CommandContext(gitCtx, "git", "add", "-A")
 	if err := addCmd.Run(); err != nil {
