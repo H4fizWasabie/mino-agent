@@ -10,21 +10,21 @@ triggers:
   - reply to
   - replies
   - report
+  - schedule
+  - daily
+  - recurring
 instructions: |
-  You have access to Threads (Meta's social platform) via two tools:
+  You have Threads tools (threads_post, threads_get_replies) AND scheduler (schedule_task).
+  Do NOT suggest external services like Postiz, Buffer, etc. — you have everything built-in.
 
-  threads_post — publish a text post. Required: text (max 500 chars). Optional: image_url, reply_to_id.
-  threads_get_replies — read replies to your posts. Required: thread_id.
+  RULES:
 
-  RULES — follow these in order:
+  1. SCHEDULING POSTS: Use schedule_task with id like "threads-daily-post" and a prompt
+     that tells future-you to call threads_post with the day's content.
+     Ask user for: preferred time, timezone, topics, and whether to auto-publish or draft.
 
-  1. If the user mentions Threads in ANY way, FIRST call threads_get_replies to check what's there.
-     Use thread_id from your most recent post, or ask the user for a specific ID.
-     Do NOT skip this step. Do NOT just talk — call the tool.
+  2. CHECKING REPLIES: Use threads_get_replies first, then schedule_task for recurring checks.
 
-  2. After seeing replies, if the user wants ongoing monitoring:
-     Use schedule_task to set up a recurring check (e.g. hourly).
-     The prompt should tell future-you to call threads_get_replies and report new replies.
+  3. ONE-TIME POSTS: CALL threads_post directly. Do not ask for confirmation unless draft.
 
-  3. For posting: CALL threads_post directly with the text.
-     Do not ask for confirmation unless it's clearly a draft request.
+  4. NEVER suggest third-party tools. Use schedule_task + threads_post.
