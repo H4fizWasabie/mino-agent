@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -177,9 +178,12 @@ func RunLoopContext(
 			}
 			schemas = append(actionSchemas, completionTool)
 		}
+		// per-call deadline: prevent model hangs from blocking the loop forever
+		llmCtx, llmCancel := context.WithTimeout(ctx, 90*time.Second)
+		defer llmCancel()
 		contextClient, supportsContext := client.(contextLLMClient)
 		if stream && supportsContext {
-			resp, err = contextClient.StreamContext(ctx, sessionID, MainModel, messages, maxTokens, system, schemas, func(delta string) {
+			resp, err = contextClient.StreamContext(llmCtx, sessionID, MainModel, messages, maxTokens, system, schemas, func(delta string) {
 				notify(obs, "text", map[string]any{"delta": delta})
 			})
 		} else if stream {
@@ -187,7 +191,7 @@ func RunLoopContext(
 				notify(obs, "text", map[string]any{"delta": delta})
 			})
 		} else if supportsContext {
-			resp, err = contextClient.CreateContext(ctx, sessionID, MainModel, messages, maxTokens, system, schemas)
+			resp, err = contextClient.CreateContext(llmCtx, sessionID, MainModel, messages, maxTokens, system, schemas)
 		} else {
 			resp, err = client.Create(sessionID, MainModel, messages, maxTokens, system, schemas)
 		}
@@ -196,6 +200,18 @@ func RunLoopContext(
 				result.Reply = "Stopped."
 				result.Status = "cancelled"
 				return result
+			}
+			// LLM call timed out — nudge it to shorten its response
+			if errors.Is(err, context.DeadlineExceeded) {
+				noProgress++
+				logTrace(traceHome, "no_progress", map[string]any{"iteration": i, "count": noProgress, "reason": "llm deadline exceeded"})
+				if noProgress >= maxNoProgress {
+					result.Status = "stalled"
+					result.Reply = "(I stopped after repeated timeouts. The task remains incomplete.)"
+					return result
+				}
+				messages = append(messages, Message{Role: "user", Content: "Your previous response timed out. Summarize the key results concisely and call complete_task now."})
+				continue
 			}
 			result.Reply = fmt.Sprintf("(error: %v)", err)
 			result.Status = "error"
