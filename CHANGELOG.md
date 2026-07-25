@@ -1,18 +1,40 @@
 # Changelog
 
-## [Unreleased]
+## [v1.2.0] — Agent Intelligence Upgrade
 
-### Added
-- Context-aware memory ranking (§19) — `contextBoost` signal in `scoreFact` bumps facts overlapping with the active conversation turn. Formula: `0.45×similarity + 0.20×importance + 0.15×recency + 0.10×feedback + 0.10×contextBoost`.
-- Structured task plans (§20) — `TaskStep` struct + `Plan` field in `TaskSnapshot`. LLM declares plan via `complete_task`, harness persists and feeds back on restart.
-- Extension retry detection (§21) — trigram similarity on consecutive same-tool outputs triggers alert when extensions return similar useless results ≥3 times in 5 min.
-- Eval case auto-generation (§22) — two-tier confidence (`manual`/`auto`), dashboard thumbs-up endpoint, auto-harvest from completed tasks.
+### Added — New capabilities
+- **Safety guards** (§8) — four-layer protection: workspace boundary check, SQL gate, git auto-commit before destructive bash, immutable audit log (`~/.mino/audit.jsonl`).
+- **Fan-out** (§15) — `fan_out` tool spawns N parallel delegates with WaitGroup, aggregates results.
+- **Onboarding flow** (§16) — provider button grid (ChatGPT OAuth, Claude PKCE, manual key), auto-open browser, Telegram optional. No config needed to start.
+- **`mino eval` CLI** (§17) — reads `eval/cases.json`, runs against real LLM, judges behavior (not output), writes `eval_report.json`, exits 0/1 for CI.
+- **Observability** (§18) — alerting (error rate + dead man's switch), `/health` + `/metrics` (Prometheus), cost-per-session tracking, Telegram notifications.
+- **Context-aware memory ranking** (§19) — `contextBoost` signal in `scoreFact`. Formula: `0.45×sim + 0.20×imp + 0.15×rec + 0.10×fdbk + 0.10×ctx`.
+- **Structured task plans** (§20) — `TaskStep` struct + `Plan` field in `TaskSnapshot`. LLM declares plan via `complete_task`, harness persists and feeds back on restart.
+- **Extension retry detection** (§21) — trigram similarity on consecutive same-tool outputs, alert when stuck ≥3 calls.
+- **Eval auto-generation** (§22) — two-tier confidence (`manual`/`auto`), dashboard thumbs-up endpoint, auto-harvest from completed tasks.
+- **File rollback system** — `write_file`/`edit_file` snapshot originals, `restore_files` tool for session-level recovery.
+- **Text-embedded tool calls** — models without native function calling can write `[tool_call: name({...})]` in text.
+- **Startup message** — `Mino is ready! Open: http://localhost:7779` printed on launch.
+- **Cross-platform builds** — `build-release.sh` produces binaries for linux, darwin, windows (amd64/arm64).
 
 ### Changed
-- `maxReadOnlyStreak` changed from const to var, reads `MINO_MAX_READ_ONLY_STREAK` at init.
-- Restore the live Runtime Spine dashboard visualization so the public `mino-agent` repository matches the current Mino frontend.
-- Run Telegram and the dashboard together when a dashboard port is configured.
-- Link Telegram reply-to messages and scheduler notifications into the Telegram session context so short follow-ups resolve against the message the user actually answered.
+- Delegate worker upgraded with more tools, context injection, and response caching.
+- Batch skill embeddings in one API call instead of N.
+- Time string moved from system prompt to user message for cache stability.
+- `maxReadOnlyStreak` reads `MINO_MAX_READ_ONLY_STREAK` env var (default 5).
+- Dashboard and Telegram run together when port is configured.
+- Telegram reply-to messages and scheduler notifications linked into session context.
+
+### Fixed
+- LLM call hangs no longer block the loop (90s per-call deadline).
+- Approval keywords expanded for Telegram friendliness ("yes", "go ahead").
+- `reasoning_effort` passthrough for OpenAI-compatible providers.
+- Delegate registered before tool filter so it's always available.
+- Alert datetime format mismatch (SQLite vs RFC3339) — false silence alerts stopped.
+- `gitCommitBeforeBash` no longer pollutes project repo during tests.
+- `eval/cases.json` uses `MINO_HOME` path instead of CWD-relative.
+- Missing `--ink-dim` CSS variable — onboarding buttons now visible.
+- Default port unified to 7779 across all components.
 
 ## [v1.1.0] — Core Upgrade
 
