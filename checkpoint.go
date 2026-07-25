@@ -5,6 +5,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -14,20 +15,30 @@ import (
 
 const checkpointMaxAge = 30 * 24 * time.Hour
 
+// TaskStep — DECISIONS.md §20: structured plan step.
+type TaskStep struct {
+	Description string `json:"description"` // LLM-written summary
+	Tool        string `json:"tool"`        // tool called (or empty if pending)
+	Status      string `json:"status"`      // "done" | "active" | "pending"
+	Output      string `json:"output"`      // inline (≤8KB) or artifact ref (>8KB)
+}
+
 // TaskSnapshot saved after each tool execution.
 type TaskSnapshot struct {
-	Goal        string   `json:"goal"`
-	Round       int      `json:"round"`
-	ToolsUsed   []string `json:"tools_used"`
-	Discoveries []string `json:"discoveries"`
-	Status      string   `json:"status"` // "active" or "complete"
-	UpdatedAt   string   `json:"updated_at"`
+	Goal        string      `json:"goal"`
+	Round       int         `json:"round"`
+	ToolsUsed   []string    `json:"tools_used"`
+	Plan        []TaskStep  `json:"plan,omitempty"`
+	Discoveries []string    `json:"discoveries"`
+	Status      string      `json:"status"` // "active" or "complete"
+	UpdatedAt   string      `json:"updated_at"`
 }
 
 // CheckpointManager handles save/load/clear.
 type CheckpointManager struct {
 	home      string
 	sessionID string
+	plan      []TaskStep // §20: current plan from LLM
 	mu        sync.Mutex
 }
 
@@ -45,7 +56,14 @@ func (c *CheckpointManager) path() string {
 	return filepath.Join(c.taskDir(), c.sessionID+".json")
 }
 
-// Save writes a snapshot. Returns true if saved.
+// SetPlan stores the current task plan from the LLM.
+func (c *CheckpointManager) SetPlan(plan []TaskStep) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.plan = plan
+}
+
+// Save writes a snapshot.
 func (c *CheckpointManager) Save(goal string, round int, toolsUsed, discoveries []string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -56,6 +74,7 @@ func (c *CheckpointManager) Save(goal string, round int, toolsUsed, discoveries 
 		Goal:        goal,
 		Round:       round,
 		ToolsUsed:   toolsUsed,
+		Plan:        c.plan,
 		Discoveries: discoveries,
 		Status:      "active",
 		UpdatedAt:   time.Now().UTC().Format(time.RFC3339),
@@ -84,7 +103,19 @@ func (c *CheckpointManager) ResumePrompt() string {
 		return ""
 	}
 	data, _ := json.Marshal(t)
-	return "You were working on this before a restart:\n" + string(data) + "\n\nContinue."
+	prompt := "You were working on this before a restart:\n" + string(data) + "\n\nContinue."
+	if len(t.Plan) > 0 {
+		steps := "\nPlan progress:\n"
+		for _, s := range t.Plan {
+			steps += fmt.Sprintf("- [%s] %s", s.Status, s.Description)
+			if s.Tool != "" {
+				steps += fmt.Sprintf(" (tool: %s)", s.Tool)
+			}
+			steps += "\n"
+		}
+		prompt += steps
+	}
+	return prompt
 }
 
 // Clear retires a completed task.

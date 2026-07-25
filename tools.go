@@ -428,6 +428,7 @@ func BuildRegistry(db *sql.DB, home, workspace string, mem *Memory, location ...
 		},
 		Fn: func(args map[string]any) string {
 			query, _ := args["query"].(string)
+			mem.recallCtx = query // §19: conversation context for context_boost scoring
 			if mem.embedder != nil {
 				return mem.SemanticSearch(query, mem.embedder)
 			}

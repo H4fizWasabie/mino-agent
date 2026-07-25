@@ -35,18 +35,23 @@ func checkAlerts(db *sql.DB, notifyFn func(string), checkInterval time.Duration)
 		case <-ticker.C:
 			checkErrorRate(db, notifyFn)
 			checkSilence(db, notifyFn)
+			checkExtensionRetryLoops(db, notifyFn)
 		case <-alerts.stopCh:
 			return
 		}
 	}
 }
 
+// sqliteNow returns the current time formatted for SQLite datetime comparisons.
+// SQLite's datetime('now') produces "2006-01-02 15:04:05", not RFC3339.
+func sqliteNow() string { return time.Now().UTC().Format("2006-01-02 15:04:05") }
+
 func stopAlerts() {
 	close(alerts.stopCh)
 }
 
 func checkErrorRate(db *sql.DB, notifyFn func(string)) {
-	cutoff := time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+	cutoff := time.Now().Add(-1 * time.Hour).UTC().Format("2006-01-02 15:04:05")
 	var total, errors int
 	if err := db.QueryRow(
 		"SELECT COUNT(*) FROM tool_calls WHERE created_at > ?", cutoff,
@@ -88,7 +93,7 @@ func checkSilence(db *sql.DB, notifyFn func(string)) {
 	if hours <= 0 {
 		return
 	}
-	cutoff := time.Now().Add(-time.Duration(hours) * time.Hour).UTC().Format(time.RFC3339)
+	cutoff := time.Now().Add(-time.Duration(hours) * time.Hour).UTC().Format("2006-01-02 15:04:05")
 	var count int
 	if err := db.QueryRow(
 		"SELECT COUNT(*) FROM tool_calls WHERE created_at > ?", cutoff,

@@ -144,6 +144,24 @@ func RunLoopContext(
 		notify(obs, "gate", map[string]any{"decision": decision, "reason": reason})
 		logTrace(traceHome, "gate", map[string]any{"decision": decision, "reason": reason})
 		logTrace(traceHome, "turn_end", map[string]any{"reply": result.Reply, "status": result.Status, "iterations": result.Iterations})
+
+		// §22: auto-harvest eval case from completed tasks (skip eval/test sessions)
+		if result.Status == "complete" && len(result.ToolCalls) > 0 && !strings.HasPrefix(sessionID, "eval") {
+			hasMutate := false
+			toolNames := make([]string, 0, len(result.ToolCalls))
+			for _, tc := range result.ToolCalls {
+				toolNames = append(toolNames, tc.Name)
+				if tools.BehaviorFor(tc.Name, tc.Args) == BehaviorMutate {
+					hasMutate = true
+				}
+			}
+			if hasMutate && len(messages) > 0 {
+				prompt := checkpointGoal
+				c := GenerateEvalCase(prompt, toolNames, "auto")
+				casesPath := filepath.Join(traceHome, "eval", "cases.json")
+				AppendEvalCase(casesPath, c)
+			}
+		}
 	}()
 
 	// build filter query once — tools needed don't change mid-loop
@@ -285,6 +303,27 @@ func RunLoopContext(
 			status, _ := args["status"].(string)
 			reply, _ := args["reply"].(string)
 			status, reply = strings.ToLower(strings.TrimSpace(status)), strings.TrimSpace(reply)
+			// §20: extract task plan from complete_task args
+			if rawPlan, ok := args["plan"]; ok && chk != nil {
+				if planArr, ok := rawPlan.([]any); ok {
+					plan := make([]TaskStep, 0, len(planArr))
+					for _, p := range planArr {
+						if pm, ok := p.(map[string]any); ok {
+							desc, _ := pm["description"].(string)
+							tool, _ := pm["tool"].(string)
+							stepStatus, _ := pm["status"].(string)
+							output, _ := pm["output"].(string)
+							if stepStatus == "" {
+								stepStatus = "pending"
+							}
+							plan = append(plan, TaskStep{Description: desc, Tool: tool, Status: stepStatus, Output: output})
+						}
+					}
+					if len(plan) > 0 {
+						chk.SetPlan(plan)
+					}
+				}
+			}
 			if (status == "complete" || status == "blocked") && reply != "" && (status == "blocked" || !unresolvedFailure && !unverifiedTransfer && !pendingApproval) {
 				// Verify claimed files exist before accepting completion
 				if status == "complete" {

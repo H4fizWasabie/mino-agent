@@ -75,6 +75,7 @@ func RunDashboard(w *Core) {
 	http.HandleFunc("/api/oauth/device/", handleOAuthDevice)
 	http.HandleFunc("/health", handleHealth)
 	http.HandleFunc("/metrics", handleMetrics)
+	http.HandleFunc("/api/eval/thumbs-up", handleEvalThumbsUp)
 
 	// Telegram runs in main — don't double-start here
 
@@ -573,6 +574,32 @@ func evalReport(home string) map[string]any {
 		return nil
 	}
 	return report
+}
+
+// handleEvalThumbsUp — §22: user clicks thumbs-up on a completed task in the dashboard.
+// Generates a manual eval case from the interaction.
+func handleEvalThumbsUp(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", 405)
+		return
+	}
+	var req struct {
+		Prompt    string   `json:"prompt"`
+		ToolsUsed []string `json:"tools_used"`
+	}
+	if json.NewDecoder(r.Body).Decode(&req) != nil || req.Prompt == "" {
+		http.Error(w, `{"error":"bad request"}`, 400)
+		return
+	}
+	c := GenerateEvalCase(req.Prompt, req.ToolsUsed, "manual")
+	casesPath := filepath.Join(LoadSettings().Home, "eval", "cases.json")
+	if err := AppendEvalCase(casesPath, c); err != nil {
+		slog.Warn("thumbs-up eval case write failed", "error", err)
+		http.Error(w, `{"error":"failed to save"}`, 500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"ok": true, "name": c.Name})
 }
 
 func databaseSnapshot(db *sql.DB, home string, all []string) map[string]any {

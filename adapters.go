@@ -449,6 +449,7 @@ type factHit struct {
 	subject, content, createdAt   string
 	importance, feedback          int
 	keyword, semantic, finalScore float64
+	contextBoost                  float64
 }
 
 func (m *Memory) hybridFactCandidates(query string, es *EmbeddingStore) []factHit {
@@ -489,8 +490,26 @@ func (m *Memory) hybridFactCandidates(query string, es *EmbeddingStore) []factHi
 			hits[hit.id] = hit
 		}
 	}
+	// context_boost (§19): term overlap between conversation context and fact subject+content
+	ctxTerms := make(map[string]struct{})
+	for _, t := range strings.FieldsFunc(m.recallCtx, func(r rune) bool {
+		return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_')
+	}) {
+		ctxTerms[strings.ToLower(t)] = struct{}{}
+	}
 	result := make([]factHit, 0, len(hits))
 	for _, hit := range hits {
+		if len(ctxTerms) > 0 {
+			overlap := 0
+			for _, t := range strings.FieldsFunc(hit.subject+" "+hit.content, func(r rune) bool {
+				return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_')
+			}) {
+				if _, ok := ctxTerms[strings.ToLower(t)]; ok {
+					overlap++
+				}
+			}
+			hit.contextBoost = min(1.0, float64(overlap)/float64(len(ctxTerms)))
+		}
 		hit.finalScore = scoreFact(hit)
 		result = append(result, hit)
 	}
@@ -518,7 +537,8 @@ func scoreFact(hit factHit) float64 {
 		created = time.Now()
 	}
 	recency := math.Exp(-max(0, time.Since(created).Hours()) / (24 * 180))
-	return 0.55*similarity + 0.20*importance + 0.15*recency + 0.10*feedback
+	// §19: five-signal ranking with context_boost
+	return 0.45*similarity + 0.20*importance + 0.15*recency + 0.10*feedback + 0.10*hit.contextBoost
 }
 
 func ftsTerms(query string) string {

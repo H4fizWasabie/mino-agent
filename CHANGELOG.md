@@ -3,9 +3,10 @@
 ## [Unreleased]
 
 ### Added
-- `MINO_MAX_READ_ONLY_STREAK` env var — caps consecutive read-only tool calls before nudging toward mutation (default 5). Raise for coding-heavy sessions.
-- Text-embedded tool call fallback parser — models without native function calling can write `[tool_call: name({...})]` in text and the loop executes it as a real tool call.
-- File rollback system — `write_file` and `edit_file` snapshot originals before mutation. `restore_files` tool restores a session's files to pre-session state. `restore_files --list` shows restorable sessions.
+- Context-aware memory ranking (§19) — `contextBoost` signal in `scoreFact` bumps facts overlapping with the active conversation turn. Formula: `0.45×similarity + 0.20×importance + 0.15×recency + 0.10×feedback + 0.10×contextBoost`.
+- Structured task plans (§20) — `TaskStep` struct + `Plan` field in `TaskSnapshot`. LLM declares plan via `complete_task`, harness persists and feeds back on restart.
+- Extension retry detection (§21) — trigram similarity on consecutive same-tool outputs triggers alert when extensions return similar useless results ≥3 times in 5 min.
+- Eval case auto-generation (§22) — two-tier confidence (`manual`/`auto`), dashboard thumbs-up endpoint, auto-harvest from completed tasks.
 
 ### Changed
 - `maxReadOnlyStreak` changed from const to var, reads `MINO_MAX_READ_ONLY_STREAK` at init.

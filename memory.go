@@ -19,6 +19,7 @@ type Memory struct {
 	cfg           *Settings
 	embedder      *EmbeddingStore
 	consolidateMu sync.Mutex
+	recallCtx     string // §19: conversation context for context_boost in scoreFact
 }
 
 func NewMemory(db *sql.DB, client *ProviderManager, cfg *Settings) *Memory {

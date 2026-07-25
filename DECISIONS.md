@@ -205,3 +205,85 @@ Priority order: alerting > health endpoint > cost breakdown > error trending.
 **Why:** A business user pays for API credits and relies on Mino for daily tasks. They need to know things are working without actively checking. Mino should be the first to tell you it's broken.
 
 **Revisit when:** Dashboard gains a dedicated observability tab, or when multi-user deployments need per-user cost attribution.
+
+## 19. Context-aware memory ranking
+
+Memory recall (`recall`) currently scores facts with a static four-signal formula:
+
+```
+finalScore = 0.55 × similarity + 0.20 × importance + 0.15 × recency + 0.10 × feedback
+```
+
+A fifth signal, `context_boost`, will be added — bumping facts whose subject overlaps with the active conversation turn (keyword or semantic match). The formula becomes:
+
+```
+finalScore = 0.45 × similarity + 0.20 × importance + 0.15 × recency + 0.10 × feedback + 0.10 × context_boost
+```
+
+The system prompt stays stable (cache-friendly). Facts are still pulled via `recall` on demand, not pre-injected.
+
+**What was skipped:** Dynamic fact injection into the system prompt before each turn (Option B). That approach gives better relevance — the harness knows the conversation topic before the LLM asks — but breaks prompt caching because the system prompt changes every turn.
+
+**Why not a reranker model:** Cross-encoder rerankers cost an API call per recall and add latency. For a single-user agent with a fact pool under ~1K entries, the weighted formula is free math on existing metadata and already gets ~95% of the value.
+
+**Revisit when:**
+- Anthropic prompt caching with `cache_control` markers is implemented (makes Option B cache-friendly)
+- Fact pool exceeds ~10K entries and `scoreFact` tuning plateaus (revisit reranker model)
+- `context_boost` tuning plateaus and relevance is still the bottleneck (revisit Option B)
+
+## 20. Structured task plans (checkpoint → plan)
+
+Replace the flat `ToolsUsed []string` in `TaskSnapshot` with a structured plan the LLM declares and the harness persists:
+
+```go
+type TaskStep struct {
+    Description string `json:"description"` // LLM-written summary
+    Tool        string `json:"tool"`        // tool called (or empty if pending)
+    Status      string `json:"status"`      // "done" | "active" | "pending"
+    Output      string `json:"output"`      // inline (≤8KB) or artifact ref (>8KB)
+}
+```
+
+The harness does NOT enforce dependencies — the LLM is the planner and knows how to sequence. The harness only persists and feeds back via the existing context assembly pipelines:
+
+- **Tool output compaction** (§artifacts.go): step outputs > 8KB become artifacts at `/tmp/mino/results/`, referenced by path
+- **User input compaction**: large user inputs get head/tail split
+- **History truncation**: last N turns only, earlier compacted
+- **Context budget**: hard cap via `ContextChars`
+
+The task plan becomes the fifth pillar of context — assembled by `ContextFor()` alongside facts, episodes, skills, and history.
+
+**What was skipped:** A DAG-based task graph with dependency enforcement (`blocks: [step2]`). The LLM is the planner; the harness is the notebook. No constraint validation, no tool gating.
+
+**Revisit when:** Multi-step tasks spanning tool categories become common and LLM sequencing errors are the bottleneck. A lightweight DAG with harness enforcement would be the upgrade path.
+
+## 21. Extension quality feedback loop
+
+Extension tools can return valid-looking but useless results — the LLM retries in a loop without the harness noticing. The existing error-rate alert (§18.1) only catches `status=error`, not silent quality failures.
+
+Two signals combined, both queryable from `tool_calls` + `created_at` timestamps (no turn/goal boundaries needed):
+
+1. **Consecutive same-tool calls.** If the same extension tool is called ≥3 times within a 5-minute window with no other extension call in between, flag as a retry loop.
+2. **Output similarity.** If the same tool's last 3 outputs within 10 minutes are >90% similar (Trigram or Jaccard on the first 500 chars), it's likely returning the same broken result.
+
+When both signals fire concurrently, trigger an alert: "[MINO ALERT] Extension `tool_name` appears stuck — 3+ similar consecutive calls in last 5 min."
+
+**What was skipped:** Turn/goal boundaries (not applicable to continuous sessions), user rejection parsing (fragile), tool dominance heuristic (add later if needed).
+
+**Revisit when:** The output similarity threshold needs tuning per extension, or when extension-specific quality baselines ("this tool normally takes 2 calls, 5+ is anomalous") become worth the complexity.
+
+## 22. Eval case auto-generation
+
+`eval/cases.json` is manually written. Auto-generate cases from real interactions to catch regressions without manual curation:
+
+1. **User-approved (primary).** Add a thumbs-up button to completed tasks in the dashboard. User clicks → auto-generate an eval case from that interaction: `{name, prompt, expected_tool, confidence: "manual"}`. These gate deploys — fail the build on regression.
+
+2. **Auto-harvest (background).** When `complete_task` fires with status=complete (not blocked), auto-generate a case from all tools called. Marked `confidence: "auto"` — run silently, report results, don't fail eval. Seeds the pool and surfaces anomalies without blocking deploys.
+
+Two tiers by confidence:
+- `manual`: user-verified, blocks deploys on failure
+- `auto`: harness-generated, reports only, doesn't block
+
+**Why not scheduled user review:** Adds friction. Thumbs-up is one click in the existing dashboard workflow. Auto-harvest is zero-touch.
+
+**Revisit when:** Auto-generated cases consistently disagree with manual cases (confidence scoring needs tuning), or the case pool exceeds ~100 entries (add sampling: N random cases per commit, full suite before release).
