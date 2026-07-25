@@ -7,11 +7,12 @@ VPS_USER="root"
 BINARY="./mino"
 MINO_HOME="/home/mino"
 BUILD_TAGS="${MINO_BUILD_TAGS:-}"
+VERSION="${MINO_VERSION:-$(git describe --tags --abbrev=0 2>/dev/null || echo dev)}"
 
 echo "=== Deploying Mino to $VPS ==="
 
 echo "--- Building Mino ($BUILD_TAGS) ---"
-go build -tags "$BUILD_TAGS" -o "$BINARY" .
+go build -tags "$BUILD_TAGS" -ldflags "-X main.Version=$VERSION" -o "$BINARY" .
 
 echo "--- Building minowrap ---"
 (cd extensions/minowrap && go build -o minowrap .)
