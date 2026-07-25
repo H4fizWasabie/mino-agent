@@ -24,6 +24,7 @@ type Skill struct {
 	LastUsedAt  float64  `json:"last_used_at"`
 	State       string   `json:"state"`
 	CreatedAt   float64  `json:"created_at"`
+	descEmb     []float32 `yaml:"-" json:"-"` // cached descriptor embedding
 }
 
 type SkillLoader struct {
@@ -111,18 +112,10 @@ func (sl *SkillLoader) semanticMatch(message string) []*Skill {
 	}
 	var candidates []skCandidate
 	for _, s := range sl.skills {
-		if s.State != "active" && s.State != "pinned" {
+		if s.State != "active" && s.State != "pinned" || len(s.descEmb) == 0 {
 			continue
 		}
-		text := s.Name + ": " + s.Description
-		if len(s.Triggers) > 0 {
-			text += ". Triggers: " + strings.Join(s.Triggers, ", ")
-		}
-		sEmb, err := sl.embedder.Embed(text)
-		if err != nil {
-			continue
-		}
-		candidates = append(candidates, skCandidate{s, cosineSimilarity(qEmb, sEmb)})
+		candidates = append(candidates, skCandidate{s, cosineSimilarity(qEmb, s.descEmb)})
 	}
 	sortSkCandidates(candidates)
 	var hits []*Skill
@@ -274,6 +267,7 @@ func (sl *SkillLoader) refresh() {
 			skill.UseCount = old.UseCount
 			skill.LastUsedAt = old.LastUsedAt
 			skill.State = old.State
+			skill.descEmb = old.descEmb // preserve cached embedding across refresh
 		}
 		if skill.State == "" {
 			skill.State = "active"
@@ -281,8 +275,48 @@ func (sl *SkillLoader) refresh() {
 		sl.skills[skill.Name] = skill
 		return nil
 	})
+	sl.cacheSkillEmbeddings()
 	skillWordCache = map[string]map[string]bool{}
 	sl.lastScan = time.Now()
+}
+
+// cacheSkillEmbeddings batch-embeds all skill descriptors so semanticMatch
+// only needs one query embedding per invocation.
+func (sl *SkillLoader) cacheSkillEmbeddings() {
+	if sl.embedder == nil {
+		return
+	}
+	type idx struct {
+		skill *Skill
+		text  string
+	}
+	var pending []idx
+	for _, s := range sl.skills {
+		if len(s.descEmb) > 0 {
+			continue // already cached from previous refresh
+		}
+		text := s.Name + ": " + s.Description
+		if len(s.Triggers) > 0 {
+			text += ". Triggers: " + strings.Join(s.Triggers, ", ")
+		}
+		pending = append(pending, idx{s, text})
+	}
+	if len(pending) == 0 {
+		return
+	}
+	texts := make([]string, len(pending))
+	for i, p := range pending {
+		texts[i] = p.text
+	}
+	embs, err := sl.embedder.EmbedBatch(texts)
+	if err != nil {
+		return
+	}
+	for i, p := range pending {
+		if i < len(embs) {
+			p.skill.descEmb = embs[i]
+		}
+	}
 }
 
 func (sl *SkillLoader) stale() bool {

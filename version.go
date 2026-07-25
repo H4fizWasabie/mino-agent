@@ -1,7 +1,6 @@
 package main
 
 import (
-	_ "embed"
 	"fmt"
 	"os"
 	"runtime"
@@ -9,9 +8,6 @@ import (
 
 // Version is set at build time via -ldflags "-X main.Version=v0.2.0"
 var Version = "dev"
-
-//go:embed go.mod
-var goMod []byte
 
 func printVersion() {
 	fmt.Printf("mino %s %s/%s\n", Version, runtime.GOOS, runtime.GOARCH)

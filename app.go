@@ -69,32 +69,19 @@ func NewCore() *Core {
 	LoadExtensions(s.Home, tools) // discover + register extension tools
 
 	if s.ConsolidateEvery > 0 {
-		// consolidation semaphore: at most one pass at a time
-		consolidateSem := make(chan struct{}, 1)
 		go func() { // 6-hour full consolidation pass
 			for {
 				time.Sleep(6 * time.Hour)
-				select {
-				case consolidateSem <- struct{}{}:
-					if n := mem.ConsolidateDue(); n > 0 {
-						slog.Info("consolidation", "new_facts", n)
-					}
-					<-consolidateSem
-				default:
-					slog.Info("consolidation skipped — previous pass still running")
+				if n := mem.ConsolidateDue(); n > 0 {
+					slog.Info("consolidation", "new_facts", n)
 				}
 			}
 		}()
 		go func() { // 5-minute threshold check — triggers when context nears 80% full
 			for {
 				time.Sleep(5 * time.Minute)
-				select {
-				case consolidateSem <- struct{}{}:
-					if n := mem.ConsolidateIfFull(s.ContextChars); n > 0 {
-						slog.Info("consolidation (threshold)", "new_facts", n)
-					}
-					<-consolidateSem
-				default:
+				if n := mem.ConsolidateIfFull(s.ContextChars); n > 0 {
+					slog.Info("consolidation (threshold)", "new_facts", n)
 				}
 			}
 		}()
