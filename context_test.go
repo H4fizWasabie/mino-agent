@@ -16,12 +16,12 @@ func TestBuildSystemUsesConfiguredTimezoneAndOffset(t *testing.T) {
 	if !strings.Contains(got, "LOCAL WORKSPACE (authoritative): /srv/mino-work") {
 		t.Fatalf("workspace missing: %q", got)
 	}
-	// Verify SOUL and completion prompt are present (cacheable prefix)
+	// Verify SOUL remains present in the cacheable prefix.
 	if !strings.Contains(got, "You are Mino") {
 		t.Fatalf("SOUL missing: %q", got[:100])
 	}
-	if !strings.Contains(got, "complete_task") {
-		t.Fatalf("completion prompt missing: %q", got[:100])
+	if strings.Contains(got, "complete_task") {
+		t.Fatalf("stale completion protocol present: %q", got[:100])
 	}
 }
 

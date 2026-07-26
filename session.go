@@ -86,7 +86,6 @@ func loadSoul(home string) string {
 func (s *Session) BuildSystem(userMessage, source string) string {
 	parts := []string{
 		loadSoul(s.settings.Home),
-		"\n" + completionPrompt,
 		fmt.Sprintf("\nLOCAL WORKSPACE (authoritative): %s\nThis overrides any hardcoded workspace path in a skill. Local files may be edited in place. Stage remote files here, verify locally, then sync them back once.", s.settings.Workspace),
 	}
 	if source == "telegram" {
