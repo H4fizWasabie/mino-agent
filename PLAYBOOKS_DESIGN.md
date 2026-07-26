@@ -3,131 +3,118 @@
 ## What is a playbook?
 
 A playbook is a repeatable procedure. One folder. Numbered markdown stages.
-The filesystem is the executor. Mino's loop walks the stages.
-
-A playbook answers **"how do I handle this?"** — the scheduler/project/checkpoint
-tells you **when**, the playbook tells you **how**.
-
-## Schema
+The filesystem is the executor. A runner walks the stages; each stage has
+a mini-loop with up to 3 retries.
 
 ```
 ~/.mino/playbooks/<name>/
-├── config.md       # description, schedule, shared values (optional)
+├── config.md       # description, shared values (optional)
 ├── 01-<verb>.md    # stage 1
 ├── 02-<verb>.md    # stage 2
-├── ...             # as many stages as needed
 └── output/          # Mino creates, human reviews between runs
 ```
+
+## Schema
 
 ### `config.md` (optional)
 
 ```markdown
-description: Weekly procurement audit — fetch pending POs, analyze supplier performance, draft report
-schedule: Mon 09:00
+description: Weekly procurement audit — fetch POs, analyze suppliers, draft report
 status: active
 Database: {{DB_PATH}}
 Stale threshold: 7 days
-Critical suppliers: UNIMED SDN BHD, PAHANG PHARMACY
 ```
 
+`description:` is what memory indexes for routing.
 `{{PLACEHOLDER}}` values resolve from SOUL.md or session context.
 
 ### Stage files: `NN-<verb>.md`
 
-Every stage has exactly three sections. Order is fixed.
+Every stage has three sections:
 
 ```markdown
-# <Verb phrase — what this stage does>
+# <Verb phrase>
 
 ## Read
 
-- `config.md` (for X and Y)
-- `output/<previous-stage-output>.md` (the output from stage N-1)
+- `config.md` (for threshold)
+- `output/<previous>.md` (from stage N-1)
 
 ## Do
 
-1. First concrete step
-2. Second concrete step
-3. Last step: write results
+1. Concrete step
+2. Another step
+3. Write results
 
 ## Write
 
-`output/<descriptive-name>.md`
+`output/<name>.md`
 ```
 
 **Rules:**
-- `## Read` lists files. One per line.
-- `## Do` is numbered steps. One action per step.
-- `## Write` is exactly one file path under `output/`.
-- Stage 1's `## Read` points to `config.md` or is empty.
-- No stage file exceeds 80 lines. Split instead.
-- No branching. No circular references. Linear only.
+- `## Read` lists files to load before executing
+- `## Do` is numbered steps
+- `## Write` is exactly one output path
+- No stage exceeds 80 lines
+- Linear only — no branching
 
-### `output/` folder
+## Two loops
 
-Mino creates on first run. After each execution, `output/` contains exactly one
-file per stage. Stage N+1 reads Stage N's output. A human can open and edit
-any file between stages — the next stage picks up the edit.
+| Loop | Scope | Max tries | When |
+|---|---|---|---|
+| **Playbook runner** | Walks numbered stages, checks output exists | — | Structured tasks |
+| **Mini-loop** | Executes tools within one stage | 3 retries | Per stage |
+| **Main loop** | observe → act → observe | maxIter | Ad-hoc queries |
 
----
+The main loop (ad-hoc) is simple: LLM calls tools, tools run, results fed back.
+No completion protocol, no dedup, no streaks. The LLM stops when it has nothing
+more to say.
 
 ## Memory as Router
 
-Vague prompts ("send me last week's data") route to the right playbook via memory:
+Vague prompts ("send me last week's purchase data") match playbooks:
 
-1. Embed the prompt → cosine similarity against all playbook `description:` fields
-2. FTS5 search for keywords across playbook `config.md` files
-3. Recall past sessions where similar prompts resolved to a playbook
+1. **Keyword** (always, free): word overlap between prompt and playbook
+   description + stage content → score 0.0–1.0
+2. **Embedding** (if configured): cosine similarity on description → refinement
 
-The LLM doesn't guess. Memory routes. LLM confirms and executes.
-
----
-
-## What gets replaced
-
-| Current Mino | Playbook equivalent |
+| Score | Behavior |
 |---|---|
-| `scheduler.go` (241 lines) | `config.md` `schedule:` field + cron/systemd timer |
-| `checkpoint.go` (167 lines) | Stage `output/` folder IS the checkpoint state |
-| `artifacts.go` — SessionArtifact struct, named artifact tracking (89 lines) | Deleted. `output/` replaces the *named session artifact* pattern. But large-tool-output compaction (`compactToolOutput`) moves into loop.go — `/tmp/mino/results/` stays as the overflow bucket. |
-| Projects table + tools (~120 lines) | Playbook folder IS the project |
-| Schedule tools (~80 lines) | Creating a playbook folder IS scheduling |
-| ToolFilter / embedding filter (~150 lines) | `## Read` lists exactly what to load |
-| Approval tools / workspace gate (~150 lines) | Stage step: "Stop here. Ask Abah." |
-| Completion protocol (~80 lines) | Stage completes when `output/` file exists |
-| Dedup / no-progress / streaks (~120 lines) | Stages are linear, single-pass. No dedup needed. |
-| File claim verification (~60 lines) | `## Write` says the path. Runner checks existence. |
-| **Total replaced: ~1,300 lines** | |
+| ≥ 0.5 | Auto-run playbook, bypass LLM entirely |
+| 0.3–0.49 | Hint injected into system prompt, LLM decides |
+| < 0.3 | Normal flow |
 
-## Two folders, two purposes
+## What was removed
 
-| Folder | Role | Lifecycle |
+| Removed | Lines | Replaced by |
 |---|---|---|
-| `~/.mino/playbooks/<name>/output/` | Stage-to-stage handoffs. Human-readable, git-trackable, the truth. | Survives runs. Git committed. |
-| `/tmp/mino/results/` | Large tool output overflow within a single stage. Prevents context blow-up. | Ephemeral. Auto-cleaned after 24h. |
+| `scheduler.go` | 241 | Systemd timer or ad-hoc invocation |
+| `checkpoint.go` | 167 | Stage `output/` folder IS the checkpoint |
+| `artifacts.go` | 89 | Moved compaction to loop.go; `/tmp/mino/results/` stays |
+| `delegate.go` (fan_out + delegate) | 133 | Playbooks handle multi-step tasks |
+| Projects table + tools | ~120 | Playbook folder IS the project |
+| Schedule tools | ~80 | Creating a playbook = scheduling |
+| ToolFilter + SchemasFor | ~150 | `## Read` lists exactly what to load |
+| Approval tools + workspace gate | ~150 | Stage step: "Stop here. Ask Abah." |
+| Completion protocol + dedup + streaks | ~560 | LLM stops when done; output file = proof |
+| `eval_test.go` (old loop tests) | 1086 | Removed; core tests preserved |
+| **Total removed** | **~2,700** | |
 
-When a stage's tool call returns 50KB of SQL results, the loop writes to
-`/tmp/mino/results/` and tells the LLM "read the slice you need." The playbook
-doesn't know in advance how big a query result will be — the overflow bucket
-handles it generically.
+## What stayed
 
-## Mino's 4 pillars of context management
-
-| Pillar | Fate |
+| Component | Lines |
 |---|---|
-| **Consolidation** (memory.go) | **Stays.** Distills chat logs into durable facts. Unchanged. |
-| **Tool filter** (ToolFilter, SchemasFor, embedding index) | **Replaced** by `## Read`. A stage lists exactly which files to load. No embedding, no cosine similarity. |
-| **History truncation** (session.go, MaxHistoryTurns, ContextMessages) | **Stays.** Keeps last N turns. Unchanged. |
-| **Artifact compaction** (`compactToolOutput`, `/tmp/mino/results/`) | **Simplified.** `artifacts.go` (89 lines, SessionArtifact struct, named artifact catalog) is deleted. `compactToolOutput()` moves into loop.go. `/tmp/mino/results/` stays as the overflow bucket. |
+| `loop.go` (simplified) | ~300 (was 767) |
+| `tools.go` (core tools only) | ~1,600 (was 2,291) |
+| `playbook.go` (new) | ~500 |
+| Session, memory, skills | Unchanged |
+| Providers (Anthropic, OpenAI, Gemini, Mimo) | Unchanged |
+| Gateways (Telegram, dashboard) | Unchanged |
+| MCP, auth, alerts, extensions | Unchanged |
 
-## What stays
+## State
 
-All infrastructure: tools (read, write, bash, search, fetch, calendar, etc.),
-providers (Anthropic, OpenAI, Gemini), memory (SQLite + FTS5 + embeddings),
-gateways (Telegram, dashboard), skills, MCP, auth, alerts, extensions.
-
-## What simplifies
-
-- `loop.go` (767 → ~100): No completion protocol, no dedup, no streaks. Just walk stages.
-- `app.go` (292 → ~150): No checkpoint manager, no scheduler bypass.
-- `session.go` (259 → ~180): No completion prompt, no pending approvals section.
+- **Branch**: `feat/playbooks`
+- **Deployed**: VPS `100.101.53.98`, mimo-v2.5
+- **Tests**: 112 passing
+- **Live playbook**: `procurement-audit` — auto-routes from "send me purchase data"
