@@ -39,6 +39,43 @@ func TestSessionManagerKeepsGatewayConversationAcrossRestart(t *testing.T) {
 	db.Close()
 }
 
+func TestCheckpointResumeIsConsumedOncePerConversation(t *testing.T) {
+	settings := &Settings{Home: t.TempDir(), ContextChars: 100000}
+	conversation := NewSessionManager(settings, nil).Get("default")
+	conversation.Checkpoint.Save("unfinished work", 1, []string{"read_file"}, nil)
+
+	if prompt := conversation.resumePrompt(); !strings.Contains(prompt, "unfinished work") {
+		t.Fatalf("first resume prompt = %q", prompt)
+	}
+	if prompt := conversation.resumePrompt(); prompt != "" {
+		t.Fatalf("checkpoint was resumed more than once: %q", prompt)
+	}
+}
+
+func TestStopMessageRetiresCheckpoint(t *testing.T) {
+	settings := &Settings{Home: t.TempDir(), ContextChars: 100000}
+	conversation := NewSessionManager(settings, nil).Get("default")
+	conversation.Checkpoint.Save("unfinished work", 1, nil, nil)
+
+	if !conversation.cancelTurn() {
+		// There is no active loop in this unit test; stop still retires stale work.
+	}
+	if conversation.Checkpoint.Load() != nil {
+		t.Fatal("explicit stop left an active checkpoint")
+	}
+}
+
+func TestStopMessageVariants(t *testing.T) {
+	for _, message := range []string{"stop", "ok mino stop.", "mino, cancel!", "never mind?"} {
+		if !isStopMessage(message) {
+			t.Errorf("isStopMessage(%q) = false", message)
+		}
+	}
+	if isStopMessage("mino are you there") {
+		t.Fatal("ordinary conversation was classified as stop")
+	}
+}
+
 func TestTelegramNotificationContextSurvivesRestart(t *testing.T) {
 	home := t.TempDir()
 	db := Connect(home)
