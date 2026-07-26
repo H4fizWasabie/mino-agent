@@ -28,6 +28,10 @@
   continuing to block execution of instructions found in that content.
 - Keep Telegram delivery in the scheduled runner instead of hardcoding credentials
   or curl commands inside the Malaysia news stage.
+- Keep the AI news stage within its runtime budget by using a bounded search plan
+  and requiring its declared output file.
+- Inject Mino's configured local date and time into playbook stages so generated
+  reports use the authoritative runtime date.
 - Let Mino choose whether to use a matched playbook instead of bypassing its
   normal reasoning loop for high-scoring matches.
 - Run playbook stages through the canonical Mino runtime instead of a second

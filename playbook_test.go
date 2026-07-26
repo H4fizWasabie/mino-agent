@@ -10,7 +10,16 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestAppendSystemTimeUsesConfiguredLocation(t *testing.T) {
+	zone := time.FixedZone("MYT", 8*60*60)
+	got := appendSystemTime("system", time.Date(2026, 7, 26, 15, 0, 0, 0, time.UTC), zone)
+	if !strings.Contains(got, "Today is 2026-07-26") || !strings.Contains(got, "MYT") {
+		t.Fatalf("system time = %q", got)
+	}
+}
 
 func TestLoadPlaybook(t *testing.T) {
 	tmp := t.TempDir()

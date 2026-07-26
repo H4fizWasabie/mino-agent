@@ -408,6 +408,7 @@ func RunPlaybook(
 	result := &PlaybookResult{Name: name}
 	conversation := core.Sessions.Get(sessionID)
 	system := conversation.Session.BuildPlaybookSystem(userMessage, "")
+	system = appendSystemTime(system, time.Now(), core.Settings.Location())
 	baseMessages := conversation.Session.PlaybookContext(system)
 
 	for i, stage := range pb.Stages {
@@ -452,6 +453,14 @@ func RunPlaybook(
 	result.Status = "complete"
 	logTrace(core.Settings.Home, "playbook_complete", map[string]any{"name": name, "stages": result.StagesRun})
 	return result, nil
+}
+
+func appendSystemTime(system string, now time.Time, location *time.Location) string {
+	local := now.In(location)
+	zone, offset := local.Zone()
+	return system + fmt.Sprintf("\n[System time: %s %s (UTC%+03d:%02d). Today is %s.]",
+		local.Format("Monday, 2006-01-02 15:04:05"), zone, offset/3600, (abs(offset)%3600)/60,
+		local.Format("2006-01-02"))
 }
 
 // --- Playbook discovery ---
