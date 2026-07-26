@@ -12,6 +12,7 @@ type Conversation struct {
 	mu         sync.Mutex
 	activeMu   sync.Mutex
 	cancel     context.CancelFunc
+	resumed    bool
 }
 
 func (c *Conversation) beginTurn(parent context.Context) (context.Context, func()) {
@@ -30,11 +31,25 @@ func (c *Conversation) beginTurn(parent context.Context) (context.Context, func(
 func (c *Conversation) cancelTurn() bool {
 	c.activeMu.Lock()
 	defer c.activeMu.Unlock()
-	if c.cancel == nil {
-		return false
+	active := c.cancel != nil
+	if active {
+		c.cancel()
 	}
-	c.cancel()
-	return true
+	// An explicit stop retires interrupted work, including a stale checkpoint
+	// left by a previous process or test run.
+	c.Checkpoint.Clear()
+	return active
+}
+
+func (c *Conversation) resumePrompt() string {
+	if c.resumed {
+		return ""
+	}
+	prompt := c.Checkpoint.ResumePrompt()
+	if prompt != "" {
+		c.resumed = true
+	}
+	return prompt
 }
 
 type SessionManager struct {

@@ -5,6 +5,10 @@
 ### Changed
 - Integrated the Mino logo into the dashboard sidebar, favicon, and onboarding screen with embedded PNG assets.
 
+### Fixed
+- Retire stale checkpoints on explicit stop, consume restart recovery only once per conversation, and recognize common punctuated stop phrases.
+- Reject empty provider responses so fallback/error handling runs instead of emitting misleading no-progress replies.
+
 ## [v1.2.0] — Agent Intelligence Upgrade
 
 ### Added — New capabilities

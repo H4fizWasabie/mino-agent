@@ -66,9 +66,9 @@ func NewCore() *Core {
 	mem.skills = NewSkillLoader(s.Home, mem.embedder)
 	tools := BuildRegistry(db, s.Home, s.Workspace, mem, s.Location())
 	tools.SetMaxDescChars(s.MaxToolDescChars)
-	tools.SetLogDB(db) // enable tool_calls table logging
+	tools.SetLogDB(db)                                      // enable tool_calls table logging
 	tools.SetAuditLog(filepath.Join(s.Home, "audit.jsonl")) // §8.4: immutable audit log
-	LoadExtensions(s.Home, tools) // discover + register extension tools
+	LoadExtensions(s.Home, tools)                           // discover + register extension tools
 
 	if s.ConsolidateEvery > 0 {
 		go func() { // 6-hour full consolidation pass
@@ -239,7 +239,7 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 		local.Format("Monday, 2006-01-02 15:04:05"), zone, offset/3600, (abs(offset)%3600)/60,
 		local.Format("2006-01-02"))
 	// inject resume prompt if there's an active task
-	if resume := conversation.Checkpoint.ResumePrompt(); resume != "" {
+	if resume := conversation.resumePrompt(); resume != "" {
 		system += "\n\n" + resume
 	}
 	logTrace(w.Settings.Home, "turn_start", map[string]any{"user_message": userMessage})
@@ -270,7 +270,12 @@ func (w *Core) CancelTurn(sessionID string) bool {
 }
 
 func isStopMessage(message string) bool {
-	switch strings.ToLower(strings.TrimSpace(message)) {
+	clean := strings.NewReplacer(".", " ", ",", " ", "!", " ", "?", " ", ":", " ").Replace(strings.ToLower(message))
+	words := strings.Fields(clean)
+	for len(words) > 0 && (words[0] == "ok" || words[0] == "okay" || words[0] == "mino") {
+		words = words[1:]
+	}
+	switch strings.Join(words, " ") {
 	case "stop", "cancel", "stop task", "cancel task", "never mind", "nevermind":
 		return true
 	default:
