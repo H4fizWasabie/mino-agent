@@ -616,21 +616,22 @@ async function runQuery(){
 // the Data tab shows the SAME rows as raw SQLite tables (see the explainer).
 function memOverview(d){
   const s = d.stats;
-  const facts = (d.facts||[]).length, episodes = (d.episodes||[]).length, skills = (d.skills||[]).length;
+  const facts = (d.facts||[]).length, episodes = (d.episodes||[]).length, skills = (d.skills||[]).length, playbooks = (d.playbooks||[]).length;
   const pillars = [
     ["✦","Semantic","semantic",facts,"facts","Durable knowledge Mino can retrieve across conversations."],
     ["◷","Episodic","episodic",episodes,"episodes","Dated highlights distilled from longer conversations."],
     ["⌘","Procedural","skills",skills,"skills","Reusable instructions loaded only when they are relevant."],
+    ["◇","Playbooks","playbooks",playbooks,"playbooks","Executable filesystem procedures with stages, outputs, and schedules."],
   ].map(([icon,t,sub,n,unit,desc]) => `<div class="memory-pillar" role="link" tabindex="0" onclick="location.hash='memory/${sub}'" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();location.hash='memory/${sub}'}">
       <span class="memory-pillar-icon">${icon}</span><div><span>${t}</span><strong>${n} ${unit}</strong><p>${desc}</p></div><b>→</b></div>`).join("");
   return `<section class="memory-hero"><div><div class="eyebrow">MEMORY OBSERVATORY</div><h2 class="memory-title">What Mino carries forward.</h2>
       <p>Inspect durable knowledge, lived context, reusable skills, and the pipeline that keeps them current.</p></div>
-      <div class="memory-health"><span class="runtime-kicker"><i></i> MEMORY STATUS</span><strong>${facts+episodes+skills} records</strong><span>${d.chat_pending||0} messages queued</span><small>SQLite · FTS5 · human-readable mirror</small></div></section>
+      <div class="memory-health"><span class="runtime-kicker"><i></i> MEMORY STATUS</span><strong>${facts+episodes+skills+playbooks} records</strong><span>${d.chat_pending||0} messages queued</span><small>SQLite · FTS5 · human-readable mirror</small></div></section>
     <section class="memory-pillar-grid">${pillars}</section>
     <section class="memory-retrieval"><div class="overview-section-head"><div><span class="section-kicker">RETRIEVAL</span><h2>Memory enters only when needed</h2></div><span class="section-note">the gate protects latency and relevance</span></div>${gateSplit(s)}</section>
     <section class="memory-source"><div><span class="section-kicker">ONE SOURCE · TWO VIEWS</span><h3>Curated here. Auditable in SQLite.</h3><p>Memory presents the useful mental model; Database exposes the exact same facts, episodes, and FTS5 indexes at row level.</p></div>
       <a href="#database">Open database →</a></section>
-    <div class="memory-files"><span>FILES</span>${reveal("state.db","state.db")}${reveal("MEMORY.md","MEMORY.md")}${reveal("SOUL.md","SOUL.md")}${reveal("skills","skills/")}</div>`;
+    <div class="memory-files"><span>FILES</span>${reveal("state.db","state.db")}${reveal("MEMORY.md","MEMORY.md")}${reveal("SOUL.md","SOUL.md")}${reveal("skills","skills/")}${reveal("playbooks","playbooks/")}</div>`;
 }
 function memSemantic(d){
   const facts = d.facts || [];
@@ -668,6 +669,22 @@ ${sk.body}`;
       <div class="memory-editor-actions"><button class="save" id="sksave-${i}" disabled onclick="saveSkill(${i})">Save SKILL.md</button>
         <span class="meta" id="skmsg-${i}">${esc(sk.rel)}</span></div></div>`;
   }).join("") || `<div class="memory-empty"><span>⌘</span><strong>No skills loaded</strong><p>Create one in chat or place a SKILL.md in the skills folder.</p></div>`;
+  return h;
+}
+function memPlaybooks(d){
+  const playbooks = d.playbooks || [];
+  let h = `<section class="memory-tab-head"><div><span class="section-kicker">EXECUTABLE PROCEDURES</span><h2>Playbooks</h2><p>Filesystem state machines that Mino can choose to run through the normal runtime.</p></div><strong>${playbooks.length}</strong></section>
+    <div class="memory-callout"><span>◇</span><p>Playbooks are separate from skills: skills guide Mino’s judgment; playbooks define repeatable stages, outputs, and schedules. ${reveal("playbooks","Open the playbooks folder →")}</p></div>`;
+  if (!playbooks.length) return h + `<div class="memory-empty"><span>◇</span><strong>No playbooks found</strong><p>Ask Mino to create a repeatable workflow, or add a playbook folder under ~/.mino/playbooks/.</p></div>`;
+  h += `<div class="playbook-grid">${playbooks.map(pb => {
+    if (pb.error) return `<article class="memory-editor-card playbook-card"><div class="memory-editor-head"><div><code>${esc(pb.name)}</code><p class="playbook-error">${esc(pb.error)}</p></div><span class="srcpill warn">invalid</span></div><div class="memory-editor-actions"><span class="meta">${esc(pb.path||"")}</span></div></article>`;
+    const stages = pb.stages || [], outputs = pb.outputs || [];
+    return `<article class="memory-editor-card playbook-card"><div class="memory-editor-head"><div><code>${esc(pb.name)}</code><p>${esc(pb.description||"No description")}</p></div><span class="srcpill ${pb.status==="active"?"good":"warn"}">${esc(pb.status||"active")}</span></div>
+      <div class="playbook-meta"><span>${stages.length} stage${stages.length===1?"":"s"}</span>${pb.schedule?`<span>schedule · ${esc(pb.schedule)}</span>`:""}${pb.notify?`<span>Telegram delivery</span>`:""}</div>
+      <div class="playbook-stages">${stages.map((stage,i)=>`<div><b>${String(stage.number||i+1).padStart(2,"0")}</b><span>${esc(stage.name||"stage")}</span>${(stage.tools||[]).length?`<small>${stage.tools.map(t=>esc(t)).join(" · ")}</small>`:""}</div>`).join("")}</div>
+      ${outputs.length?`<div class="playbook-outputs"><span>OUTPUT</span>${outputs.map(path=>`<code>${esc(path)}</code>`).join("")}</div>`:`<div class="meta playbook-empty-output">No output recorded yet</div>`}
+      <div class="memory-editor-actions"><span class="meta">${esc(pb.path||"")}</span>${reveal(pb.path||"","open folder")}</div></article>`;
+  }).join("")}</div>`;
   return h;
 }
 function memSoul(d){
@@ -865,11 +882,13 @@ const VIEWS = {
     sub = sub || "overview";
     const tabs = [["overview","Overview"],["semantic","Semantic",(d.facts||[]).length],
       ["episodic","Episodic",(d.episodes||[]).length],["skills","Skills",(d.skills||[]).length],
+      ["playbooks","Playbooks",(d.playbooks||[]).length],
       ["soul","SOUL"],["consolidation","Consolidation",d.chat_pending]];
     let h = subtabBar("memory", tabs, sub);
     if (sub==="semantic") return h + memSemantic(d);
     if (sub==="episodic") return h + memEpisodic(d);
     if (sub==="skills") return h + memSkills(d);
+    if (sub==="playbooks") return h + memPlaybooks(d);
     if (sub==="soul") return h + memSoul(d);
     if (sub==="consolidation") return h + memConsolidation(d);
     return h + memOverview(d);

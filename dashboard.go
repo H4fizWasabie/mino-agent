@@ -345,9 +345,10 @@ func handleMemoryAPI(w http.ResponseWriter, r *http.Request) {
 	facts := queryAll(dashCore.DB, "SELECT id, subject, content, source, created_at FROM facts ORDER BY id")
 	episodes := queryAll(dashCore.DB, "SELECT id, summary, happened_at FROM episodes ORDER BY id DESC")
 	skills := skillCatalog(dashCore.Settings.Home)
+	playbooks := playbookCatalog(dashCore.Settings.Home)
 
 	json.NewEncoder(w).Encode(map[string]any{
-		"facts": facts, "episodes": episodes, "skills": skills,
+		"facts": facts, "episodes": episodes, "skills": skills, "playbooks": playbooks,
 	})
 }
 
@@ -481,6 +482,47 @@ func skillCatalog(home string) []map[string]any {
 	return out
 }
 
+func playbookCatalog(home string) []map[string]any {
+	playbooksDir := filepath.Join(home, "playbooks")
+	var out []map[string]any
+	for _, name := range ListPlaybooks(home) {
+		pb, err := LoadPlaybook(playbooksDir, name)
+		if err != nil {
+			out = append(out, map[string]any{"name": name, "path": filepath.Join("playbooks", name), "error": err.Error()})
+			continue
+		}
+		stages := make([]map[string]any, 0, len(pb.Stages))
+		for _, stage := range pb.Stages {
+			stages = append(stages, map[string]any{
+				"number": stage.Number, "name": stage.Name, "reads": stage.Reads,
+				"tools": stage.Tools, "write": stage.Write,
+			})
+		}
+		outputs := []string{}
+		for _, path := range sortedFiles(filepath.Join(pb.Dir, "output", "*.md")) {
+			rel, relErr := filepath.Rel(home, path)
+			if relErr == nil {
+				outputs = append(outputs, rel)
+			}
+		}
+		out = append(out, map[string]any{
+			"name": name, "path": filepath.Join("playbooks", name), "description": pb.Description,
+			"schedule": pb.Schedule, "status": pb.Status, "notify": pb.Config["notify"] == "true",
+			"stages": stages, "outputs": outputs,
+		})
+	}
+	if out == nil {
+		return []map[string]any{}
+	}
+	return out
+}
+
+func sortedFiles(pattern string) []string {
+	files, _ := filepath.Glob(pattern)
+	sort.Strings(files)
+	return files
+}
+
 func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 	db := dashCore.DB
 
@@ -500,6 +542,7 @@ func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 	episodesData := queryAll(db, "SELECT id, happened_at, summary FROM episodes ORDER BY happened_at DESC")
 	calendarData := queryAll(db, "SELECT title, start, \"end\", attendees, created_at FROM calendar_events ORDER BY start")
 	skillsData := skillCatalog(dashCore.Settings.Home)
+	playbooksData := playbookCatalog(dashCore.Settings.Home)
 	outboxData := outboxList(dashCore.Settings.Home)
 	soulData, _ := os.ReadFile(filepath.Join(dashCore.Settings.Home, "SOUL.md"))
 	activeTasks := listActiveTasksPlaybook(dashCore.Settings.Home)
@@ -570,6 +613,7 @@ func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 		"calendar":          calendarData,
 		"outbox":            outboxData,
 		"skills":            skillsData,
+		"playbooks":         playbooksData,
 		"soul":              string(soulData),
 		"tools": map[string]any{
 			"catalog":  dashCore.Tools.Catalog(),

@@ -333,6 +333,13 @@ func seedBuiltinSkills(home string) {
 		os.WriteFile(skillPath, []byte(codingSkill), 0644)
 	}
 
+	// playbook authoring skill
+	playbookSkillPath := filepath.Join(home, "skills", "playbook-authoring", "SKILL.md")
+	if _, err := os.Stat(playbookSkillPath); os.IsNotExist(err) {
+		os.MkdirAll(filepath.Dir(playbookSkillPath), 0700)
+		os.WriteFile(playbookSkillPath, []byte(playbookAuthoringSkill), 0644)
+	}
+
 	// context7 MCP
 	mcpPath := filepath.Join(home, "mcp.d", "context7.json")
 	if _, err := os.Stat(mcpPath); os.IsNotExist(err) {
@@ -342,3 +349,6 @@ func seedBuiltinSkills(home string) {
 
 //go:embed assets/coding.SKILL.md
 var codingSkill string
+
+//go:embed assets/playbook-authoring.SKILL.md
+var playbookAuthoringSkill string

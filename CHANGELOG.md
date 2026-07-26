@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Added
+- Add the built-in `playbook-authoring` skill so Mino can create, improve, validate,
+  and resume filesystem playbooks with consistent stage and safety conventions.
+- Show parsed playbooks beside skills in the dashboard's Memory view, including
+  descriptions, stages, tools, schedules, status, and output files.
 - Playbook system — numbered markdown stages with `## Read` / `## Do` / `## Write`.
   Filesystem is the executor. Mini-loop with 3 retries per stage. Memory routes
   vague prompts to the right playbook via embeddings + FTS5.

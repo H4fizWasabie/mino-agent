@@ -72,3 +72,11 @@ func TestCodingSkillUsesWorkspaceAndChunkedWrites(t *testing.T) {
 		t.Fatal("coding skill hardcodes the VPS workspace")
 	}
 }
+
+func TestPlaybookAuthoringSkillIsEmbedded(t *testing.T) {
+	for _, want := range []string{"name: playbook-authoring", "create playbook", "## Structure", "write_file", "Telegram"} {
+		if !strings.Contains(playbookAuthoringSkill, want) {
+			t.Errorf("playbook authoring skill missing %q", want)
+		}
+	}
+}

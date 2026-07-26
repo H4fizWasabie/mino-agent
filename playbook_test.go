@@ -394,6 +394,40 @@ func TestListPlaybooks(t *testing.T) {
 	}
 }
 
+func TestPlaybookCatalogUsesParsedFilesystemState(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, "playbooks", "procurement-audit")
+	if err := os.MkdirAll(filepath.Join(dir, "output"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.md"), []byte("description: Weekly audit\nschedule: Mon 09:00 Asia/Kuala_Lumpur\nstatus: active\nnotify: true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "01-fetch.md"), []byte("## Tools\n- read_file\n## Write\n`output/audit.md`\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "output", "audit.md"), []byte("done"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	catalog := playbookCatalog(home)
+	if len(catalog) != 1 {
+		t.Fatalf("catalog = %#v, want one playbook", catalog)
+	}
+	item := catalog[0]
+	if item["name"] != "procurement-audit" || item["description"] != "Weekly audit" || item["notify"] != true {
+		t.Fatalf("catalog metadata = %#v", item)
+	}
+	stages, ok := item["stages"].([]map[string]any)
+	if !ok || len(stages) != 1 || stages[0]["write"] != "output/audit.md" {
+		t.Fatalf("catalog stages = %#v", item["stages"])
+	}
+	outputs, ok := item["outputs"].([]string)
+	if !ok || len(outputs) != 1 || outputs[0] != filepath.Join("playbooks", "procurement-audit", "output", "audit.md") {
+		t.Fatalf("catalog outputs = %#v", item["outputs"])
+	}
+}
+
 func TestSchedulePlaybook(t *testing.T) {
 	home := t.TempDir()
 	dir := filepath.Join(home, "playbooks", "news")
