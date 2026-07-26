@@ -21,5 +21,10 @@ for config in "$HOME_DIR"/playbooks/*/config.md; do
   [ -e "$marker" ] && continue
   if /usr/local/bin/mino-playbook-runner "$playbook" "Run the $playbook playbook now."; then
     install -m 600 /dev/null "$marker"
+  else
+    status=$?
+    if [ "$status" -ne 75 ]; then
+      echo "playbook runner failed for $playbook (status=$status)" >&2
+    fi
   fi
 done
