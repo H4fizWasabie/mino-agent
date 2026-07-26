@@ -8,8 +8,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
+	"time"
 )
+
+const inputPreviewLimit = 8000
 
 const defaultSoul = `You are Mino, a personal AI assistant.
 You are concise, warm, and proactive. Answer briefly.
@@ -115,6 +120,18 @@ func (s *Session) BuildSystem(userMessage, source string) string {
 		skills := s.mem.MatchingSkills(userMessage)
 		if skills != "" {
 			parts = append(parts, "\nRelevant skill instructions:\n"+skills)
+		}
+
+		// Playbook routing: always keyword-match first (fast), then refine with embeddings
+		playbookName, playbookDesc, playbookScore := MatchPlaybook(s.settings.Home, userMessage, nil) // keyword first
+		if playbookName == "" && s.mem.embedder != nil {
+			playbookName, playbookDesc, playbookScore = MatchPlaybook(s.settings.Home, userMessage, s.mem.embedder)
+		}
+		if playbookName != "" && playbookScore >= 0.3 {
+			parts = append(parts, fmt.Sprintf(
+				"\n🎯 PLAYBOOK AVAILABLE: \"%s\" — %s\nIMPORTANT: If this matches the user's request, call run_playbook with name=\"%s\" instead of handling it manually.",
+				playbookName, playbookDesc, playbookName,
+			))
 		}
 	}
 	return strings.Join(parts, "\n")
@@ -256,4 +273,37 @@ type ToolCall struct {
 	Name   string
 	Args   map[string]any
 	Output string
+}
+
+// --- artifact helpers (moved from artifacts.go) ---
+
+var artifactOutput = regexp.MustCompile(`^\[artifact: (.+?) → ([0-9]+) chars at (.+?);`)
+
+func artifactFromOutput(output string) (SessionArtifact, bool) {
+	matches := artifactOutput.FindStringSubmatch(output)
+	if len(matches) != 4 {
+		return SessionArtifact{}, false
+	}
+	size, err := strconv.Atoi(matches[2])
+	if err != nil {
+		return SessionArtifact{}, false
+	}
+	return SessionArtifact{Label: matches[1], Path: matches[3], Size: size}, true
+}
+
+func compactUserInput(sessionID, input string, preview int) (string, SessionArtifact) {
+	if len(input) <= preview || preview <= 0 {
+		return input, SessionArtifact{}
+	}
+	dir := filepath.Join("/tmp/mino/results", safePath(sessionID), "input-"+fmt.Sprint(time.Now().UnixNano()))
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return input[:preview], SessionArtifact{}
+	}
+	path := filepath.Join(dir, "user.txt")
+	if err := os.WriteFile(path, []byte(input), 0600); err != nil {
+		return input[:preview], SessionArtifact{}
+	}
+	head := preview / 2
+	tail := preview - head
+	return fmt.Sprintf("[large user input: %d chars at %s; use read_file with offset and limit]\nHEAD:\n%s\n...\nTAIL:\n%s", len(input), path, input[:head], input[len(input)-tail:]), SessionArtifact{Label: "user input", Path: path, Size: len(input)}
 }

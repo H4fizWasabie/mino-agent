@@ -88,11 +88,10 @@ func RunLoop(
 	maxTokens int,
 	obs Observer,
 	stream bool,
-	chk *CheckpointManager,
 	traceHome string,
 	es *EmbeddingStore,
 ) *LoopResult {
-	return RunLoopContext(context.Background(), client, sessionID, system, messages, tools, maxIter, maxTokens, obs, stream, chk, traceHome, es)
+	return RunLoopContext(context.Background(), client, sessionID, system, messages, tools, maxIter, maxTokens, obs, stream, traceHome, es)
 }
 
 func RunLoopContext(
@@ -106,7 +105,6 @@ func RunLoopContext(
 	maxTokens int,
 	obs Observer,
 	stream bool,
-	chk *CheckpointManager,
 	traceHome string,
 	es *EmbeddingStore,
 ) *LoopResult {
@@ -128,12 +126,8 @@ func RunLoopContext(
 	readOnlyStreak := 0
 	successfulObservation := false
 	finalizeOnly := false
-	checkpointGoal := lastUserContent(messages)
 
 	defer func() {
-		if chk != nil && (result.Status == "complete" || result.Status == "cancelled") {
-			chk.Clear()
-		}
 		decision, reason := "skip", "recall tool not invoked"
 		for _, call := range result.ToolCalls {
 			if call.Name == "recall" {
@@ -156,7 +150,7 @@ func RunLoopContext(
 				}
 			}
 			if hasMutate && len(messages) > 0 {
-				prompt := checkpointGoal
+				prompt := lastUserContent(messages)
 				c := GenerateEvalCase(prompt, toolNames, "auto")
 				casesPath := filepath.Join(traceHome, "eval", "cases.json")
 				AppendEvalCase(casesPath, c)
@@ -303,27 +297,6 @@ func RunLoopContext(
 			status, _ := args["status"].(string)
 			reply, _ := args["reply"].(string)
 			status, reply = strings.ToLower(strings.TrimSpace(status)), strings.TrimSpace(reply)
-			// §20: extract task plan from complete_task args
-			if rawPlan, ok := args["plan"]; ok && chk != nil {
-				if planArr, ok := rawPlan.([]any); ok {
-					plan := make([]TaskStep, 0, len(planArr))
-					for _, p := range planArr {
-						if pm, ok := p.(map[string]any); ok {
-							desc, _ := pm["description"].(string)
-							tool, _ := pm["tool"].(string)
-							stepStatus, _ := pm["status"].(string)
-							output, _ := pm["output"].(string)
-							if stepStatus == "" {
-								stepStatus = "pending"
-							}
-							plan = append(plan, TaskStep{Description: desc, Tool: tool, Status: stepStatus, Output: output})
-						}
-					}
-					if len(plan) > 0 {
-						chk.SetPlan(plan)
-					}
-				}
-			}
 			if (status == "complete" || status == "blocked") && reply != "" && (status == "blocked" || !unresolvedFailure && !unverifiedTransfer && !pendingApproval) {
 				// Verify claimed files exist before accepting completion
 				if status == "complete" {
@@ -428,14 +401,7 @@ func RunLoopContext(
 				trace["output"] = output
 			}
 			logTrace(traceHome, "tool", trace)
-			// checkpoint: save after each tool execution
-			if chk != nil {
-				toolNames := make([]string, len(result.ToolCalls))
-				for j, tc2 := range result.ToolCalls {
-					toolNames[j] = tc2.Name
-				}
-				chk.Save(checkpointGoal, i, toolNames, nil)
-			}
+
 			toolResults = append(toolResults, map[string]any{
 				"type":        "tool_result",
 				"tool_use_id": tc.ID,
@@ -764,4 +730,40 @@ func verifyFileClaims(paths map[string]struct{}) string {
 		}
 	}
 	return ""
+}
+
+// --- Artifact compaction (moved from artifacts.go) ---
+
+const artifactInlineLimit = 8000
+
+func prepareToolOutput(home, sessionID string, turn int, tool, output string) string {
+	if tool == "read_file" {
+		return output
+	}
+	return compactToolOutput(home, sessionID, turn, tool, output)
+}
+
+func compactToolOutput(home, sessionID string, turn int, tool, output string) string {
+	if len(output) <= artifactInlineLimit {
+		return output
+	}
+	dir := filepath.Join("/tmp/mino/results", safePath(sessionID), fmt.Sprintf("%d", turn))
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return output[:artifactInlineLimit] + "\n[artifact write failed]"
+	}
+	path := filepath.Join(dir, safePath(tool)+".txt")
+	if err := os.WriteFile(path, []byte(output), 0600); err != nil {
+		return output[:artifactInlineLimit] + "\n[artifact write failed]"
+	}
+	return fmt.Sprintf("[artifact: %s → %d chars at %s; use read_file with offset and limit]", tool, len(output), path)
+}
+
+func safePath(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if r == '-' || r == '_' || r == '.' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			return r
+		}
+		return '_'
+	}, s)
+	return s
 }

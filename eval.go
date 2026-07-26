@@ -138,7 +138,7 @@ func runEvalCase(home string, client *ProviderManager, tools *Registry, model st
 	}
 	done := make(chan loopOutcome, 1)
 	go func() {
-		result := RunLoop(client, "eval-"+safeApprovalSlug(c.Name), system, messages, tools, 25, 16384, nil, false, nil, home, nil)
+		result := RunLoop(client, "eval-"+safeApprovalSlug(c.Name), system, messages, tools, 25, 16384, nil, false, home, nil)
 		done <- loopOutcome{result}
 	}()
 

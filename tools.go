@@ -449,8 +449,6 @@ func BuildRegistry(db *sql.DB, home, workspace string, mem *Memory, location ...
 		r.Register(behaves(makeCreateSkillTool(home, mem), BehaviorMutate))
 		r.Register(behaves(makeWorkingMemoryTool(home, mem), BehaviorMutate))
 		r.Register(behaves(makePatternTool(home, mem), BehaviorMutate))
-		r.Register(behaves(makeScheduleTool(home), BehaviorMutate))
-		r.Register(behaves(makeListScheduleTool(home), BehaviorObserve))
 	}
 
 	// image generation (OpenRouter images API)
@@ -1659,108 +1657,6 @@ func makePatternTool(home string, mem *Memory) *Tool {
 			return fmt.Sprintf("Pattern saved: %s", rule)
 		},
 	}
-}
-
-func makeScheduleTool(home string) *Tool {
-	return &Tool{
-		Name:        "schedule_task",
-		Description: "Schedule a reminder, recurring task, or cron job. Mino runs the prompt at the specified time automatically. Use when user asks to: remind, schedule, notify, alert, every morning, daily, hourly, at 9am, cron, recurring, periodic, later.",
-		Schema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"id":       map[string]any{"type": "string", "description": "Short unique ID (e.g. 'health-check', 'morning-brief')"},
-				"schedule": map[string]any{"type": "string", "description": "When to run: HH:MM (daily) or 'every NhNm' (interval, e.g. 'every 1h' or 'every 30m')"},
-				"prompt":   map[string]any{"type": "string", "description": "The prompt Mino will run at the scheduled time. Can include tool instructions like 'run bash: df -h and report if disk > 80%'"},
-				"notify":   map[string]any{"type": "boolean", "description": "Whether to send a notification when this runs"},
-				"once":     map[string]any{"type": "boolean", "description": "Remove the task after its first successful trigger"},
-			},
-			"required": []string{"id", "schedule", "prompt"},
-		},
-		Fn: func(args map[string]any) string {
-			return addScheduledJob(home, args)
-		},
-	}
-}
-
-func makeListScheduleTool(home string) *Tool {
-	return &Tool{
-		Name:        "list_scheduled",
-		Description: "List all scheduled reminders, recurring tasks, and cron jobs. Use when user asks: what's scheduled, upcoming tasks, reminders, what's pending, show schedule.",
-		Schema: map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
-		},
-		Fn: func(args map[string]any) string {
-			path := filepath.Join(home, "schedule.json")
-			data, _ := os.ReadFile(path)
-			if len(data) == 0 {
-				return "No scheduled tasks."
-			}
-			var jobs []ScheduledJob
-			json.Unmarshal(data, &jobs)
-			if len(jobs) == 0 {
-				return "No scheduled tasks."
-			}
-			var out strings.Builder
-			out.WriteString("Scheduled tasks:\n")
-			for _, j := range jobs {
-				mode := ""
-				if j.Once {
-					mode = " (once)"
-				}
-				out.WriteString(fmt.Sprintf("- %s: %s%s → %s\n", j.ID, j.Schedule, mode, j.Prompt))
-			}
-			return out.String()
-		},
-	}
-}
-
-// --- helpers ---
-
-func addScheduledJob(home string, args map[string]any) string {
-	scheduleFileMu.Lock()
-	defer scheduleFileMu.Unlock()
-	id, _ := args["id"].(string)
-	schedule, _ := args["schedule"].(string)
-	prompt, _ := args["prompt"].(string)
-	notify, _ := args["notify"].(bool)
-	once, _ := args["once"].(bool)
-	id, schedule, prompt = strings.TrimSpace(id), strings.TrimSpace(schedule), strings.TrimSpace(prompt)
-	if !safeActionID(id) {
-		return "Error: schedule id must use only letters, numbers, dots, dashes, or underscores"
-	}
-	if prompt == "" {
-		return "Error: schedule prompt cannot be empty"
-	}
-	if err := validateSchedule(schedule); err != nil {
-		return "Error: invalid schedule: " + err.Error()
-	}
-
-	path := filepath.Join(home, "schedule.json")
-	var jobs []ScheduledJob
-	data, _ := os.ReadFile(path)
-	json.Unmarshal(data, &jobs)
-
-	// update or append
-	found := false
-	for i, j := range jobs {
-		if j.ID == id {
-			jobs[i] = ScheduledJob{ID: id, Schedule: schedule, Prompt: prompt, Notify: notify, Once: once}
-			found = true
-			break
-		}
-		if j.Schedule == schedule && strings.EqualFold(strings.TrimSpace(j.Prompt), prompt) {
-			return fmt.Sprintf("Error: duplicate schedule already exists as '%s'", j.ID)
-		}
-	}
-	if !found {
-		jobs = append(jobs, ScheduledJob{ID: id, Schedule: schedule, Prompt: prompt, Notify: notify, Once: once})
-	}
-
-	if err := writeScheduleFile(home, jobs); err != nil {
-		return "Error saving schedule: " + err.Error()
-	}
-	return fmt.Sprintf("Scheduled '%s' at %s: %s", id, schedule, prompt)
 }
 
 func runBash(cmd string) (string, error) {

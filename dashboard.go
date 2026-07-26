@@ -502,9 +502,9 @@ func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 	skillsData := skillCatalog(dashCore.Settings.Home)
 	outboxData := outboxList(dashCore.Settings.Home)
 	soulData, _ := os.ReadFile(filepath.Join(dashCore.Settings.Home, "SOUL.md"))
-	activeTasks := ListActiveTasks(dashCore.Settings.Home)
+	activeTasks := listActiveTasksPlaybook(dashCore.Settings.Home)
 	if activeTasks == nil {
-		activeTasks = []TaskSnapshot{}
+		activeTasks = []map[string]any{}
 	}
 	if factsData == nil {
 		factsData = []map[string]any{}
@@ -805,9 +805,9 @@ func outboxList(home string) []map[string]any {
 }
 
 func handleActiveTasks(w http.ResponseWriter, r *http.Request) {
-	tasks := ListActiveTasks(dashCore.Settings.Home)
+	tasks := listActiveTasksPlaybook(dashCore.Settings.Home)
 	if tasks == nil {
-		tasks = []TaskSnapshot{}
+		tasks = []map[string]any{}
 	}
 	json.NewEncoder(w).Encode(map[string]any{"tasks": tasks})
 }

@@ -29,14 +29,13 @@ type Core struct {
 	Memory         *Memory
 	Tools          *Registry
 	Sessions       *SessionManager
-	Scheduler      *Scheduler
+
 }
 
 func NewCore() *Core {
 	s := LoadSettings()
 	s.EnsureHome()
 	seedBuiltinSkills(s.Home)
-	CleanupArtifacts(24 * time.Hour)
 
 	db := Connect(s.Home)
 	authStore := LoadAuthStore(s.Home)
@@ -125,14 +124,7 @@ func NewCore() *Core {
 	}
 	tools.SetFilter(toolFilter)
 
-	// Scheduler: runs prompts through agent loop on schedule
-	w.Scheduler = NewScheduler(s.Home, s.Location(), func(prompt string, notify bool) {
-		result := w.RespondFor("scheduler", prompt, "scheduler", nil, false)
-		slog.Info("scheduled job done", "id", prompt[:min(40, len(prompt))], "reply", result.Reply[:min(80, len(result.Reply))])
-		if notify {
-			w.sendNotification(result)
-		}
-	})
+
 
 	// Playbook tools — LLM can discover and run playbooks
 	tools.Register(behaves(makeListPlaybooksTool(s.Home), BehaviorObserve))
@@ -236,6 +228,33 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 	conversation := w.Sessions.Get(sessionID)
 	conversation.mu.Lock()
 	defer conversation.mu.Unlock()
+
+	// Playbook routing: intercept before LLM if high-confidence match
+	var es *EmbeddingStore
+	if w.Memory != nil {
+		es = w.Memory.embedder
+	}
+	playbookName, _, playbookScore := MatchPlaybook(w.Settings.Home, userMessage, nil)
+	if playbookName == "" && es != nil {
+		playbookName, _, playbookScore = MatchPlaybook(w.Settings.Home, userMessage, es)
+	}
+	if playbookName != "" && playbookScore >= 0.5 {
+		// Strong match: auto-run the playbook, bypass LLM entirely
+		pbResult, err := RunPlaybook(parent, w, playbookName, sessionID, obs)
+		if err == nil && pbResult.Status == "complete" {
+			result := &LoopResult{
+				Reply:     pbResult.Reply,
+				Status:    pbResult.Status,
+				ToolCalls: pbResult.ToolCalls,
+				TokensIn:  pbResult.TokensIn,
+				TokensOut: pbResult.TokensOut,
+			}
+			conversation.Session.AddExchange(userMessage, userMessage, result.Reply, result.ToolCalls, source)
+			return result
+		}
+		// Playbook failed — let LLM explain why
+	}
+
 	ctx, finish := conversation.beginTurn(parent)
 	defer finish()
 	ctx = context.WithValue(ctx, turnMessageKey{}, userMessage)
@@ -247,17 +266,12 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 	system += fmt.Sprintf("\n[System time: %s %s (UTC%+03d:%02d). Today is %s.]",
 		local.Format("Monday, 2006-01-02 15:04:05"), zone, offset/3600, (abs(offset)%3600)/60,
 		local.Format("2006-01-02"))
-	// inject resume prompt if there's an active task
-	if resume := conversation.resumePrompt(); resume != "" {
-		system += "\n\n" + resume
-	}
-	logTrace(w.Settings.Home, "turn_start", map[string]any{"user_message": userMessage})
+logTrace(w.Settings.Home, "turn_start", map[string]any{"user_message": userMessage})
 	messages, userContext := conversation.Session.ContextFor(system, userMessage)
 	if len(images) > 0 {
 		messages[len(messages)-1].Images = images
 	}
 
-	var es *EmbeddingStore
 	if w.Memory != nil {
 		es = w.Memory.embedder
 	}
@@ -265,7 +279,6 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 		ctx,
 		w.Client, conversation.Session.sessionID, system, messages, w.Tools,
 		w.Settings.MaxIter, w.Settings.MaxTokens, obs, stream,
-		conversation.Checkpoint,
 		w.Settings.Home,
 		es,
 	)

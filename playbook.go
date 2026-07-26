@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -494,20 +495,60 @@ func MatchPlaybook(home, prompt string, es *EmbeddingStore) (string, string, flo
 		return "", "", 0
 	}
 
-	// if no embedding store, return first match by keyword
+	// if no embedding store, return best match by keyword overlap
 	if es == nil {
-		promptWords := strings.Fields(strings.ToLower(prompt))
+		promptLower := strings.ToLower(prompt)
+		promptWords := make(map[string]bool)
+		for _, w := range strings.Fields(promptLower) {
+			if len(w) >= 3 {
+				promptWords[w] = true
+			}
+		}
+		bestName, bestDesc, bestScore := "", "", 0.0
 		for _, name := range playbooks {
 			pb, err := LoadPlaybook(filepath.Join(home, "playbooks"), name)
 			if err != nil {
 				continue
 			}
-			text := strings.ToLower(pb.Description + " " + name)
-			for _, w := range promptWords {
-				if len(w) >= 3 && strings.Contains(text, w) {
-					return name, pb.Description, 0.5
+			// search description + name + all stage content
+			searchText := strings.ToLower(pb.Description + " " + name)
+			for _, s := range pb.Stages {
+				searchText += " " + strings.ToLower(s.Raw)
+			}
+			textWords := make(map[string]bool)
+			for _, w := range strings.Fields(searchText) {
+				if len(w) >= 3 {
+					textWords[w] = true
 				}
 			}
+			// count overlapping words
+			overlap := 0
+			for w := range promptWords {
+				if textWords[w] {
+					overlap++
+				}
+			}
+			// also check if prompt contains playbook name directly
+			if strings.Contains(promptLower, strings.ToLower(name)) {
+				overlap += 2 // boost for direct name match
+			}
+			// substring check: does any prompt word appear as substring in searchText?
+			for w := range promptWords {
+				if strings.Contains(searchText, w) {
+					overlap++
+				}
+			}
+			if overlap > 0 && float64(overlap) > bestScore {
+				bestName, bestDesc, bestScore = name, pb.Description, float64(overlap)
+			}
+		}
+		if bestName != "" {
+			// Score reflects match strength: 0.3 = weak (hint), 0.5+ = strong (auto-run)
+			score := math.Min(1.0, bestScore/10.0)
+			if score < 0.3 {
+				score = 0.3 // minimum for any match
+			}
+			return bestName, bestDesc, score
 		}
 		return "", "", 0
 	}
@@ -686,6 +727,32 @@ func formatPlaybookResult(result *PlaybookResult) string {
 		b.WriteString(result.Reply)
 	}
 	return b.String()
+}
+
+// listActiveTasksPlaybook returns active playbook runs for the dashboard.
+// Replaces the old checkpoint-based ListActiveTasks.
+func listActiveTasksPlaybook(home string) []map[string]any {
+	playbooks := ListPlaybooks(home)
+	var tasks []map[string]any
+	playbooksDir := filepath.Join(home, "playbooks")
+	for _, name := range playbooks {
+		pb, err := LoadPlaybook(playbooksDir, name)
+		if err != nil || pb.Status != "active" {
+			continue
+		}
+		// check if there's in-progress output
+		outputDir := filepath.Join(pb.Dir, "output")
+		entries, _ := os.ReadDir(outputDir)
+		hasOutput := len(entries) > 0
+		tasks = append(tasks, map[string]any{
+			"goal":       pb.Description,
+			"status":     pb.Status,
+			"stages":     len(pb.Stages),
+			"has_output": hasOutput,
+			"playbook":   name,
+		})
+	}
+	return tasks
 }
 
 // ensure playbook types are compatible with existing interfaces

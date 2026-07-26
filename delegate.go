@@ -27,7 +27,7 @@ func runDelegate(w *Core, prompt, contextBrief string) string {
 	}
 	system += "\n\nRules:\n- Use recall to check if relevant facts already exist.\n- Use save_note to persist findings the main agent will need.\n- Do not create schedules or send notifications.\n- Return a single concise answer, not a conversation."
 
-	result := RunLoop(w.Client, id, system, []Message{{Role: "user", Content: prompt}}, tools, min(10, w.Settings.MaxIter), w.Settings.MaxTokens, nil, false, nil, w.Settings.Home, nil)
+	result := RunLoop(w.Client, id, system, []Message{{Role: "user", Content: prompt}}, tools, min(10, w.Settings.MaxIter), w.Settings.MaxTokens, nil, false, w.Settings.Home, nil)
 	output := compactToolOutput(w.Settings.Home, id, 1, "delegate", result.Reply)
 
 	delegateCacheStore(w.DB, prompt, output)

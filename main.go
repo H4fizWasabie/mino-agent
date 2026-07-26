@@ -45,8 +45,6 @@ func main() {
 
 	w := NewCore()
 	defer w.Close()
-	w.Scheduler.Start()
-	defer w.Scheduler.Stop()
 
 	// Auto-open browser on first run (onboarding §16)
 	if needsOnboarding(w.Settings.Home) {

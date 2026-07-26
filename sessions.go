@@ -7,12 +7,10 @@ import (
 
 // Conversation owns the mutable state for one long-running gateway session.
 type Conversation struct {
-	Session    *Session
-	Checkpoint *CheckpointManager
-	mu         sync.Mutex
-	activeMu   sync.Mutex
-	cancel     context.CancelFunc
-	resumed    bool
+	Session  *Session
+	mu       sync.Mutex
+	activeMu sync.Mutex
+	cancel   context.CancelFunc
 }
 
 func (c *Conversation) beginTurn(parent context.Context) (context.Context, func()) {
@@ -35,21 +33,7 @@ func (c *Conversation) cancelTurn() bool {
 	if active {
 		c.cancel()
 	}
-	// An explicit stop retires interrupted work, including a stale checkpoint
-	// left by a previous process or test run.
-	c.Checkpoint.Clear()
 	return active
-}
-
-func (c *Conversation) resumePrompt() string {
-	if c.resumed {
-		return ""
-	}
-	prompt := c.Checkpoint.ResumePrompt()
-	if prompt != "" {
-		c.resumed = true
-	}
-	return prompt
 }
 
 type SessionManager struct {
@@ -73,8 +57,8 @@ func (m *SessionManager) Get(id string) *Conversation {
 		return conversation
 	}
 	session := NewSession(m.settings, m.mem)
-	session.Switch(id) // restores a gateway conversation after process restart
-	conversation := &Conversation{Session: session, Checkpoint: NewCheckpointManager(m.settings.Home, id)}
+	session.Switch(id)
+	conversation := &Conversation{Session: session}
 	m.items[id] = conversation
 	return conversation
 }

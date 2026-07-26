@@ -39,32 +39,6 @@ func TestSessionManagerKeepsGatewayConversationAcrossRestart(t *testing.T) {
 	db.Close()
 }
 
-func TestCheckpointResumeIsConsumedOncePerConversation(t *testing.T) {
-	settings := &Settings{Home: t.TempDir(), ContextChars: 100000}
-	conversation := NewSessionManager(settings, nil).Get("default")
-	conversation.Checkpoint.Save("unfinished work", 1, []string{"read_file"}, nil)
-
-	if prompt := conversation.resumePrompt(); !strings.Contains(prompt, "unfinished work") {
-		t.Fatalf("first resume prompt = %q", prompt)
-	}
-	if prompt := conversation.resumePrompt(); prompt != "" {
-		t.Fatalf("checkpoint was resumed more than once: %q", prompt)
-	}
-}
-
-func TestStopMessageRetiresCheckpoint(t *testing.T) {
-	settings := &Settings{Home: t.TempDir(), ContextChars: 100000}
-	conversation := NewSessionManager(settings, nil).Get("default")
-	conversation.Checkpoint.Save("unfinished work", 1, nil, nil)
-
-	if !conversation.cancelTurn() {
-		// There is no active loop in this unit test; stop still retires stale work.
-	}
-	if conversation.Checkpoint.Load() != nil {
-		t.Fatal("explicit stop left an active checkpoint")
-	}
-}
-
 func TestStopMessageVariants(t *testing.T) {
 	for _, message := range []string{"stop", "ok mino stop.", "mino, cancel!", "never mind?"} {
 		if !isStopMessage(message) {
@@ -276,7 +250,7 @@ func TestViewImageBecomesVisionContent(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(makeViewImageTool())
 	home := t.TempDir()
-	result := RunLoop(fakePM(ts.URL), "s", "sys", []Message{{Role: "user", Content: "read the scan"}}, reg, 3, 100, nil, false, nil, home, nil)
+	result := RunLoop(fakePM(ts.URL), "s", "sys", []Message{{Role: "user", Content: "read the scan"}}, reg, 3, 100, nil, false, home, nil)
 
 	if result.Reply != "a scanned invoice" {
 		t.Fatalf("reply = %q", result.Reply)

@@ -126,71 +126,6 @@ func TestProjectToolsRemainAvailableAsAPair(t *testing.T) {
 	}
 }
 
-func TestScheduleTaskActuallyWritesJSON(t *testing.T) {
-	home := makeTestHome(t)
-	tools := makeEvalTools(home)
-
-	// Script: LLM calls schedule_task, then replies "Done!"
-	script := []*LLMResponse{
-		scriptedResp([]ContentBlock{
-			toolBlock("schedule_task", map[string]any{
-				"id":       "test-eval-task",
-				"schedule": "08:00",
-				"prompt":   "say hello",
-			}),
-		}, "tool_use"),
-		scriptedResp([]ContentBlock{finishBlock("complete", "Task created!")}, "tool_use"),
-	}
-
-	fake := &fakeClient{script: script}
-	result := RunLoop(fake, "eval", "", nil, tools, 10, 2048, nil, false, nil, home, nil)
-
-	// Task file must exist
-	data, err := os.ReadFile(filepath.Join(home, "schedule.json"))
-	if err != nil {
-		t.Fatalf("schedule.json not created: %v", err)
-	}
-	var jobs []ScheduledJob
-	json.Unmarshal(data, &jobs)
-	found := false
-	for _, j := range jobs {
-		if j.ID == "test-eval-task" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("schedule.json doesn't contain test-eval-task. got: %s", string(data))
-	}
-	_ = result
-}
-
-func TestNotifyCheckpointSavedAfterTool(t *testing.T) {
-	home := makeTestHome(t)
-	tools := makeEvalTools(home)
-	chk := NewCheckpointManager(home, "eval-session")
-
-	script := []*LLMResponse{
-		scriptedResp([]ContentBlock{
-			toolBlock("schedule_task", map[string]any{
-				"id":       "chk-test",
-				"schedule": "09:00",
-				"prompt":   "checkpoint me",
-			}),
-		}, "tool_use"),
-		scriptedResp([]ContentBlock{finishBlock("blocked", "paused for test")}, "tool_use"),
-	}
-
-	RunLoop(&fakeClient{script: script}, "eval", "", []Message{{Role: "user", Content: "checkpoint me"}}, tools, 10, 2048, nil, false, chk, home, nil)
-
-	data, _ := os.ReadFile(filepath.Join(home, "active_tasks", "eval-session.json"))
-	if len(data) == 0 {
-		t.Error("checkpoint not written after tool execution")
-	}
-	if snap := chk.Load(); snap == nil || len(snap.ToolsUsed) == 0 || snap.Goal != "checkpoint me" {
-		t.Errorf("checkpoint = %#v", snap)
-	}
-}
 
 func TestRequestApprovalCreatesPendingFile(t *testing.T) {
 	home := makeTestHome(t)
@@ -208,7 +143,7 @@ func TestRequestApprovalCreatesPendingFile(t *testing.T) {
 		scriptedResp([]ContentBlock{finishBlock("blocked", "Awaiting your approval.")}, "tool_use"),
 	}
 
-	RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 10, 2048, nil, false, nil, home, nil)
+	RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 10, 2048, nil, false, home, nil)
 
 	path := filepath.Join(home, "pending", "delete-emails-7.json")
 	data, err := os.ReadFile(path)
@@ -235,7 +170,7 @@ func TestPendingApprovalCannotCompleteTurn(t *testing.T) {
 		scriptedResp([]ContentBlock{finishBlock("complete", "Deleted.")}, "tool_use"),
 		scriptedResp([]ContentBlock{finishBlock("blocked", "Waiting for approval.")}, "tool_use"),
 	}
-	result := RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 4, 2048, nil, false, nil, home, nil)
+	result := RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 4, 2048, nil, false, home, nil)
 	if result.Status != "blocked" || result.Iterations != 3 {
 		t.Fatalf("pending approval completed the turn: %#v", result)
 	}
@@ -254,7 +189,7 @@ func TestBluffingDoesNotCreateArtifact(t *testing.T) {
 	}
 
 	fake := &fakeClient{script: script}
-	result := RunLoop(fake, "eval", "", nil, tools, 10, 2048, nil, false, nil, home, nil)
+	result := RunLoop(fake, "eval", "", nil, tools, 10, 2048, nil, false, home, nil)
 
 	// schedule.json must NOT exist or be empty (no tool was called)
 	data, _ := os.ReadFile(filepath.Join(home, "schedule.json"))
@@ -275,7 +210,7 @@ func TestExplicitCompletionEndsInOneIteration(t *testing.T) {
 		scriptedResp([]ContentBlock{finishBlock("complete", "Paris is the capital of France.")}, "tool_use"),
 	}
 
-	result := RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 10, 2048, nil, false, nil, home, nil)
+	result := RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 10, 2048, nil, false, home, nil)
 
 	if result.Iterations != 1 {
 		t.Errorf("expected 1 iteration, got %d", result.Iterations)
@@ -303,7 +238,7 @@ func TestNarrationAndFakeToolTrailCannotFinishTask(t *testing.T) {
 		if kind == "progress" {
 			progress++
 		}
-	}, false, nil, home, nil)
+	}, false, home, nil)
 
 	if result.Status != "complete" || result.Reply != "The latest PO is PO-42." || result.Iterations != 3 {
 		t.Fatalf("result = %#v", result)
@@ -316,7 +251,7 @@ func TestNarrationAndFakeToolTrailCannotFinishTask(t *testing.T) {
 func TestCompletionToolIsAlwaysAvailable(t *testing.T) {
 	home := makeTestHome(t)
 	fake := &fakeClient{script: []*LLMResponse{scriptedResp([]ContentBlock{finishBlock("complete", "done")}, "tool_use")}}
-	RunLoop(fake, "eval", "", nil, makeEvalTools(home), 2, 2048, nil, false, nil, home, nil)
+	RunLoop(fake, "eval", "", nil, makeEvalTools(home), 2, 2048, nil, false, home, nil)
 	for _, tool := range fake.tools {
 		if tool.Name == completionToolName {
 			return
@@ -336,7 +271,7 @@ func TestSuccessfulToolObservationIsExplicit(t *testing.T) {
 		scriptedResp([]ContentBlock{finishBlock("complete", "Sent.")}, "tool_use"),
 	}}
 
-	result := RunLoop(fake, "eval", "", nil, tools, 5, 2048, nil, false, nil, home, nil)
+	result := RunLoop(fake, "eval", "", nil, tools, 5, 2048, nil, false, home, nil)
 	if result.Status != "complete" || len(fake.messages) != 2 {
 		t.Fatalf("result=%#v calls=%d", result, len(fake.messages))
 	}
@@ -364,7 +299,7 @@ func TestRepeatedSuccessfulToolExecutesOnce(t *testing.T) {
 		scriptedResp([]ContentBlock{finishBlock("complete", "Sent once.")}, "tool_use"),
 	}}
 
-	result := RunLoop(fake, "eval", "", nil, tools, 8, 2048, nil, false, nil, home, nil)
+	result := RunLoop(fake, "eval", "", nil, tools, 8, 2048, nil, false, home, nil)
 	if result.Status != "complete" || result.Iterations != 3 || runs != 1 {
 		t.Fatalf("runs=%d result=%#v", runs, result)
 	}
@@ -388,7 +323,7 @@ func TestRepeatedNoProgressStopsEarly(t *testing.T) {
 	}
 	fake := &fakeClient{script: script}
 
-	result := RunLoop(fake, "eval", "", nil, tools, 10, 2048, nil, false, nil, home, nil)
+	result := RunLoop(fake, "eval", "", nil, tools, 10, 2048, nil, false, home, nil)
 	if result.Status != "stalled" || result.Iterations != 4 || runs != 1 {
 		t.Fatalf("runs=%d result=%#v", runs, result)
 	}
@@ -419,7 +354,7 @@ func TestReadOnlyStreakNudgesModelTowardMutation(t *testing.T) {
 		scriptedResp([]ContentBlock{toolBlock("probe_mutate", map[string]any{})}, "tool_use"),
 		scriptedResp([]ContentBlock{finishBlock("complete", "Fixed.")}, "tool_use"),
 	)
-	result := RunLoop(&fakeClient{script: script}, "eval", "Fix the target file", nil, tools, 10, 2048, nil, false, nil, home, nil)
+	result := RunLoop(&fakeClient{script: script}, "eval", "Fix the target file", nil, tools, 10, 2048, nil, false, home, nil)
 	if result.Status != "complete" || result.Iterations != 7 {
 		t.Fatalf("result=%#v", result)
 	}
@@ -439,7 +374,7 @@ func TestSuccessfulMutationCannotFinalizeFromNarration(t *testing.T) {
 		scriptedResp([]ContentBlock{textBlock("The requested change is complete.")}, "end_turn"),
 		scriptedResp([]ContentBlock{textBlock("Final result: mutation succeeded.")}, "end_turn"),
 	}
-	result := RunLoop(&fakeClient{script: script}, "eval", "make the requested change", nil, tools, 6, 2048, nil, false, nil, home, nil)
+	result := RunLoop(&fakeClient{script: script}, "eval", "make the requested change", nil, tools, 6, 2048, nil, false, home, nil)
 	if result.Status != "stalled" || result.Iterations != 4 {
 		t.Fatalf("result=%#v", result)
 	}
@@ -455,7 +390,7 @@ func TestReadOnlySuccessCannotImplicitlyCompleteMutationTask(t *testing.T) {
 		scriptedResp([]ContentBlock{textBlock("The change should work.")}, "end_turn"),
 		scriptedResp([]ContentBlock{textBlock("Done.")}, "end_turn"),
 	}
-	result := RunLoop(&fakeClient{script: script}, "eval", "fix the file", nil, tools, 4, 2048, nil, false, nil, home, nil)
+	result := RunLoop(&fakeClient{script: script}, "eval", "fix the file", nil, tools, 4, 2048, nil, false, home, nil)
 	if result.Status != "stalled" {
 		t.Fatalf("read-only work implicitly completed: %#v", result)
 	}
@@ -474,7 +409,7 @@ func TestImplicitCompletionUsesFileVerification(t *testing.T) {
 		scriptedResp([]ContentBlock{textBlock("The requested write is complete.")}, "end_turn"),
 		scriptedResp([]ContentBlock{textBlock("Final result: file created.")}, "end_turn"),
 	}
-	result := RunLoop(&fakeClient{script: script}, "eval", "create the file", nil, tools, 4, 2048, nil, false, nil, home, nil)
+	result := RunLoop(&fakeClient{script: script}, "eval", "create the file", nil, tools, 4, 2048, nil, false, home, nil)
 	if result.Status == "complete" {
 		t.Fatalf("missing file passed implicit verification: %#v", result)
 	}
@@ -490,7 +425,7 @@ func TestTruncatedToolArgumentsAreNotExecuted(t *testing.T) {
 		scriptedResp([]ContentBlock{finishBlock("complete", "Recovered.")}, "tool_use"),
 	}}
 
-	result := RunLoop(fake, "eval", "", []Message{{Role: "user", Content: "write " + path}}, makeEvalTools(home), 5, 2048, nil, false, nil, home, nil)
+	result := RunLoop(fake, "eval", "", []Message{{Role: "user", Content: "write " + path}}, makeEvalTools(home), 5, 2048, nil, false, home, nil)
 	if result.Status != "complete" || len(result.ToolCalls) != 0 {
 		t.Fatalf("result=%#v", result)
 	}
@@ -579,7 +514,7 @@ func TestRawSCPRequiresStructuredTransferProof(t *testing.T) {
 		scriptedResp([]ContentBlock{finishBlock("complete", "Transferred.")}, "tool_use"),
 		scriptedResp([]ContentBlock{finishBlock("blocked", "The raw transfer lacks destination proof.")}, "tool_use"),
 	}
-	result := RunLoop(&fakeClient{script: script}, "eval", "send the file", nil, tools, 4, 2048, nil, false, nil, home, nil)
+	result := RunLoop(&fakeClient{script: script}, "eval", "send the file", nil, tools, 4, 2048, nil, false, home, nil)
 	if result.Status != "blocked" || result.Iterations != 3 {
 		t.Fatalf("raw scp completion accepted: %#v", result)
 	}
@@ -718,45 +653,13 @@ func TestCompletionVerifiesEveryChangedFile(t *testing.T) {
 		scriptedResp([]ContentBlock{finishBlock("complete", "Both files are ready.")}, "tool_use"),
 		scriptedResp([]ContentBlock{finishBlock("blocked", "The second file could not be verified.")}, "tool_use"),
 	}
-	result := RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 4, 2048, nil, false, nil, home, nil)
+	result := RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 4, 2048, nil, false, home, nil)
 	if result.Status != "blocked" || result.Iterations != 3 {
 		t.Fatalf("missing second file passed verification: %#v", result)
 	}
 }
 
-func TestOneShotScheduleRemovesItself(t *testing.T) {
-	home := t.TempDir()
-	now := time.Now()
-	jobs := []ScheduledJob{{ID: "once", Schedule: now.Format("15:04"), Prompt: "run once", Once: true}}
-	if err := writeScheduleFile(home, jobs); err != nil {
-		t.Fatal(err)
-	}
-	calls := 0
-	scheduler := NewScheduler(home, now.Location(), func(string, bool) { calls++ })
-	scheduler.tick()
-	if calls != 1 {
-		t.Fatalf("callback calls = %d", calls)
-	}
-	data, _ := os.ReadFile(filepath.Join(home, "schedule.json"))
-	var remaining []ScheduledJob
-	json.Unmarshal(data, &remaining)
-	if len(remaining) != 0 {
-		t.Fatalf("one-shot schedule remained: %#v", remaining)
-	}
-}
 
-func TestScheduleRejectsInvalidAndExactDuplicate(t *testing.T) {
-	home := t.TempDir()
-	if got := addScheduledJob(home, map[string]any{"id": "bad id", "schedule": "09:00", "prompt": "x"}); !strings.HasPrefix(got, "Error:") {
-		t.Fatalf("invalid ID accepted: %q", got)
-	}
-	if got := addScheduledJob(home, map[string]any{"id": "first", "schedule": "09:00", "prompt": "Daily briefing"}); strings.HasPrefix(got, "Error:") {
-		t.Fatal(got)
-	}
-	if got := addScheduledJob(home, map[string]any{"id": "second", "schedule": "09:00", "prompt": "Daily briefing"}); !strings.Contains(got, "duplicate schedule") {
-		t.Fatalf("duplicate accepted: %q", got)
-	}
-}
 
 func TestCopyFailureMakesSyncToolAvailable(t *testing.T) {
 	t.Setenv("MINO_WORKSPACE", "/")
@@ -777,7 +680,7 @@ func TestCopyFailureMakesSyncToolAvailable(t *testing.T) {
 		scriptedResp([]ContentBlock{toolBlock("sync_file", map[string]any{"source": source, "destination": destination})}, "tool_use"),
 		scriptedResp([]ContentBlock{finishBlock("complete", "Copied and verified.")}, "tool_use"),
 	}}
-	result := RunLoop(client, "eval", "", nil, tools, 4, 2048, nil, false, nil, home, nil)
+	result := RunLoop(client, "eval", "", nil, tools, 4, 2048, nil, false, home, nil)
 	if result.Status != "complete" || len(client.toolSets) < 2 {
 		t.Fatalf("result=%#v toolsets=%#v", result, client.toolSets)
 	}
@@ -794,7 +697,7 @@ func TestBlockedCompletionIsExplicit(t *testing.T) {
 	home := makeTestHome(t)
 	result := RunLoop(&fakeClient{script: []*LLMResponse{
 		scriptedResp([]ContentBlock{finishBlock("blocked", "I need approval to delete it.")}, "tool_use"),
-	}}, "eval", "", nil, makeEvalTools(home), 2, 2048, nil, false, nil, home, nil)
+	}}, "eval", "", nil, makeEvalTools(home), 2, 2048, nil, false, home, nil)
 	if result.Status != "blocked" || result.Reply != "I need approval to delete it." {
 		t.Fatalf("result = %#v", result)
 	}
@@ -815,7 +718,7 @@ func TestFailedToolMustRecoverOrBlockBeforeCompletion(t *testing.T) {
 		scriptedResp([]ContentBlock{toolBlock("probe", map[string]any{"mode": "recover"})}, "tool_use"),
 		scriptedResp([]ContentBlock{finishBlock("complete", "Recovered and completed.")}, "tool_use"),
 	}
-	result := RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 6, 2048, nil, false, nil, home, nil)
+	result := RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 6, 2048, nil, false, home, nil)
 	if result.Status != "complete" || result.Reply != "Recovered and completed." || result.Iterations != 4 {
 		t.Fatalf("result = %#v", result)
 	}
@@ -839,7 +742,7 @@ func TestSuccessfulReadDoesNotClearFailedMutation(t *testing.T) {
 		scriptedResp([]ContentBlock{finishBlock("complete", "Done despite failure.")}, "tool_use"),
 		scriptedResp([]ContentBlock{finishBlock("blocked", "The project update failed.")}, "tool_use"),
 	}
-	result := RunLoop(&fakeClient{script: script}, "eval", "update the project", nil, tools, 5, 2048, nil, false, nil, home, nil)
+	result := RunLoop(&fakeClient{script: script}, "eval", "update the project", nil, tools, 5, 2048, nil, false, home, nil)
 	if result.Status != "blocked" || result.Iterations != 4 {
 		t.Fatalf("failed mutation was cleared by read: %#v", result)
 	}
@@ -859,7 +762,7 @@ func TestStreamingNarrationIsNotExposedAsFinalText(t *testing.T) {
 		case "progress":
 			progressEvents++
 		}
-	}, true, nil, home, nil)
+	}, true, home, nil)
 	if result.Reply != "Final result." || textEvents != 2 || progressEvents != 1 {
 		t.Fatalf("result=%#v text=%d progress=%d", result, textEvents, progressEvents)
 	}
@@ -879,66 +782,14 @@ func TestCompletionCannotShareResponseWithExternalTools(t *testing.T) {
 			{Type: "tool_use", ID: "finish-1", Name: completionToolName, Input: map[string]any{"status": "complete", "reply": "Too early."}},
 		}, "tool_use"),
 		scriptedResp([]ContentBlock{finishBlock("complete", "Actually complete.")}, "tool_use"),
-	}}, "eval", "", nil, tools, 3, 2048, nil, false, nil, home, nil)
+	}}, "eval", "", nil, tools, 3, 2048, nil, false, home, nil)
 	if runs != 1 || result.Iterations != 2 || result.Reply != "Actually complete." {
 		t.Fatalf("runs=%d result=%#v", runs, result)
 	}
 }
 
-func TestRunLoopRetiresCompletedCheckpoint(t *testing.T) {
-	home := makeTestHome(t)
-	checkpoint := NewCheckpointManager(home, "task")
-	tools := NewRegistry()
-	tools.Register(behaves(&Tool{Name: "probe", Schema: map[string]any{"type": "object"}, Fn: func(map[string]any) string {
-		return "done"
-	}}, BehaviorMutate))
-	RunLoop(&fakeClient{script: []*LLMResponse{
-		scriptedResp([]ContentBlock{toolBlock("probe", map[string]any{})}, "tool_use"),
-		scriptedResp([]ContentBlock{finishBlock("complete", "complete")}, "tool_use"),
-	}}, "eval", "", []Message{{Role: "user", Content: "goal"}}, tools, 3, 2048, nil, false, checkpoint, home, nil)
-	if checkpoint.Load() != nil {
-		t.Fatal("completed task checkpoint was retained")
-	}
-}
 
-func TestStaleCheckpointExpires(t *testing.T) {
-	home := t.TempDir()
-	checkpoint := NewCheckpointManager(home, "stale")
-	checkpoint.Save("old goal", 1, []string{"read_file"}, nil)
-	old := time.Now().Add(-checkpointMaxAge - time.Hour)
-	if err := os.Chtimes(checkpoint.path(), old, old); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(checkpoint.path())
-	if err != nil {
-		t.Fatal(err)
-	}
-	var snapshot TaskSnapshot
-	if json.Unmarshal(data, &snapshot) != nil {
-		t.Fatal("invalid checkpoint fixture")
-	}
-	snapshot.UpdatedAt = old.UTC().Format(time.RFC3339)
-	data, _ = json.Marshal(snapshot)
-	if err := os.WriteFile(checkpoint.path(), data, 0644); err != nil {
-		t.Fatal(err)
-	}
-	if checkpoint.Load() != nil {
-		t.Fatal("stale checkpoint was resumed")
-	}
-	if _, err := os.Stat(checkpoint.path()); !os.IsNotExist(err) {
-		t.Fatal("stale checkpoint file was not retired")
-	}
-}
 
-func TestCheckpointKeepsOriginalGoal(t *testing.T) {
-	checkpoint := NewCheckpointManager(t.TempDir(), "task")
-	checkpoint.Save("original task", 1, []string{"read_file"}, nil)
-	checkpoint.Save("system prompt\nYou were working on this before a restart", 2, []string{"read_file", "edit_file"}, nil)
-	snapshot := checkpoint.Load()
-	if snapshot == nil || snapshot.Goal != "original task" || snapshot.Round != 2 {
-		t.Fatalf("snapshot=%#v", snapshot)
-	}
-}
 
 func TestIterationGuardrailStopsRunawayLoop(t *testing.T) {
 	home := makeTestHome(t)
@@ -952,7 +803,7 @@ func TestIterationGuardrailStopsRunawayLoop(t *testing.T) {
 		}, "tool_use"))
 	}
 
-	result := RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 3, 2048, nil, false, nil, home, nil)
+	result := RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 3, 2048, nil, false, home, nil)
 
 	if result.Iterations != 3 {
 		t.Errorf("expected 3 iterations (max), got %d", result.Iterations)
@@ -989,7 +840,7 @@ func TestResolveApprovalApprovesAndCleansUp(t *testing.T) {
 	}
 
 	ctx := context.WithValue(context.Background(), turnMessageKey{}, "Yes, approve test-approve and go ahead.")
-	RunLoopContext(ctx, &fakeClient{script: script}, "eval", "", nil, tools, 10, 2048, nil, false, nil, home, nil)
+	RunLoopContext(ctx, &fakeClient{script: script}, "eval", "", nil, tools, 10, 2048, nil, false, home, nil)
 
 	// Pending file must be removed
 	if _, err := os.Stat(filepath.Join(pending, "test-approve.json")); err == nil {
@@ -1021,7 +872,7 @@ func TestResolveApprovalRejectsAndCleansUp(t *testing.T) {
 		scriptedResp([]ContentBlock{finishBlock("complete", "Rejected. File kept.")}, "tool_use"),
 	}
 
-	RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 10, 2048, nil, false, nil, home, nil)
+	RunLoop(&fakeClient{script: script}, "eval", "", nil, tools, 10, 2048, nil, false, home, nil)
 
 	if _, err := os.Stat(filepath.Join(pending, "test-reject.json")); err == nil {
 		t.Error("pending file not removed after rejection")

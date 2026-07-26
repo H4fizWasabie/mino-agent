@@ -50,7 +50,7 @@ func TestDashboardDataIncludesSoul(t *testing.T) {
 				Sample  []map[string]any `json:"sample"`
 			} `json:"tables"`
 		} `json:"db"`
-		ActiveTasks []TaskSnapshot `json:"active_tasks"`
+		ActiveTasks []map[string]any `json:"active_tasks"`
 		Tools       struct {
 			MCP struct {
 				Servers []string `json:"servers"`
@@ -198,7 +198,7 @@ func TestRunLoopTraceIncludesSelectedToolCount(t *testing.T) {
 		[]ContentBlock{finishBlock("complete", "done")},
 		"tool_use",
 	)}}
-	result := RunLoop(client, "trace", "", nil, tools, 2, 2048, nil, false, nil, home, nil)
+	result := RunLoop(client, "trace", "", nil, tools, 2, 2048, nil, false, home, nil)
 	if result.Status != "complete" {
 		t.Fatalf("loop status = %q", result.Status)
 	}
