@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -164,12 +165,34 @@ func TestContextMessagesKeepsLastNTurnsOnly(t *testing.T) {
 	}
 }
 
-func TestToolResultsTellModelWhenToStop(t *testing.T) {
-	got := formatToolResults([]map[string]any{{"tool": "probe", "status": "error", "cached": false, "content": "Error: missing column"}})
-	if !strings.Contains(got, "distinct next tool") || !strings.Contains(got, "Stop calling tools") {
-		t.Fatalf("tool result lacks stop guidance: %q", got)
+func TestFormatToolResultsFeedsObservation(t *testing.T) {
+	got := formatToolResults([]map[string]any{{"tool": "probe", "content": "Error: missing column"}})
+	if got != "[tool_result tool=probe: Error: missing column]\n" {
+		t.Fatalf("tool result = %q", got)
 	}
-	if strings.Contains(got, "complete_task") {
-		t.Fatalf("tool result references removed completion protocol: %q", got)
+}
+
+func TestLoopExecutesModelRequestedToolsWithoutDedupState(t *testing.T) {
+	executions := 0
+	tools := NewRegistry()
+	tools.Register(&Tool{
+		Name: "probe", Schema: map[string]any{"type": "object", "properties": map[string]any{}},
+		Fn: func(map[string]any) string {
+			executions++
+			return "observed"
+		},
+	})
+	client := &fakeClient{script: []*LLMResponse{
+		scriptedResp([]ContentBlock{toolBlock("probe", map[string]any{})}, "tool_use"),
+		scriptedResp([]ContentBlock{toolBlock("probe", map[string]any{})}, "tool_use"),
+		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
+	}}
+
+	result := RunLoopContext(context.Background(), client, "simple-loop", "", []Message{{Role: "user", Content: "probe twice"}}, tools, 5, 100, nil, false, t.TempDir(), nil)
+	if result.Status != "complete" || result.Reply != "done" {
+		t.Fatalf("result = %#v", result)
+	}
+	if executions != 2 || len(result.ToolCalls) != 2 {
+		t.Fatalf("executions=%d calls=%d, want 2/2", executions, len(result.ToolCalls))
 	}
 }

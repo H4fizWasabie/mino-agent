@@ -377,8 +377,6 @@ func BuildRegistry(db *sql.DB, home, workspace string, mem *Memory, location ...
 	bash := makeBashToolFor(home, bashTimeout)
 	bash.Classify = classifyBash
 	r.Register(bash)
-	r.Register(behaves(makeRequestApprovalTool(home), BehaviorMutate))
-	r.Register(behaves(makeResolveApprovalTool(home), BehaviorMutate))
 
 	// coding discovery tools
 	r.Register(behaves(makeListFilesTool(codingTimeout), BehaviorObserve))
@@ -772,26 +770,13 @@ func makeBashToolFor(home string, timeout time.Duration) *Tool {
 		if isShellCopyCommand(cmd) {
 			return "Error: use sync_file for local or remote file copies so destination proof is recorded"
 		}
-		approvalPath := ""
 		dangerReason := dangerousBashReason(cmd)
 		if dangerReason != "" {
-			approvalID, _ := args["approval_id"].(string)
-			var err error
-			approvalPath, err = approvedBashPlan(home, approvalID, cmd)
-			if err != nil {
-				return fmt.Sprintf("[APPROVAL_REQUIRED] %s. Call request_approval first, wait for the user's explicit approval, then retry bash with the returned approval_id.", dangerReason)
-			}
-		}
-		// git auto-commit before destructive bash (§8.3): snapshot workspace for rollback
-		if dangerReason != "" || approvalPath != "" {
 			gitCommitBeforeBash(ctx, cmd, home)
 		}
 		out, err := runBashContext(ctx, timeout, rewriteBashWithRTK(ctx, cmd))
 		if err != nil {
 			return fmt.Sprintf("Error: %v\nOutput: %s", err, out)
-		}
-		if approvalPath != "" {
-			os.Remove(approvalPath)
 		}
 		if len(out) > 1<<20 {
 			out = out[:1<<20] + fmt.Sprintf("\n... (truncated at 1 MiB, %d bytes total)", len(out))
@@ -803,132 +788,17 @@ func makeBashToolFor(home string, timeout time.Duration) *Tool {
 	}
 	return &Tool{
 		Name:        "bash",
-		Description: fmt.Sprintf("Execute a bash command. Supported commands use RTK to reduce output tokens. Timeout: %s. Destructive commands require explicit user approval_id. Prefer write_file, read_file, and sync_file.", timeout),
+		Description: fmt.Sprintf("Execute a bash command. Supported commands use RTK to reduce output tokens. Timeout: %s. Destructive commands receive a best-effort Git snapshot first. Prefer write_file, read_file, and sync_file.", timeout),
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"command":     map[string]any{"type": "string", "description": "Bash command to execute"},
-				"approval_id": map[string]any{"type": "string", "description": "Approved action ID required for destructive commands"},
+				"command": map[string]any{"type": "string", "description": "Bash command to execute"},
 			},
 			"required": []string{"command"},
 		},
 		Fn:        func(args map[string]any) string { return run(context.Background(), args) },
 		ContextFn: run,
 	}
-}
-
-func makeRequestApprovalTool(home string) *Tool {
-	return &Tool{
-		Name:        "request_approval",
-		Description: "Create an approval request before a destructive or irreversible action. Wait for the user to approve it before executing the action.",
-		Schema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"action_id": map[string]any{"type": "string", "description": "Short unique ID using letters, numbers, dots, dashes, or underscores"},
-				"title":     map[string]any{"type": "string", "description": "One-line summary for the user"},
-				"details":   map[string]any{"type": "string", "description": "What will happen and its risks"},
-				"exec_plan": map[string]any{"type": "string", "description": "The exact action to perform if approved"},
-			},
-			"required": []string{"action_id", "title", "details", "exec_plan"},
-		},
-		Fn: func(args map[string]any) string {
-			actionID, _ := args["action_id"].(string)
-			if !safeActionID(actionID) {
-				return "Error: action_id must use only letters, numbers, dots, dashes, or underscores"
-			}
-			path := filepath.Join(approvalHome(home), "pending", actionID+".json")
-			if _, err := os.Stat(path); err == nil {
-				return "Error: an approval request with that action_id already exists"
-			}
-			request := map[string]any{
-				"action_id": actionID,
-				"title":     args["title"],
-				"details":   args["details"],
-				"exec_plan": args["exec_plan"],
-				"created":   time.Now().Format(time.RFC3339),
-			}
-			data, _ := json.Marshal(request)
-			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-				return "Error creating approval directory: " + err.Error()
-			}
-			if err := os.WriteFile(path, data, 0600); err != nil {
-				return "Error saving approval: " + err.Error()
-			}
-			return fmt.Sprintf("[APPROVAL_REQUIRED] %s. The user must explicitly approve '%s' before it can run.", actionID, request["title"])
-		},
-	}
-}
-
-func makeResolveApprovalTool(home string) *Tool {
-	resolve := func(ctx context.Context, args map[string]any) string {
-		actionID, _ := args["action_id"].(string)
-		if !safeActionID(actionID) {
-			return "Error: invalid action_id"
-		}
-		decision, _ := args["decision"].(string)
-		if decision != "approve" && decision != "reject" {
-			return "Error: decision must be approve or reject"
-		}
-		path := filepath.Join(approvalHome(home), "pending", actionID+".json")
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return fmt.Sprintf("No pending approval found for '%s'", actionID)
-		}
-		var request map[string]any
-		if err := json.Unmarshal(data, &request); err != nil {
-			return "Error: pending approval is invalid"
-		}
-		if decision == "approve" {
-			if !turnExplicitlyApproves(ctx) {
-				return "Error: approval must come from an explicit user message such as approve, yes, proceed, or go ahead"
-			}
-			if err := os.MkdirAll(filepath.Join(approvalHome(home), "approved"), 0700); err != nil {
-				return "Error creating approved directory: " + err.Error()
-			}
-			request["approved_at"] = time.Now().Format(time.RFC3339)
-			approved, _ := json.Marshal(request)
-			approvedPath := filepath.Join(approvalHome(home), "approved", actionID+".json")
-			if err := os.WriteFile(approvedPath, approved, 0600); err != nil {
-				return "Error saving approval: " + err.Error()
-			}
-			if err := os.Remove(path); err != nil {
-				return "Error removing pending approval: " + err.Error()
-			}
-			return fmt.Sprintf("APPROVED: use approval_id=%s for the exact approved bash command.", actionID)
-		}
-		if err := os.Remove(path); err != nil {
-			return "Error removing pending approval: " + err.Error()
-		}
-		return fmt.Sprintf("REJECTED: %s", request["title"])
-	}
-	return &Tool{
-		Name:        "resolve_approval",
-		Description: "Approve or reject a pending approval. Approval requires an explicit user confirmation in the current message.",
-		Schema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"action_id": map[string]any{"type": "string", "description": "The pending approval ID"},
-				"decision":  map[string]any{"type": "string", "enum": []string{"approve", "reject"}},
-			},
-			"required": []string{"action_id", "decision"},
-		},
-		Fn:        func(args map[string]any) string { return resolve(context.Background(), args) },
-		ContextFn: resolve,
-	}
-}
-
-func turnExplicitlyApproves(ctx context.Context) bool {
-	message, _ := ctx.Value(userMessageKey{}).(string)
-	message = strings.ToLower(strings.TrimSpace(message))
-	if message == "yes" || message == "y" {
-		return true
-	}
-	for _, phrase := range []string{"approve", "approved", "proceed", "go ahead", "confirm", "do it", "send it", "ok", "sure", "done"} {
-		if strings.Contains(message, phrase) {
-			return true
-		}
-	}
-	return false
 }
 
 func classifyBash(args map[string]any) ToolBehavior {
@@ -967,14 +837,14 @@ var destructiveBashPatterns = []struct {
 	re     *regexp.Regexp
 	reason string
 }{
-	{regexp.MustCompile(`(?i)(?:^|[\s;&|()])(?:\\|[^\s;&|()]*/)?(?:rm|rmdir|unlink|shred)(?:\s|$)`), "file deletion requires approval"},
-	{regexp.MustCompile(`(?i)(?:^|[\s;&|()])(?:\\|[^\s;&|()]*/)?(?:mkfs(?:\.\w+)?|wipefs|fdisk|parted)(?:\s|$)`), "disk modification requires approval"},
-	{regexp.MustCompile(`(?i)(?:^|[\s;&|()])(?:\\|[^\s;&|()]*/)?(?:shutdown|reboot|poweroff|halt)(?:\s|$)`), "host shutdown requires approval"},
-	{regexp.MustCompile(`(?i)\bgit\s+(?:reset\s+--hard|clean\s+-[a-z]*f|push\b[^\n]*(?:--force|-f\b))`), "destructive Git operation requires approval"},
-	{regexp.MustCompile(`(?i)\b(?:drop|truncate)\s+(?:table|database)\b`), "destructive database operation requires approval"},
-	{regexp.MustCompile(`(?i)\bdelete\s+from\b`), "DELETE without WHERE requires approval"},
-	{regexp.MustCompile(`(?i)\bupdate\s+\w+\s+set\b`), "UPDATE without WHERE requires approval"},
-	{regexp.MustCompile(`(?i)\bchmod\s+(?:-R\s+)?777\b`), "world-writable permission change requires approval"},
+	{regexp.MustCompile(`(?i)(?:^|[\s;&|()])(?:\\|[^\s;&|()]*/)?(?:rm|rmdir|unlink|shred)(?:\s|$)`), "file deletion"},
+	{regexp.MustCompile(`(?i)(?:^|[\s;&|()])(?:\\|[^\s;&|()]*/)?(?:mkfs(?:\.\w+)?|wipefs|fdisk|parted)(?:\s|$)`), "disk modification"},
+	{regexp.MustCompile(`(?i)(?:^|[\s;&|()])(?:\\|[^\s;&|()]*/)?(?:shutdown|reboot|poweroff|halt)(?:\s|$)`), "host shutdown"},
+	{regexp.MustCompile(`(?i)\bgit\s+(?:reset\s+--hard|clean\s+-[a-z]*f|push\b[^\n]*(?:--force|-f\b))`), "destructive Git operation"},
+	{regexp.MustCompile(`(?i)\b(?:drop|truncate)\s+(?:table|database)\b`), "destructive database operation"},
+	{regexp.MustCompile(`(?i)\bdelete\s+from\b`), "DELETE without WHERE"},
+	{regexp.MustCompile(`(?i)\bupdate\s+\w+\s+set\b`), "UPDATE without WHERE"},
+	{regexp.MustCompile(`(?i)\bchmod\s+(?:-R\s+)?777\b`), "world-writable permission change"},
 }
 
 // --- Workspace boundary gate (§8.1) ---
@@ -1062,41 +932,6 @@ func gitCommitBeforeBash(ctx context.Context, command string, home string) {
 	msg += " — " + cmdPreview
 	commitCmd := exec.CommandContext(gitCtx, "git", "commit", "-m", msg)
 	commitCmd.Run() // ignore errors
-}
-
-func approvalHome(home string) string {
-	if home != "" {
-		return home
-	}
-	if configured := os.Getenv("MINO_HOME"); configured != "" {
-		return configured
-	}
-	if userHome, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(userHome, ".mino")
-	}
-	return ".mino"
-}
-
-func safeActionID(actionID string) bool {
-	return regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`).MatchString(actionID)
-}
-
-func approvedBashPlan(home, actionID, command string) (string, error) {
-	if !safeActionID(actionID) {
-		return "", fmt.Errorf("invalid approval ID")
-	}
-	path := filepath.Join(approvalHome(home), "approved", actionID+".json")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	var approval struct {
-		ExecPlan string `json:"exec_plan"`
-	}
-	if json.Unmarshal(data, &approval) != nil || !strings.Contains(approval.ExecPlan, command) {
-		return "", fmt.Errorf("approved plan does not contain the exact command")
-	}
-	return path, nil
 }
 
 // --- Tool factories (match Core's make_tool patterns) ---

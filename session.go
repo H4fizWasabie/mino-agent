@@ -4,7 +4,6 @@ package main
 // Working memory = SOUL.md + gated memory + chat history + user message.
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,7 +20,6 @@ You are concise, warm, and proactive. Answer briefly.
 
 TOOL DISCIPLINE (STRICT):
 - Never re-run the same tool with the same args.
-  If you see "[already executed]" in a tool result, you called it twice. Move on.
 - A successful tool result is authoritative. Do not repeat or second-guess it.
 - A failed tool result is evidence, not completion. Inspect the error and retry with
   corrected arguments or a different tool when a safe path remains.
@@ -31,7 +29,7 @@ TOOL DISCIPLINE (STRICT):
 
 TASK COMPLETION (STRICT):
 - Continue until every requested step is complete, or you are genuinely blocked by
-  required user input, approval, or an unavailable external dependency.
+  required user input, confirmation, or an unavailable external dependency.
 - Before replying, silently verify what the user asked you to do and whether each
   action actually succeeded. Saying "Done" does not count; tool evidence does.
 - Do not hand unfinished work back to the user merely because a tool failed or output
@@ -82,7 +80,7 @@ func loadSoul(home string) string {
 
 // BuildSystem — Core's build_system():
 //
-//	SOUL.md + pending approvals + relevant skill matches. Time is injected as user message for cache stability.
+//	SOUL.md + relevant skill and playbook matches. Time is injected as user message for cache stability.
 func (s *Session) BuildSystem(userMessage, source string) string {
 	return s.buildSystem(userMessage, source, true)
 }
@@ -98,29 +96,6 @@ func (s *Session) buildSystem(userMessage, source string, includePlaybookRouting
 	}
 	if source == "telegram" {
 		parts = append(parts, "\nYou are responding via Telegram. If you are going to call a tool, do NOT output explanatory text. Just call the tool silently. Reply to the user ONLY after all tools have completed. Never say 'Let me...' in Telegram mode.")
-	}
-
-	// inject pending approvals so the user sees them in any conversation
-	if s.settings != nil {
-		pendingDir := filepath.Join(s.settings.Home, "pending")
-		if entries, err := os.ReadDir(pendingDir); err == nil && len(entries) > 0 {
-			var pending []string
-			for _, e := range entries {
-				if !strings.HasSuffix(e.Name(), ".json") {
-					continue
-				}
-				data, _ := os.ReadFile(filepath.Join(pendingDir, e.Name()))
-				var req map[string]any
-				if json.Unmarshal(data, &req) == nil {
-					title, _ := req["title"].(string)
-					actionID := strings.TrimSuffix(e.Name(), ".json")
-					pending = append(pending, fmt.Sprintf("- [%s] %s", actionID, title))
-				}
-			}
-			if len(pending) > 0 {
-				parts = append(parts, "\n\u23f3 PENDING APPROVALS (use resolve_approval to approve/reject):\n"+strings.Join(pending, "\n"))
-			}
-		}
 	}
 
 	if s.mem != nil {

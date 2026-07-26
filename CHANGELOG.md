@@ -25,14 +25,13 @@
   normal reasoning loop for high-scoring matches.
 - Run playbook stages through the canonical Mino runtime instead of a second
   playbook-specific LLM/tool loop.
-- Add optional per-stage tool capabilities and lenient circuit breakers that
-  cache one repeated call but stop repeated identical actions before runaway
-  rounds.
+- Keep the canonical loop as reason → tool execution → observation without a
+  second deduplication cache or repeated-call state machine.
 - Feed playbook stages through the session context and artifact catalog while
   avoiding nested playbook routing inside an executing stage.
 - Remove an unused test helper that still fabricated the deleted completion tool.
 - Align decisions, handoff, contributing, and playbook design notes with the
-  current filesystem playbook and approval architecture.
+  current filesystem playbook architecture.
 - Make deploy builds reproducible and fail deployment if the VPS binary hash
   differs from the just-built local binary.
 - Remove the obsolete sqlite_fts5 build-tag advice from the FTS rebuild error.
@@ -40,8 +39,8 @@
   generic playbook dispatcher owns scheduled delivery.
 - Make scheduled runners encode API JSON safely, select only output created by
   the current run, and avoid overlapping executions per playbook.
-- Restore the approval request and resolution tools so destructive Bash remains
-  fail-closed without leaving the model with an unusable approval protocol.
+- Remove the obsolete programmatic approval tools and use explicit human
+  checkpoints in playbook stages.
 - Remove the unused completion tool/protocol remnants and tell the model to stop
   calling tools when a turn is complete.
 - Remove the obsolete `complete_task` protocol from the session system prompt;

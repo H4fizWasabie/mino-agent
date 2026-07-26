@@ -99,8 +99,6 @@ func RunLoopContext(
 	}()
 
 	schemas := tools.Schemas()
-	toolCache := make(map[string]string)
-	repeatedCalls := make(map[string]int)
 
 	for i := 1; i <= maxIter; i++ {
 		if ctx.Err() != nil {
@@ -152,21 +150,7 @@ func RunLoopContext(
 		var turnImages []string
 		for _, tc := range toolUses {
 			args, _ := tc.Input.(map[string]any)
-			key := dedupKey(tc.Name, args)
-			raw, cached := toolCache[key]
-			if cached {
-				repeatedCalls[key]++
-				if repeatedCalls[key] >= 2 {
-					result.Status = "blocked"
-					result.Reply = fmt.Sprintf("Stopped: repeated identical call to %s.", tc.Name)
-					logTrace(traceHome, "circuit_breaker", map[string]any{"reason": "repeated tool call", "tool": tc.Name, "iteration": i})
-					return result
-				}
-				raw = "[already executed] " + raw
-			} else {
-				raw = tools.ExecuteContext(ctx, tc.Name, args)
-				toolCache[key] = raw
-			}
+			raw := tools.ExecuteContext(ctx, tc.Name, args)
 			if ctx.Err() != nil {
 				result.Status = "cancelled"
 				result.Reply = "Stopped."
@@ -198,7 +182,7 @@ func RunLoopContext(
 }
 
 func toolOutputStatus(output string) string {
-	text := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(output, "[already executed] ")))
+	text := strings.ToLower(strings.TrimSpace(output))
 	if strings.HasPrefix(text, "error:") || strings.HasPrefix(text, "error ") ||
 		strings.HasPrefix(text, "extension error:") || strings.HasPrefix(text, "failed ") ||
 		strings.HasPrefix(text, "search failed:") ||
@@ -369,35 +353,12 @@ func assembleAssistantContent(blocks []ContentBlock) string {
 	return strings.TrimSpace(out.String())
 }
 
-// ponytail: global lock, per-account locks if throughput matters
-
-func dedupKey(name string, args map[string]any) string {
-	data, _ := json.Marshal(args)
-	return name + ":" + string(data)
-}
-
 func formatToolResults(results []map[string]any) string {
 	var out strings.Builder
-	duplicate := false
 	for _, r := range results {
-		fmt.Fprintf(&out, "[tool_result tool=%v status=%v cached=%v: %v]\n", r["tool"], r["status"], r["cached"], r["content"])
-		duplicate = duplicate || r["cached"] == true
+		fmt.Fprintf(&out, "[tool_result tool=%v: %v]\n", r["tool"], r["content"])
 	}
-	if duplicate {
-		out.WriteString("[The exact action already ran. Its cached result is authoritative; do not execute or verify it again.]\n")
-	}
-	out.WriteString("[Continue only if a requested step remains. After status=ok, call a distinct next tool. Stop calling tools when the work is complete. Never repeat a successful action.]\n")
 	return out.String()
-}
-
-// appendActionReceipt makes every tool result auditable and reusable by the
-// next observe cycle. The loop owns this protocol; tools only return evidence.
-func appendActionReceipt(output, tool, action, status string, cached bool) string {
-	receipt, _ := json.Marshal(map[string]any{
-		"tool": tool, "action": action, "status": status,
-		"proof": status == "ok", "cached": cached,
-	})
-	return output + "\n[action_receipt " + string(receipt) + "]"
 }
 
 type traceFile struct {

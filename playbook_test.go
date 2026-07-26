@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -224,29 +223,6 @@ func TestRespondForLetsModelChooseMatchedPlaybook(t *testing.T) {
 	}
 	if !sawCandidate {
 		t.Fatal("matched playbook was not offered to the model")
-	}
-}
-
-func TestPlaybookCircuitBreakerStopsRepeatedIdenticalCall(t *testing.T) {
-	home := t.TempDir()
-	path := filepath.Join(home, "input.txt")
-	if err := os.WriteFile(path, []byte("evidence"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	registry := NewRegistry()
-	registry.Register(makeReadTool())
-	client := &fakeClient{script: []*LLMResponse{
-		scriptedResp([]ContentBlock{toolBlock("read_file", map[string]any{"path": path})}, "tool_use"),
-		scriptedResp([]ContentBlock{toolBlock("read_file", map[string]any{"path": path})}, "tool_use"),
-		scriptedResp([]ContentBlock{toolBlock("read_file", map[string]any{"path": path})}, "tool_use"),
-	}}
-
-	result := RunLoopContext(context.Background(), client, "test-session", "", []Message{{Role: "user", Content: "read the evidence"}}, registry, 10, 100, nil, false, home, nil)
-	if result.Status != "blocked" || !strings.Contains(result.Reply, "repeated identical call") {
-		t.Fatalf("result = %#v, want circuit breaker", result)
-	}
-	if len(result.ToolCalls) != 2 {
-		t.Fatalf("calls = %d, want first execution plus one cached result", len(result.ToolCalls))
 	}
 }
 

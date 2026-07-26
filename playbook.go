@@ -411,8 +411,7 @@ func RunPlaybook(
 
 		// check if stage wants human input ("Stop here. Ask Abah.")
 		if strings.Contains(strings.ToLower(reply), "stop here") ||
-			strings.Contains(strings.ToLower(reply), "ask abah") ||
-			strings.Contains(strings.ToLower(reply), "awaiting approval") {
+			strings.Contains(strings.ToLower(reply), "ask abah") {
 			result.Status = "blocked"
 			logTrace(core.Settings.Home, "playbook_blocked", map[string]any{"stage": stage.Number})
 			return result, nil

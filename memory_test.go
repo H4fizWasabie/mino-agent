@@ -89,7 +89,6 @@ func TestToolOutputStatus(t *testing.T) {
 		{"success", "3 results found", "ok"},
 		{"builtin error", "Error reading /tmp/missing: not found", "error"},
 		{"extension error", "Extension error: context deadline exceeded", "error"},
-		{"cached error", "[already executed] Extension error: unavailable", "error"},
 		{"failed operation", "Failed to create skill: permission denied", "error"},
 		{"search failure", "Search failed: timeout", "error"},
 		{"mcp failure", "MCP call files_read failed: EOF", "error"},
@@ -179,7 +178,6 @@ func TestTraceTelemetryUsesRecordedDecisionsAndStatuses(t *testing.T) {
 		t.Fatalf("turn verification telemetry was not reconstructed: %#v", turns[0])
 	}
 }
-
 
 func TestUsageStatsIgnoresErrorTextInChatHistory(t *testing.T) {
 	home := t.TempDir()
