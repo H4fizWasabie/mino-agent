@@ -21,6 +21,7 @@
 - Keep dashboard tool activity rows compact; full tool arguments and output remain collapsed until opened.
 
 ### Fixed
+- Remove an unused test helper that still fabricated the deleted completion tool.
 - Align decisions, handoff, contributing, and playbook design notes with the
   current filesystem playbook and approval architecture.
 - Make deploy builds reproducible and fail deployment if the VPS binary hash

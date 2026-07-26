@@ -1,8 +1,6 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -108,7 +106,6 @@ func TestAddExchangePersistsFullToolArguments(t *testing.T) {
 // The old Telegram/dashboard race was fixed by funneling every gateway through
 // RespondFor with a per-conversation mutex. This pins that guarantee.
 
-
 // Images must reach the API as vision parts for the current turn only —
 // leaking base64 into history would blow the context budget every turn after.
 
@@ -121,10 +118,4 @@ func fakePM(url string) *ProviderManager {
 		state:     map[string]*providerState{"fake": {}},
 		sticky:    map[string]string{}, now: time.Now, sleep: func(time.Duration) {},
 	}
-}
-
-func openAICompletionJSON(reply string) string {
-	args, _ := json.Marshal(map[string]string{"status": "complete", "reply": reply})
-	encoded, _ := json.Marshal(string(args))
-	return fmt.Sprintf(`{"choices":[{"message":{"content":"","tool_calls":[{"id":"finish","function":{"name":"complete_task","arguments":%s}}]},"finish_reason":"tool_calls"}],"usage":{}}`, encoded)
 }
