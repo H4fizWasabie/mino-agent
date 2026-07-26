@@ -11,7 +11,7 @@ import (
 
 // CurrentSchemaVersion is incremented when the schema changes in a way
 // that needs explicit migration. Add a migration function in runMigrations().
-const CurrentSchemaVersion = 2
+const CurrentSchemaVersion = 3
 
 // Simplified schema — single statements, no triggers with embedded semicolons.
 var schemaStatements = []string{
@@ -80,16 +80,6 @@ var schemaStatements = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(session_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_tool_calls_name ON tool_calls(tool_name)`,
-	`CREATE TABLE IF NOT EXISTS projects (
-		name TEXT PRIMARY KEY,
-		objective TEXT NOT NULL DEFAULT '',
-		status TEXT NOT NULL DEFAULT 'active',
-		blocker TEXT NOT NULL DEFAULT '',
-		next_action TEXT NOT NULL DEFAULT '',
-		last_checked TEXT,
-		next_check TEXT,
-		updated_at TEXT DEFAULT (datetime('now'))
-	)`,
 	`CREATE TABLE IF NOT EXISTS _meta (
 		key TEXT PRIMARY KEY,
 		value TEXT NOT NULL
@@ -142,11 +132,9 @@ func runMigrations(db *sql.DB) {
 		db.Exec("INSERT OR IGNORE INTO _meta (key, value) VALUES ('schema_version', '0')")
 	}
 
-	// v2: add last_checked / next_check to projects for persistent objectives
-	if current < 2 {
-		db.Exec("ALTER TABLE projects ADD COLUMN last_checked TEXT")
-		db.Exec("ALTER TABLE projects ADD COLUMN next_check TEXT")
-		current = 2
+	// v3: projects table removed (replaced by playbook folders)
+	if current < 3 {
+		current = 3
 	}
 
 	if current != CurrentSchemaVersion {
