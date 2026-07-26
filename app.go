@@ -64,7 +64,6 @@ func NewCore() *Core {
 	}
 	mem.skills = NewSkillLoader(s.Home, mem.embedder)
 	tools := BuildRegistry(db, s.Home, s.Workspace, mem, s.Location())
-	tools.SetMaxDescChars(s.MaxToolDescChars)
 	tools.SetLogDB(db)                                      // enable tool_calls table logging
 	tools.SetAuditLog(filepath.Join(s.Home, "audit.jsonl")) // §8.4: immutable audit log
 	LoadExtensions(s.Home, tools)                           // discover + register extension tools
@@ -115,14 +114,6 @@ func NewCore() *Core {
 	tools.Register(MakeReloadPluginsTool(s.Home, tools, mcpBridge))
 
 	// Tool filter: use embeddings to send only relevant tools per turn
-	addDelegateTools(w)
-	coreTools := []string{"recall", "save_note", "read_file", "write_file", "edit_file", "bash", "request_approval", "resolve_approval", "project_get", "project_update", "delegate", "fan_out", "restore_files", "threads_post", "threads_get_replies", "list_playbooks", "run_playbook"}
-	toolFilter := NewToolFilter(coreTools, 8) // top 8 + 8 core = max 16 tools/turn
-	if mem.embedder != nil {
-		toolFilter.Index(tools.Schemas(), mem.embedder)
-		slog.Info("tool filter indexed", "tools", len(tools.Schemas()))
-	}
-	tools.SetFilter(toolFilter)
 
 
 
@@ -257,8 +248,6 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 
 	ctx, finish := conversation.beginTurn(parent)
 	defer finish()
-	ctx = context.WithValue(ctx, turnMessageKey{}, userMessage)
-	ctx = context.WithValue(ctx, turnSourceKey{}, source)
 	system := conversation.Session.BuildSystem(userMessage, source)
 	// time context: injected as system message so it doesn't clutter the chat display
 	local := time.Now().In(w.Settings.Location())

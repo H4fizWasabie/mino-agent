@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"math"
 	"net/http"
 	"net/url"
@@ -30,8 +29,6 @@ import (
 // ToolFunc is the callable — matches Core's fn: Callable[..., str]
 type ToolFunc func(args map[string]any) string
 type ContextToolFunc func(context.Context, map[string]any) string
-type turnMessageKey struct{}
-type turnSourceKey struct{}
 type sessionIDKey struct{}
 type rollbackDirKey struct{}
 
@@ -67,8 +64,6 @@ func (t *Tool) ToAPI() map[string]any {
 
 type Registry struct {
 	tools        map[string]*Tool
-	filter       *ToolFilter
-	maxDescChars int
 	logDB        *sql.DB   // optional: if set, ExecuteContext logs to tool_calls table
 	auditFile    *os.File  // optional: append-only JSONL audit log
 	auditMu      sync.Mutex // guards auditFile writes
@@ -171,9 +166,6 @@ func (r *Registry) Schema(name string) (ToolDef, bool) {
 
 func (r *Registry) toolDef(t *Tool) ToolDef {
 	desc := t.Description
-	if r.maxDescChars > 0 && len(desc) > r.maxDescChars {
-		desc = desc[:r.maxDescChars] + "..."
-	}
 	return ToolDef{Name: t.Name, Description: desc, Parameters: t.Schema}
 }
 
@@ -192,10 +184,7 @@ func (r *Registry) ExecuteContext(ctx context.Context, name string, args map[str
 	if err := validateObject(args, t.Schema); err != nil {
 		return fmt.Sprintf("Error: invalid arguments for %s: %v", name, err)
 	}
-	// snapshot before mutation for rollback
-	snapshotIfMutate(ctx, name, args)
-
-	start := time.Now()
+start := time.Now()
 	var output string
 	if t.ContextFn != nil {
 		output = t.ContextFn(ctx, args)
@@ -406,9 +395,6 @@ func BuildRegistry(db *sql.DB, home, workspace string, mem *Memory, location ...
 
 	// notes (Core: notes.make_tool)
 	r.Register(behaves(makeNotesTool(db, mem), BehaviorMutate))
-	r.Register(behaves(makeProjectListTool(db), BehaviorObserve))
-	r.Register(behaves(makeProjectGetTool(db), BehaviorObserve))
-	r.Register(behaves(makeProjectUpdateTool(db), BehaviorMutate))
 
 	// messages (Core: messages.make_tool)
 	r.Register(behaves(makeMessagesTool(home), BehaviorMutate))
@@ -452,12 +438,9 @@ func BuildRegistry(db *sql.DB, home, workspace string, mem *Memory, location ...
 	}
 
 	// image generation (OpenRouter images API)
-	r.Register(behaves(makeRequestApprovalTool(home), BehaviorMutate))
-	r.Register(behaves(makeResolveApprovalTool(home), BehaviorMutate))
 	r.Register(behaves(makeGenerateImageTool(home), BehaviorMutate))
 
 	// rollback — restore files from a session snapshot
-	r.Register(makeRollbackTool(home))
 
 	return r
 }
@@ -522,9 +505,6 @@ func makeWriteTool(workspace, home string) *Tool {
 		},
 		ContextFn: func(ctx context.Context, args map[string]any) string {
 			path, _ := args["path"].(string)
-			if blocked := workspaceGate(ctx, path, workspace, home); blocked != "" {
-				return blocked
-			}
 			content, _ := args["content"].(string)
 			mode, _ := args["mode"].(string)
 			os.MkdirAll(filepath.Dir(path), 0755)
@@ -565,9 +545,6 @@ func makeEditTool(workspace, home string) *Tool {
 		},
 		ContextFn: func(ctx context.Context, args map[string]any) string {
 			path, _ := args["path"].(string)
-			if blocked := workspaceGate(ctx, path, workspace, home); blocked != "" {
-				return blocked
-			}
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return fmt.Sprintf("Error reading %s: %v", path, err)
@@ -641,12 +618,6 @@ func makeSyncFileToolFor(workspace, home string, timeout time.Duration) *Tool {
 		defer cancel()
 		source, _ := args["source"].(string)
 		destination, _ := args["destination"].(string)
-		// gate destination (write target) on workspace boundary
-		if !isRemotePath(destination) {
-			if blocked := workspaceGate(ctx, destination, workspace, home); blocked != "" {
-				return blocked
-			}
-		}
 		sourceRemote, destinationRemote := isRemotePath(source), isRemotePath(destination)
 		if sourceRemote && destinationRemote {
 			return "Error: sync_file requires at least one local endpoint; stage remote-to-remote transfers locally"
@@ -891,9 +862,6 @@ var destructiveBashPatterns = []struct {
 
 // --- Workspace boundary gate (§8.1) ---
 
-// workspaceGateApprovals caches per-session directory approvals.
-// Key: "<sessionID>/<dirPrefix>", Value: true.
-var workspaceGateApprovals sync.Map
 
 // isUnderAllowedPath returns true if the path is under workspace or Mino home.
 // Always allows writes to ~/.mino/rollback/ (git rollback snapshots) and
@@ -923,54 +891,7 @@ func isUnderAllowedPath(path, workspace, home string) bool {
 	return false
 }
 
-// workspaceGate checks if the path is within the allowed boundary.
-// If not, auto-creates an approval request and returns an [APPROVAL_REQUIRED] message.
-// Per-session cache: first approval for a directory tree skips subsequent checks.
-func workspaceGate(ctx context.Context, path, workspace, home string) string {
-	if isUnderAllowedPath(path, workspace, home) {
-		return ""
-	}
-	sid, _ := ctx.Value(sessionIDKey{}).(string)
-	if sid == "" {
-		sid = "unknown"
-	}
-	dir := filepath.Dir(path)
-	cacheKey := sid + "/" + dir
-	if _, ok := workspaceGateApprovals.Load(cacheKey); ok {
-		return "" // already approved for this session+directory
-	}
-	// auto-create approval in pending/ — user must explicitly approve
-	actionID := "write-outside-" + safeApprovalSlug(dir)
-	pendingDir := filepath.Join(approvalHome(home), "pending")
-	os.MkdirAll(pendingDir, 0700)
-	req := map[string]any{
-		"action_id": actionID,
-		"title":     "Write outside workspace: " + dir,
-		"details":   "The agent is attempting to write to " + path + " which is outside the workspace (" + workspace + ") and Mino home (" + home + ").",
-		"exec_plan": "Retry the write_file/edit_file/sync_file call. The path has been approved for this session.",
-		"created":   time.Now().Format(time.RFC3339),
-	}
-	data, _ := json.Marshal(req)
-	pendingPath := filepath.Join(pendingDir, actionID+".json")
-	os.WriteFile(pendingPath, data, 0600)
-	// cache for session — retry after approval skips the gate
-	workspaceGateApprovals.Store(cacheKey, true)
-	return fmt.Sprintf("[APPROVAL_REQUIRED] %s is outside workspace. Approval requested as '%s'. The user must approve this action before it can proceed.", dir, actionID)
-}
 
-// safeApprovalSlug replaces path separators and unsafe chars for approval IDs.
-func safeApprovalSlug(dir string) string {
-	slug := strings.TrimPrefix(dir, "/")
-	slug = strings.ReplaceAll(slug, "/", "-")
-	slug = strings.ReplaceAll(slug, string(os.PathSeparator), "-")
-	// keep only alphanumeric, dash, underscore, dot
-	return strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
-			return r
-		}
-		return '-'
-	}, slug)
-}
 
 var hasWhereClause = regexp.MustCompile(`(?i)\bwhere\b`)
 
@@ -1171,137 +1092,8 @@ func makeNotesTool(db *sql.DB, mem *Memory) *Tool {
 	}
 }
 
-func makeProjectListTool(db *sql.DB) *Tool {
-	return &Tool{
-		Name:        "project_list",
-		Description: "List all tracked projects/objectives. Use for morning briefings to discover what needs attention. Filter by status or by due check-ins.",
-		Schema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"status":  map[string]any{"type": "string", "description": "Filter: active, blocked, complete, paused. Omit to list all."},
-				"due_now": map[string]any{"type": "boolean", "description": "If true, only return objectives where next_check <= now."},
-			},
-		},
-		Fn: func(args map[string]any) string {
-			query := "SELECT name, objective, status, blocker, next_action, COALESCE(last_checked,''), COALESCE(next_check,''), updated_at FROM projects"
-			var conditions []string
-			var params []any
-			if status, _ := args["status"].(string); status != "" {
-				conditions = append(conditions, "status = ?")
-				params = append(params, status)
-			}
-			if due, _ := args["due_now"].(bool); due {
-				conditions = append(conditions, "next_check IS NOT NULL AND next_check <= datetime('now')")
-			}
-			if len(conditions) > 0 {
-				query += " WHERE " + strings.Join(conditions, " AND ")
-			}
-			query += " ORDER BY next_check ASC, updated_at DESC"
-			rows, err := db.Query(query, params...)
-			if err != nil {
-				return fmt.Sprintf("Error listing projects: %v", err)
-			}
-			defer rows.Close()
-			var out strings.Builder
-			count := 0
-			for rows.Next() {
-				var name, objective, status, blocker, nextAction, lastChecked, nextCheck, updated string
-				if err := rows.Scan(&name, &objective, &status, &blocker, &nextAction, &lastChecked, &nextCheck, &updated); err != nil {
-					continue
-				}
-				out.WriteString(fmt.Sprintf("- %s [%s] next_check=%s next_action=%s\n", name, status, nextCheck, nextAction))
-				count++
-			}
-			if count == 0 {
-				return "No projects found."
-			}
-			return fmt.Sprintf("%d project(s):\n%s", count, out.String())
-		},
-	}
-}
 
-func makeProjectGetTool(db *sql.DB) *Tool {
-	return &Tool{
-		Name:        "project_get",
-		Description: "Read the durable state of an ongoing project. Use only when the user names a project or asks to continue tracked work; skip for one-off tasks.",
-		Schema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"name": map[string]any{"type": "string", "description": "Exact project name"},
-			},
-			"required": []string{"name"},
-		},
-		Fn: func(args map[string]any) string {
-			name, _ := args["name"].(string)
-			var objective, status, blocker, nextAction, updated string
-			err := db.QueryRow("SELECT objective, status, blocker, next_action, updated_at FROM projects WHERE name = ?", name).
-				Scan(&objective, &status, &blocker, &nextAction, &updated)
-			if err == sql.ErrNoRows {
-				return fmt.Sprintf("No project state found for %q. Ask before creating a new project record.", name)
-			}
-			if err != nil {
-				return fmt.Sprintf("Error reading project %q: %v", name, err)
-			}
-			return fmt.Sprintf("Project %q\nobjective: %s\nstatus: %s\nblocker: %s\nnext_action: %s\nupdated_at: %s", name, objective, status, blocker, nextAction, updated)
-		},
-	}
-}
 
-func makeProjectUpdateTool(db *sql.DB) *Tool {
-	return &Tool{
-		Name:        "project_update",
-		Description: "Create or update durable project state after the user explicitly requests tracking or a verified milestone. Never invent a project or overwrite a major objective silently.",
-		Schema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"name":         map[string]any{"type": "string", "description": "Exact project name"},
-				"objective":    map[string]any{"type": "string"},
-				"status":       map[string]any{"type": "string", "enum": []string{"active", "blocked", "complete", "paused"}},
-				"blocker":      map[string]any{"type": "string"},
-				"next_action":  map[string]any{"type": "string"},
-				"last_checked": map[string]any{"type": "string", "description": "ISO 8601 timestamp of last check-in"},
-				"next_check":   map[string]any{"type": "string", "description": "ISO 8601 timestamp for next check-in"},
-			},
-			"required": []string{"name"},
-		},
-		Fn: func(args map[string]any) string {
-			name, _ := args["name"].(string)
-			if strings.TrimSpace(name) == "" {
-				return "Error: project name cannot be empty"
-			}
-			objective, _ := args["objective"].(string)
-			status, _ := args["status"].(string)
-			blocker, _ := args["blocker"].(string)
-			nextAction, _ := args["next_action"].(string)
-			lastChecked, _ := args["last_checked"].(string)
-			nextCheck, _ := args["next_check"].(string)
-			var current [6]string
-			err := db.QueryRow("SELECT objective, status, blocker, next_action, COALESCE(last_checked,''), COALESCE(next_check,'') FROM projects WHERE name = ?", name).
-				Scan(&current[0], &current[1], &current[2], &current[3], &current[4], &current[5])
-			if err != nil && err != sql.ErrNoRows {
-				return fmt.Sprintf("Error reading project %q: %v", name, err)
-			}
-			if current[1] == "" {
-				current[1] = "active"
-			}
-			for i, value := range []string{objective, status, blocker, nextAction, lastChecked, nextCheck} {
-				if value != "" {
-					current[i] = value
-				}
-			}
-			_, err = db.Exec(`INSERT INTO projects (name, objective, status, blocker, next_action, last_checked, next_check, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-				ON CONFLICT(name) DO UPDATE SET objective=excluded.objective, status=excluded.status,
-				blocker=excluded.blocker, next_action=excluded.next_action,
-				last_checked=excluded.last_checked, next_check=excluded.next_check, updated_at=excluded.updated_at`,
-				name, current[0], current[1], current[2], current[3], current[4], current[5])
-			if err != nil {
-				return fmt.Sprintf("Error updating project %q: %v", name, err)
-			}
-			return fmt.Sprintf("Project state updated: %s", name)
-		},
-	}
-}
 
 func makeMessagesTool(home string) *Tool {
 	return &Tool{
@@ -1774,118 +1566,8 @@ func makeViewImageTool() *Tool {
 
 // --- Approval tools (multi-turn gate for destructive ops) ---
 
-func makeRequestApprovalTool(home string) *Tool {
-	return &Tool{
-		Name:        "request_approval",
-		Description: "Pause and ask for user approval BEFORE executing a destructive or irreversible action. Use for deleting emails, files, modifying configs, sending messages, or spending money. Saves the request so the user can review it later.",
-		Schema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"action_id": map[string]any{"type": "string", "description": "Short unique ID, e.g. 'gmail-cleanup-2026-07-18'"},
-				"title":     map[string]any{"type": "string", "description": "One-line summary for the user, e.g. 'Delete 7 promotional emails'"},
-				"details":   map[string]any{"type": "string", "description": "Full details: what will be affected, why it should be done, what the risks are"},
-				"exec_plan": map[string]any{"type": "string", "description": "Instructions for what to do if approved. Include exact tool calls, email IDs, file paths, etc. The LLM will read this back when executing."},
-			},
-			"required": []string{"action_id", "title", "details", "exec_plan"},
-		},
-		Fn: func(args map[string]any) string {
-			actionID, _ := args["action_id"].(string)
-			if !safeActionID(actionID) {
-				return "Error: action_id must use only letters, numbers, dots, dashes, or underscores"
-			}
-			title, _ := args["title"].(string)
-			details, _ := args["details"].(string)
-			execPlan, _ := args["exec_plan"].(string)
-			os.MkdirAll(filepath.Join(home, "pending"), 0700)
-			path := filepath.Join(home, "pending", actionID+".json")
-			data, _ := json.Marshal(map[string]any{
-				"action_id": actionID,
-				"title":     title,
-				"details":   details,
-				"exec_plan": execPlan,
-				"created":   time.Now().Format(time.RFC3339),
-			})
-			os.WriteFile(path, data, 0600)
-			return fmt.Sprintf("[APPROVAL_REQUIRED] %s — %s\n\nThe user will see this in their next conversation. Wait for their response before proceeding.", actionID, title)
-		},
-	}
-}
 
-func makeResolveApprovalTool(home string) *Tool {
-	resolve := func(ctx context.Context, args map[string]any) string {
-		actionID, _ := args["action_id"].(string)
-		if !safeActionID(actionID) {
-			return "Error: invalid action_id"
-		}
-		decision, _ := args["decision"].(string)
-		reason, _ := args["reason"].(string)
-		if decision != "approve" && decision != "reject" {
-			return "Error: decision must be approve or reject"
-		}
-		if decision == "approve" && !turnExplicitlyApproves(ctx) {
-			return "Error: approval must come from an explicit user message such as approve, yes, proceed, or go ahead"
-		}
-		path := filepath.Join(home, "pending", actionID+".json")
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return fmt.Sprintf("No pending approval found for '%s'", actionID)
-		}
-		var req map[string]any
-		if json.Unmarshal(data, &req) != nil {
-			return "Error: pending approval is invalid"
-		}
-		if decision == "approve" {
-			os.MkdirAll(filepath.Join(home, "approved"), 0700)
-			req["approved_at"] = time.Now().Format(time.RFC3339)
-			approved, _ := json.Marshal(req)
-			approvedPath := filepath.Join(home, "approved", actionID+".json")
-			if err := os.WriteFile(approvedPath, approved, 0600); err != nil {
-				return "Error saving approval: " + err.Error()
-			}
-			os.Remove(path)
-			execPlan, _ := req["exec_plan"].(string)
-			return fmt.Sprintf("APPROVED: %s\n\nExec plan:\n%s\n\nUse approval_id=%s for the exact destructive bash command.", req["title"], execPlan, actionID)
-		}
-		os.Remove(path)
-		if reason != "" {
-			return fmt.Sprintf("REJECTED: %s — %s", req["title"], reason)
-		}
-		return fmt.Sprintf("REJECTED: %s", req["title"])
-	}
-	return &Tool{
-		Name:        "resolve_approval",
-		Description: "Check or resolve a pending approval. Use BEFORE executing any action that was previously approved. If decision is 'approve', the exec_plan is returned so you can carry it out. If 'reject', the request is deleted.",
-		Schema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"action_id": map[string]any{"type": "string", "description": "The ID of the pending approval"},
-				"decision":  map[string]any{"type": "string", "description": "'approve' or 'reject'"},
-				"reason":    map[string]any{"type": "string", "description": "Why approved or rejected (optional)"},
-			},
-			"required": []string{"action_id", "decision"},
-		},
-		Fn:        func(args map[string]any) string { return resolve(context.Background(), args) },
-		ContextFn: resolve,
-	}
-}
 
-func turnExplicitlyApproves(ctx context.Context) bool {
-	// scheduled tasks were explicitly approved at schedule-creation time
-	if source, _ := ctx.Value(turnSourceKey{}).(string); source == "scheduler" {
-		return true
-	}
-	message, _ := ctx.Value(turnMessageKey{}).(string)
-	message = strings.ToLower(strings.TrimSpace(message))
-	if message == "yes" || message == "y" {
-		return true
-	}
-	for _, phrase := range []string{"approve", "approved", "proceed", "go ahead", "confirm", "do it", "send it", "ok", "sure", "done"} {
-		if strings.Contains(message, phrase) {
-			return true
-		}
-	}
-	return false
-}
 
 func makeGenerateImageTool(home string) *Tool {
 	return &Tool{
@@ -1925,263 +1607,3 @@ func makeGenerateImageTool(home string) *Tool {
 	}
 }
 
-// --- ToolFilter: embedding-based dynamic tool selection ---
-// Cuts context waste by sending only relevant tools each turn.
-// Startup: embed all tool descriptions once. Each turn: embed message, pick top K.
-
-type toolEmbedding struct {
-	name string
-	emb  []float32
-}
-
-type ToolFilter struct {
-	embeddings []toolEmbedding
-	core       map[string]bool // always-include tools
-	topK       int
-}
-
-func NewToolFilter(coreTools []string, topK int) *ToolFilter {
-	core := make(map[string]bool, len(coreTools))
-	for _, name := range coreTools {
-		core[name] = true
-	}
-	return &ToolFilter{core: core, topK: topK}
-}
-
-// Index embeds all tool descriptions. Call once at startup with an embedder.
-// Batches in groups to avoid payload limits.
-func (f *ToolFilter) Index(tools []ToolDef, es *EmbeddingStore) {
-	if es == nil || len(tools) == 0 {
-		return
-	}
-	texts := make([]string, len(tools))
-	for i, t := range tools {
-		texts[i] = t.Name + ": " + t.Description
-	}
-	// ponytail: batch in chunks of 20 to stay under payload limits
-	for start := 0; start < len(texts); start += 20 {
-		end := start + 20
-		if end > len(texts) {
-			end = len(texts)
-		}
-		chunk := texts[start:end]
-		embs, err := es.EmbedBatch(chunk)
-		if err != nil {
-			slog.Warn("tool filter chunk embed failed", "start", start, "error", err)
-			continue
-		}
-		for j, emb := range embs {
-			idx := start + j
-			if idx < len(tools) {
-				f.embeddings = append(f.embeddings, toolEmbedding{name: tools[idx].Name, emb: emb})
-			}
-		}
-	}
-}
-
-// Filter returns the top K tools relevant to the message, plus always-core tools.
-// Falls back to keyword matching when no embedding store is available.
-func (f *ToolFilter) Filter(message string, tools []ToolDef, es *EmbeddingStore) []ToolDef {
-	if es == nil || len(f.embeddings) == 0 {
-		return f.keywordFilter(message, tools) // ponytail: keyword fallback, no API key needed
-	}
-	msgEmb, err := es.Embed(message)
-	if err != nil {
-		return tools
-	}
-	// score all tools by cosine similarity
-	type scored struct {
-		name  string
-		score float64
-	}
-	var scores []scored
-	for _, te := range f.embeddings {
-		scores = append(scores, scored{name: te.name, score: cosineSimilarity(msgEmb, te.emb)})
-	}
-	sort.Slice(scores, func(i, j int) bool { return scores[i].score > scores[j].score })
-
-	// pick top K + core
-	picked := make(map[string]bool)
-	var result []ToolDef
-	for _, s := range scores {
-		if len(picked) >= f.topK {
-			break
-		}
-		if picked[s.name] {
-			continue
-		}
-		picked[s.name] = true
-		for _, t := range tools {
-			if t.Name == s.name {
-				result = append(result, t)
-				break
-			}
-		}
-	}
-	// add core tools if not already picked
-	for _, t := range tools {
-		if f.core[t.Name] && !picked[t.Name] {
-			result = append(result, t)
-			picked[t.Name] = true
-		}
-	}
-	return result
-}
-
-// keywordFilter picks top K tools by keyword overlap with the message.
-// ponytail: zero-cost fallback when no embedding API key is set.
-func (f *ToolFilter) keywordFilter(message string, tools []ToolDef) []ToolDef {
-	msgLower := strings.ToLower(message)
-	msgWords := strings.Fields(msgLower)
-
-	type scored struct {
-		name  string
-		score int
-	}
-	var scores []scored
-	for _, t := range tools {
-		text := strings.ToLower(t.Name + " " + t.Description)
-		s := 0
-		for _, w := range msgWords {
-			if len(w) >= 3 && strings.Contains(text, w) {
-				s++
-			}
-		}
-		scores = append(scores, scored{name: t.Name, score: s})
-	}
-	sort.Slice(scores, func(i, j int) bool { return scores[i].score > scores[j].score })
-
-	picked := make(map[string]bool)
-	var result []ToolDef
-	for _, s := range scores {
-		if len(picked) >= f.topK {
-			break
-		}
-		if picked[s.name] {
-			continue
-		}
-		picked[s.name] = true
-		for _, t := range tools {
-			if t.Name == s.name {
-				result = append(result, t)
-				break
-			}
-		}
-	}
-	for _, t := range tools {
-		if f.core[t.Name] && !picked[t.Name] {
-			result = append(result, t)
-			picked[t.Name] = true
-		}
-	}
-	return result
-}
-
-// passthroughSchemas returns all tool schemas (used when no filter).
-func (r *Registry) SchemasFor(message string, es *EmbeddingStore) []ToolDef {
-	all := r.Schemas()
-	if r.filter == nil {
-		return all
-	}
-	return r.filter.Filter(message, all, es)
-}
-
-// SetFilter attaches a tool filter to the registry.
-func (r *Registry) SetFilter(f *ToolFilter) {
-	r.filter = f
-}
-
-// SetMaxDescChars caps tool description length (0 = no limit).
-func (r *Registry) SetMaxDescChars(n int) {
-	r.maxDescChars = n
-}
-
-// --- Rollback ---
-
-// snapshotIfMutate saves the original file before write_file or edit_file touches it.
-func snapshotIfMutate(ctx context.Context, toolName string, args map[string]any) {
-	// only write_file and edit_file are tracked — bash mutations are a known gap.
-	// ponytail: bash rollback skipped, add when Mino uses destructive shell commands unsafely.
-	if toolName != "write_file" && toolName != "edit_file" {
-		return
-	}
-	path, ok := args["path"].(string)
-	if !ok || path == "" {
-		return
-	}
-	// Only snapshot if the file already exists — new files have nothing to roll back.
-	info, err := os.Stat(path)
-	if err != nil || info.IsDir() {
-		return
-	}
-
-	rbDir, _ := ctx.Value(rollbackDirKey{}).(string)
-	if rbDir == "" {
-		return
-	}
-	snapshotPath := filepath.Join(rbDir, filepath.Clean(path))
-	if _, err := os.Stat(snapshotPath); err == nil {
-		return // already snapshotted in this session
-	}
-	os.MkdirAll(filepath.Dir(snapshotPath), 0700)
-	src, err := os.ReadFile(path)
-	if err != nil {
-		return
-	}
-	os.WriteFile(snapshotPath, src, 0644)
-}
-
-func makeRollbackTool(home string) *Tool {
-	return &Tool{
-		Name:        "restore_files",
-		Description: "Restore files to their state before a session. Use session_id to revert all write_file and edit_file changes made in that session. Use '--list' to see restorable sessions.",
-		Schema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"session_id": map[string]any{"type": "string", "description": "Session ID to roll back, or '--list' to list available sessions"},
-			},
-			"required": []string{"session_id"},
-		},
-		Fn: func(args map[string]any) string {
-			sid, _ := args["session_id"].(string)
-			rbBase := filepath.Join(home, "rollback")
-			if sid == "--list" {
-				entries, err := os.ReadDir(rbBase)
-				if err != nil || len(entries) == 0 {
-					return "No file restoration snapshots available."
-				}
-				var buf strings.Builder
-				buf.WriteString("Restorable sessions:\n")
-				for _, e := range entries {
-					if e.IsDir() {
-						buf.WriteString("- " + e.Name() + "\n")
-					}
-				}
-				return buf.String()
-			}
-			srcDir := filepath.Join(rbBase, filepath.Clean(sid))
-			if _, err := os.Stat(srcDir); os.IsNotExist(err) {
-				return fmt.Sprintf("No file snapshot for session %s. Use restore_files --list to see restorable sessions.", sid)
-			}
-			count := 0
-			filepath.Walk(srcDir, func(snapPath string, info os.FileInfo, err error) error {
-				if err != nil || info.IsDir() {
-					return nil
-				}
-				rel, _ := filepath.Rel(srcDir, snapPath)
-				restorePath := filepath.Join(string(os.PathSeparator), rel)
-				data, err := os.ReadFile(snapPath)
-				if err != nil {
-					return nil
-				}
-				os.MkdirAll(filepath.Dir(restorePath), 0755)
-				if err := os.WriteFile(restorePath, data, 0644); err == nil {
-					count++
-				}
-				return nil
-			})
-			os.RemoveAll(srcDir)
-			return fmt.Sprintf("Restored %d files from session %s.", count, sid)
-		},
-	}
-}

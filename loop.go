@@ -6,7 +6,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -115,17 +114,6 @@ func RunLoopContext(
 	rbDir := filepath.Join(traceHome, "rollback", sessionID)
 	ctx = context.WithValue(ctx, rollbackDirKey{}, rbDir)
 	result := &LoopResult{}
-	dedup := make(map[string]string) // tool dedup: key → cached output
-	dedupStatus := make(map[string]string)
-	unresolvedFailure := false
-	unverifiedTransfer := false
-	verifiedSyncRequired := false
-	pendingApproval := false
-	filePaths := make(map[string]struct{})
-	noProgress := 0
-	readOnlyStreak := 0
-	successfulObservation := false
-	finalizeOnly := false
 
 	defer func() {
 		decision, reason := "skip", "recall tool not invoked"
@@ -138,31 +126,9 @@ func RunLoopContext(
 		notify(obs, "gate", map[string]any{"decision": decision, "reason": reason})
 		logTrace(traceHome, "gate", map[string]any{"decision": decision, "reason": reason})
 		logTrace(traceHome, "turn_end", map[string]any{"reply": result.Reply, "status": result.Status, "iterations": result.Iterations})
-
-		// §22: auto-harvest eval case from completed tasks (skip eval/test sessions)
-		if result.Status == "complete" && len(result.ToolCalls) > 0 && !strings.HasPrefix(sessionID, "eval") {
-			hasMutate := false
-			toolNames := make([]string, 0, len(result.ToolCalls))
-			for _, tc := range result.ToolCalls {
-				toolNames = append(toolNames, tc.Name)
-				if tools.BehaviorFor(tc.Name, tc.Args) == BehaviorMutate {
-					hasMutate = true
-				}
-			}
-			if hasMutate && len(messages) > 0 {
-				prompt := lastUserContent(messages)
-				c := GenerateEvalCase(prompt, toolNames, "auto")
-				casesPath := filepath.Join(traceHome, "eval", "cases.json")
-				AppendEvalCase(casesPath, c)
-			}
-		}
 	}()
 
-	// build filter query once — tools needed don't change mid-loop
-	filterQuery := system
-	if len(messages) > 0 {
-		filterQuery += "\n" + messages[len(messages)-1].Content
-	}
+	schemas := tools.Schemas()
 
 	for i := 1; i <= maxIter; i++ {
 		if ctx.Err() != nil {
@@ -172,281 +138,76 @@ func RunLoopContext(
 		}
 		result.Iterations = i
 
-		// reason: one LLM call
-		var resp *LLMResponse
-		var err error
-
-		// build filter query from system + last user message
-		filterQuery := system
-		if len(messages) > 0 {
-			filterQuery += "\n" + messages[len(messages)-1].Content
-		}
-
-		schemas := []ToolDef{completionTool}
-		if !finalizeOnly {
-			actionSchemas := tools.SchemasFor(filterQuery, es)
-			if verifiedSyncRequired {
-				actionSchemas = includeToolSchema(actionSchemas, tools, "sync_file")
-			}
-			schemas = append(actionSchemas, completionTool)
-		}
-		// per-call deadline: prevent model hangs from blocking the loop forever
-		llmCtx, llmCancel := context.WithTimeout(ctx, 90*time.Second)
-		defer llmCancel()
-		contextClient, supportsContext := client.(contextLLMClient)
-		if stream && supportsContext {
-			resp, err = contextClient.StreamContext(llmCtx, sessionID, MainModel, messages, maxTokens, system, schemas, func(delta string) {
-				notify(obs, "text", map[string]any{"delta": delta})
-			})
-		} else if stream {
-			resp, err = client.Stream(sessionID, MainModel, messages, maxTokens, system, schemas, func(delta string) {
-				notify(obs, "text", map[string]any{"delta": delta})
-			})
-		} else if supportsContext {
-			resp, err = contextClient.CreateContext(llmCtx, sessionID, MainModel, messages, maxTokens, system, schemas)
-		} else {
-			resp, err = client.Create(sessionID, MainModel, messages, maxTokens, system, schemas)
-		}
+		_, llmCancel := context.WithTimeout(ctx, 90*time.Second)
+		resp, err := client.Create(sessionID, MainModel, messages, maxTokens, system, schemas)
+		llmCancel()
 		if err != nil {
 			if ctx.Err() != nil {
-				result.Reply = "Stopped."
 				result.Status = "cancelled"
+				result.Reply = "Stopped."
 				return result
 			}
-			// LLM call timed out — nudge it to shorten its response
-			if errors.Is(err, context.DeadlineExceeded) {
-				noProgress++
-				logTrace(traceHome, "no_progress", map[string]any{"iteration": i, "count": noProgress, "reason": "llm deadline exceeded"})
-				if noProgress >= maxNoProgress {
-					result.Status = "stalled"
-					result.Reply = "(I stopped after repeated timeouts. The task remains incomplete.)"
-					return result
-				}
-				messages = append(messages, Message{Role: "user", Content: "Your previous response timed out. Summarize the key results concisely and call complete_task now."})
-				continue
-			}
-			result.Reply = fmt.Sprintf("(error: %v)", err)
 			result.Status = "error"
+			result.Reply = fmt.Sprintf("(error: %v)", err)
 			return result
 		}
 
 		result.TokensIn += resp.Usage.InputTokens
 		result.TokensOut += resp.Usage.OutputTokens
 
-		selectedTools := len(schemas) - 1 // complete_task is the terminal protocol, not an action tool
-		logTrace(traceHome, "llm", map[string]any{
-			"iteration": i, "in": resp.Usage.InputTokens, "out": resp.Usage.OutputTokens,
-			"selected_tools": selectedTools,
-		})
-
 		notify(obs, "llm", map[string]any{
-			"iteration":      i,
-			"stopReason":     resp.StopReason,
-			"selected_tools": selectedTools,
-			"usage":          map[string]int{"in": resp.Usage.InputTokens, "out": resp.Usage.OutputTokens},
+			"iteration":  i,
+			"stopReason": resp.StopReason,
+			"usage":      map[string]int{"in": resp.Usage.InputTokens, "out": resp.Usage.OutputTokens},
 		})
 
-		// assistant turn joins working memory
 		messages = append(messages, Message{Role: "assistant", Content: assembleAssistantContent(resp.Content)})
-		// extract tool uses; fall back to text-embedded [tool_call: ...] markers
+
 		toolUses := extractToolUses(resp.Content)
 		if len(toolUses) == 0 {
 			toolUses = extractTextToolUses(extractText(resp.Content))
 		}
-		completionError := "Error: complete_task must be called alone with status complete or blocked and a non-empty reply."
 
-		if resp.Usage.OutputTokens >= maxTokens && (len(toolUses) == 0 || hasInvalidToolInput(toolUses)) {
-			noProgress++
-			successfulObservation, finalizeOnly = false, false
-			logTrace(traceHome, "no_progress", map[string]any{"iteration": i, "count": noProgress, "reason": "output ceiling truncated tool arguments"})
-			if noProgress >= maxNoProgress {
-				result.Status = "stalled"
-				result.Reply = "(I stopped after repeated output truncation. The task remains incomplete.)"
-				return result
-			}
-			messages = append(messages, Message{Role: "user", Content: "Your response hit the output ceiling and the tool arguments were incomplete. Do not retry the same large payload. Use smaller targeted edits, or split a large write into write_file chunks using mode=overwrite once and mode=append afterward."})
-			continue
-		}
-
-		// Plain text is provisional. Only complete_task can end the turn.
+		// No tool calls = LLM is done
 		if len(toolUses) == 0 {
-			noProgress++
-			notify(obs, "progress", map[string]any{"text": "Still working..."})
-			logTrace(traceHome, "no_progress", map[string]any{"iteration": i, "count": noProgress, "reason": "no tool call"})
-			if noProgress >= maxNoProgress {
-				result.Status = "stalled"
-				result.Reply = "(I stopped after repeated no-progress responses before completing the task.)"
-				return result
-			}
-			prompt := "Your previous response did not complete the protocol. Call the next tool, or call complete_task alone with the final reply."
-			if successfulObservation {
-				if readOnlyStreak >= maxReadOnlyStreak {
-					prompt = "You have gathered several read-only observations. Decide now: perform the requested change with the appropriate mutating tool, or call complete_task with the verified result or real blocker. Do not perform another exploratory read unless it is strictly necessary."
-					finalizeOnly = false
-				} else {
-					prompt = "The previous tool observation was successful. Do not repeat or re-verify it. Call the next distinct tool only if work remains; otherwise call complete_task alone now."
-					finalizeOnly = noProgress >= maxNoProgress-1
-				}
-			}
-			messages = append(messages, Message{Role: "user", Content: prompt})
-			continue
+			result.Status = "complete"
+			result.Reply = extractText(resp.Content)
+			return result
 		}
 
-		if len(toolUses) == 1 && toolUses[0].Name == completionToolName {
-			args, _ := toolUses[0].Input.(map[string]any)
-			status, _ := args["status"].(string)
-			reply, _ := args["reply"].(string)
-			status, reply = strings.ToLower(strings.TrimSpace(status)), strings.TrimSpace(reply)
-			if (status == "complete" || status == "blocked") && reply != "" && (status == "blocked" || !unresolvedFailure && !unverifiedTransfer && !pendingApproval) {
-				// Verify claimed files exist before accepting completion
-				if status == "complete" {
-					if correction := verifyFileClaims(filePaths); correction != "" {
-						messages = append(messages, Message{Role: "user", Content: correction})
-						continue
-					}
-				}
-				result.Status, result.Reply = status, reply
-				notify(obs, "completion", map[string]any{"status": status})
-				logTrace(traceHome, "task_completion", map[string]any{"status": status})
-				return result
-			}
-			if status == "complete" && unresolvedFailure {
-				completionError = "Error: a mutating tool failed and has not been recovered. A successful read does not clear it. Recover with a successful mutation or finish with status blocked and the exact blocker."
-			}
-			if status == "complete" && unverifiedTransfer {
-				completionError = "Error: the file transfer used raw scp without structured destination proof. Use sync_file to transfer and verify byte count plus SHA-256, or finish with status blocked and the exact blocker."
-			}
-			if status == "complete" && pendingApproval {
-				completionError = "Error: an action is waiting for explicit user approval. Finish with status blocked and explain the pending approval."
-			}
-		}
-
-		// act: execute each tool; observe: feed results back
+		// Execute tools and feed results back
 		toolResults := make([]map[string]any, 0)
 		var turnImages []string
-		batchTools, batchFailed, newActions, cachedActions := 0, false, 0, 0
-		batchReadOnly := true
 		for _, tc := range toolUses {
 			args, _ := tc.Input.(map[string]any)
-			if tc.Name == completionToolName {
-				toolResults = append(toolResults, map[string]any{
-					"type": "tool_result", "tool_use_id": tc.ID,
-					"tool": tc.Name, "status": "error", "cached": false, "content": completionError,
-				})
-				continue
+			raw := tools.ExecuteContext(ctx, tc.Name, args)
+			if ctx.Err() != nil {
+				result.Status = "cancelled"
+				result.Reply = "Stopped."
+				return result
 			}
-			batchTools++
-			behavior := tools.BehaviorFor(tc.Name, args)
-			if tc.Name == "bash" && containsCopyCommand(args) {
-				verifiedSyncRequired = true
+			if tc.Name == "view_image" && strings.HasPrefix(raw, "data:image/") {
+				turnImages = append(turnImages, raw)
+				raw = "[image loaded into visual context]"
 			}
-			batchReadOnly = batchReadOnly && behavior == BehaviorObserve
-			key := dedupKey(tc.Name, args)
-			var output, status string
-			cached := false
-			if cachedOutput, ok := dedup[key]; ok {
-				output = "[already executed] " + cachedOutput
-				status = dedupStatus[key]
-				cachedActions++
-				cached = true
-			} else {
-				newActions++
-				raw := tools.ExecuteContext(ctx, tc.Name, args)
-				if ctx.Err() != nil {
-					result.Status = "cancelled"
-					result.Reply = "Stopped."
-					return result
-				}
-				// view_image returns a data URL; attach it as vision content so
-				// the model sees the image instead of megabytes of base64 text.
-				if tc.Name == "view_image" && strings.HasPrefix(raw, "data:image/") {
-					turnImages = append(turnImages, raw)
-					raw = "[image loaded into visual context]"
-				}
-				status = toolOutputStatus(raw)
-				if strings.HasPrefix(raw, "[APPROVAL_REQUIRED]") {
-					pendingApproval = true
-				}
-				if tc.Name == "resolve_approval" && (strings.HasPrefix(raw, "APPROVED:") || strings.HasPrefix(raw, "REJECTED:")) {
-					pendingApproval = false
-				}
-				output = prepareToolOutput(traceHome, sessionID, i, tc.Name, raw)
-				dedup[key] = output
-				dedupStatus[key] = status
-			}
-			batchFailed = batchFailed || status == "error"
-			if !cached && behavior != BehaviorObserve {
-				if status == "error" {
-					unresolvedFailure = true
-				} else {
-					unresolvedFailure = false
-				}
-			}
-			if !cached && status == "ok" {
-				trackFileMutation(filePaths, tc.Name, args, output)
-				if tc.Name == "bash" && containsSCPCommand(args) {
-					unverifiedTransfer = true
-				}
-				if tc.Name == "sync_file" && strings.Contains(output, `"verified":true`) {
-					unverifiedTransfer = false
-					verifiedSyncRequired = false
-				}
-			}
-			output = appendActionReceipt(output, tc.Name, key, status, cached)
-			event := map[string]any{"tool": tc.Name, "args": args, "output": output, "status": status, "cached": cached, "action": key, "proof": status == "ok"}
+			output := prepareToolOutput(traceHome, sessionID, i, tc.Name, raw)
 			result.ToolCalls = append(result.ToolCalls, ToolCall{Name: tc.Name, Args: args, Output: output})
-			notify(obs, "tool", event)
-			trace := map[string]any{"tool": tc.Name, "args": args, "status": status, "cached": cached, "action": key, "proof": status == "ok"}
-			if status == "error" {
-				trace["output"] = output
-			}
-			logTrace(traceHome, "tool", trace)
+
+			notify(obs, "tool", map[string]any{"tool": tc.Name, "args": args, "status": toolOutputStatus(raw)})
+			logTrace(traceHome, "tool", map[string]any{"tool": tc.Name, "args": args, "status": toolOutputStatus(raw)})
 
 			toolResults = append(toolResults, map[string]any{
 				"type":        "tool_result",
 				"tool_use_id": tc.ID,
 				"tool":        tc.Name,
-				"status":      status,
-				"cached":      cached,
 				"content":     output,
 			})
 		}
-		if batchTools > 0 {
-			successfulObservation = !batchFailed
-			if batchReadOnly && !batchFailed {
-				readOnlyStreak++
-			} else {
-				readOnlyStreak = 0
-			}
-		}
-		if newActions > 0 {
-			noProgress = 0
-			finalizeOnly = false
-		} else {
-			noProgress++
-			reason := "invalid completion"
-			if cachedActions > 0 {
-				reason = "cached duplicate action"
-			}
-			logTrace(traceHome, "no_progress", map[string]any{"iteration": i, "count": noProgress, "reason": reason})
-		}
 		messages = append(messages, Message{Role: "user", Content: formatToolResults(toolResults), Images: turnImages})
-		if noProgress >= maxNoProgress {
-			result.Status = "stalled"
-			result.Reply = "(I stopped after repeatedly attempting an action that had already run.)"
-			return result
-		}
-		if successfulObservation && noProgress >= maxNoProgress-1 && readOnlyStreak < maxReadOnlyStreak {
-			finalizeOnly = true
-			messages = append(messages, Message{Role: "user", Content: "The requested action already succeeded and produced no new evidence when repeated. Finalize now by calling complete_task alone."})
-		} else if readOnlyStreak >= maxReadOnlyStreak {
-			messages = append(messages, Message{Role: "user", Content: "Analysis has reached the read-only observation limit. If the requested task requires a change, make it now with the appropriate mutating tool; otherwise call complete_task with the verified result or real blocker."})
-		}
 	}
 
 	result.Status = "iteration_limit"
-	result.Reply = "(I hit my iteration limit before completing the task. The task remains incomplete.)"
-	// turn_end trace handled by defer
+	result.Reply = "(stopped after " + fmt.Sprint(maxIter) + " iterations)"
 	return result
 }
 
