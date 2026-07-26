@@ -11,7 +11,7 @@ import (
 
 // CurrentSchemaVersion is incremented when the schema changes in a way
 // that needs explicit migration. Add a migration function in runMigrations().
-const CurrentSchemaVersion = 3
+const CurrentSchemaVersion = 4
 
 // Simplified schema — single statements, no triggers with embedded semicolons.
 var schemaStatements = []string{
@@ -24,6 +24,15 @@ var schemaStatements = []string{
 		notes TEXT DEFAULT '',
 		created_at TEXT DEFAULT (datetime('now'))
 	)`,
+	`CREATE TABLE IF NOT EXISTS reminders (
+		id INTEGER PRIMARY KEY,
+		message TEXT NOT NULL,
+		remind_at TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'pending',
+		created_at TEXT DEFAULT (datetime('now')),
+		delivered_at TEXT
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(status, remind_at)`,
 	`CREATE TABLE IF NOT EXISTS facts (
 		id INTEGER PRIMARY KEY,
 		subject TEXT NOT NULL,
@@ -80,6 +89,7 @@ var schemaStatements = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(session_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_tool_calls_name ON tool_calls(tool_name)`,
+	`CREATE VIRTUAL TABLE IF NOT EXISTS tool_catalog_fts USING fts5(name UNINDEXED, description, keywords)`,
 	`CREATE TABLE IF NOT EXISTS _meta (
 		key TEXT PRIMARY KEY,
 		value TEXT NOT NULL
@@ -131,15 +141,20 @@ func runMigrations(db *sql.DB) {
 		current = 0 // fresh DB or pre-versioning DB
 		db.Exec("INSERT OR IGNORE INTO _meta (key, value) VALUES ('schema_version', '0')")
 	}
+	from := current
 
 	// v3: projects table removed (replaced by playbook folders)
 	if current < 3 {
 		current = 3
 	}
+	// v4: persistent one-shot reminders
+	if current < 4 {
+		current = 4
+	}
 
-	if current != CurrentSchemaVersion {
+	if current != from {
 		db.Exec("UPDATE _meta SET value = ? WHERE key = 'schema_version'", fmt.Sprint(CurrentSchemaVersion))
-		slog.Info("schema migrated", "from", current, "to", CurrentSchemaVersion)
+		slog.Info("schema migrated", "from", from, "to", CurrentSchemaVersion)
 	}
 }
 

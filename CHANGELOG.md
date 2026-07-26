@@ -16,6 +16,9 @@
   Malaysia news playbook.
 - Add `schedule_playbook` so Mino can schedule existing playbooks through the
   external systemd dispatcher without hand-editing shell or unit files.
+- Add persistent one-time reminders with Telegram delivery, listing, and cancellation.
+- Select essential tools on every normal turn and retrieve specialist tools from
+  the assembled context through FTS5 and optional embeddings.
 
 ### Changed
 - Clarify playbook documentation: config values are read from files, and

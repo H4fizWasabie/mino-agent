@@ -98,8 +98,6 @@ func RunLoopContext(
 		logTrace(traceHome, "turn_end", map[string]any{"reply": result.Reply, "status": result.Status, "iterations": result.Iterations})
 	}()
 
-	schemas := tools.Schemas()
-
 	for i := 1; i <= maxIter; i++ {
 		if ctx.Err() != nil {
 			result.Status = "cancelled"
@@ -107,6 +105,7 @@ func RunLoopContext(
 			return result
 		}
 		result.Iterations = i
+		schemas := tools.SchemasForContext(toolSelectionContext(system, messages), es)
 
 		_, llmCancel := context.WithTimeout(ctx, 90*time.Second)
 		resp, err := client.Create(sessionID, MainModel, messages, maxTokens, system, schemas)
@@ -179,6 +178,20 @@ func RunLoopContext(
 	result.Status = "iteration_limit"
 	result.Reply = "(stopped after " + fmt.Sprint(maxIter) + " iterations)"
 	return result
+}
+
+func toolSelectionContext(system string, messages []Message) string {
+	var b strings.Builder
+	b.WriteString(system)
+	for _, message := range messages {
+		b.WriteString("\n")
+		b.WriteString(message.Content)
+	}
+	text := b.String()
+	if len(text) > 24000 {
+		text = text[len(text)-24000:]
+	}
+	return text
 }
 
 func toolOutputStatus(output string) string {

@@ -351,7 +351,7 @@ func executeStage(
 		messages := append([]Message(nil), baseMessages...)
 		messages = append(messages, Message{Role: "user", Content: userMsg})
 
-		stageTools := tools
+		stageTools := tools.Static()
 		if len(stage.Tools) > 0 {
 			stageTools = tools.Only(stage.Tools...)
 		}

@@ -1,0 +1,172 @@
+package main
+
+import (
+	"database/sql"
+	"fmt"
+	"strings"
+	"time"
+
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+)
+
+func makeReminderTools(db *sql.DB, location *time.Location) []*Tool {
+	return []*Tool{
+		makeCreateReminderTool(db, location),
+		makeListRemindersTool(db, location),
+		makeCancelReminderTool(db),
+	}
+}
+
+func makeCreateReminderTool(db *sql.DB, location *time.Location) *Tool {
+	return &Tool{
+		Name:        "create_reminder",
+		Description: "Create a one-time reminder that Mino will send to the owner's Telegram chat. Resolve relative dates using the configured timezone and provide an ISO 8601 time.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"message":   map[string]any{"type": "string", "description": "What to remind the user about"},
+				"remind_at": map[string]any{"type": "string", "description": "When to send it: ISO 8601 with timezone, for example 2026-07-28T09:00:00+08:00"},
+			},
+			"required": []string{"message", "remind_at"},
+		},
+		Fn: func(args map[string]any) string {
+			message, _ := args["message"].(string)
+			remindAt, _ := args["remind_at"].(string)
+			message = strings.TrimSpace(message)
+			when, err := parseReminderTime(remindAt, location)
+			if message == "" {
+				return "Error: reminder message is required"
+			}
+			if err != nil {
+				return fmt.Sprintf("Error: remind_at must be ISO 8601 or YYYY-MM-DD HH:MM in the configured timezone: %v", err)
+			}
+			if !when.After(time.Now()) {
+				return "Error: reminder time must be in the future"
+			}
+			result, err := db.Exec("INSERT INTO reminders (message, remind_at) VALUES (?, ?)", message, when.UTC().Format(time.RFC3339))
+			if err != nil {
+				return fmt.Sprintf("Error creating reminder: %v", err)
+			}
+			id, _ := result.LastInsertId()
+			return fmt.Sprintf("Created reminder #%d for %s: %s", id, when.In(location).Format("2006-01-02 15:04 MST"), message)
+		},
+	}
+}
+
+func makeListRemindersTool(db *sql.DB, location *time.Location) *Tool {
+	return &Tool{
+		Name:        "list_reminders",
+		Description: "List pending one-time reminders in the configured timezone.",
+		Schema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		Fn: func(map[string]any) string {
+			rows, err := db.Query("SELECT id, message, remind_at FROM reminders WHERE status = 'pending' ORDER BY remind_at LIMIT 50")
+			if err != nil {
+				return "No reminders found."
+			}
+			defer rows.Close()
+			var out strings.Builder
+			for rows.Next() {
+				var id int64
+				var message, remindAt string
+				if rows.Scan(&id, &message, &remindAt) != nil {
+					continue
+				}
+				when, _ := time.Parse(time.RFC3339, remindAt)
+				fmt.Fprintf(&out, "- #%d at %s: %s\n", id, when.In(location).Format("2006-01-02 15:04 MST"), message)
+			}
+			if out.Len() == 0 {
+				return "No pending reminders."
+			}
+			return "Pending reminders:\n" + out.String()
+		},
+	}
+}
+
+func makeCancelReminderTool(db *sql.DB) *Tool {
+	return &Tool{
+		Name:        "cancel_reminder",
+		Description: "Cancel a pending reminder by its numeric ID.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id": map[string]any{"type": "integer", "description": "Reminder ID from create_reminder or list_reminders"},
+			},
+			"required": []string{"id"},
+		},
+		Fn: func(args map[string]any) string {
+			id, ok := reminderID(args["id"])
+			if !ok || id <= 0 {
+				return "Error: reminder id must be a positive integer"
+			}
+			result, err := db.Exec("UPDATE reminders SET status = 'cancelled' WHERE id = ? AND status = 'pending'", id)
+			if err != nil {
+				return fmt.Sprintf("Error cancelling reminder: %v", err)
+			}
+			changed, _ := result.RowsAffected()
+			if changed == 0 {
+				return fmt.Sprintf("No pending reminder found with id %d", id)
+			}
+			return fmt.Sprintf("Cancelled reminder #%d", id)
+		},
+	}
+}
+
+func parseReminderTime(raw string, location *time.Location) (time.Time, error) {
+	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04", "2006-01-02T15:04"} {
+		if layout == time.RFC3339 {
+			if parsed, err := time.Parse(layout, raw); err == nil {
+				return parsed, nil
+			}
+			continue
+		}
+		if parsed, err := time.ParseInLocation(layout, raw, location); err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("invalid time %q", raw)
+}
+
+func reminderID(raw any) (int64, bool) {
+	switch value := raw.(type) {
+	case float64:
+		return int64(value), value == float64(int64(value))
+	case int:
+		return int64(value), true
+	case int64:
+		return value, true
+	default:
+		return 0, false
+	}
+}
+
+func runReminderDispatcher(core *Core, bot *tgbotapi.BotAPI) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		dispatchDueReminders(core, bot)
+	}
+}
+
+func dispatchDueReminders(core *Core, bot *tgbotapi.BotAPI) {
+	rows, err := core.DB.Query("SELECT id, message FROM reminders WHERE status = 'pending' AND remind_at <= ? ORDER BY remind_at LIMIT 20", time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var message string
+		if rows.Scan(&id, &message) != nil {
+			continue
+		}
+		reply := "⏰ Reminder: " + message
+		if _, err := bot.Send(tgbotapi.NewMessage(core.Settings.TelegramChatID, reply)); err != nil {
+			continue
+		}
+		core.recordTelegramNotification(core.Settings.TelegramChatID, reply)
+		core.DB.Exec("UPDATE reminders SET status = 'delivered', delivered_at = datetime('now') WHERE id = ? AND status = 'pending'", id)
+	}
+}

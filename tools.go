@@ -64,10 +64,13 @@ func (t *Tool) ToAPI() map[string]any {
 // --- Registry (matches Core's ToolRegistry) ---
 
 type Registry struct {
-	tools     map[string]*Tool
-	logDB     *sql.DB    // optional: if set, ExecuteContext logs to tool_calls table
-	auditFile *os.File   // optional: append-only JSONL audit log
-	auditMu   sync.Mutex // guards auditFile writes
+	tools          map[string]*Tool
+	logDB          *sql.DB    // optional: if set, ExecuteContext logs to tool_calls table
+	auditFile      *os.File   // optional: append-only JSONL audit log
+	auditMu        sync.Mutex // guards auditFile writes
+	searchDB       *sql.DB    // optional: FTS5 index for context-conditioned tool selection
+	searchMu       sync.Mutex
+	toolEmbeddings map[string][]float32
 }
 
 // SetLogDB enables tool-call logging to the tool_calls table.
@@ -94,11 +97,20 @@ func (r *Registry) CloseAuditLog() {
 }
 
 func NewRegistry() *Registry {
-	return &Registry{tools: make(map[string]*Tool)}
+	return &Registry{tools: make(map[string]*Tool), toolEmbeddings: make(map[string][]float32)}
 }
 
 func (r *Registry) Register(t *Tool) {
 	r.tools[t.Name] = t
+	r.searchMu.Lock()
+	delete(r.toolEmbeddings, t.Name)
+	r.searchMu.Unlock()
+	r.syncToolCatalog()
+}
+
+func (r *Registry) SetSearchDB(db *sql.DB) {
+	r.searchDB = db
+	r.syncToolCatalog()
 }
 
 func (r *Registry) BehaviorFor(name string, args map[string]any) ToolBehavior {
@@ -154,7 +166,184 @@ func (r *Registry) Schemas() []ToolDef {
 	for _, t := range r.tools {
 		schemas = append(schemas, r.toolDef(t))
 	}
+	sort.Slice(schemas, func(i, j int) bool { return schemas[i].Name < schemas[j].Name })
 	return schemas
+}
+
+var essentialToolNames = map[string]bool{
+	"recall": true, "read_file": true, "write_file": true, "edit_file": true,
+	"save_note": true, "search_web": true, "create_event": true, "list_events": true,
+	"list_playbooks": true, "run_playbook": true,
+	"create_reminder": true, "list_reminders": true, "cancel_reminder": true,
+}
+
+var toolFamilies = [][]string{
+	{"read_file", "write_file", "edit_file"},
+	{"create_event", "list_events"},
+	{"create_reminder", "list_reminders", "cancel_reminder"},
+	{"list_playbooks", "run_playbook", "schedule_playbook"},
+	{"search_web", "fetch_url"},
+}
+
+// SchemasForContext keeps the everyday tools available and retrieves specialist
+// schemas from the full assembled context, including skills, playbooks, history,
+// and prior observations. A registry without an index is static (used by tests
+// and explicit playbook stage registries).
+func (r *Registry) SchemasForContext(contextText string, es *EmbeddingStore) []ToolDef {
+	if r.searchDB == nil {
+		return r.Schemas()
+	}
+	selected := make(map[string]bool, len(essentialToolNames))
+	for name := range essentialToolNames {
+		if _, ok := r.tools[name]; ok {
+			selected[name] = true
+		}
+	}
+	for _, name := range r.searchToolNames(contextText) {
+		selected[name] = true
+	}
+	for _, name := range r.semanticToolNames(contextText, es) {
+		selected[name] = true
+	}
+	for _, family := range toolFamilies {
+		matched := false
+		for _, name := range family {
+			if selected[name] {
+				matched = true
+				break
+			}
+		}
+		if matched {
+			for _, name := range family {
+				if _, ok := r.tools[name]; ok {
+					selected[name] = true
+				}
+			}
+		}
+	}
+	var schemas []ToolDef
+	for name := range selected {
+		if tool, ok := r.tools[name]; ok {
+			schemas = append(schemas, r.toolDef(tool))
+		}
+	}
+	sort.Slice(schemas, func(i, j int) bool { return schemas[i].Name < schemas[j].Name })
+	return schemas
+}
+
+func (r *Registry) syncToolCatalog() {
+	if r.searchDB == nil {
+		return
+	}
+	r.searchMu.Lock()
+	defer r.searchMu.Unlock()
+	if _, err := r.searchDB.Exec("DELETE FROM tool_catalog_fts"); err != nil {
+		return
+	}
+	for name, tool := range r.tools {
+		keywords := strings.ReplaceAll(name, "_", " ")
+		_, _ = r.searchDB.Exec("INSERT INTO tool_catalog_fts(name, description, keywords) VALUES (?, ?, ?)", name, tool.Description, keywords)
+	}
+}
+
+func (r *Registry) searchToolNames(contextText string) []string {
+	if r.searchDB == nil {
+		return nil
+	}
+	words := toolSearchWords(contextText)
+	if len(words) == 0 {
+		return nil
+	}
+	match := strings.Join(words, " OR ")
+	rows, err := r.searchDB.Query("SELECT name FROM tool_catalog_fts WHERE tool_catalog_fts MATCH ? ORDER BY bm25(tool_catalog_fts) LIMIT 16", match)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		if rows.Scan(&name) == nil {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func (r *Registry) semanticToolNames(contextText string, es *EmbeddingStore) []string {
+	if es == nil || strings.TrimSpace(contextText) == "" {
+		return nil
+	}
+	r.searchMu.Lock()
+	pending := make([]string, 0)
+	for name, tool := range r.tools {
+		if len(r.toolEmbeddings[name]) == 0 {
+			pending = append(pending, name+" — "+tool.Description)
+		}
+	}
+	r.searchMu.Unlock()
+	if len(pending) > 0 {
+		if embeddings, err := es.EmbedBatch(pending); err == nil {
+			r.searchMu.Lock()
+			for i, text := range pending {
+				if i < len(embeddings) {
+					name := strings.SplitN(text, " — ", 2)[0]
+					r.toolEmbeddings[name] = embeddings[i]
+				}
+			}
+			r.searchMu.Unlock()
+		}
+	}
+	query, err := es.Embed(contextText)
+	if err != nil || len(query) == 0 {
+		return nil
+	}
+	type candidate struct {
+		name  string
+		score float64
+	}
+	var candidates []candidate
+	r.searchMu.Lock()
+	for name, embedding := range r.toolEmbeddings {
+		if score := cosineSimilarity(query, embedding); score >= 0.25 {
+			candidates = append(candidates, candidate{name, score})
+		}
+	}
+	r.searchMu.Unlock()
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
+	if len(candidates) > 12 {
+		candidates = candidates[:12]
+	}
+	names := make([]string, len(candidates))
+	for i, candidate := range candidates {
+		names[i] = candidate.name
+	}
+	return names
+}
+
+func toolSearchWords(contextText string) []string {
+	var words []string
+	seen := make(map[string]bool)
+	for _, raw := range strings.FieldsFunc(strings.ToLower(contextText), func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_'
+	}) {
+		if len(raw) < 3 || seen[raw] || toolSearchStopWords[raw] {
+			continue
+		}
+		seen[raw] = true
+		words = append(words, `"`+strings.ReplaceAll(raw, `"`, "")+`"`)
+		if len(words) == 80 {
+			break
+		}
+	}
+	return words
+}
+
+var toolSearchStopWords = map[string]bool{
+	"about": true, "after": true, "also": true, "and": true, "are": true,
+	"from": true, "has": true, "have": true, "into": true, "just": true,
+	"only": true, "that": true, "the": true, "their": true, "this": true,
+	"through": true, "user": true, "using": true, "with": true, "your": true,
 }
 
 func (r *Registry) Schema(name string) (ToolDef, bool) {
@@ -347,10 +536,19 @@ func (r *Registry) Only(names ...string) *Registry {
 	return out
 }
 
+func (r *Registry) Static() *Registry {
+	out := NewRegistry()
+	for _, tool := range r.tools {
+		out.Register(tool)
+	}
+	return out
+}
+
 // --- BuildRegistry (matches Core's build_registry) ---
 
 func BuildRegistry(db *sql.DB, home, workspace string, mem *Memory, location ...*time.Location) *Registry {
 	r := NewRegistry()
+	r.SetSearchDB(db)
 	loc := time.Local
 	bashTimeout, codingTimeout, syncTimeout := 2*time.Minute, 2*time.Minute, 5*time.Minute
 	if len(location) > 0 && location[0] != nil {
@@ -393,6 +591,13 @@ func BuildRegistry(db *sql.DB, home, workspace string, mem *Memory, location ...
 	// calendar tools (Core: calendar.make_tool + make_list_tool)
 	r.Register(behaves(makeCalendarTool(db, home), BehaviorMutate))
 	r.Register(behaves(makeListCalendarTool(db, loc), BehaviorObserve))
+	for _, reminderTool := range makeReminderTools(db, loc) {
+		behavior := BehaviorObserve
+		if reminderTool.Name == "create_reminder" || reminderTool.Name == "cancel_reminder" {
+			behavior = BehaviorMutate
+		}
+		r.Register(behaves(reminderTool, behavior))
+	}
 
 	// notes (Core: notes.make_tool)
 	r.Register(behaves(makeNotesTool(db, mem), BehaviorMutate))
