@@ -254,10 +254,15 @@ func buildStagePrompt(pb *Playbook, stage StageFile) string {
 		b.WriteString("\n\n")
 	}
 
+	outPath := outputPath(pb, stage)
+	b.WriteString("## Output File\n\n")
+	b.WriteString(fmt.Sprintf("Write your final output to this exact path: `%s`\n", outPath))
+	b.WriteString(fmt.Sprintf("The output directory already exists: `%s`\n\n", filepath.Dir(outPath)))
+
 	b.WriteString("## Rules\n\n")
 	b.WriteString("- Follow the instructions above. Work step by step.\n")
 	b.WriteString("- If you encounter an error, try to fix it. If you cannot fix it after a reasonable attempt, write the error to the output file and stop.\n")
-	b.WriteString("- When all steps are complete, write the output file and say DONE.\n")
+	b.WriteString("- When all steps are complete, write to the output file path above and say DONE.\n")
 	b.WriteString("- Do NOT call a tool and then narrate what you'll do next. Just do it.\n")
 	b.WriteString("- Do not repeat successful tool calls.\n")
 
