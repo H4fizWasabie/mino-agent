@@ -1206,11 +1206,13 @@ func makeProjectUpdateTool(db *sql.DB) *Tool {
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":        map[string]any{"type": "string", "description": "Exact project name"},
-				"objective":   map[string]any{"type": "string"},
-				"status":      map[string]any{"type": "string", "enum": []string{"active", "blocked", "complete", "paused"}},
-				"blocker":     map[string]any{"type": "string"},
-				"next_action": map[string]any{"type": "string"},
+				"name":         map[string]any{"type": "string", "description": "Exact project name"},
+				"objective":    map[string]any{"type": "string"},
+				"status":       map[string]any{"type": "string", "enum": []string{"active", "blocked", "complete", "paused"}},
+				"blocker":      map[string]any{"type": "string"},
+				"next_action":  map[string]any{"type": "string"},
+				"last_checked": map[string]any{"type": "string", "description": "ISO 8601 timestamp of last check-in"},
+				"next_check":   map[string]any{"type": "string", "description": "ISO 8601 timestamp for next check-in"},
 			},
 			"required": []string{"name"},
 		},
@@ -1223,25 +1225,28 @@ func makeProjectUpdateTool(db *sql.DB) *Tool {
 			status, _ := args["status"].(string)
 			blocker, _ := args["blocker"].(string)
 			nextAction, _ := args["next_action"].(string)
-			var current [4]string
-			err := db.QueryRow("SELECT objective, status, blocker, next_action FROM projects WHERE name = ?", name).
-				Scan(&current[0], &current[1], &current[2], &current[3])
+			lastChecked, _ := args["last_checked"].(string)
+			nextCheck, _ := args["next_check"].(string)
+			var current [6]string
+			err := db.QueryRow("SELECT objective, status, blocker, next_action, COALESCE(last_checked,''), COALESCE(next_check,'') FROM projects WHERE name = ?", name).
+				Scan(&current[0], &current[1], &current[2], &current[3], &current[4], &current[5])
 			if err != nil && err != sql.ErrNoRows {
 				return fmt.Sprintf("Error reading project %q: %v", name, err)
 			}
 			if current[1] == "" {
 				current[1] = "active"
 			}
-			for i, value := range []string{objective, status, blocker, nextAction} {
+			for i, value := range []string{objective, status, blocker, nextAction, lastChecked, nextCheck} {
 				if value != "" {
 					current[i] = value
 				}
 			}
-			_, err = db.Exec(`INSERT INTO projects (name, objective, status, blocker, next_action, updated_at)
-				VALUES (?, ?, ?, ?, ?, datetime('now'))
+			_, err = db.Exec(`INSERT INTO projects (name, objective, status, blocker, next_action, last_checked, next_check, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
 				ON CONFLICT(name) DO UPDATE SET objective=excluded.objective, status=excluded.status,
-				blocker=excluded.blocker, next_action=excluded.next_action, updated_at=excluded.updated_at`,
-				name, current[0], current[1], current[2], current[3])
+				blocker=excluded.blocker, next_action=excluded.next_action,
+				last_checked=excluded.last_checked, next_check=excluded.next_check, updated_at=excluded.updated_at`,
+				name, current[0], current[1], current[2], current[3], current[4], current[5])
 			if err != nil {
 				return fmt.Sprintf("Error updating project %q: %v", name, err)
 			}

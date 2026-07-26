@@ -11,7 +11,7 @@ import (
 
 // CurrentSchemaVersion is incremented when the schema changes in a way
 // that needs explicit migration. Add a migration function in runMigrations().
-const CurrentSchemaVersion = 1
+const CurrentSchemaVersion = 2
 
 // Simplified schema — single statements, no triggers with embedded semicolons.
 var schemaStatements = []string{
@@ -86,6 +86,8 @@ var schemaStatements = []string{
 		status TEXT NOT NULL DEFAULT 'active',
 		blocker TEXT NOT NULL DEFAULT '',
 		next_action TEXT NOT NULL DEFAULT '',
+		last_checked TEXT,
+		next_check TEXT,
 		updated_at TEXT DEFAULT (datetime('now'))
 	)`,
 	`CREATE TABLE IF NOT EXISTS _meta (
@@ -140,11 +142,12 @@ func runMigrations(db *sql.DB) {
 		db.Exec("INSERT OR IGNORE INTO _meta (key, value) VALUES ('schema_version', '0')")
 	}
 
-	// Example for future migrations:
-	// if current < 2 {
-	//     db.Exec("ALTER TABLE ... ADD COLUMN ...")
-	//     current = 2
-	// }
+	// v2: add last_checked / next_check to projects for persistent objectives
+	if current < 2 {
+		db.Exec("ALTER TABLE projects ADD COLUMN last_checked TEXT")
+		db.Exec("ALTER TABLE projects ADD COLUMN next_check TEXT")
+		current = 2
+	}
 
 	if current != CurrentSchemaVersion {
 		db.Exec("UPDATE _meta SET value = ? WHERE key = 'schema_version'", fmt.Sprint(CurrentSchemaVersion))
