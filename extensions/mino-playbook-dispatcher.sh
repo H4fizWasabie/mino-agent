@@ -1,30 +1,51 @@
 #!/bin/bash
 set -euo pipefail
 
-HOME_DIR=/home/mino/.mino
-STATE_DIR="$HOME_DIR/scheduled-runs"
-mkdir -p "$STATE_DIR"
+HOME=/home/mino/.mino
+NOW=$(date +%H:%M)
+DOW=$(date +%u)
+HOUR=$(date +%H)
+MINUTE=$(date +%M)
+NOW_MINS=$((10#$HOUR * 60 + 10#$MINUTE))
 
-for config in "$HOME_DIR"/playbooks/*/config.md; do
-  [ -f "$config" ] || continue
-  schedule=$(sed -n 's/^schedule:[[:space:]]*\([0-9][0-9]:[0-9][0-9]\).*$/\1/p' "$config" | head -1)
-  [ -n "$schedule" ] || continue
-  notify=$(sed -n 's/^notify:[[:space:]]*//p' "$config" | head -1)
-  [ "$notify" = "true" ] || continue
-  playbook=$(basename "$(dirname "$config")")
-  zone=$(sed -n 's/^schedule:[[:space:]]*[0-9][0-9]:[0-9][0-9][[:space:]]*//p' "$config" | head -1)
-  zone=${zone:-Asia/Kuala_Lumpur}
-  current=$(TZ="$zone" date +%H:%M)
-  [ "$current" = "$schedule" ] || continue
-  day=$(TZ="$zone" date +%F)
-  marker="$STATE_DIR/$playbook-$day"
-  [ -e "$marker" ] && continue
-  if /usr/local/bin/mino-playbook-runner "$playbook" "Run the $playbook playbook now."; then
-    install -m 600 /dev/null "$marker"
-  else
-    status=$?
-    if [ "$status" -ne 75 ]; then
-      echo "playbook runner failed for $playbook (status=$status)" >&2
+for d in "$HOME"/playbooks/*/config.md; do
+    test -f "$d" || continue
+    name=$(basename "$(dirname "$d")")
+    schedule=$(grep "^schedule:" "$d" | head -1 | cut -d: -f2- | xargs)
+    test -n "$schedule" || continue
+
+    if echo "$schedule" | grep -q "^every"; then
+        interval=$(echo "$schedule" | grep -o '[0-9]\+')
+        test -n "$interval" || continue
+        stamp="$HOME/run-locks/$name.last"
+        if test -f "$stamp"; then
+            last=$(cat "$stamp")
+            elapsed=$(($(date +%s) - last))
+            if [ "$elapsed" -lt "$((interval * 60))" ]; then continue; fi
+        fi
+        date +%s > "$stamp"
+    else
+        time_part=$(echo "$schedule" | grep -o '[0-9][0-9]:[0-9][0-9]')
+        day_part=$(echo "$schedule" | tr '[:upper:]' '[:lower:]' | grep -o 'mon\|tue\|wed\|thu\|fri\|sat\|sun' || echo "")
+        test -n "$time_part" || continue
+        t_hour=${time_part%%:*}
+        t_min=${time_part##*:}
+        t_mins=$((10#$t_hour * 60 + 10#$t_min))
+        diff=$((NOW_MINS - t_mins))
+        if [ "$diff" -lt 0 ] || [ "$diff" -gt 5 ]; then continue; fi
+        if test -n "$day_part"; then
+            day_num=$(echo "Mon Tue Wed Thu Fri Sat Sun" | tr ' ' '\n' | grep -ni "^$day_part" | cut -d: -f1 | head -1)
+            if [ "$DOW" != "$day_num" ]; then continue; fi
+        fi
+        stamp="$HOME/run-locks/$name.last"
+        if test -f "$stamp"; then
+            last=$(cat "$stamp")
+            if [ $(($(date +%s) - last)) -lt 120 ]; then continue; fi
+        fi
+        date +%s > "$stamp"
     fi
-  fi
+
+    logger -t mino-dispatcher "Running playbook: $name"
+    /usr/local/bin/mino-playbook-runner "$name" &
 done
+wait

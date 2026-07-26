@@ -2,23 +2,22 @@
 
 ## Read
 
-- `config.md` (for the workflow description and timezone)
+- `config.md`
 
 ## Do
 
-1. Search the internet for today's Malaysia news using the live Composio web-search tools. Discover the exact search tool and schema through Composio before executing it; do not guess a tool slug.
-2. Gather current, reputable results covering Malaysian politics, economy, and important local events. Prefer genuinely current reporting from today.
-3. Select the 5–7 most important headlines and summarize each concisely. Include the source URL beside each item when available.
-4. Write a clean Telegram-ready brief with a Malaysia News heading, today's Malaysia date, and concise bullets.
-5. Do not send messages, publish content, or modify external data during this run. The caller will deliver the generated brief.
+1. Search for today's Malaysia news using web search. Gather results covering politics, economy, and local events.
+2. Select the 5–7 most important headlines. Summarize each concisely with source URL.
+3. Write a Telegram-ready brief with today's Malaysia date and clean bullet formatting.
+4. Send to Abah via Telegram using curl:
+   - Bot: `8905695639:AAGw4w08yz_AWMUXGoEb7A90-f3o00sh5yk`
+   - Chat: `1794722543`
 
 ## Tools
 
-- read_file
-- write_file
 - search_web
-- MCP_composio_COMPOSIO_SEARCH_TOOLS
-- MCP_composio_COMPOSIO_MULTI_EXECUTE_TOOL
+- bash
+- write_file
 
 ## Write
 
