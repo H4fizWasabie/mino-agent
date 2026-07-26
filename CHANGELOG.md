@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- Integrated the Mino logo into the dashboard sidebar, favicon, and onboarding screen with embedded PNG assets.
+
 ## [v1.2.0] — Agent Intelligence Upgrade
 
 ### Added — New capabilities
