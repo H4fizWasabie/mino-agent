@@ -10,6 +10,9 @@
   retain task-specific context.
 
 ### Changed
+- Clarify playbook documentation: config values are read from files, and
+  embeddings are a routing fallback after keyword matching.
+
 - Integrated the Mino logo into the dashboard sidebar, favicon, and onboarding screen with embedded PNG assets.
 - Keep dashboard tool activity rows compact; full tool arguments and output remain collapsed until opened.
 

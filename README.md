@@ -159,9 +159,7 @@ telegram.go          — Telegram bot gateway
 mcp.go               — MCP bridge (stdio-based servers)
 skill.go             — skill loader (SKILL.md files)
 extensions.go        — HTTP extension protocol
-checkpoint.go        — task survival across restarts
-scheduler.go         — cron engine for proactive tasks
-artifacts.go         — large output management
+playbook.go          — numbered Markdown workflows and stage runner
 adapters.go          — working memory, patterns, embeddings
 ```
 

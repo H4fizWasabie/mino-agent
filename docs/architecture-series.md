@@ -1,5 +1,10 @@
 # How We Built Mino — An Educational Architecture Series
 
+> Historical note: this series documents the pre-playbook Mino architecture.
+> The current `feat/playbooks` design is documented in
+> `PLAYBOOKS_DESIGN.md`; references below to completion protocols, tool
+> filtering, checkpoints, and schedulers are retained as history.
+
 > Already posted: [#1 — The 95-line loop](#1-the-95-line-agent-loop) · [#2 — The completion protocol](#2-the-completion-protocol)
 >
 > Coming next: [#3 — Why we skipped vector databases](#3-why-we-skipped-vector-databases) · [#4 — Tool dedup and dynamic selection](#4-tool-dedup-and-dynamic-selection) · [#5 — Memory: three pillars, one SQLite file](#5-memory-three-pillars-one-sqlite-file) · [#6 — MCP + Extensions: same bridge, zero restarts](#6-mcp--extensions-same-bridge-zero-restarts) · [#7 — Guardrails that are code, not prompts](#7-guardrails-that-are-code-not-prompts) · [#8 — Single binary, zero Python](#8-single-binary-zero-python) · [#9 — 11 iterations of failure](#9-eleven-iterations-of-failure)

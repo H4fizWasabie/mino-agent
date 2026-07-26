@@ -21,12 +21,14 @@ a mini-loop with up to 3 retries.
 ```markdown
 description: Weekly procurement audit — fetch POs, analyze suppliers, draft report
 status: active
-Database: {{DB_PATH}}
+Database: /srv/data/procurement.db
 Stale threshold: 7 days
 ```
 
 `description:` is what memory indexes for routing.
-`{{PLACEHOLDER}}` values resolve from SOUL.md or session context.
+Shared values stay in `config.md`; the stage LLM reads the file through the
+paths listed in `## Read`. The filesystem is the resolver—there is no template
+engine or placeholder substitution.
 
 ### Stage files: `NN-<verb>.md`
 
@@ -76,7 +78,7 @@ Vague prompts ("send me last week's purchase data") match playbooks:
 
 1. **Keyword** (always, free): word overlap between prompt and playbook
    description + stage content → score 0.0–1.0
-2. **Embedding** (if configured): cosine similarity on description → refinement
+2. **Embedding** (if configured and keyword matching finds nothing): cosine similarity on description → fallback
 
 | Score | Behavior |
 |---|---|
@@ -116,5 +118,5 @@ Vague prompts ("send me last week's purchase data") match playbooks:
 
 - **Branch**: `feat/playbooks`
 - **Deployed**: VPS `100.101.53.98`, mimo-v2.5
-- **Tests**: 112 passing
+- **Runtime model**: playbook stages execute directly from the filesystem
 - **Live playbook**: `procurement-audit` — auto-routes from "send me purchase data"

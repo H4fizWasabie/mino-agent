@@ -1,5 +1,9 @@
 # Mino — Handoff
 
+> The current `feat/playbooks` branch supersedes the earlier scheduler,
+> checkpoint, completion-protocol, and tool-filter architecture with numbered
+> filesystem playbooks. See `PLAYBOOKS_DESIGN.md` for the current model.
+
 > Mino → Go port complete. Dashboard works. Memory works. Ready for DECISIONS.md iterations.
 
 ## What was built

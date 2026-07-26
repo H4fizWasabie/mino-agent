@@ -2,6 +2,10 @@
 
 Key architectural decisions for Mino. Each entry explains what, why, and when to revisit.
 
+> The current `feat/playbooks` branch supersedes the older task-survival,
+> scheduler, tool-filter, approval, and completion-protocol sections where
+> `PLAYBOOKS_DESIGN.md` describes a simpler filesystem-based replacement.
+
 ---
 
 ## 1. Single binary, no framework
