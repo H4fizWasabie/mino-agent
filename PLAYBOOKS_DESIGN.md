@@ -95,9 +95,12 @@ stage up to three times with a correction. Within an attempt, the canonical
 loop remains simple: call the model, execute its tools, return the observations,
 and repeat until the model stops or the iteration limit is reached.
 
-The output file is proof of stage completion and the durable recovery point.
-Stages with external side effects must remain idempotent because a process
-restart can re-enter an earlier stage.
+The runner snapshots the declared output before each attempt. A file created or
+updated by that attempt is proof of stage completion even if the model reaches
+its iteration limit after writing it. An unchanged file from an earlier run
+never satisfies the current attempt. Cancellation and runtime errors remain
+failures. Stages with external side effects must remain idempotent because a
+process restart can re-enter an earlier stage.
 
 Every completed stage adds its absolute output path to `PlaybookResult` and the
 session artifact catalog. The `run_playbook` observation therefore gives later

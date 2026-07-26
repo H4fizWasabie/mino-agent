@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -165,6 +166,98 @@ func TestBuildStagePromptIncludesUserRequest(t *testing.T) {
 	if !strings.Contains(got, "## User Request") ||
 		!strings.Contains(got, "send me last week's purchase data") {
 		t.Fatalf("prompt did not include user request: %q", got)
+	}
+}
+
+func TestExecuteStageAcceptsFreshOutputAtIterationLimit(t *testing.T) {
+	pb := &Playbook{Name: "generic", Dir: t.TempDir()}
+	stage := StageFile{Number: 1, Name: "write", Write: "output/result.md"}
+	outPath := outputPath(pb, stage)
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(pb.Dir, pb.Dir))
+	registry.Register(makeReadTool())
+
+	script := []*LLMResponse{
+		scriptedResp([]ContentBlock{toolBlock("write_file", map[string]any{"path": outPath, "content": "result"})}, "tool_use"),
+	}
+	for range maxStageIterations - 1 {
+		script = append(script, scriptedResp([]ContentBlock{toolBlock("read_file", map[string]any{"path": outPath})}, "tool_use"))
+	}
+
+	reply, calls, _, _, err := executeStage(
+		context.Background(), &fakeClient{script: script}, "fresh-output", "",
+		pb, stage, "do the work", nil, registry, 100, nil, pb.Dir,
+	)
+	if err != nil {
+		t.Fatalf("executeStage: %v", err)
+	}
+	if reply != "" {
+		t.Fatalf("iteration-limit receipt should rely on output, got %q", reply)
+	}
+	if len(calls) != maxStageIterations {
+		t.Fatalf("calls = %d, want %d", len(calls), maxStageIterations)
+	}
+}
+
+func TestExecuteStageRejectsUnchangedOutput(t *testing.T) {
+	pb := &Playbook{Name: "generic", Dir: t.TempDir()}
+	stage := StageFile{Number: 1, Name: "write", Write: "output/result.md"}
+	outPath := outputPath(pb, stage)
+	if err := os.WriteFile(outPath, []byte("old result"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeClient{script: []*LLMResponse{
+		scriptedResp([]ContentBlock{textBlock("DONE")}, "stop"),
+		scriptedResp([]ContentBlock{textBlock("DONE")}, "stop"),
+		scriptedResp([]ContentBlock{textBlock("DONE")}, "stop"),
+	}}
+
+	_, _, _, _, err := executeStage(
+		context.Background(), client, "stale-output", "", pb, stage,
+		"do the work", nil, NewRegistry(), 100, nil, pb.Dir,
+	)
+	if err == nil || !strings.Contains(err.Error(), "not created or updated") {
+		t.Fatalf("error = %v", err)
+	}
+	if client.pos != maxStageRetries {
+		t.Fatalf("attempts = %d, want %d", client.pos, maxStageRetries)
+	}
+}
+
+func TestExecuteStageRejectsMissingOutputAtIterationLimit(t *testing.T) {
+	pb := &Playbook{Name: "generic", Dir: t.TempDir()}
+	stage := StageFile{Number: 1, Name: "write", Write: "output/result.md"}
+	registry := NewRegistry()
+	registry.Register(makeReadTool())
+	script := make([]*LLMResponse, 0, maxStageIterations)
+	for range maxStageIterations {
+		script = append(script, scriptedResp([]ContentBlock{toolBlock("read_file", map[string]any{"path": filepath.Join(pb.Dir, "missing")})}, "tool_use"))
+	}
+
+	_, _, _, _, err := executeStage(
+		context.Background(), &fakeClient{script: script}, "missing-output", "",
+		pb, stage, "do the work", nil, registry, 100, nil, pb.Dir,
+	)
+	if err == nil || !strings.Contains(err.Error(), "iteration_limit") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestExecuteStagePreservesCancellationWithOldOutput(t *testing.T) {
+	pb := &Playbook{Name: "generic", Dir: t.TempDir()}
+	stage := StageFile{Number: 1, Name: "write", Write: "output/result.md"}
+	if err := os.WriteFile(outputPath(pb, stage), []byte("old result"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, _, _, _, err := executeStage(
+		ctx, &fakeClient{}, "cancelled-output", "", pb, stage,
+		"do the work", nil, NewRegistry(), 100, nil, pb.Dir,
+	)
+	if err == nil || !strings.Contains(err.Error(), "cancelled") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

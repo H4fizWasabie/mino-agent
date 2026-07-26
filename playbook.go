@@ -304,7 +304,25 @@ func outputPath(pb *Playbook, stage StageFile) string {
 	return filepath.Join(outputDir, fmt.Sprintf("%02d-%s.md", stage.Number, stage.Name))
 }
 
-// --- Mini-loop executor ---
+type outputState struct {
+	exists   bool
+	size     int64
+	modified time.Time
+}
+
+func inspectOutput(path string) outputState {
+	info, err := os.Stat(path)
+	if err != nil {
+		return outputState{}
+	}
+	return outputState{exists: true, size: info.Size(), modified: info.ModTime()}
+}
+
+func (after outputState) changedSince(before outputState) bool {
+	return after.exists && (!before.exists || after.size != before.size || !after.modified.Equal(before.modified))
+}
+
+// --- Stage executor ---
 
 // executeStage runs one stage with up to maxStageRetries attempts.
 // Each attempt: feed stage to LLM, let it call tools, repeat until done.
@@ -328,6 +346,8 @@ func executeStage(
 	var allCalls []ToolCall
 
 	for attempt := 1; attempt <= maxStageRetries; attempt++ {
+		outPath := outputPath(pb, stage)
+		before := inspectOutput(outPath)
 		messages := append([]Message(nil), baseMessages...)
 		messages = append(messages, Message{Role: "user", Content: userMsg})
 
@@ -341,25 +361,27 @@ func executeStage(
 		tokensOut += stageResult.TokensOut
 		allCalls = append(allCalls, stageResult.ToolCalls...)
 
+		freshOutput := inspectOutput(outPath).changedSince(before)
+		if freshOutput && (stageResult.Status == "complete" || stageResult.Status == "iteration_limit") {
+			slog.Info("playbook stage complete", "playbook", pb.Name, "stage", stage.Number, "attempt", attempt, "runtime_status", stageResult.Status)
+			if stageResult.Status == "iteration_limit" {
+				return "", allCalls, tokensIn, tokensOut, nil
+			}
+			return stageResult.Reply, allCalls, tokensIn, tokensOut, nil
+		}
+
 		if stageResult.Status != "complete" {
 			return stageResult.Reply, allCalls, tokensIn, tokensOut, fmt.Errorf("stage runtime %s: %s", stageResult.Status, stageResult.Reply)
 		}
 
-		// check output file
-		outPath := outputPath(pb, stage)
-		if _, err := os.Stat(outPath); err == nil {
-			slog.Info("playbook stage complete", "playbook", pb.Name, "stage", stage.Number, "attempt", attempt)
-			return stageResult.Reply, allCalls, tokensIn, tokensOut, nil
-		}
-
-		// output file not found — retry
-		slog.Warn("playbook stage output missing", "playbook", pb.Name, "stage", stage.Number, "attempt", attempt, "expected", outPath)
+		// A completed model turn without a fresh output does not satisfy the stage.
+		slog.Warn("playbook stage output unchanged", "playbook", pb.Name, "stage", stage.Number, "attempt", attempt, "expected", outPath)
 		if attempt < maxStageRetries {
-			userMsg = buildStagePrompt(pb, stage, userMessage) + fmt.Sprintf("\n## Retry\n\nThe output file `%s` was not created. Complete the remaining steps and write the output file. Do NOT repeat steps that already succeeded.\n", outputPath(pb, stage))
+			userMsg = buildStagePrompt(pb, stage, userMessage) + fmt.Sprintf("\n## Retry\n\nThe output file `%s` was not created or updated by the previous attempt. Complete the remaining steps and write the output file. Do NOT repeat steps that already succeeded.\n", outPath)
 		}
 	}
 
-	return "", allCalls, tokensIn, tokensOut, fmt.Errorf("stage %d failed after %d attempts: output not written", stage.Number, maxStageRetries)
+	return "", allCalls, tokensIn, tokensOut, fmt.Errorf("stage %d failed after %d attempts: output not created or updated", stage.Number, maxStageRetries)
 }
 
 // --- Runner ---
