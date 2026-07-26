@@ -166,6 +166,15 @@ func TestBuildStagePromptIncludesUserRequest(t *testing.T) {
 	}
 }
 
+func TestBuildPlaybookSystemOmitsNestedPlaybookRouting(t *testing.T) {
+	settings := &Settings{Home: t.TempDir(), Workspace: t.TempDir(), ContextChars: 10000}
+	session := NewSession(settings, nil)
+	got := session.BuildPlaybookSystem("run the procurement audit", "")
+	if strings.Contains(got, "PLAYBOOK AVAILABLE") {
+		t.Fatalf("playbook system recursively advertises routing: %q", got)
+	}
+}
+
 func TestPlaybookCircuitBreakerStopsRepeatedIdenticalCall(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, "input.txt")

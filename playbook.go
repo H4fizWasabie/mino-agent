@@ -316,6 +316,7 @@ func executeStage(
 	pb *Playbook,
 	stage StageFile,
 	userMessage string,
+	baseMessages []Message,
 	tools *Registry,
 	maxTokens int,
 	obs Observer,
@@ -326,10 +327,9 @@ func executeStage(
 	var allCalls []ToolCall
 
 	for attempt := 1; attempt <= maxStageRetries; attempt++ {
-		messages := []Message{
-			{Role: "system", Content: system},
-			{Role: "user", Content: userMsg},
-		}
+		messages := append([]Message(nil), baseMessages...)
+		messages = append(messages, Message{Role: "system", Content: system})
+		messages = append(messages, Message{Role: "user", Content: userMsg})
 
 		stageTools := tools
 		if len(stage.Tools) > 0 {
@@ -482,14 +482,16 @@ func RunPlaybook(
 	logTrace(core.Settings.Home, "playbook_start", map[string]any{"name": name, "stages": len(pb.Stages)})
 
 	result := &PlaybookResult{Name: name}
-	system := loadSoul(core.Settings.Home) + fmt.Sprintf("\nLOCAL WORKSPACE: %s", core.Settings.Workspace)
+	conversation := core.Sessions.Get(sessionID)
+	system := conversation.Session.BuildPlaybookSystem(userMessage, "")
+	baseMessages := conversation.Session.PlaybookContext(system)
 
 	for i, stage := range pb.Stages {
 		slog.Info("playbook stage executing", "playbook", name, "stage", stage.Number, "name", stage.Name)
 
 		reply, calls, ti, to, err := executeStage(
 			ctx, core.Client, sessionID, system,
-			pb, stage, userMessage, core.Tools, core.Settings.MaxTokens,
+			pb, stage, userMessage, baseMessages, core.Tools, core.Settings.MaxTokens,
 			obs, core.Settings.Home,
 		)
 		result.TokensIn += ti

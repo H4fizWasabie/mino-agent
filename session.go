@@ -84,6 +84,14 @@ func loadSoul(home string) string {
 //
 //	SOUL.md + pending approvals + relevant skill matches. Time is injected as user message for cache stability.
 func (s *Session) BuildSystem(userMessage, source string) string {
+	return s.buildSystem(userMessage, source, true)
+}
+
+func (s *Session) BuildPlaybookSystem(userMessage, source string) string {
+	return s.buildSystem(userMessage, source, false)
+}
+
+func (s *Session) buildSystem(userMessage, source string, includePlaybookRouting bool) string {
 	parts := []string{
 		loadSoul(s.settings.Home),
 		fmt.Sprintf("\nLOCAL WORKSPACE (authoritative): %s\nThis overrides any hardcoded workspace path in a skill. Local files may be edited in place. Stage remote files here, verify locally, then sync them back once.", s.settings.Workspace),
@@ -119,6 +127,10 @@ func (s *Session) BuildSystem(userMessage, source string) string {
 		skills := s.mem.MatchingSkills(userMessage)
 		if skills != "" {
 			parts = append(parts, "\nRelevant skill instructions:\n"+skills)
+		}
+
+		if !includePlaybookRouting {
+			return strings.Join(parts, "\n")
 		}
 
 		// Playbook routing: always keyword-match first (fast), then refine with embeddings
@@ -247,6 +259,19 @@ func (s *Session) ContextFor(system, userMessage string) ([]Message, string) {
 	}
 	messages = append(messages, Message{Role: "user", Content: userContext})
 	return messages, userContext
+}
+
+func (s *Session) PlaybookContext(system string) []Message {
+	catalog := ""
+	if s.mem != nil {
+		catalog = s.mem.SessionArtifacts(s.sessionID, 2000)
+	}
+	historyBudget := max(0, s.settings.ContextChars-len(system)-len(catalog))
+	messages := s.ContextMessages(historyBudget)
+	if catalog != "" {
+		messages = append(messages, Message{Role: "assistant", Content: catalog})
+	}
+	return messages
 }
 
 func (s *Session) StartNew(id string) {

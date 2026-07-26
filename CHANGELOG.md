@@ -24,6 +24,8 @@
 - Add optional per-stage tool capabilities and lenient circuit breakers that
   cache one repeated call but stop repeated identical actions before runaway
   rounds.
+- Feed playbook stages through the session context and artifact catalog while
+  avoiding nested playbook routing inside an executing stage.
 - Remove an unused test helper that still fabricated the deleted completion tool.
 - Align decisions, handoff, contributing, and playbook design notes with the
   current filesystem playbook and approval architecture.
