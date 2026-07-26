@@ -21,6 +21,8 @@
 - Keep dashboard tool activity rows compact; full tool arguments and output remain collapsed until opened.
 
 ### Fixed
+- Restore the approval request and resolution tools so destructive Bash remains
+  fail-closed without leaving the model with an unusable approval protocol.
 - Remove the unused completion tool/protocol remnants and tell the model to stop
   calling tools when a turn is complete.
 - Remove the obsolete `complete_task` protocol from the session system prompt;

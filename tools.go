@@ -377,6 +377,8 @@ func BuildRegistry(db *sql.DB, home, workspace string, mem *Memory, location ...
 	bash := makeBashToolFor(home, bashTimeout)
 	bash.Classify = classifyBash
 	r.Register(bash)
+	r.Register(behaves(makeRequestApprovalTool(home), BehaviorMutate))
+	r.Register(behaves(makeResolveApprovalTool(home), BehaviorMutate))
 
 	// coding discovery tools
 	r.Register(behaves(makeListFilesTool(codingTimeout), BehaviorObserve))
@@ -777,7 +779,7 @@ func makeBashToolFor(home string, timeout time.Duration) *Tool {
 			var err error
 			approvalPath, err = approvedBashPlan(home, approvalID, cmd)
 			if err != nil {
-				return fmt.Sprintf("[APPROVAL_REQUIRED] %s. Call request_approval with the exact command, wait for the user's explicit approval, then retry bash with approval_id.", dangerReason)
+				return fmt.Sprintf("[APPROVAL_REQUIRED] %s. Call request_approval first, wait for the user's explicit approval, then retry bash with the returned approval_id.", dangerReason)
 			}
 		}
 		// git auto-commit before destructive bash (§8.3): snapshot workspace for rollback
@@ -813,6 +815,120 @@ func makeBashToolFor(home string, timeout time.Duration) *Tool {
 		Fn:        func(args map[string]any) string { return run(context.Background(), args) },
 		ContextFn: run,
 	}
+}
+
+func makeRequestApprovalTool(home string) *Tool {
+	return &Tool{
+		Name:        "request_approval",
+		Description: "Create an approval request before a destructive or irreversible action. Wait for the user to approve it before executing the action.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"action_id": map[string]any{"type": "string", "description": "Short unique ID using letters, numbers, dots, dashes, or underscores"},
+				"title":     map[string]any{"type": "string", "description": "One-line summary for the user"},
+				"details":   map[string]any{"type": "string", "description": "What will happen and its risks"},
+				"exec_plan": map[string]any{"type": "string", "description": "The exact action to perform if approved"},
+			},
+			"required": []string{"action_id", "title", "details", "exec_plan"},
+		},
+		Fn: func(args map[string]any) string {
+			actionID, _ := args["action_id"].(string)
+			if !safeActionID(actionID) {
+				return "Error: action_id must use only letters, numbers, dots, dashes, or underscores"
+			}
+			path := filepath.Join(approvalHome(home), "pending", actionID+".json")
+			if _, err := os.Stat(path); err == nil {
+				return "Error: an approval request with that action_id already exists"
+			}
+			request := map[string]any{
+				"action_id": actionID,
+				"title":     args["title"],
+				"details":   args["details"],
+				"exec_plan": args["exec_plan"],
+				"created":   time.Now().Format(time.RFC3339),
+			}
+			data, _ := json.Marshal(request)
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				return "Error creating approval directory: " + err.Error()
+			}
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				return "Error saving approval: " + err.Error()
+			}
+			return fmt.Sprintf("[APPROVAL_REQUIRED] %s. The user must explicitly approve '%s' before it can run.", actionID, request["title"])
+		},
+	}
+}
+
+func makeResolveApprovalTool(home string) *Tool {
+	resolve := func(ctx context.Context, args map[string]any) string {
+		actionID, _ := args["action_id"].(string)
+		if !safeActionID(actionID) {
+			return "Error: invalid action_id"
+		}
+		decision, _ := args["decision"].(string)
+		if decision != "approve" && decision != "reject" {
+			return "Error: decision must be approve or reject"
+		}
+		path := filepath.Join(approvalHome(home), "pending", actionID+".json")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Sprintf("No pending approval found for '%s'", actionID)
+		}
+		var request map[string]any
+		if err := json.Unmarshal(data, &request); err != nil {
+			return "Error: pending approval is invalid"
+		}
+		if decision == "approve" {
+			if !turnExplicitlyApproves(ctx) {
+				return "Error: approval must come from an explicit user message such as approve, yes, proceed, or go ahead"
+			}
+			if err := os.MkdirAll(filepath.Join(approvalHome(home), "approved"), 0700); err != nil {
+				return "Error creating approved directory: " + err.Error()
+			}
+			request["approved_at"] = time.Now().Format(time.RFC3339)
+			approved, _ := json.Marshal(request)
+			approvedPath := filepath.Join(approvalHome(home), "approved", actionID+".json")
+			if err := os.WriteFile(approvedPath, approved, 0600); err != nil {
+				return "Error saving approval: " + err.Error()
+			}
+			if err := os.Remove(path); err != nil {
+				return "Error removing pending approval: " + err.Error()
+			}
+			return fmt.Sprintf("APPROVED: use approval_id=%s for the exact approved bash command.", actionID)
+		}
+		if err := os.Remove(path); err != nil {
+			return "Error removing pending approval: " + err.Error()
+		}
+		return fmt.Sprintf("REJECTED: %s", request["title"])
+	}
+	return &Tool{
+		Name:        "resolve_approval",
+		Description: "Approve or reject a pending approval. Approval requires an explicit user confirmation in the current message.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"action_id": map[string]any{"type": "string", "description": "The pending approval ID"},
+				"decision":  map[string]any{"type": "string", "enum": []string{"approve", "reject"}},
+			},
+			"required": []string{"action_id", "decision"},
+		},
+		Fn:        func(args map[string]any) string { return resolve(context.Background(), args) },
+		ContextFn: resolve,
+	}
+}
+
+func turnExplicitlyApproves(ctx context.Context) bool {
+	message, _ := ctx.Value(userMessageKey{}).(string)
+	message = strings.ToLower(strings.TrimSpace(message))
+	if message == "yes" || message == "y" {
+		return true
+	}
+	for _, phrase := range []string{"approve", "approved", "proceed", "go ahead", "confirm", "do it", "send it", "ok", "sure", "done"} {
+		if strings.Contains(message, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 func classifyBash(args map[string]any) ToolBehavior {
