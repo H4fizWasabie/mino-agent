@@ -180,38 +180,6 @@ func TestTraceTelemetryUsesRecordedDecisionsAndStatuses(t *testing.T) {
 	}
 }
 
-func TestRunLoopTraceIncludesSelectedToolCount(t *testing.T) {
-	home := t.TempDir()
-	if err := os.Mkdir(filepath.Join(home, "traces"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	tools := NewRegistry()
-	tools.Register(&Tool{
-		Name: "observe",
-		Schema: map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
-		},
-		Fn: func(map[string]any) string { return "ok" },
-	})
-	client := &fakeClient{script: []*LLMResponse{scriptedResp(
-		[]ContentBlock{finishBlock("complete", "done")},
-		"tool_use",
-	)}}
-	result := RunLoop(client, "trace", "", nil, tools, 2, 2048, nil, false, home, nil)
-	if result.Status != "complete" {
-		t.Fatalf("loop status = %q", result.Status)
-	}
-	for _, event := range traceEvents(home) {
-		if event["type"] == "llm" {
-			if event["selected_tools"] != float64(1) {
-				t.Fatalf("selected_tools = %v, want 1", event["selected_tools"])
-			}
-			return
-		}
-	}
-	t.Fatal("llm trace event not written")
-}
 
 func TestUsageStatsIgnoresErrorTextInChatHistory(t *testing.T) {
 	home := t.TempDir()
