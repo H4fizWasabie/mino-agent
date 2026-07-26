@@ -49,6 +49,7 @@ type PlaybookResult struct {
 	StagesRun int
 	Status    string // "complete", "blocked", "failed"
 	Reply     string
+	Outputs   []string
 	ToolCalls []ToolCall
 	TokensIn  int
 	TokensOut int
@@ -409,6 +410,14 @@ func RunPlaybook(
 			return result, nil // not an error — playbook result carries the failure
 		}
 
+		outPath := outputPath(pb, stage)
+		result.Outputs = append(result.Outputs, outPath)
+		if core.Memory != nil {
+			if info, err := os.Stat(outPath); err == nil {
+				core.Memory.RecordArtifact(sessionID, fmt.Sprintf("%s stage %d output", name, stage.Number), outPath, int(info.Size()))
+			}
+		}
+
 		// check if stage wants human input ("Stop here. Ask Abah.")
 		if strings.Contains(strings.ToLower(reply), "stop here") ||
 			strings.Contains(strings.ToLower(reply), "ask abah") {
@@ -745,8 +754,15 @@ func formatPlaybookResult(result *PlaybookResult) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("## Playbook: %s — %s\n\n", result.Name, result.Status))
 	b.WriteString(fmt.Sprintf("Stages completed: %d\n", result.StagesRun))
-	b.WriteString(fmt.Sprintf("Tokens used: %d in / %d out\n\n", result.TokensIn, result.TokensOut))
+	b.WriteString(fmt.Sprintf("Tokens used: %d in / %d out\n", result.TokensIn, result.TokensOut))
+	if len(result.Outputs) > 0 {
+		b.WriteString("Outputs:\n")
+		for _, output := range result.Outputs {
+			b.WriteString("- " + output + "\n")
+		}
+	}
 	if result.Reply != "" {
+		b.WriteString("\n")
 		b.WriteString(result.Reply)
 	}
 	return b.String()

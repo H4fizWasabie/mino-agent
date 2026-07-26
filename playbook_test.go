@@ -177,6 +177,26 @@ func TestBuildPlaybookSystemOmitsNestedPlaybookRouting(t *testing.T) {
 	}
 }
 
+func TestFormatPlaybookResultReportsGenericOutputs(t *testing.T) {
+	outputs := []string{
+		filepath.Join(t.TempDir(), "output", "first.md"),
+		filepath.Join(t.TempDir(), "output", "second.md"),
+	}
+	got := formatPlaybookResult(&PlaybookResult{
+		Name: "example", Status: "complete", StagesRun: 2,
+		Outputs: outputs, Reply: "DONE",
+	})
+	for _, output := range outputs {
+		if !strings.Contains(got, "- "+output) {
+			t.Fatalf("receipt missing output %q: %q", output, got)
+		}
+	}
+	if strings.Contains(strings.ToLower(got), "telegram") ||
+		strings.Contains(strings.ToLower(got), "delivered") {
+		t.Fatalf("generic receipt invented delivery: %q", got)
+	}
+}
+
 func TestRespondForLetsModelChooseMatchedPlaybook(t *testing.T) {
 	home := t.TempDir()
 	dir := filepath.Join(home, "playbooks", "procurement-audit")

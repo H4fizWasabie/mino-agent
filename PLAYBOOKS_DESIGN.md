@@ -99,6 +99,11 @@ The output file is proof of stage completion and the durable recovery point.
 Stages with external side effects must remain idempotent because a process
 restart can re-enter an earlier stage.
 
+Every completed stage adds its absolute output path to `PlaybookResult` and the
+session artifact catalog. The `run_playbook` observation therefore gives later
+conversation turns a concrete file to inspect instead of requiring the
+procedure to run again.
+
 Human review is part of the procedure, not a programmatic approval subsystem.
 A stage that needs confirmation says `Stop here. Ask Abah.` The runner returns
 `blocked`, and a later user message decides what happens next.

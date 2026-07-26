@@ -32,6 +32,8 @@
   second deduplication cache or repeated-call state machine.
 - Feed playbook stages through the session context and artifact catalog while
   avoiding nested playbook routing inside an executing stage.
+- Return every completed stage output path in the playbook receipt and register
+  it in the session artifact catalog so later turns can inspect existing state.
 - Remove an unused test helper that still fabricated the deleted completion tool.
 - Align decisions, handoff, contributing, and playbook design notes with the
   current filesystem playbook architecture.
