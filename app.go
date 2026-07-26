@@ -218,32 +218,6 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 	conversation.mu.Lock()
 	defer conversation.mu.Unlock()
 
-	// Playbook routing: intercept before LLM if high-confidence match
-	var es *EmbeddingStore
-	if w.Memory != nil {
-		es = w.Memory.embedder
-	}
-	playbookName, _, playbookScore := MatchPlaybook(w.Settings.Home, userMessage, nil)
-	if playbookName == "" && es != nil {
-		playbookName, _, playbookScore = MatchPlaybook(w.Settings.Home, userMessage, es)
-	}
-	if playbookName != "" && playbookScore >= 0.5 {
-		// Strong match: auto-run the playbook, bypass LLM entirely
-		pbResult, err := RunPlaybook(parent, w, playbookName, userMessage, sessionID, obs)
-		if err == nil && pbResult.Status == "complete" {
-			result := &LoopResult{
-				Reply:     pbResult.Reply,
-				Status:    pbResult.Status,
-				ToolCalls: pbResult.ToolCalls,
-				TokensIn:  pbResult.TokensIn,
-				TokensOut: pbResult.TokensOut,
-			}
-			conversation.Session.AddExchange(userMessage, userMessage, result.Reply, result.ToolCalls, source)
-			return result
-		}
-		// Playbook failed — let LLM explain why
-	}
-
 	ctx, finish := conversation.beginTurn(parent)
 	defer finish()
 	system := conversation.Session.BuildSystem(userMessage, source)
@@ -259,6 +233,7 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 		messages[len(messages)-1].Images = images
 	}
 
+	var es *EmbeddingStore
 	if w.Memory != nil {
 		es = w.Memory.embedder
 	}

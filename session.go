@@ -140,7 +140,7 @@ func (s *Session) buildSystem(userMessage, source string, includePlaybookRouting
 		}
 		if playbookName != "" && playbookScore >= 0.3 {
 			parts = append(parts, fmt.Sprintf(
-				"\n🎯 PLAYBOOK AVAILABLE: \"%s\" — %s\nIMPORTANT: If this matches the user's request, call run_playbook with name=\"%s\" instead of handling it manually.",
+				"\nPOSSIBLY RELEVANT PLAYBOOK: \"%s\" — %s\nUse run_playbook with name=\"%s\" only if this repeatable procedure is the best fit for the current request. Otherwise handle the request normally.",
 				playbookName, playbookDesc, playbookName,
 			))
 		}

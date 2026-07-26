@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -170,8 +173,57 @@ func TestBuildPlaybookSystemOmitsNestedPlaybookRouting(t *testing.T) {
 	settings := &Settings{Home: t.TempDir(), Workspace: t.TempDir(), ContextChars: 10000}
 	session := NewSession(settings, nil)
 	got := session.BuildPlaybookSystem("run the procurement audit", "")
-	if strings.Contains(got, "PLAYBOOK AVAILABLE") {
+	if strings.Contains(got, "RELEVANT PLAYBOOK") {
 		t.Fatalf("playbook system recursively advertises routing: %q", got)
+	}
+}
+
+func TestRespondForLetsModelChooseMatchedPlaybook(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, "playbooks", "procurement-audit")
+	if err := os.MkdirAll(filepath.Join(dir, "output"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.md"), []byte("description: Weekly procurement audit\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "01-fetch.md"), []byte("## Do\n1. Fetch data\n## Write\n`output/data.md`\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	calls, sawCandidate := 0, false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		body, _ := io.ReadAll(r.Body)
+		sawCandidate = strings.Contains(string(body), "POSSIBLY RELEVANT PLAYBOOK")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Handled through normal reasoning."},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}`))
+	}))
+	defer server.Close()
+
+	settings := &Settings{
+		Home: home, Workspace: home, ContextChars: 100000,
+		MaxIter: 5, MaxTokens: 1000, Timezone: "Asia/Kuala_Lumpur",
+	}
+	db := Connect(home)
+	defer db.Close()
+	client := fakePM(server.URL)
+	mem := NewMemory(db, client, settings)
+	core := &Core{
+		Settings: settings, DB: db, Client: client, Memory: mem,
+		Tools: NewRegistry(), Sessions: NewSessionManager(settings, mem),
+	}
+	core.Tools.Register(makeRunPlaybookTool(core))
+
+	result := core.RespondFor("routing-test", "send me the procurement data", "dashboard", nil, false)
+	if result.Reply != "Handled through normal reasoning." {
+		t.Fatalf("reply = %q", result.Reply)
+	}
+	if calls != 1 {
+		t.Fatalf("provider calls = %d, want one normal reasoning turn", calls)
+	}
+	if !sawCandidate {
+		t.Fatal("matched playbook was not offered to the model")
 	}
 }
 
