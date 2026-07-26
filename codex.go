@@ -177,6 +177,9 @@ func parseCodexSSE(r io.Reader, onText func(string)) (*LLMResponse, error) {
 	if finalText != "" {
 		blocks = append([]ContentBlock{{Type: "text", Text: finalText}}, blocks...)
 	}
+	if len(blocks) == 0 {
+		return nil, fmt.Errorf("empty codex response")
+	}
 	stopReason := "end_turn"
 	if len(extractToolUses(blocks)) > 0 {
 		stopReason = "tool_use"

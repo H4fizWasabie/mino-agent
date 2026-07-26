@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -26,6 +27,19 @@ func TestLoadProvidersRestoresCodexChoices(t *testing.T) {
 	}
 	if len(providers[0].ReasoningLevels) != 5 || providers[0].ReasoningLevels[3] != "high" {
 		t.Fatalf("reasoning levels = %#v", providers[0].ReasoningLevels)
+	}
+}
+
+func TestParseSSEStreamAcceptsReasoningContent(t *testing.T) {
+	var streamed strings.Builder
+	response, err := parseSSEStream(strings.NewReader("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Hello from streaming\"}}]}\n\ndata: [DONE]\n"), func(delta string) {
+		streamed.WriteString(delta)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Content) != 1 || response.Content[0].Text != "Hello from streaming" || streamed.String() != response.Content[0].Text {
+		t.Fatalf("streamed=%q response=%+v", streamed.String(), response)
 	}
 }
 

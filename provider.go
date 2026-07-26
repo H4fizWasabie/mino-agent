@@ -202,6 +202,9 @@ func parseResponse(r io.Reader) (*LLMResponse, error) {
 			Input: args,
 		})
 	}
+	if len(blocks) == 0 {
+		return nil, fmt.Errorf("empty model response")
+	}
 
 	stopReason := choice.FinishReason
 	if len(choice.Message.ToolCalls) > 0 {
@@ -240,8 +243,9 @@ func parseSSEStream(r io.Reader, onText func(string)) (*LLMResponse, error) {
 		var chunk struct {
 			Choices []struct {
 				Delta struct {
-					Content   string `json:"content"`
-					ToolCalls []struct {
+					Content          string `json:"content"`
+					ReasoningContent string `json:"reasoning_content"`
+					ToolCalls        []struct {
 						Index    int    `json:"index"`
 						ID       string `json:"id"`
 						Function struct {
@@ -266,10 +270,14 @@ func parseSSEStream(r io.Reader, onText func(string)) (*LLMResponse, error) {
 		}
 
 		for _, choice := range chunk.Choices {
-			if choice.Delta.Content != "" {
-				fullText.WriteString(choice.Delta.Content)
+			text := choice.Delta.Content
+			if text == "" {
+				text = choice.Delta.ReasoningContent
+			}
+			if text != "" {
+				fullText.WriteString(text)
 				if onText != nil {
-					onText(choice.Delta.Content)
+					onText(text)
 				}
 			}
 			for _, tc := range choice.Delta.ToolCalls {
@@ -306,6 +314,9 @@ func parseSSEStream(r io.Reader, onText func(string)) (*LLMResponse, error) {
 			Name:  st.Name,
 			Input: args,
 		})
+	}
+	if len(blocks) == 0 {
+		return nil, fmt.Errorf("empty streamed model response")
 	}
 
 	stopReason := "end_turn"
@@ -462,6 +473,9 @@ func parseAnthropicResponse(r io.Reader) (*LLMResponse, error) {
 			blocks = append(blocks, ContentBlock{Type: "tool_use", ID: c.ID, Name: c.Name, Input: c.Input})
 		}
 	}
+	if len(blocks) == 0 {
+		return nil, fmt.Errorf("empty anthropic response")
+	}
 
 	stopReason := result.StopReason
 
@@ -581,6 +595,9 @@ func parseAnthropicStream(r io.Reader, onText func(string)) (*LLMResponse, error
 		var input map[string]any
 		json.Unmarshal([]byte(st.Input), &input)
 		textBlocks = append(textBlocks, ContentBlock{Type: "tool_use", ID: st.ID, Name: st.Name, Input: input})
+	}
+	if len(textBlocks) == 0 {
+		return nil, fmt.Errorf("empty anthropic streamed response")
 	}
 
 	stopReason := "end_turn"
