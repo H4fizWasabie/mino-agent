@@ -24,6 +24,10 @@
 - Keep dashboard tool activity rows compact; full tool arguments and output remain collapsed until opened.
 
 ### Fixed
+- Allow playbook stages to write derived summaries of untrusted web content while
+  continuing to block execution of instructions found in that content.
+- Keep Telegram delivery in the scheduled runner instead of hardcoding credentials
+  or curl commands inside the Malaysia news stage.
 - Let Mino choose whether to use a matched playbook instead of bypassing its
   normal reasoning loop for high-scoring matches.
 - Run playbook stages through the canonical Mino runtime instead of a second
