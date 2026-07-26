@@ -17,7 +17,7 @@ Read **[DECISIONS.md](DECISIONS.md)** before contributing. It explains the archi
 ```bash
 git clone https://github.com/H4fizWasabie/mino-agent
 cd mino-agent
-go build -tags sqlite_fts5
+go build -trimpath -buildvcs=false -ldflags="-buildid="
 go test ./...
 ```
 

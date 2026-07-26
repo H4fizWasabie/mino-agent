@@ -111,7 +111,7 @@ func Connect(home string) *sql.DB {
 	// at startup instead of silently degrading recall.
 	for _, table := range []string{"facts_fts", "episodes_fts"} {
 		if _, err := db.Exec(fmt.Sprintf("INSERT INTO %s(%s) VALUES ('rebuild')", table, table)); err != nil {
-			panic(fmt.Sprintf("rebuild %s: %v (build with -tags sqlite_fts5)", table, err))
+			panic(fmt.Sprintf("rebuild %s: %v (verify the modernc.org/sqlite build and database)", table, err))
 		}
 	}
 	runMigrations(db)

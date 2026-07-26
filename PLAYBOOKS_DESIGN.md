@@ -97,7 +97,7 @@ Vague prompts ("send me last week's purchase data") match playbooks:
 | Projects table + tools | ~120 | Playbook folder IS the project |
 | Schedule tools | ~80 | Creating a playbook = scheduling |
 | ToolFilter + SchemasFor | ~150 | `## Read` lists exactly what to load |
-| Approval tools + workspace gate | ~150 | Stage step: "Stop here. Ask Abah." |
+| Workspace gate | ~150 | Playbook stages and explicit approval tools handle guarded actions |
 | Completion protocol + dedup + streaks | ~560 | LLM stops when done; output file = proof |
 | `eval_test.go` (old loop tests) | 1086 | Removed; core tests preserved |
 | **Total removed** | **~2,700** | |

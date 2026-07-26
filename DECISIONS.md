@@ -3,7 +3,7 @@
 Key architectural decisions for Mino. Each entry explains what, why, and when to revisit.
 
 > The current `feat/playbooks` branch supersedes the older task-survival,
-> scheduler, tool-filter, approval, and completion-protocol sections where
+> scheduler, tool-filter, and completion-protocol sections where
 > `PLAYBOOKS_DESIGN.md` describes a simpler filesystem-based replacement.
 
 ---
@@ -58,23 +58,23 @@ Every N exchanges, a small model distills chat logs into durable facts and episo
 
 ---
 
-## 6. Task survival (checkpoints)
+## 6. Playbooks and recovery
 
-Each tool execution saves a checkpoint to `~/.mino/active_tasks/<session>.json`. On restart, the checkpoint is injected into the system prompt so the agent can resume.
+Multi-step workflows live in numbered Markdown stages under a playbook directory. Each stage reads the files named by its `## Read` section and writes its verified result to `output/`. Output files are the durable, inspectable checkpoint.
 
-**Why:** Crashes and restarts shouldn't lose in-progress work. Checkpoints are lightweight snapshots, not full state capture.
+The runtime no longer uses the former `active_tasks` checkpoint protocol. A restarted run may re-enter the playbook, so stages with external side effects must be idempotent or guard themselves with their output.
 
-**Revisit when:** Multi-step tasks that span tool categories need structured state (add task graph).
+**Why:** The filesystem is simpler to inspect, edit, back up, and hand off than a second task state machine.
 
 ---
 
-## 7. Tool filter (embeddings-based)
+## 7. Playbook routing
 
-Tools are embedded once at boot via OpenRouter. Each turn, the user message is embedded and cosine similarity selects the top N tools. Core tools (recall, save_note, read_file, bash, etc.) are always available.
+Mino matches playbooks by keywords first. If keyword matching finds nothing and an embedder is available, semantic matching is used as a fallback. The selected playbook is exposed to the LLM, which decides whether to run it.
 
-**Why:** 52+ tools would blow the context window. Sending only relevant tools saves tokens and improves reliability.
+**Why:** Fast deterministic routing handles common requests; embeddings improve recall without making every request pay the embedding cost.
 
-**Revisit when:** Embedding latency becomes a bottleneck, or a provider offers native tool filtering.
+**Revisit when:** Keyword routing produces frequent false positives or embedding latency becomes material.
 
 ---
 
@@ -235,31 +235,13 @@ The system prompt stays stable (cache-friendly). Facts are still pulled via `rec
 - Fact pool exceeds ~10K entries and `scoreFact` tuning plateaus (revisit reranker model)
 - `context_boost` tuning plateaus and relevance is still the bottleneck (revisit Option B)
 
-## 20. Structured task plans (checkpoint → plan)
+## 20. Playbook stage plans
 
-Replace the flat `ToolsUsed []string` in `TaskSnapshot` with a structured plan the LLM declares and the harness persists:
+The numbered Markdown files inside a playbook are the workflow plan. A stage declares its required reads, action, and output contract; the runtime supplies the original user request and verifies that the expected output exists.
 
-```go
-type TaskStep struct {
-    Description string `json:"description"` // LLM-written summary
-    Tool        string `json:"tool"`        // tool called (or empty if pending)
-    Status      string `json:"status"`      // "done" | "active" | "pending"
-    Output      string `json:"output"`      // inline (≤8KB) or artifact ref (>8KB)
-}
-```
+The LLM remains responsible for sequencing within a stage. The filesystem remains the durable record rather than a separate `TaskSnapshot` or dependency graph.
 
-The harness does NOT enforce dependencies — the LLM is the planner and knows how to sequence. The harness only persists and feeds back via the existing context assembly pipelines:
-
-- **Tool output compaction** (§artifacts.go): step outputs > 8KB become artifacts at `/tmp/mino/results/`, referenced by path
-- **User input compaction**: large user inputs get head/tail split
-- **History truncation**: last N turns only, earlier compacted
-- **Context budget**: hard cap via `ContextChars`
-
-The task plan becomes the fifth pillar of context — assembled by `ContextFor()` alongside facts, episodes, skills, and history.
-
-**What was skipped:** A DAG-based task graph with dependency enforcement (`blocks: [step2]`). The LLM is the planner; the harness is the notebook. No constraint validation, no tool gating.
-
-**Revisit when:** Multi-step tasks spanning tool categories become common and LLM sequencing errors are the bottleneck. A lightweight DAG with harness enforcement would be the upgrade path.
+**Revisit when:** Playbooks need dependencies that cannot be expressed as numbered stages and output files.
 
 ## 21. Extension quality feedback loop
 
@@ -276,13 +258,13 @@ When both signals fire concurrently, trigger an alert: "[MINO ALERT] Extension `
 
 **Revisit when:** The output similarity threshold needs tuning per extension, or when extension-specific quality baselines ("this tool normally takes 2 calls, 5+ is anomalous") become worth the complexity.
 
-## 22. Eval case auto-generation
+## 22. Eval case generation
 
 `eval/cases.json` is manually written. Auto-generate cases from real interactions to catch regressions without manual curation:
 
 1. **User-approved (primary).** Add a thumbs-up button to completed tasks in the dashboard. User clicks → auto-generate an eval case from that interaction: `{name, prompt, expected_tool, confidence: "manual"}`. These gate deploys — fail the build on regression.
 
-2. **Auto-harvest (background).** When `complete_task` fires with status=complete (not blocked), auto-generate a case from all tools called. Marked `confidence: "auto"` — run silently, report results, don't fail eval. Seeds the pool and surfaces anomalies without blocking deploys.
+2. **Auto-harvest (background).** When a run completes successfully without further tool calls, auto-generate a case from all tools called. Marked `confidence: "auto"` — run silently, report results, don't fail eval. Seeds the pool and surfaces anomalies without blocking deploys.
 
 Two tiers by confidence:
 - `manual`: user-verified, blocks deploys on failure

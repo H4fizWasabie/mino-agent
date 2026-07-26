@@ -21,6 +21,13 @@
 - Keep dashboard tool activity rows compact; full tool arguments and output remain collapsed until opened.
 
 ### Fixed
+- Align decisions, handoff, contributing, and playbook design notes with the
+  current filesystem playbook and approval architecture.
+- Make deploy builds reproducible and fail deployment if the VPS binary hash
+  differs from the just-built local binary.
+- Remove the obsolete sqlite_fts5 build-tag advice from the FTS rebuild error.
+- Remove the obsolete Malaysia-specific systemd runner and units now that the
+  generic playbook dispatcher owns scheduled delivery.
 - Make scheduled runners encode API JSON safely, select only output created by
   the current run, and avoid overlapping executions per playbook.
 - Restore the approval request and resolution tools so destructive Bash remains

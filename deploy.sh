@@ -12,7 +12,7 @@ VERSION="${MINO_VERSION:-$(git describe --tags --abbrev=0 2>/dev/null || echo de
 echo "=== Deploying Mino to $VPS ==="
 
 echo "--- Building Mino ($BUILD_TAGS) ---"
-go build -tags "$BUILD_TAGS" -ldflags "-X main.Version=$VERSION" -o "$BINARY" .
+go build -trimpath -buildvcs=false -tags "$BUILD_TAGS" -ldflags "-buildid= -X main.Version=$VERSION" -o "$BINARY" .
 
 echo "--- Building minowrap ---"
 (cd extensions/minowrap && go build -o minowrap .)
@@ -41,6 +41,9 @@ echo "--- Pushing binaries ---"
 # upload to temp name + atomic mv: scp onto a running binary fails with ETXTBSY
 scp "$BINARY" "$VPS_USER@$VPS:/usr/local/bin/mino.new"
 ssh "$VPS_USER@$VPS" 'chmod +x /usr/local/bin/mino.new && mv /usr/local/bin/mino.new /usr/local/bin/mino'
+LOCAL_SHA=$(sha256sum "$BINARY" | awk '{print $1}')
+REMOTE_SHA=$(ssh "$VPS_USER@$VPS" "sha256sum /usr/local/bin/mino | awk '{print \$1}'")
+[ "$LOCAL_SHA" = "$REMOTE_SHA" ] || { echo "Mino binary hash mismatch: local=$LOCAL_SHA remote=$REMOTE_SHA" >&2; exit 1; }
 scp extensions/minowrap/minowrap "$VPS_USER@$VPS:/usr/local/bin/minowrap.new"
 ssh "$VPS_USER@$VPS" 'chmod +x /usr/local/bin/minowrap.new && mv /usr/local/bin/minowrap.new /usr/local/bin/minowrap'
 
@@ -99,11 +102,8 @@ for unit in extensions/*.service; do
     scp "$unit" "$VPS_USER@$VPS:/etc/systemd/system/"
 done
 
-scp extensions/mino-daily-malaysia-news-runner.sh "$VPS_USER@$VPS:/usr/local/bin/mino-daily-malaysia-news-runner.new"
-scp extensions/mino-daily-malaysia-news.service extensions/mino-daily-malaysia-news.timer "$VPS_USER@$VPS:/etc/systemd/system/"
 scp extensions/mino-playbook-runner.sh extensions/mino-playbook-dispatcher.sh "$VPS_USER@$VPS:/tmp/"
 scp extensions/mino-playbook-dispatcher.service extensions/mino-playbook-dispatcher.timer "$VPS_USER@$VPS:/etc/systemd/system/"
-ssh "$VPS_USER@$VPS" 'chmod 755 /usr/local/bin/mino-daily-malaysia-news-runner.new && mv /usr/local/bin/mino-daily-malaysia-news-runner.new /usr/local/bin/mino-daily-malaysia-news-runner'
 ssh "$VPS_USER@$VPS" 'install -m 755 /tmp/mino-playbook-runner.sh /usr/local/bin/mino-playbook-runner; install -m 755 /tmp/mino-playbook-dispatcher.sh /usr/local/bin/mino-playbook-dispatcher; rm -f /tmp/mino-playbook-runner.sh /tmp/mino-playbook-dispatcher.sh'
 
 ssh "$VPS_USER@$VPS" '

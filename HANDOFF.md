@@ -4,6 +4,10 @@
 > checkpoint, completion-protocol, and tool-filter architecture with numbered
 > filesystem playbooks. See `PLAYBOOKS_DESIGN.md` for the current model.
 
+> The status and checklist below document the earlier Go port and are retained
+> as history. For current behavior, follow `PLAYBOOKS_DESIGN.md`,
+> `DECISIONS.md`, and the playbook files.
+
 > Mino → Go port complete. Dashboard works. Memory works. Ready for DECISIONS.md iterations.
 
 ## What was built
@@ -43,7 +47,7 @@ MINO_API_KEY="..." MINO_BASE_URL="..." MINO_MODEL="your-model" MINO_DASHBOARD_PO
 TELEGRAM_BOT_TOKEN="..." MINO_API_KEY="..." MINO_BASE_URL="..." ./mino
 
 # Build
-CGO_ENABLED=1 go build -tags "sqlite_fts5" -ldflags="-s -w" -o mino .
+go build -trimpath -buildvcs=false -ldflags="-buildid= -s -w" -o mino .
 ```
 
 ### Multi-provider (`~/.mino/providers.json`)
