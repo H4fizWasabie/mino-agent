@@ -16,7 +16,7 @@ import (
 )
 
 const maxStageRetries = 3
-const maxToolRounds = 15 // max tool-call rounds within one stage attempt
+const maxToolRounds = 8 // max tool-call rounds within one stage attempt
 
 // StageFile is one numbered stage in a playbook.
 type StageFile struct {
@@ -344,7 +344,9 @@ func runToolLoop(
 			return allCalls, tokensIn, tokensOut, "cancelled"
 		}
 
-		resp, err := client.Create(sessionID, MainModel, messages, maxTokens, "", allSchemas)
+		resp, err := client.Stream(sessionID, MainModel, messages, maxTokens, "", allSchemas, func(delta string) {
+			notify(obs, "text", map[string]any{"delta": delta})
+		})
 		if err != nil {
 			slog.Warn("playbook LLM error", "round", round, "error", err)
 			return allCalls, tokensIn, tokensOut, fmt.Sprintf("LLM error: %v", err)
