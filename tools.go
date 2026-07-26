@@ -406,6 +406,7 @@ func BuildRegistry(db *sql.DB, home, workspace string, mem *Memory, location ...
 
 	// notes (Core: notes.make_tool)
 	r.Register(behaves(makeNotesTool(db, mem), BehaviorMutate))
+	r.Register(behaves(makeProjectListTool(db), BehaviorObserve))
 	r.Register(behaves(makeProjectGetTool(db), BehaviorObserve))
 	r.Register(behaves(makeProjectUpdateTool(db), BehaviorMutate))
 
@@ -1168,6 +1169,55 @@ func makeNotesTool(db *sql.DB, mem *Memory) *Tool {
 				mem.embedder.Index("fact", subject+": "+content)
 			}
 			return fmt.Sprintf("Saved: %s — %s", subject, content)
+		},
+	}
+}
+
+func makeProjectListTool(db *sql.DB) *Tool {
+	return &Tool{
+		Name:        "project_list",
+		Description: "List all tracked projects/objectives. Use for morning briefings to discover what needs attention. Filter by status or by due check-ins.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"status":  map[string]any{"type": "string", "description": "Filter: active, blocked, complete, paused. Omit to list all."},
+				"due_now": map[string]any{"type": "boolean", "description": "If true, only return objectives where next_check <= now."},
+			},
+		},
+		Fn: func(args map[string]any) string {
+			query := "SELECT name, objective, status, blocker, next_action, COALESCE(last_checked,''), COALESCE(next_check,''), updated_at FROM projects"
+			var conditions []string
+			var params []any
+			if status, _ := args["status"].(string); status != "" {
+				conditions = append(conditions, "status = ?")
+				params = append(params, status)
+			}
+			if due, _ := args["due_now"].(bool); due {
+				conditions = append(conditions, "next_check IS NOT NULL AND next_check <= datetime('now')")
+			}
+			if len(conditions) > 0 {
+				query += " WHERE " + strings.Join(conditions, " AND ")
+			}
+			query += " ORDER BY next_check ASC, updated_at DESC"
+			rows, err := db.Query(query, params...)
+			if err != nil {
+				return fmt.Sprintf("Error listing projects: %v", err)
+			}
+			defer rows.Close()
+			var out strings.Builder
+			count := 0
+			for rows.Next() {
+				var name, objective, status, blocker, nextAction, lastChecked, nextCheck, updated string
+				if err := rows.Scan(&name, &objective, &status, &blocker, &nextAction, &lastChecked, &nextCheck, &updated); err != nil {
+					continue
+				}
+				out.WriteString(fmt.Sprintf("- %s [%s] next_check=%s next_action=%s\n", name, status, nextCheck, nextAction))
+				count++
+			}
+			if count == 0 {
+				return "No projects found."
+			}
+			return fmt.Sprintf("%d project(s):\n%s", count, out.String())
 		},
 	}
 }
