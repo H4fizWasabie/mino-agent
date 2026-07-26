@@ -101,7 +101,10 @@ done
 
 scp extensions/mino-daily-malaysia-news-runner.sh "$VPS_USER@$VPS:/usr/local/bin/mino-daily-malaysia-news-runner.new"
 scp extensions/mino-daily-malaysia-news.service extensions/mino-daily-malaysia-news.timer "$VPS_USER@$VPS:/etc/systemd/system/"
+scp extensions/mino-playbook-runner.sh extensions/mino-playbook-dispatcher.sh "$VPS_USER@$VPS:/tmp/"
+scp extensions/mino-playbook-dispatcher.service extensions/mino-playbook-dispatcher.timer "$VPS_USER@$VPS:/etc/systemd/system/"
 ssh "$VPS_USER@$VPS" 'chmod 755 /usr/local/bin/mino-daily-malaysia-news-runner.new && mv /usr/local/bin/mino-daily-malaysia-news-runner.new /usr/local/bin/mino-daily-malaysia-news-runner'
+ssh "$VPS_USER@$VPS" 'install -m 755 /tmp/mino-playbook-runner.sh /usr/local/bin/mino-playbook-runner; install -m 755 /tmp/mino-playbook-dispatcher.sh /usr/local/bin/mino-playbook-dispatcher; rm -f /tmp/mino-playbook-runner.sh /tmp/mino-playbook-dispatcher.sh'
 
 ssh "$VPS_USER@$VPS" '
     command -v sqlite3 >/dev/null || apt-get install -y -qq sqlite3
@@ -122,7 +125,8 @@ ssh "$VPS_USER@$VPS" '
     fi
     systemctl daemon-reload
     systemctl enable mino mino-fileingest minowrap
-    systemctl enable --now mino-daily-malaysia-news.timer
+    systemctl disable --now mino-daily-malaysia-news.timer || true
+    systemctl enable --now mino-playbook-dispatcher.timer
     systemctl restart minowrap
     systemctl restart mino-fileingest
     systemctl restart mino

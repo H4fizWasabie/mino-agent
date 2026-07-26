@@ -117,6 +117,7 @@ func NewCore() *Core {
 	// Playbook tools — LLM can discover and run playbooks
 	tools.Register(behaves(makeListPlaybooksTool(s.Home), BehaviorObserve))
 	tools.Register(behaves(makeRunPlaybookTool(w), BehaviorMutate))
+	tools.Register(behaves(makeSchedulePlaybookTool(s.Home, s.Timezone), BehaviorMutate))
 	// seed example playbook if none exist
 	if len(ListPlaybooks(s.Home)) == 0 {
 		CreateExamplePlaybook(s.Home)

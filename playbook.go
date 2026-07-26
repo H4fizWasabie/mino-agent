@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -727,6 +728,73 @@ func makeListPlaybooksTool(home string) *Tool {
 				fmt.Fprintf(&b, "- **%s**: %s (%d stages)\n", name, desc, len(pb.Stages))
 			}
 			return b.String()
+		},
+	}
+}
+
+func makeSchedulePlaybookTool(home, timezone string) *Tool {
+	return &Tool{
+		Name:        "schedule_playbook",
+		Description: "Schedule an existing playbook daily at a local time. The external systemd dispatcher will run it and deliver its output to Telegram.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":     map[string]any{"type": "string", "description": "Existing playbook folder name"},
+				"time":     map[string]any{"type": "string", "description": "Daily local time in HH:MM format"},
+				"timezone": map[string]any{"type": "string", "description": "IANA timezone, defaulting to Mino's configured timezone"},
+			},
+			"required": []string{"name", "time"},
+		},
+		ContextFn: func(ctx context.Context, args map[string]any) string {
+			name, _ := args["name"].(string)
+			at, _ := args["time"].(string)
+			zone, _ := args["timezone"].(string)
+			if zone == "" {
+				zone = timezone
+			}
+			if filepath.Base(name) != name || name == "." || name == ".." {
+				return "Error: invalid playbook name"
+			}
+			if !regexp.MustCompile(`^(?:[01][0-9]|2[0-3]):[0-5][0-9]$`).MatchString(at) {
+				return "Error: time must use HH:MM format"
+			}
+			if _, err := time.LoadLocation(zone); err != nil {
+				return fmt.Sprintf("Error: invalid timezone %q", zone)
+			}
+			configPath := filepath.Join(home, "playbooks", name, "config.md")
+			if _, err := LoadPlaybook(filepath.Join(home, "playbooks"), name); err != nil {
+				return fmt.Sprintf("Error: %v", err)
+			}
+			data, err := os.ReadFile(configPath)
+			if err != nil {
+				return fmt.Sprintf("Error reading config: %v", err)
+			}
+			lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+			set := map[string]string{"schedule:": fmt.Sprintf("schedule: %s %s", at, zone), "notify:": "notify: true", "status:": "status: active"}
+			seen := make(map[string]bool)
+			for i, line := range lines {
+				key := strings.Fields(line)
+				if len(key) == 0 {
+					continue
+				}
+				if replacement, ok := set[key[0]]; ok {
+					lines[i], seen[key[0]] = replacement, true
+				}
+			}
+			for _, key := range []string{"schedule:", "notify:", "status:"} {
+				if !seen[key] {
+					lines = append(lines, set[key])
+				}
+			}
+			tmp := configPath + ".tmp"
+			if err := os.WriteFile(tmp, []byte(strings.Join(lines, "\n")+"\n"), 0600); err != nil {
+				return fmt.Sprintf("Error writing config: %v", err)
+			}
+			if err := os.Rename(tmp, configPath); err != nil {
+				os.Remove(tmp)
+				return fmt.Sprintf("Error installing config: %v", err)
+			}
+			return fmt.Sprintf("Scheduled %s daily at %s (%s); systemd will deliver the output to Telegram.", name, at, zone)
 		},
 	}
 }

@@ -10,6 +10,8 @@
   retain task-specific context.
 - Add an external systemd timer and Telegram delivery runner for the daily
   Malaysia news playbook.
+- Add `schedule_playbook` so Mino can schedule existing playbooks through the
+  external systemd dispatcher without hand-editing shell or unit files.
 
 ### Changed
 - Clarify playbook documentation: config values are read from files, and

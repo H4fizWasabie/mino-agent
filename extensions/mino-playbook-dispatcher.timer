@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Mino playbook schedules every minute
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+AccuracySec=1s
+Persistent=true
+Unit=mino-playbook-dispatcher.service
+
+[Install]
+WantedBy=timers.target

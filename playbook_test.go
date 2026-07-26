@@ -201,3 +201,32 @@ func TestListPlaybooks(t *testing.T) {
 		t.Errorf("list = %v, want [alpha beta gamma]", names)
 	}
 }
+
+func TestSchedulePlaybook(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, "playbooks", "news")
+	if err := os.MkdirAll(filepath.Join(dir, "output"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.md"), []byte("description: News\nstatus: active\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "01-news.md"), []byte("## Do\n1. Search\n## Write\n`output/news.md`\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := makeSchedulePlaybookTool(home, "Asia/Kuala_Lumpur").ContextFn(nil, map[string]any{"name": "news", "time": "20:00"})
+	if !strings.Contains(got, "Scheduled news daily at 20:00") {
+		t.Fatalf("schedule result = %q", got)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "config.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := string(data)
+	for _, want := range []string{"schedule: 20:00 Asia/Kuala_Lumpur", "notify: true", "status: active"} {
+		if !strings.Contains(config, want) {
+			t.Errorf("config missing %q: %s", want, config)
+		}
+	}
+}
