@@ -52,6 +52,15 @@ else
     echo "No fileingest extension in this release; preserving the existing VPS sidecar"
 fi
 
+# Push filesystem playbooks without touching their runtime output directories.
+if [ -d playbooks ]; then
+    ssh "$VPS_USER@$VPS" 'mkdir -p /home/mino/.mino/playbooks'
+    for playbook in playbooks/*; do
+        [ -d "$playbook" ] || continue
+        scp -r "$playbook" "$VPS_USER@$VPS:/home/mino/.mino/playbooks/"
+    done
+fi
+
 # 4. Seed minowrap tools.json if not exists
 echo "--- Seeding minowrap tools ---"
 ssh "$VPS_USER@$VPS" '
@@ -90,6 +99,10 @@ for unit in extensions/*.service; do
     scp "$unit" "$VPS_USER@$VPS:/etc/systemd/system/"
 done
 
+scp extensions/mino-daily-malaysia-news-runner.sh "$VPS_USER@$VPS:/usr/local/bin/mino-daily-malaysia-news-runner.new"
+scp extensions/mino-daily-malaysia-news.service extensions/mino-daily-malaysia-news.timer "$VPS_USER@$VPS:/etc/systemd/system/"
+ssh "$VPS_USER@$VPS" 'chmod 755 /usr/local/bin/mino-daily-malaysia-news-runner.new && mv /usr/local/bin/mino-daily-malaysia-news-runner.new /usr/local/bin/mino-daily-malaysia-news-runner'
+
 ssh "$VPS_USER@$VPS" '
     command -v sqlite3 >/dev/null || apt-get install -y -qq sqlite3
     if grep -q "^TELEGRAM_BOT_TOKEN=" /home/mino/.mino/mino.env 2>/dev/null && ! grep -q "^MINO_TELEGRAM_CHAT_ID=" /home/mino/.mino/mino.env; then
@@ -109,6 +122,7 @@ ssh "$VPS_USER@$VPS" '
     fi
     systemctl daemon-reload
     systemctl enable mino mino-fileingest minowrap
+    systemctl enable --now mino-daily-malaysia-news.timer
     systemctl restart minowrap
     systemctl restart mino-fileingest
     systemctl restart mino

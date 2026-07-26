@@ -8,6 +8,8 @@
   vague prompts to the right playbook via embeddings + FTS5.
 - Pass the original user request into every playbook stage so routed workflows
   retain task-specific context.
+- Add an external systemd timer and Telegram delivery runner for the daily
+  Malaysia news playbook.
 
 ### Changed
 - Clarify playbook documentation: config values are read from files, and
