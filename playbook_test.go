@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -141,6 +142,17 @@ func TestParseStageMissingSections(t *testing.T) {
 	}
 	if stage.Write != "" {
 		t.Errorf("write = %q, want empty", stage.Write)
+	}
+}
+
+func TestBuildStagePromptIncludesUserRequest(t *testing.T) {
+	pb := &Playbook{Name: "procurement", Dir: t.TempDir()}
+	stage := StageFile{Number: 1, Name: "fetch"}
+
+	got := buildStagePrompt(pb, stage, "send me last week's purchase data")
+	if !strings.Contains(got, "## User Request") ||
+		!strings.Contains(got, "send me last week's purchase data") {
+		t.Fatalf("prompt did not include user request: %q", got)
 	}
 }
 

@@ -6,6 +6,8 @@
 - Playbook system — numbered markdown stages with `## Read` / `## Do` / `## Write`.
   Filesystem is the executor. Mini-loop with 3 retries per stage. Memory routes
   vague prompts to the right playbook via embeddings + FTS5.
+- Pass the original user request into every playbook stage so routed workflows
+  retain task-specific context.
 
 ### Changed
 - Integrated the Mino logo into the dashboard sidebar, favicon, and onboarding screen with embedded PNG assets.

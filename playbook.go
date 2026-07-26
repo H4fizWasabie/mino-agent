@@ -43,13 +43,13 @@ type Playbook struct {
 
 // PlaybookResult is the outcome of running a playbook.
 type PlaybookResult struct {
-	Name       string
-	StagesRun  int
-	Status     string // "complete", "blocked", "failed"
-	Reply      string
-	ToolCalls  []ToolCall
-	TokensIn   int
-	TokensOut  int
+	Name      string
+	StagesRun int
+	Status    string // "complete", "blocked", "failed"
+	Reply     string
+	ToolCalls []ToolCall
+	TokensIn  int
+	TokensOut int
 }
 
 // --- Parser ---
@@ -244,9 +244,14 @@ func extractSection(raw, heading string) string {
 // --- Builder ---
 
 // buildStagePrompt creates the user message for executing a stage.
-func buildStagePrompt(pb *Playbook, stage StageFile) string {
+func buildStagePrompt(pb *Playbook, stage StageFile, userMessage string) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("You are executing the **%s** playbook, stage %d: **%s**.\n\n", pb.Name, stage.Number, stage.Name))
+	if userMessage != "" {
+		b.WriteString("## User Request\n\n")
+		b.WriteString(userMessage)
+		b.WriteString("\n\n")
+	}
 
 	if stage.Raw != "" {
 		b.WriteString("## Stage Instructions\n\n")
@@ -291,12 +296,13 @@ func executeStage(
 	system string,
 	pb *Playbook,
 	stage StageFile,
+	userMessage string,
 	tools *Registry,
 	maxTokens int,
 	obs Observer,
 	traceHome string,
 ) (string, []ToolCall, int, int, error) {
-	userMsg := buildStagePrompt(pb, stage)
+	userMsg := buildStagePrompt(pb, stage, userMessage)
 	tokensIn, tokensOut := 0, 0
 	var allCalls []ToolCall
 
@@ -321,7 +327,7 @@ func executeStage(
 		// output file not found — retry
 		slog.Warn("playbook stage output missing", "playbook", pb.Name, "stage", stage.Number, "attempt", attempt, "expected", outPath)
 		if attempt < maxStageRetries {
-			userMsg = fmt.Sprintf("The output file `%s` was not created. Please complete the remaining steps and write the output file. Do NOT repeat steps that already succeeded.", stage.Write)
+			userMsg = buildStagePrompt(pb, stage, userMessage) + fmt.Sprintf("\n## Retry\n\nThe output file `%s` was not created. Complete the remaining steps and write the output file. Do NOT repeat steps that already succeeded.\n", outputPath(pb, stage))
 		}
 	}
 
@@ -421,6 +427,7 @@ func RunPlaybook(
 	ctx context.Context,
 	core *Core,
 	name string,
+	userMessage string,
 	sessionID string,
 	obs Observer,
 ) (*PlaybookResult, error) {
@@ -441,7 +448,7 @@ func RunPlaybook(
 
 		reply, calls, ti, to, err := executeStage(
 			ctx, core.Client, sessionID, system,
-			pb, stage, core.Tools, core.Settings.MaxTokens,
+			pb, stage, userMessage, core.Tools, core.Settings.MaxTokens,
 			obs, core.Settings.Home,
 		)
 		result.TokensIn += ti
@@ -680,7 +687,8 @@ func makeRunPlaybookTool(core *Core) *Tool {
 			if v := ctx.Value(sessionIDKey{}); v != nil {
 				sid, _ = v.(string)
 			}
-			result, err := RunPlaybook(ctx, core, name, sid, nil)
+			request, _ := ctx.Value(userMessageKey{}).(string)
+			result, err := RunPlaybook(ctx, core, name, request, sid, nil)
 			if err != nil {
 				return fmt.Sprintf("Error: %v", err)
 			}
@@ -695,7 +703,7 @@ func makeListPlaybooksTool(home string) *Tool {
 		Name:        "list_playbooks",
 		Description: "List all available playbooks with their descriptions.",
 		Schema: map[string]any{
-			"type": "object",
+			"type":       "object",
 			"properties": map[string]any{},
 		},
 		Fn: func(args map[string]any) string {

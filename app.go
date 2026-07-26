@@ -29,7 +29,6 @@ type Core struct {
 	Memory         *Memory
 	Tools          *Registry
 	Sessions       *SessionManager
-
 }
 
 func NewCore() *Core {
@@ -114,8 +113,6 @@ func NewCore() *Core {
 	tools.Register(MakeReloadPluginsTool(s.Home, tools, mcpBridge))
 
 	// Tool filter: use embeddings to send only relevant tools per turn
-
-
 
 	// Playbook tools — LLM can discover and run playbooks
 	tools.Register(behaves(makeListPlaybooksTool(s.Home), BehaviorObserve))
@@ -231,7 +228,7 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 	}
 	if playbookName != "" && playbookScore >= 0.5 {
 		// Strong match: auto-run the playbook, bypass LLM entirely
-		pbResult, err := RunPlaybook(parent, w, playbookName, sessionID, obs)
+		pbResult, err := RunPlaybook(parent, w, playbookName, userMessage, sessionID, obs)
 		if err == nil && pbResult.Status == "complete" {
 			result := &LoopResult{
 				Reply:     pbResult.Reply,
@@ -255,7 +252,7 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 	system += fmt.Sprintf("\n[System time: %s %s (UTC%+03d:%02d). Today is %s.]",
 		local.Format("Monday, 2006-01-02 15:04:05"), zone, offset/3600, (abs(offset)%3600)/60,
 		local.Format("2006-01-02"))
-logTrace(w.Settings.Home, "turn_start", map[string]any{"user_message": userMessage})
+	logTrace(w.Settings.Home, "turn_start", map[string]any{"user_message": userMessage})
 	messages, userContext := conversation.Session.ContextFor(system, userMessage)
 	if len(images) > 0 {
 		messages[len(messages)-1].Images = images

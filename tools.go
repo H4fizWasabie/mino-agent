@@ -30,6 +30,7 @@ import (
 type ToolFunc func(args map[string]any) string
 type ContextToolFunc func(context.Context, map[string]any) string
 type sessionIDKey struct{}
+type userMessageKey struct{}
 type rollbackDirKey struct{}
 
 type ToolBehavior uint8
@@ -63,10 +64,10 @@ func (t *Tool) ToAPI() map[string]any {
 // --- Registry (matches Core's ToolRegistry) ---
 
 type Registry struct {
-	tools        map[string]*Tool
-	logDB        *sql.DB   // optional: if set, ExecuteContext logs to tool_calls table
-	auditFile    *os.File  // optional: append-only JSONL audit log
-	auditMu      sync.Mutex // guards auditFile writes
+	tools     map[string]*Tool
+	logDB     *sql.DB    // optional: if set, ExecuteContext logs to tool_calls table
+	auditFile *os.File   // optional: append-only JSONL audit log
+	auditMu   sync.Mutex // guards auditFile writes
 }
 
 // SetLogDB enables tool-call logging to the tool_calls table.
@@ -184,7 +185,7 @@ func (r *Registry) ExecuteContext(ctx context.Context, name string, args map[str
 	if err := validateObject(args, t.Schema); err != nil {
 		return fmt.Sprintf("Error: invalid arguments for %s: %v", name, err)
 	}
-start := time.Now()
+	start := time.Now()
 	var output string
 	if t.ContextFn != nil {
 		output = t.ContextFn(ctx, args)
@@ -217,12 +218,12 @@ start := time.Now()
 			auditSid, _ = v.(string)
 		}
 		auditRecord := map[string]any{
-			"tool_name":   name,
-			"args":        args,
-			"output":      output,
-			"status":      toolOutputStatus(output),
-			"session_id":  auditSid,
-			"timestamp":   time.Now().UTC().Format(time.RFC3339),
+			"tool_name":  name,
+			"args":       args,
+			"output":     output,
+			"status":     toolOutputStatus(output),
+			"session_id": auditSid,
+			"timestamp":  time.Now().UTC().Format(time.RFC3339),
 		}
 		auditJSON, _ := json.Marshal(auditRecord)
 		r.auditFile.Write(auditJSON)
@@ -862,7 +863,6 @@ var destructiveBashPatterns = []struct {
 
 // --- Workspace boundary gate (§8.1) ---
 
-
 // isUnderAllowedPath returns true if the path is under workspace or Mino home.
 // Always allows writes to ~/.mino/rollback/ (git rollback snapshots) and
 // /tmp/mino (Mino's own artifact/scratch space).
@@ -890,8 +890,6 @@ func isUnderAllowedPath(path, workspace, home string) bool {
 	}
 	return false
 }
-
-
 
 var hasWhereClause = regexp.MustCompile(`(?i)\bwhere\b`)
 
@@ -1091,9 +1089,6 @@ func makeNotesTool(db *sql.DB, mem *Memory) *Tool {
 		},
 	}
 }
-
-
-
 
 func makeMessagesTool(home string) *Tool {
 	return &Tool{
@@ -1566,9 +1561,6 @@ func makeViewImageTool() *Tool {
 
 // --- Approval tools (multi-turn gate for destructive ops) ---
 
-
-
-
 func makeGenerateImageTool(home string) *Tool {
 	return &Tool{
 		Name:        "generate_image",
@@ -1606,4 +1598,3 @@ func makeGenerateImageTool(home string) *Tool {
 		},
 	}
 }
-
