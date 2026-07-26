@@ -27,7 +27,7 @@ func (f *fakeClient) Create(session string, role ModelRole, messages []Message, 
 	f.messages = append(f.messages, append([]Message(nil), messages...))
 	f.toolSets = append(f.toolSets, append([]ToolDef(nil), tools...))
 	if f.pos >= len(f.script) {
-		return scriptedResp([]ContentBlock{finishBlock("complete", "out of script")}, "tool_use"), nil
+		return scriptedResp([]ContentBlock{textBlock("out of script")}, "stop"), nil
 	}
 	r := f.script[f.pos]
 	f.pos++
@@ -45,10 +45,6 @@ func textBlock(text string) ContentBlock {
 
 func toolBlock(name string, args map[string]any) ContentBlock {
 	return ContentBlock{Type: "tool_use", ID: "tu_1", Name: name, Input: args}
-}
-
-func finishBlock(status, reply string) ContentBlock {
-	return toolBlock(completionToolName, map[string]any{"status": status, "reply": reply})
 }
 
 func scriptedResp(blocks []ContentBlock, stopReason string) *LLMResponse {

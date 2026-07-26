@@ -24,37 +24,6 @@ type LoopResult struct {
 	TokensOut  int
 }
 
-const (
-	completionToolName = "complete_task"
-	maxNoProgress      = 3
-	completionPrompt   = `COMPLETION PROTOCOL (RUNTIME ENFORCED):
-- Ordinary assistant text is progress and cannot end the turn.
-- To answer the user, call complete_task ALONE with status and the final reply.
-- Use status "complete" only when every requested step is verified complete.
-- Use status "blocked" only when required user input, approval, or an unavailable external dependency prevents further safe progress.
-- If work remains, call the next tool instead.
-- Each side-effecting tool follows: plan one action, execute it once, use its action receipt as proof, then observe before deciding what comes next. Never repeat an action whose receipt is successful.
-- TOOL HYGIENE: Prefer write_file over bash echo for file creation. Prefer read_file over bash cat. If a specialized tool exists for your task, use it — bash is the fallback, not the default.
-- Before claiming "file created" in complete_task, verify the file exists. If it does not exist, fix it first. The harness may reject completion with unverified file claims.
-- IMPORTANT: complete_task.reply must contain the FULL answer including any jokes, lists, code, or content the user requested. NEVER wrap it with meta-commentary like "Hope that helped!" — put the actual content in the reply field.`
-)
-
-// ponytail: env override, defaults to 5. Raise for coding-heavy sessions.
-var maxReadOnlyStreak = envInt("MINO_MAX_READ_ONLY_STREAK", 5)
-
-var completionTool = ToolDef{
-	Name:        completionToolName,
-	Description: "Finish the current task. Call alone only after all work is complete or genuinely blocked.",
-	Parameters: map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"status": map[string]any{"type": "string", "enum": []string{"complete", "blocked"}},
-			"reply":  map[string]any{"type": "string", "description": "The final user-facing answer or exact blocker."},
-		},
-		"required": []string{"status", "reply"},
-	},
-}
-
 // Observer matches Core's Observer callback
 type Observer func(kind string, data map[string]any)
 
@@ -401,7 +370,7 @@ func formatToolResults(results []map[string]any) string {
 	if duplicate {
 		out.WriteString("[The exact action already ran. Its cached result is authoritative; do not execute or verify it again.]\n")
 	}
-	out.WriteString("[Continue only if a requested step remains. After status=ok, call a distinct next tool or call complete_task alone now. Never repeat a successful action.]\n")
+	out.WriteString("[Continue only if a requested step remains. After status=ok, call a distinct next tool. Stop calling tools when the work is complete. Never repeat a successful action.]\n")
 	return out.String()
 }
 
@@ -466,32 +435,6 @@ func closeTrace(home string) {
 		current.file.Close()
 		delete(traceFiles.byHome, home)
 	}
-}
-
-func trackFileMutation(paths map[string]struct{}, tool string, args map[string]any, output string) {
-	switch tool {
-	case "write_file", "edit_file":
-		if path, _ := args["path"].(string); path != "" && !isRemotePath(path) {
-			paths[path] = struct{}{}
-		}
-	case "sync_file":
-		if path, _ := args["destination"].(string); path != "" && !isRemotePath(path) {
-			paths[path] = struct{}{}
-		}
-	}
-	re := regexp.MustCompile(`(?:Wrote \d+ bytes to |Appended \d+ bytes to |Edited )(/\S+)`)
-	for _, match := range re.FindAllStringSubmatch(output, -1) {
-		paths[strings.TrimRight(match[1], ".,;:!?)")] = struct{}{}
-	}
-}
-
-func verifyFileClaims(paths map[string]struct{}) string {
-	for path := range paths {
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			return fmt.Sprintf("Error: the completed task wrote %s but the file no longer exists. Recreate it and verify every changed file before calling complete_task again.", path)
-		}
-	}
-	return ""
 }
 
 // --- Artifact compaction (moved from artifacts.go) ---

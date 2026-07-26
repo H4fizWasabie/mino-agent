@@ -164,9 +164,12 @@ func TestContextMessagesKeepsLastNTurnsOnly(t *testing.T) {
 	}
 }
 
-func TestToolResultsRequireCompletionOrRealBlocker(t *testing.T) {
+func TestToolResultsTellModelWhenToStop(t *testing.T) {
 	got := formatToolResults([]map[string]any{{"tool": "probe", "status": "error", "cached": false, "content": "Error: missing column"}})
-	if !strings.Contains(got, "distinct next tool") || !strings.Contains(got, "complete_task") {
-		t.Fatalf("tool result lacks completion reminder: %q", got)
+	if !strings.Contains(got, "distinct next tool") || !strings.Contains(got, "Stop calling tools") {
+		t.Fatalf("tool result lacks stop guidance: %q", got)
+	}
+	if strings.Contains(got, "complete_task") {
+		t.Fatalf("tool result references removed completion protocol: %q", got)
 	}
 }

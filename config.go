@@ -24,10 +24,9 @@ type Settings struct {
 	ConsolidateEvery int
 	MinSimilarity    float64
 	ContextChars     int
-	MaxHistoryTurns    int // keep only last N turns (0 = unlimited, default 5)
-	MaxToolDescChars   int // trim tool descriptions exceeding this (0 = no limit)
-	MaxReadOnlyStreak  int // max consecutive read-only tool calls before nudge (default 5)
-	RollbackDir        string
+	MaxHistoryTurns  int // keep only last N turns (0 = unlimited, default 5)
+	MaxToolDescChars int // trim tool descriptions exceeding this (0 = no limit)
+	RollbackDir      string
 	BashTimeout      time.Duration
 	CodingTimeout    time.Duration
 	SyncTimeout      time.Duration
@@ -71,9 +70,8 @@ func LoadSettings() *Settings {
 		ConsolidateLimit: envInt("MINO_CONSOLIDATE_LIMIT", 2),
 		Telegram:         os.Getenv("TELEGRAM_BOT_TOKEN"),
 		TelegramChatID:   envInt64("MINO_TELEGRAM_CHAT_ID", 0),
-		Timezone:          envOr("MINO_TIMEZONE", "Asia/Kuala_Lumpur"),
-		MaxReadOnlyStreak: envInt("MINO_MAX_READ_ONLY_STREAK", 5),
-		RollbackDir:       filepath.Join(home, "rollback"),
+		Timezone:         envOr("MINO_TIMEZONE", "Asia/Kuala_Lumpur"),
+		RollbackDir:      filepath.Join(home, "rollback"),
 	}
 }
 

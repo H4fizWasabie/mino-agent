@@ -21,6 +21,8 @@
 - Keep dashboard tool activity rows compact; full tool arguments and output remain collapsed until opened.
 
 ### Fixed
+- Remove the unused completion tool/protocol remnants and tell the model to stop
+  calling tools when a turn is complete.
 - Remove the obsolete `complete_task` protocol from the session system prompt;
   playbooks and ad-hoc turns now finish when the model has no more work.
 - Retire stale checkpoints on explicit stop, consume restart recovery only once per conversation, and recognize common punctuated stop phrases.
