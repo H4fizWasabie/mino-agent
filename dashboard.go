@@ -227,10 +227,27 @@ func dashboardTools(calls []ToolCall) []map[string]any {
 	for i, call := range calls {
 		tools[i] = map[string]any{
 			"tool": call.Name, "args": call.Args, "output": call.Output,
-			"status": toolOutputStatus(call.Output), "summary": call.Output,
+			"status": toolOutputStatus(call.Output), "summary": dashboardToolSummary(call.Output),
 		}
 	}
 	return tools
+}
+
+// dashboardToolSummary keeps the chat activity row useful without exposing the
+// full tool result. The complete result remains available in the disclosure.
+func dashboardToolSummary(output string) string {
+	summary := strings.TrimSpace(output)
+	if receipt := strings.Index(summary, "[action_receipt"); receipt >= 0 {
+		summary = strings.TrimSpace(summary[:receipt])
+	}
+	summary = strings.Join(strings.Fields(summary), " ")
+	if end := strings.Index(summary, ". "); end >= 0 {
+		summary = summary[:end+1]
+	}
+	if len(summary) > 120 {
+		summary = strings.TrimSpace(summary[:117]) + "..."
+	}
+	return summary
 }
 
 // --- API: Session ---

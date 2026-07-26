@@ -6,6 +6,21 @@ import (
 	"testing"
 )
 
+func TestDashboardToolSummaryCompactsOutput(t *testing.T) {
+	for _, tc := range []struct {
+		name, output, want string
+	}{
+		{"sentence", "Scheduled the reminder. [action_receipt {\"proof\":true}]", "Scheduled the reminder."},
+		{"long", "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz", "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklm..."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := dashboardToolSummary(tc.output); got != tc.want {
+				t.Fatalf("dashboardToolSummary() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestEvalReportRequiresReleaseEvidence(t *testing.T) {
 	home := t.TempDir()
 	if got := evalReport(home); got != nil {

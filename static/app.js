@@ -232,11 +232,19 @@ const secs = ms => ms==null ? "—" : (ms/1000).toFixed(1)+"s";
 const gateBadge = g => !g ? "" :
   `<span class="badge ${g.decision==="retrieve"?"retrieve":""}">gate · ${esc(g.decision)}</span><span class="meta" style="margin:0">${esc(g.reason||"")}</span>`;
 
+// Keep the activity row compact even when an older API payload uses the full
+// result as `summary`; the complete output stays behind a closed disclosure.
+const toolSummary = x => {
+  let s = String(x.summary || x.output || "").replace(/\[action_receipt[\s\S]*$/, "").replace(/\s+/g, " ").trim();
+  const end = s.indexOf(". ");
+  if (end >= 0) s = s.slice(0, end + 1);
+  return s.length > 120 ? s.slice(0, 117).trim() + "..." : s;
+};
 // A tool call renders as a status row (dot + one-line summary); the raw output
 // hides behind a disclosure so an ugly osascript error never floods the page.
 const toolRow = x => `<div class="tool ${x.status}">
   <div class="tool-head"><span class="dot ${x.status}"></span><code>${esc(x.tool)}</code>
-    <span style="color:var(--ink2)">${esc(x.summary)}</span></div>
+    <span style="color:var(--ink2)">${esc(toolSummary(x))}</span></div>
   <details><summary>args &amp; raw output</summary>
     <pre>${esc(x.tool)}(${esc(JSON.stringify(x.args,null,1))})\n\n${esc(x.output)}</pre>
   </details>

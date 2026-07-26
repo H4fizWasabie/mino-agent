@@ -4,6 +4,7 @@
 
 ### Changed
 - Integrated the Mino logo into the dashboard sidebar, favicon, and onboarding screen with embedded PNG assets.
+- Keep dashboard tool activity rows compact; full tool arguments and output remain collapsed until opened.
 
 ### Fixed
 - Retire stale checkpoints on explicit stop, consume restart recovery only once per conversation, and recognize common punctuated stop phrases.
