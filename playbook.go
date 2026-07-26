@@ -18,7 +18,7 @@ import (
 )
 
 const maxStageRetries = 3
-const maxToolRounds = 8 // max tool-call rounds within one stage attempt
+const maxStageIterations = 8 // bounded runtime iterations within one stage attempt
 
 // StageFile is one numbered stage in a playbook.
 type StageFile struct {
@@ -328,27 +328,27 @@ func executeStage(
 
 	for attempt := 1; attempt <= maxStageRetries; attempt++ {
 		messages := append([]Message(nil), baseMessages...)
-		messages = append(messages, Message{Role: "system", Content: system})
 		messages = append(messages, Message{Role: "user", Content: userMsg})
 
 		stageTools := tools
 		if len(stage.Tools) > 0 {
 			stageTools = tools.Only(stage.Tools...)
 		}
-		toolCalls, ti, to, done := runToolLoop(ctx, client, sessionID, messages, stageTools, maxTokens, obs, traceHome, attempt)
-		tokensIn += ti
-		tokensOut += to
-		allCalls = append(allCalls, toolCalls...)
+		stageResult := RunLoopContext(ctx, client, sessionID, system, messages, stageTools,
+			maxStageIterations, maxTokens, obs, true, traceHome, nil)
+		tokensIn += stageResult.TokensIn
+		tokensOut += stageResult.TokensOut
+		allCalls = append(allCalls, stageResult.ToolCalls...)
 
-		if strings.HasPrefix(done, "BLOCKED:") || done == "max tool rounds reached" {
-			return done, allCalls, tokensIn, tokensOut, fmt.Errorf("%s", done)
+		if stageResult.Status != "complete" {
+			return stageResult.Reply, allCalls, tokensIn, tokensOut, fmt.Errorf("stage runtime %s: %s", stageResult.Status, stageResult.Reply)
 		}
 
 		// check output file
 		outPath := outputPath(pb, stage)
 		if _, err := os.Stat(outPath); err == nil {
 			slog.Info("playbook stage complete", "playbook", pb.Name, "stage", stage.Number, "attempt", attempt)
-			return done, allCalls, tokensIn, tokensOut, nil
+			return stageResult.Reply, allCalls, tokensIn, tokensOut, nil
 		}
 
 		// output file not found — retry
@@ -359,105 +359,6 @@ func executeStage(
 	}
 
 	return "", allCalls, tokensIn, tokensOut, fmt.Errorf("stage %d failed after %d attempts: output not written", stage.Number, maxStageRetries)
-}
-
-// runToolLoop feeds the LLM, executes tools, and repeats until the LLM stops.
-// Returns tool calls made, token counts, and the final text response.
-func runToolLoop(
-	ctx context.Context,
-	client LLMClient,
-	sessionID string,
-	messages []Message,
-	tools *Registry,
-	maxTokens int,
-	obs Observer,
-	traceHome string,
-	attempt int,
-) ([]ToolCall, int, int, string) {
-	allSchemas := tools.Schemas()
-	tokensIn, tokensOut := 0, 0
-	var allCalls []ToolCall
-	cache := make(map[string]string)
-	repeats := make(map[string]int)
-
-	for round := 1; round <= maxToolRounds; round++ {
-		if ctx.Err() != nil {
-			return allCalls, tokensIn, tokensOut, "cancelled"
-		}
-
-		resp, err := client.Stream(sessionID, MainModel, messages, maxTokens, "", allSchemas, func(delta string) {
-			notify(obs, "text", map[string]any{"delta": delta})
-		})
-		if err != nil {
-			slog.Warn("playbook LLM error", "round", round, "error", err)
-			return allCalls, tokensIn, tokensOut, fmt.Sprintf("LLM error: %v", err)
-		}
-
-		tokensIn += resp.Usage.InputTokens
-		tokensOut += resp.Usage.OutputTokens
-
-		notify(obs, "llm", map[string]any{
-			"stage_attempt": attempt,
-			"round":         round,
-			"usage":         map[string]int{"in": resp.Usage.InputTokens, "out": resp.Usage.OutputTokens},
-		})
-
-		// extract tool uses
-		toolUses := extractToolUses(resp.Content)
-		if len(toolUses) == 0 {
-			toolUses = extractTextToolUses(extractText(resp.Content))
-		}
-
-		// append assistant turn
-		messages = append(messages, Message{Role: "assistant", Content: assembleAssistantContent(resp.Content)})
-
-		// no tool calls = LLM says it's done
-		if len(toolUses) == 0 {
-			logTrace(traceHome, "playbook_stage_done", map[string]any{"round": round, "attempt": attempt})
-			return allCalls, tokensIn, tokensOut, extractText(resp.Content)
-		}
-
-		// execute tools
-		toolResults := make([]map[string]any, 0)
-		for _, tc := range toolUses {
-			args, _ := tc.Input.(map[string]any)
-			key := dedupKey(tc.Name, args)
-			output, cached := cache[key]
-			if cached {
-				repeats[key]++
-				if repeats[key] >= 2 {
-					logTrace(traceHome, "playbook_circuit_breaker", map[string]any{"reason": "repeated tool call", "tool": tc.Name, "round": round})
-					return allCalls, tokensIn, tokensOut, fmt.Sprintf("BLOCKED: repeated identical call to %s", tc.Name)
-				}
-				output = "[already executed] " + output
-			} else {
-				output = tools.ExecuteContext(ctx, tc.Name, args)
-				cache[key] = output
-			}
-			if ctx.Err() != nil {
-				return allCalls, tokensIn, tokensOut, "cancelled"
-			}
-			status := toolOutputStatus(output)
-			output = prepareToolOutput(traceHome, sessionID, round, tc.Name, output)
-			output = appendActionReceipt(output, tc.Name, key, status, cached)
-
-			allCalls = append(allCalls, ToolCall{Name: tc.Name, Args: args, Output: output})
-
-			notify(obs, "tool", map[string]any{"tool": tc.Name, "args": args, "status": status})
-			logTrace(traceHome, "tool", map[string]any{"tool": tc.Name, "args": args, "status": status})
-
-			toolResults = append(toolResults, map[string]any{
-				"type":        "tool_result",
-				"tool_use_id": tc.ID,
-				"tool":        tc.Name,
-				"status":      status,
-				"content":     output,
-			})
-		}
-		messages = append(messages, Message{Role: "user", Content: formatToolResults(toolResults)})
-	}
-
-	return allCalls, tokensIn, tokensOut, "max tool rounds reached"
 }
 
 // --- Runner ---

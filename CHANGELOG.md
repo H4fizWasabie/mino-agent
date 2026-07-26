@@ -21,6 +21,8 @@
 - Keep dashboard tool activity rows compact; full tool arguments and output remain collapsed until opened.
 
 ### Fixed
+- Run playbook stages through the canonical Mino runtime instead of a second
+  playbook-specific LLM/tool loop.
 - Add optional per-stage tool capabilities and lenient circuit breakers that
   cache one repeated call but stop repeated identical actions before runaway
   rounds.
