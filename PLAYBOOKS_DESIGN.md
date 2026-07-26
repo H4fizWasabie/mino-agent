@@ -1,122 +1,141 @@
-# Mino v2 — Playbook Architecture
+# Mino — Playbook Architecture
 
-## What is a playbook?
+## Purpose
 
-A playbook is a repeatable procedure. One folder. Numbered markdown stages.
-The filesystem is the executor. A runner walks the stages; each stage has
-a mini-loop with up to 3 retries.
+A playbook is an optional filesystem state machine for a repeatable procedure.
+It is not Mino's chat architecture and it does not replace normal reasoning.
 
-```
-~/.mino/playbooks/<name>/
-├── config.md       # description, shared values (optional)
+Every user message enters Mino's normal runtime. A matched playbook is offered
+as context, like a relevant skill or the `recall` tool. Mino decides whether the
+procedure fits the current request and may call `run_playbook`. Questions,
+follow-ups, and one-off actions continue normally when a playbook is unnecessary.
+
+## Filesystem layout
+
+```text
+~/.mino/playbooks/<id>/
+├── config.md       # description, status, schedule, and shared values
 ├── 01-<verb>.md    # stage 1
 ├── 02-<verb>.md    # stage 2
-└── output/          # Mino creates, human reviews between runs
+└── output/         # durable stage results
 ```
 
-## Schema
+The folder name is the stable machine identifier. The description in
+`config.md` explains the procedure to Mino and humans.
 
-### `config.md` (optional)
+### `config.md`
 
 ```markdown
-description: Weekly procurement audit — fetch POs, analyze suppliers, draft report
+description: Fetch purchase orders, analyze suppliers, and draft a weekly audit
 status: active
+schedule: 09:00 Asia/Kuala_Lumpur
+notify: true
 Database: /srv/data/procurement.db
 Stale threshold: 7 days
 ```
 
-`description:` is what memory indexes for routing.
-Shared values stay in `config.md`; the stage LLM reads the file through the
-paths listed in `## Read`. The filesystem is the resolver—there is no template
-engine or placeholder substitution.
+Shared values remain in the file. Stages list `config.md` under `## Read`, and
+the model reads it through the normal file tool. The filesystem is the
+resolver; there is no placeholder or template engine.
 
-### Stage files: `NN-<verb>.md`
-
-Every stage has three sections:
+### Stage files
 
 ```markdown
-# <Verb phrase>
+# Fetch purchase orders
 
 ## Read
 
-- `config.md` (for threshold)
-- `output/<previous>.md` (from stage N-1)
+- `config.md`
+- `output/previous.md`
 
 ## Do
 
-1. Concrete step
-2. Another step
-3. Write results
+1. Read the configured source.
+2. Fetch the requested period.
+3. Write the verified result.
+
+## Tools
+
+- read_file
+- write_file
+- bash
 
 ## Write
 
-`output/<name>.md`
+`output/purchase-orders.md`
 ```
 
-**Rules:**
-- `## Read` lists files to load before executing
-- `## Do` is numbered steps
-- `## Write` is exactly one output path
-- No stage exceeds 80 lines
-- Linear only — no branching
+- `## Read` names files the stage may need.
+- `## Do` describes the procedure.
+- `## Tools` optionally limits available capabilities; it does not prescribe
+  tool order.
+- `## Write` names exactly one expected output.
+- Stages run in numeric order without a dependency graph or branching engine.
 
-## Two loops
+## One runtime
 
-| Loop | Scope | Max tries | When |
-|---|---|---|---|
-| **Playbook runner** | Walks numbered stages, checks output exists | — | Structured tasks |
-| **Mini-loop** | Executes tools within one stage | 3 retries | Per stage |
-| **Main loop** | observe → act → observe | maxIter | Ad-hoc queries |
+```text
+user message
+  → normal Mino context and reasoning
+  → optional run_playbook tool call
+  → numbered stage runner
+  → canonical RunLoopContext for each stage
+  → verified output files
+```
 
-The main loop (ad-hoc) is simple: LLM calls tools, tools run, results fed back.
-No completion protocol, no dedup, no streaks. The LLM stops when it has nothing
-more to say.
+There is no second agent or playbook-specific LLM loop. A stage uses the same
+provider, reasoning setting, tool execution, artifact compaction, traces, and
+session context as an ordinary Mino turn. Nested playbook suggestions are
+disabled while a stage is running.
 
-## Memory as Router
+The runner gives each stage the original user request and its Markdown
+instructions. A stage attempt has at most eight runtime iterations. If the
+model stops without creating the declared output, the runner may retry the
+stage up to three times with a correction. Within an attempt, the canonical
+loop remains simple: call the model, execute its tools, return the observations,
+and repeat until the model stops or the iteration limit is reached.
 
-Vague prompts ("send me last week's purchase data") match playbooks:
+The output file is proof of stage completion and the durable recovery point.
+Stages with external side effects must remain idempotent because a process
+restart can re-enter an earlier stage.
 
-1. **Keyword** (always, free): word overlap between prompt and playbook
-   description + stage content → score 0.0–1.0
-2. **Embedding** (if configured and keyword matching finds nothing): cosine similarity on description → fallback
+Human review is part of the procedure, not a programmatic approval subsystem.
+A stage that needs confirmation says `Stop here. Ask Abah.` The runner returns
+`blocked`, and a later user message decides what happens next.
 
-| Score | Behavior |
-|---|---|
-| ≥ 0.5 | Auto-run playbook, bypass LLM entirely |
-| 0.3–0.49 | Hint injected into system prompt, LLM decides |
-| < 0.3 | Normal flow |
+## Discovery and choice
 
-## What was removed
+`MatchPlaybook` currently works as follows:
 
-| Removed | Lines | Replaced by |
-|---|---|---|
-| `scheduler.go` | 241 | Systemd timer or ad-hoc invocation |
-| `checkpoint.go` | 167 | Stage `output/` folder IS the checkpoint |
-| `artifacts.go` | 89 | Moved compaction to loop.go; `/tmp/mino/results/` stays |
-| `delegate.go` (fan_out + delegate) | 133 | Playbooks handle multi-step tasks |
-| Projects table + tools | ~120 | Playbook folder IS the project |
-| Schedule tools | ~80 | Creating a playbook = scheduling |
-| ToolFilter + SchemasFor | ~150 | `## Read` lists exactly what to load |
-| Workspace gate | ~150 | Playbook stages and explicit approval tools handle guarded actions |
-| Completion protocol + dedup + streaks | ~560 | LLM stops when done; output file = proof |
-| `eval_test.go` (old loop tests) | 1086 | Removed; core tests preserved |
-| **Total removed** | **~2,700** | |
+1. Keyword overlap checks the folder identifier, description, and stage text.
+2. If keyword matching finds nothing and embeddings are configured, semantic
+   similarity checks descriptions.
+3. A match at the hint threshold is added to Mino's system context as a
+   possibly relevant procedure.
+4. Mino decides whether to call `run_playbook` or handle the request normally.
 
-## What stayed
+A score never executes a playbook by itself. This preserves conversational
+context: a follow-up about an existing result should be answered as a
+follow-up, not automatically rerun as a procedure.
 
-| Component | Lines |
-|---|---|
-| `loop.go` (simplified) | ~300 (was 767) |
-| `tools.go` (core tools only) | ~1,600 (was 2,291) |
-| `playbook.go` (new) | ~500 |
-| Session, memory, skills | Unchanged |
-| Providers (Anthropic, OpenAI, Gemini, Mimo) | Unchanged |
-| Gateways (Telegram, dashboard) | Unchanged |
-| MCP, auth, alerts, extensions | Unchanged |
+## Scheduling and delivery
 
-## State
+Schedules are external orchestration, not a second task runtime:
 
-- **Branch**: `feat/playbooks`
-- **Deployed**: VPS `100.101.53.98`, mimo-v2.5
-- **Runtime model**: playbook stages execute directly from the filesystem
-- **Live playbook**: `procurement-audit` — auto-routes from "send me purchase data"
+- `schedule_playbook` writes schedule and notification values to `config.md`.
+- `mino-playbook-dispatcher.timer` checks due configurations once per minute.
+- `mino-playbook-runner` sends an explicit request to the running Mino service.
+- The runner selects output created by that run and delivers it through
+  Telegram when configured.
+- `flock` prevents overlapping scheduled runs of the same playbook.
+
+Systemd decides when to request execution. Mino still owns reasoning and stage
+execution.
+
+## Source map
+
+- `app.go`: normal conversational entry point
+- `session.go`: optional playbook candidate context
+- `playbook.go`: parsing, matching, tools, and linear stage runner
+- `loop.go`: canonical reasoning and tool runtime used by chat and stages
+- `extensions/mino-playbook-*.sh`: external scheduling and delivery

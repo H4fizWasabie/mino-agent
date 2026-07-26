@@ -21,20 +21,23 @@
 mino/
   main.go          # entry point, wire everything
   go.mod           # module: github.com/H4fizWasabie/mino-agent
-  config.go         # env vars → Config struct
-  loop.go           # THE loop (~100 lines)
+  config.go         # env vars → Settings
+  db.go             # SQLite schema and connection
+  loop.go           # canonical reasoning and tool runtime
   memory.go         # SQLite + FTS5 + consolidation
   tools.go          # tool registry + built-in tools
   session.go        # session, history, context assembly
-  provider.go       # LLM provider manager + adapters
-  telegram.go       # telegram gateway (phase 1)
-  dashboard.go      # web UI + SSE (phase 2)
-  scheduler.go      # cron engine (phase 2)
-  checkpoint.go     # task survival (phase 2)
-  memory/           # adapters, working memory, patterns (phase 3+)
+  provider.go       # LLM protocol adapters
+  provider_manager.go # provider priority, fallback, and reasoning settings
+  playbook.go       # optional filesystem state machines
+  telegram.go       # primary gateway
+  dashboard.go      # secondary web UI + SSE
+  extensions.go     # external HTTP tools
 ```
-**Build order:** Phase 1 = `main.go` + `loop.go` + `session.go` + `tools.go` + `config.go` + `provider.go`.
-Everything else comes after the core loop works. Extensions are separate repos/services — never embedded.
+**Core path:** `app.go` assembles context, `loop.go` runs reasoning and tools,
+and `session.go` records the result. Playbooks may be selected by that runtime;
+they never replace it with a second agent loop. Extensions remain separate
+services managed by systemd.
 
 ### Code quality
 - **Go stdlib first.** No external dependency without explicit discussion.
@@ -71,12 +74,19 @@ Everything else comes after the core loop works. Extensions are separate repos/s
 - **No Apple-specific code.** Mino runs on Linux VPS.
 - **Telegram is the primary interface.** Dashboard is secondary.
 - **Extensions are separate processes** (HTTP, not embedded). Systemd manages lifecycle.
+- **Playbooks are optional state machines.** Matching suggests; Mino decides
+  whether to call `run_playbook`.
+- **Human checkpoints stay in the procedure.** Use `Stop here. Ask Abah.` in a
+  stage instead of adding an approval tool or approval state machine.
+- **Keep the loop mechanical.** Call the model, execute requested tools, return
+  observations, and repeat. Do not add dedup caches or streak protocols.
 - **Tool results compacted inline:** `[tools used: name(args) -> summary]`.
-- **No sliding window for chat history.** Unlimited + compaction + consolidation.
+- **Context is bounded without deleting history.** Recent turns, artifact
+  catalogs, compaction, consolidation, and pull-based `recall` work together.
 
 ### Code patterns
 - Flat project structure (see above). No `cmd/`, `internal/`, `pkg/` — that's premature layering.
 - Error handling: explicit, never panic in library code
 - Logging: `log/slog` (structured, levels)
 - Config: environment variables + `~/.mino/config.json`
-- SQLite: `mattn/go-sqlite3` with WAL mode
+- SQLite: `modernc.org/sqlite` with WAL mode

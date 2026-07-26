@@ -72,24 +72,40 @@ The runtime no longer uses the former `active_tasks` checkpoint protocol. A rest
 
 Mino matches playbooks by keywords first. If keyword matching finds nothing and an embedder is available, semantic matching is used as a fallback. The selected playbook is exposed to the LLM, which decides whether to run it.
 
-**Why:** Fast deterministic routing handles common requests; embeddings improve recall without making every request pay the embedding cost.
+Playbooks are optional capabilities, like `recall`, rather than a mode that
+replaces conversation. Every message enters the normal runtime; matching alone
+never executes a procedure. Once Mino calls `run_playbook`, the numbered files
+become the state machine for that task and each stage uses the canonical loop.
+
+**Why:** Fast deterministic discovery handles common requests; embeddings improve recall without making every request pay the embedding cost. Keeping the decision inside Mino preserves follow-up context and avoids forcing ordinary questions through a workflow.
 
 **Revisit when:** Keyword routing produces frequent false positives or embedding latency becomes material.
 
 ---
 
-## 8. Safety guards (four-layer)
+## 8. Safety and recovery
 
-Four lightweight protections against LLM mistakes:
+Mino uses lightweight mechanical recovery around an LLM-controlled tool loop:
 
-1. **Workspace boundary.** Write/edit/bash outside the workspace or Mino home requires approval. One path prefix check.
-2. **SQL gate.** Destructive SQL patterns (DROP, TRUNCATE, DELETE, UPDATE without WHERE) require approval. Regex on command strings.
-3. **Git rollback.** Before bash executes: `git add -A && git commit -m "pre-bash snapshot"`. If bash nukes the workspace, `git reset --hard HEAD~1` recovers.
-4. **Immutable audit log.** All tool calls and their outputs are logged append-only to a separate file with restricted permissions. Survives agent malfunction.
+1. **Explicit tools.** File writes, edits, shell commands, and remote copies use
+   visible tool calls rather than hidden execution.
+2. **Verified copies.** Raw `cp`, `scp`, and `rsync` are rejected in favor of
+   `sync_file`, which records destination proof.
+3. **Git rollback.** Before recognized destructive Bash runs, Mino makes a
+   best-effort Git snapshot when the target workspace is a repository.
+4. **Immutable audit log.** Tool calls and outputs are appended to a separate
+   restricted log.
 
-**Why:** The LLM is a reasoning engine, not a safety system. Simple, mechanical guards catch 99% of catastrophic mistakes without adding latency or complexity. Scope: these guards protect against honest LLM errors, not adversarial attacks.
+There is no `request_approval` or `resolve_approval` protocol. Procedures that
+need a human decision express it directly in a playbook stage with `Stop here.
+Ask Abah.` Normal conversation can likewise ask for required confirmation.
 
-**Revisit when:** A guard triggers too aggressively (false positives blocking legitimate work), or a new category of tools (MCP, extensions) needs gating.
+**Why:** Recovery and evidence remain mechanical, while human decisions stay in
+the conversation and procedure instead of creating a second approval state
+machine.
+
+**Revisit when:** A concrete destructive-action failure shows that these simple
+guards and explicit human checkpoints are insufficient.
 
 ---
 
@@ -110,7 +126,9 @@ Mino is a personal AI agent, not a platform:
 
 Mino connects to any database via bash (`psql`, `mysql`, `sqlite3`, etc.). No native driver, no ORM — the CLI is the interface. Results come back as plain text, and the LLM interprets them.
 
-Safe by default: the SQL gate (§8.2) requires approval for destructive patterns (DROP, TRUNCATE, DELETE, UPDATE without WHERE). Users who want full mutation access can disable the guard.
+Recognized destructive shell or database commands receive a best-effort Git
+snapshot when they run inside a repository. A repeatable procedure that needs
+human confirmation must state that checkpoint in its playbook stage.
 
 **Why:** Every database already has a CLI. Wrapping each one would bloat the core. Users own their VPS, their data, and their guard configuration.
 
@@ -239,7 +257,10 @@ The system prompt stays stable (cache-friendly). Facts are still pulled via `rec
 
 The numbered Markdown files inside a playbook are the workflow plan. A stage declares its required reads, action, and output contract; the runtime supplies the original user request and verifies that the expected output exists.
 
-The LLM remains responsible for sequencing within a stage. The filesystem remains the durable record rather than a separate `TaskSnapshot` or dependency graph.
+The LLM remains responsible for sequencing within a stage. Stage execution
+uses the same `RunLoopContext`, tools, reasoning settings, and context
+management as normal Mino work. The filesystem remains the durable record
+rather than a separate `TaskSnapshot` or dependency graph.
 
 **Revisit when:** Playbooks need dependencies that cannot be expressed as numbered stages and output files.
 

@@ -4,6 +4,21 @@
 > checkpoint, completion-protocol, and tool-filter architecture with numbered
 > filesystem playbooks. See `PLAYBOOKS_DESIGN.md` for the current model.
 
+## Current playbook runtime
+
+- Every message enters Mino's normal conversational runtime.
+- Matching only offers a possibly relevant playbook; Mino chooses whether to
+  call `run_playbook`.
+- Selected stages use the canonical `RunLoopContext`, not a second agent loop.
+- The loop executes model-requested tools directly and feeds observations back;
+  it has no tool-result cache or repeated-call state machine.
+- Human decisions are written as `Stop here. Ask Abah.` stage checkpoints;
+  there are no programmatic approval tools.
+- Stage output files are durable state and restart recovery points.
+- Systemd provides schedule timing; the running Mino service performs the work.
+
+## Historical Go-port record
+
 > The status and checklist below document the earlier Go port and are retained
 > as history. For current behavior, follow `PLAYBOOKS_DESIGN.md`,
 > `DECISIONS.md`, and the playbook files.

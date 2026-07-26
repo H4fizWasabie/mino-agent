@@ -163,6 +163,12 @@ playbook.go          — numbered Markdown workflows and stage runner
 adapters.go          — working memory, patterns, embeddings
 ```
 
+Playbooks are optional repeatable procedures, not a separate chat mode. Mino
+receives a possibly relevant playbook in context and chooses whether to call
+`run_playbook`, much as it chooses whether to call `recall`. Selected stages
+then execute through the same runtime, tools, reasoning settings, and context
+management as ordinary work. See [PLAYBOOKS_DESIGN.md](PLAYBOOKS_DESIGN.md).
+
 ## Free AI stack
 
 Mino can run entirely on free tiers:

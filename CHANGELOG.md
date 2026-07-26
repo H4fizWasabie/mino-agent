@@ -16,6 +16,9 @@
 ### Changed
 - Clarify playbook documentation: config values are read from files, and
   embeddings are a routing fallback after keyword matching.
+- Rewrite the agent-facing architecture and handoff documentation around
+  optional playbook selection, the canonical runtime, filesystem state, human
+  checkpoints, and external systemd scheduling.
 
 - Integrated the Mino logo into the dashboard sidebar, favicon, and onboarding screen with embedded PNG assets.
 - Keep dashboard tool activity rows compact; full tool arguments and output remain collapsed until opened.

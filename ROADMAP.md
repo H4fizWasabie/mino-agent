@@ -1,5 +1,9 @@
 # Mino Roadmap
 
+> In this roadmap, “approval” means an explicit conversational human
+> checkpoint. It does not mean `request_approval`, `resolve_approval`, or a
+> persisted approval subsystem.
+
 > Living discussion document. This roadmap describes direction and priorities;
 > it is not an implementation plan until a phase is explicitly approved.
 
