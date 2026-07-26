@@ -231,6 +231,7 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 	ctx, finish := conversation.beginTurn(parent)
 	defer finish()
 	ctx = context.WithValue(ctx, turnMessageKey{}, userMessage)
+	ctx = context.WithValue(ctx, turnSourceKey{}, source)
 	system := conversation.Session.BuildSystem(userMessage, source)
 	// time context: injected as system message so it doesn't clutter the chat display
 	local := time.Now().In(w.Settings.Location())

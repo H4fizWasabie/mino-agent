@@ -31,6 +31,7 @@ import (
 type ToolFunc func(args map[string]any) string
 type ContextToolFunc func(context.Context, map[string]any) string
 type turnMessageKey struct{}
+type turnSourceKey struct{}
 type sessionIDKey struct{}
 type rollbackDirKey struct{}
 
@@ -896,11 +897,16 @@ var destructiveBashPatterns = []struct {
 var workspaceGateApprovals sync.Map
 
 // isUnderAllowedPath returns true if the path is under workspace or Mino home.
-// Always allows writes to ~/.mino/rollback/ (git rollback snapshots).
+// Always allows writes to ~/.mino/rollback/ (git rollback snapshots) and
+// /tmp/mino (Mino's own artifact/scratch space).
 func isUnderAllowedPath(path, workspace, home string) bool {
 	clean := filepath.Clean(path)
 	// root workspace means allow everything
 	if ws := filepath.Clean(workspace); ws == "/" {
+		return true
+	}
+	// always allow writes to Mino's own artifact storage
+	if strings.HasPrefix(clean, "/tmp/mino") {
 		return true
 	}
 	// always allow writes within workspace
@@ -1913,6 +1919,10 @@ func makeResolveApprovalTool(home string) *Tool {
 }
 
 func turnExplicitlyApproves(ctx context.Context) bool {
+	// scheduled tasks were explicitly approved at schedule-creation time
+	if source, _ := ctx.Value(turnSourceKey{}).(string); source == "scheduler" {
+		return true
+	}
 	message, _ := ctx.Value(turnMessageKey{}).(string)
 	message = strings.ToLower(strings.TrimSpace(message))
 	if message == "yes" || message == "y" {
