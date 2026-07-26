@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+- Playbook system — numbered markdown stages with `## Read` / `## Do` / `## Write`.
+  Filesystem is the executor. Mini-loop with 3 retries per stage. Memory routes
+  vague prompts to the right playbook via embeddings + FTS5.
+
 ### Changed
 - Integrated the Mino logo into the dashboard sidebar, favicon, and onboarding screen with embedded PNG assets.
 - Keep dashboard tool activity rows compact; full tool arguments and output remain collapsed until opened.

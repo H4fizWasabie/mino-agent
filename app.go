@@ -134,6 +134,14 @@ func NewCore() *Core {
 		}
 	})
 
+	// Playbook tools — LLM can discover and run playbooks
+	tools.Register(behaves(makeListPlaybooksTool(s.Home), BehaviorObserve))
+	tools.Register(behaves(makeRunPlaybookTool(w), BehaviorMutate))
+	// seed example playbook if none exist
+	if len(ListPlaybooks(s.Home)) == 0 {
+		CreateExamplePlaybook(s.Home)
+	}
+
 	// Alert checker (§18.1): error rate + dead man's switch, every 5 minutes
 	go checkAlerts(db, w.sendAlertMessage, 5*time.Minute)
 

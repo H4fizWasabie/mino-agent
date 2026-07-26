@@ -1,0 +1,191 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestLoadPlaybook(t *testing.T) {
+	tmp := t.TempDir()
+	playbooksDir := filepath.Join(tmp, "playbooks")
+
+	// create a test playbook
+	dir := filepath.Join(playbooksDir, "test-playbook")
+	os.MkdirAll(filepath.Join(dir, "output"), 0700)
+
+	os.WriteFile(filepath.Join(dir, "config.md"), []byte(`description: Test playbook for unit tests
+schedule: every 24h
+status: active
+Threshold: 7
+`), 0644)
+
+	os.WriteFile(filepath.Join(dir, "01-fetch.md"), []byte(`# Fetch data
+
+## Read
+
+- `+"`config.md`"+` (for threshold)
+
+## Do
+
+1. Query the database for pending items
+2. Filter by threshold from config
+3. Write results to output
+
+## Write
+
+`+"`output/01-data.md`"+`
+`), 0644)
+
+	os.WriteFile(filepath.Join(dir, "02-report.md"), []byte(`# Generate report
+
+## Read
+
+- `+"`output/01-data.md`"+` (the fetched data)
+
+## Do
+
+1. Read the data file
+2. Generate a summary report
+3. Stop here. Ask Abah to review.
+
+## Write
+
+`+"`output/02-report.md`"+`
+`), 0644)
+
+	pb, err := LoadPlaybook(playbooksDir, "test-playbook")
+	if err != nil {
+		t.Fatalf("LoadPlaybook: %v", err)
+	}
+
+	if pb.Name != "test-playbook" {
+		t.Errorf("name = %q, want %q", pb.Name, "test-playbook")
+	}
+	if pb.Description != "Test playbook for unit tests" {
+		t.Errorf("description = %q", pb.Description)
+	}
+	if pb.Schedule != "every 24h" {
+		t.Errorf("schedule = %q", pb.Schedule)
+	}
+	if pb.Status != "active" {
+		t.Errorf("status = %q", pb.Status)
+	}
+	if v := pb.Config["Threshold"]; v != "7" {
+		t.Errorf("Config[Threshold] = %q, want %q", v, "7")
+	}
+
+	if len(pb.Stages) != 2 {
+		t.Fatalf("stages = %d, want 2", len(pb.Stages))
+	}
+
+	// Stage 1
+	s1 := pb.Stages[0]
+	if s1.Number != 1 {
+		t.Errorf("stage 1 number = %d, want 1", s1.Number)
+	}
+	if s1.Name != "fetch" {
+		t.Errorf("stage 1 name = %q, want %q", s1.Name, "fetch")
+	}
+	wantRead := "\x60config.md\x60 (for threshold)"
+	if len(s1.Reads) != 1 || s1.Reads[0] != wantRead {
+		t.Errorf("stage 1 reads = %v", s1.Reads)
+	}
+	if len(s1.Dos) != 3 {
+		t.Errorf("stage 1 dos = %d, want 3", len(s1.Dos))
+	}
+	if s1.Write != "output/01-data.md" {
+		t.Errorf("stage 1 write = %q, want %q", s1.Write, "output/01-data.md")
+	}
+
+	// Stage 2
+	s2 := pb.Stages[1]
+	if s2.Number != 2 {
+		t.Errorf("stage 2 number = %d, want 2", s2.Number)
+	}
+	if s2.Name != "report" {
+		t.Errorf("stage 2 name = %q, want %q", s2.Name, "report")
+	}
+	if len(s2.Reads) != 1 {
+		t.Errorf("stage 2 reads = %d, want 1", len(s2.Reads))
+	}
+	if s2.Write != "output/02-report.md" {
+		t.Errorf("stage 2 write = %q, want %q", s2.Write, "output/02-report.md")
+	}
+
+	// output path
+	out := outputPath(pb, s1)
+	expectedOut := filepath.Join(dir, "output", "01-data.md")
+	if out != expectedOut {
+		t.Errorf("outputPath = %q, want %q", out, expectedOut)
+	}
+}
+
+func TestParseStageMissingSections(t *testing.T) {
+	// stage with only ## Do should work
+	tmp := t.TempDir()
+	f := filepath.Join(tmp, "01-minimal.md")
+	os.WriteFile(f, []byte(`# Minimal stage
+
+## Do
+
+1. Do one thing
+`), 0644)
+
+	stage, err := parseStage(tmp, "01-minimal.md")
+	if err != nil {
+		t.Fatalf("parseStage: %v", err)
+	}
+	if len(stage.Dos) != 1 {
+		t.Errorf("dos = %d, want 1", len(stage.Dos))
+	}
+	if stage.Write != "" {
+		t.Errorf("write = %q, want empty", stage.Write)
+	}
+}
+
+func TestMatchPlaybookKeyword(t *testing.T) {
+	tmp := t.TempDir()
+	playbooksDir := filepath.Join(tmp, "playbooks")
+
+	dir := filepath.Join(playbooksDir, "procurement-audit")
+	os.MkdirAll(filepath.Join(dir, "output"), 0700)
+	os.WriteFile(filepath.Join(dir, "config.md"), []byte(`description: Weekly procurement audit — fetch POs and analyze
+`), 0644)
+	os.WriteFile(filepath.Join(dir, "01-fetch.md"), []byte(`# Fetch
+## Do
+1. Query
+## Write
+`+"`output/01-data.md`"+`
+`), 0644)
+
+	name, desc, score := MatchPlaybook(tmp, "send me the procurement data", nil)
+	if name != "procurement-audit" {
+		t.Errorf("match name = %q, want procurement-audit", name)
+	}
+	if desc == "" {
+		t.Error("match desc empty")
+	}
+	if score <= 0 {
+		t.Error("match score zero")
+	}
+}
+
+func TestListPlaybooks(t *testing.T) {
+	tmp := t.TempDir()
+	playbooksDir := filepath.Join(tmp, "playbooks")
+
+	for _, name := range []string{"alpha", "beta", "gamma"} {
+		dir := filepath.Join(playbooksDir, name)
+		os.MkdirAll(filepath.Join(dir, "output"), 0700)
+		os.WriteFile(filepath.Join(dir, "01-test.md"), []byte("## Do\n1. thing\n"), 0644)
+	}
+
+	names := ListPlaybooks(tmp)
+	if len(names) != 3 {
+		t.Fatalf("list = %d, want 3", len(names))
+	}
+	if names[0] != "alpha" || names[1] != "beta" || names[2] != "gamma" {
+		t.Errorf("list = %v, want [alpha beta gamma]", names)
+	}
+}
