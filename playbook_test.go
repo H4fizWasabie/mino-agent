@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -32,6 +34,11 @@ Threshold: 7
 1. Query the database for pending items
 2. Filter by threshold from config
 3. Write results to output
+
+## Tools
+
+- read_file
+- write_file
 
 ## Write
 
@@ -95,6 +102,9 @@ Threshold: 7
 	if len(s1.Dos) != 3 {
 		t.Errorf("stage 1 dos = %d, want 3", len(s1.Dos))
 	}
+	if want := []string{"read_file", "write_file"}; !reflect.DeepEqual(s1.Tools, want) {
+		t.Errorf("stage 1 tools = %v, want %v", s1.Tools, want)
+	}
 	if s1.Write != "output/01-data.md" {
 		t.Errorf("stage 1 write = %q, want %q", s1.Write, "output/01-data.md")
 	}
@@ -153,6 +163,29 @@ func TestBuildStagePromptIncludesUserRequest(t *testing.T) {
 	if !strings.Contains(got, "## User Request") ||
 		!strings.Contains(got, "send me last week's purchase data") {
 		t.Fatalf("prompt did not include user request: %q", got)
+	}
+}
+
+func TestPlaybookCircuitBreakerStopsRepeatedIdenticalCall(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "input.txt")
+	if err := os.WriteFile(path, []byte("evidence"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry()
+	registry.Register(makeReadTool())
+	client := &fakeClient{script: []*LLMResponse{
+		scriptedResp([]ContentBlock{toolBlock("read_file", map[string]any{"path": path})}, "tool_use"),
+		scriptedResp([]ContentBlock{toolBlock("read_file", map[string]any{"path": path})}, "tool_use"),
+		scriptedResp([]ContentBlock{toolBlock("read_file", map[string]any{"path": path})}, "tool_use"),
+	}}
+
+	calls, _, _, done := runToolLoop(context.Background(), client, "test-session", nil, registry, 100, nil, home, 1)
+	if !strings.HasPrefix(done, "BLOCKED: repeated identical call") {
+		t.Fatalf("done = %q, want circuit breaker", done)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("calls = %d, want first execution plus one cached result", len(calls))
 	}
 }
 

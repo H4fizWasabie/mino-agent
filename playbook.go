@@ -28,7 +28,8 @@ type StageFile struct {
 	Raw    string // full file content
 	Reads  []string
 	Dos    []string
-	Write  string // relative to playbook output/ dir
+	Tools  []string // optional capability set; order remains LLM-controlled
+	Write  string   // relative to playbook output/ dir
 }
 
 // Playbook is a loaded playbook ready to execute.
@@ -157,9 +158,10 @@ func parseStage(dir, fname string) (StageFile, error) {
 		Raw:    raw,
 	}
 
-	// parse sections: ## Read, ## Do, ## Write
+	// parse sections: ## Read, ## Do, ## Tools, ## Write
 	readSection := extractSection(raw, "## Read")
 	doSection := extractSection(raw, "## Do")
+	toolsSection := extractSection(raw, "## Tools")
 	writeSection := extractSection(raw, "## Write")
 
 	if readSection != "" {
@@ -192,6 +194,17 @@ func parseStage(dir, fname string) (StageFile, error) {
 			line = strings.TrimPrefix(line, ") ")
 			if line != "" {
 				stage.Dos = append(stage.Dos, line)
+			}
+		}
+	}
+
+	if toolsSection != "" {
+		for _, line := range strings.Split(toolsSection, "\n") {
+			line = strings.TrimSpace(line)
+			line = strings.TrimPrefix(line, "- ")
+			line = strings.TrimSpace(strings.TrimPrefix(line, "-"))
+			if line != "" {
+				stage.Tools = append(stage.Tools, line)
 			}
 		}
 	}
@@ -271,6 +284,11 @@ func buildStagePrompt(pb *Playbook, stage StageFile, userMessage string) string 
 	b.WriteString("- When all steps are complete, write to the output file path above and say DONE.\n")
 	b.WriteString("- Do NOT call a tool and then narrate what you'll do next. Just do it.\n")
 	b.WriteString("- Do not repeat successful tool calls.\n")
+	if len(stage.Tools) > 0 {
+		b.WriteString("- You may use the following tools as needed; the order is your judgment, not a fixed script: ")
+		b.WriteString(strings.Join(stage.Tools, ", "))
+		b.WriteString(".\n")
+	}
 
 	return b.String()
 }
@@ -313,10 +331,18 @@ func executeStage(
 			{Role: "user", Content: userMsg},
 		}
 
-		toolCalls, ti, to, done := runToolLoop(ctx, client, sessionID, messages, tools, maxTokens, obs, traceHome, attempt)
+		stageTools := tools
+		if len(stage.Tools) > 0 {
+			stageTools = tools.Only(stage.Tools...)
+		}
+		toolCalls, ti, to, done := runToolLoop(ctx, client, sessionID, messages, stageTools, maxTokens, obs, traceHome, attempt)
 		tokensIn += ti
 		tokensOut += to
 		allCalls = append(allCalls, toolCalls...)
+
+		if strings.HasPrefix(done, "BLOCKED:") || done == "max tool rounds reached" {
+			return done, allCalls, tokensIn, tokensOut, fmt.Errorf("%s", done)
+		}
 
 		// check output file
 		outPath := outputPath(pb, stage)
@@ -351,6 +377,8 @@ func runToolLoop(
 	allSchemas := tools.Schemas()
 	tokensIn, tokensOut := 0, 0
 	var allCalls []ToolCall
+	cache := make(map[string]string)
+	repeats := make(map[string]int)
 
 	for round := 1; round <= maxToolRounds; round++ {
 		if ctx.Err() != nil {
@@ -393,13 +421,25 @@ func runToolLoop(
 		toolResults := make([]map[string]any, 0)
 		for _, tc := range toolUses {
 			args, _ := tc.Input.(map[string]any)
-			output := tools.ExecuteContext(ctx, tc.Name, args)
+			key := dedupKey(tc.Name, args)
+			output, cached := cache[key]
+			if cached {
+				repeats[key]++
+				if repeats[key] >= 2 {
+					logTrace(traceHome, "playbook_circuit_breaker", map[string]any{"reason": "repeated tool call", "tool": tc.Name, "round": round})
+					return allCalls, tokensIn, tokensOut, fmt.Sprintf("BLOCKED: repeated identical call to %s", tc.Name)
+				}
+				output = "[already executed] " + output
+			} else {
+				output = tools.ExecuteContext(ctx, tc.Name, args)
+				cache[key] = output
+			}
 			if ctx.Err() != nil {
 				return allCalls, tokensIn, tokensOut, "cancelled"
 			}
 			status := toolOutputStatus(output)
 			output = prepareToolOutput(traceHome, sessionID, round, tc.Name, output)
-			output = appendActionReceipt(output, tc.Name, dedupKey(tc.Name, args), status, false)
+			output = appendActionReceipt(output, tc.Name, key, status, cached)
 
 			allCalls = append(allCalls, ToolCall{Name: tc.Name, Args: args, Output: output})
 

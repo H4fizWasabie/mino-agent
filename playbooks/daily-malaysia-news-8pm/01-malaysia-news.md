@@ -12,6 +12,14 @@
 4. Write a clean Telegram-ready brief with a Malaysia News heading, today's Malaysia date, and concise bullets.
 5. Do not send messages, publish content, or modify external data during this run. The caller will deliver the generated brief.
 
+## Tools
+
+- read_file
+- write_file
+- search_web
+- MCP_composio_COMPOSIO_SEARCH_TOOLS
+- MCP_composio_COMPOSIO_MULTI_EXECUTE_TOOL
+
 ## Write
 
 `output/01-malaysia-news.md`

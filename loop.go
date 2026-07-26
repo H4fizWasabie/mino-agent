@@ -99,6 +99,8 @@ func RunLoopContext(
 	}()
 
 	schemas := tools.Schemas()
+	toolCache := make(map[string]string)
+	repeatedCalls := make(map[string]int)
 
 	for i := 1; i <= maxIter; i++ {
 		if ctx.Err() != nil {
@@ -150,7 +152,21 @@ func RunLoopContext(
 		var turnImages []string
 		for _, tc := range toolUses {
 			args, _ := tc.Input.(map[string]any)
-			raw := tools.ExecuteContext(ctx, tc.Name, args)
+			key := dedupKey(tc.Name, args)
+			raw, cached := toolCache[key]
+			if cached {
+				repeatedCalls[key]++
+				if repeatedCalls[key] >= 2 {
+					result.Status = "blocked"
+					result.Reply = fmt.Sprintf("Stopped: repeated identical call to %s.", tc.Name)
+					logTrace(traceHome, "circuit_breaker", map[string]any{"reason": "repeated tool call", "tool": tc.Name, "iteration": i})
+					return result
+				}
+				raw = "[already executed] " + raw
+			} else {
+				raw = tools.ExecuteContext(ctx, tc.Name, args)
+				toolCache[key] = raw
+			}
 			if ctx.Err() != nil {
 				result.Status = "cancelled"
 				result.Reply = "Stopped."

@@ -21,6 +21,9 @@
 - Keep dashboard tool activity rows compact; full tool arguments and output remain collapsed until opened.
 
 ### Fixed
+- Add optional per-stage tool capabilities and lenient circuit breakers that
+  cache one repeated call but stop repeated identical actions before runaway
+  rounds.
 - Remove an unused test helper that still fabricated the deleted completion tool.
 - Align decisions, handoff, contributing, and playbook design notes with the
   current filesystem playbook and approval architecture.
