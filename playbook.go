@@ -18,7 +18,7 @@ import (
 )
 
 const maxStageRetries = 3
-const maxStageIterations = 8 // bounded runtime iterations within one stage attempt
+const maxStageIterations = 10 // bounded runtime iterations within one stage attempt
 
 // StageFile is one numbered stage in a playbook.
 type StageFile struct {
