@@ -10,7 +10,7 @@ One binary. One SQLite file. Your own AI assistant.
 - **Telegram** — same agent, any device
 - **Playbooks** — repeatable markdown workflows, stage-by-stage execution with retry, resume on restart
 - **Coding tools** — read, write, edit, grep, glob, git, graphify, codegraph, bash
-- **Memory** — SQLite + FTS5 semantic search, auto-consolidation, one-time reminders with Telegram delivery
+- **Memory** — SQLite + FTS5 semantic search, auto-consolidation, one-time reminders
 - **Multi-provider** — priority, fallback, circuit breaking across LLM backends. OpenRouter routing.
 - **OAuth login** — Claude, Codex (ChatGPT), GitHub Copilot, xAI/Grok
 - **Web search** — Tavily API (free tier available)
