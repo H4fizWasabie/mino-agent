@@ -54,6 +54,7 @@ func NewCore() *Core {
 	embModel := envOr("MINO_EMBED_MODEL", "openai/text-embedding-3-large")
 	if embKey != "" {
 		mem.embedder = NewEmbeddingStore(db, embKey, embModel)
+		mem.graph.SetEmbedder(mem.embedder)
 		for _, entry := range PruneRecentFixes(s.Home, 7*24*time.Hour) {
 			mem.embedder.Remove("working_memory", entry)
 		}

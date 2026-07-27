@@ -36,10 +36,14 @@ type Edge struct {
 // --- Graph memory ---
 
 type GraphMemory struct {
-	dir   string
-	mu    sync.RWMutex
-	facts map[string]*Fact // id → Fact
-	cfg   *Settings
+	dir      string
+	mu       sync.RWMutex
+	facts    map[string]*Fact // id → Fact
+	cfg      *Settings
+	embedder interface {
+		SearchScored(query string, topK int) []scoredDoc
+		Index(source, content string)
+	}
 }
 
 // --- Index cache types ---
@@ -59,6 +63,14 @@ type index struct {
 
 func (gm *GraphMemory) indexPath() string {
 	return filepath.Join(gm.dir, "index.json")
+}
+
+// SetEmbedder wires the embedding store for semantic fallback in remember().
+func (gm *GraphMemory) SetEmbedder(e interface {
+	SearchScored(query string, topK int) []scoredDoc
+	Index(source, content string)
+}) {
+	gm.embedder = e
 }
 
 func NewGraphMemory(dir string, cfg *Settings) *GraphMemory {
@@ -319,9 +331,34 @@ func (gm *GraphMemory) bfsEdges(fact *Fact, indent string, depth, maxDepth int, 
 	}
 }
 
-// fts5Entry finds matching fact IDs by substring search on subjects and bodies.
+// fts5Entry finds matching fact IDs by substring search, with embedding fallback
+// for vocabulary gaps (e.g., "programming philosophy" matching "coding style").
 func (gm *GraphMemory) fts5Entry(query string) []string {
-	return gm.substringMatch(query)
+	results := gm.substringMatch(query)
+
+	// If top hit is weak or no results, fall back to embedding search
+	if (len(results) == 0 || len(results) < 2) && gm.embedder != nil {
+		docs := gm.embedder.SearchScored(query, 5)
+		seen := make(map[string]bool)
+		for _, r := range results {
+			seen[r] = true
+		}
+		for _, sd := range docs {
+			if sd.score < 0.5 {
+				continue
+			}
+			// Map embedded content back to fact ID
+			for id, f := range gm.facts {
+				candidate := f.Subject + ": " + f.Body
+				if (candidate == sd.doc.Content || strings.Contains(strings.ToLower(f.Subject), strings.ToLower(query))) && !seen[id] {
+					results = append(results, id)
+					seen[id] = true
+					break
+				}
+			}
+		}
+	}
+	return results
 }
 
 // substringMatch finds fact IDs by matching individual query words against subjects.
