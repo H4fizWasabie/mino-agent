@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [v1.4.0] — Cross-Platform Scheduler & Dashboard Polish
 
 ### Changed
 - Playbook scheduler: replaced systemd dispatcher with in-process Go ticker.
