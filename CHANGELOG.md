@@ -2,73 +2,57 @@
 
 ## [Unreleased]
 
+_No unreleased changes._
+
+## [v1.3.0] — Playbook Architecture & Production Hardening
+
 ### Added
-- Add the built-in `playbook-authoring` skill so Mino can create, improve, validate,
-  and resume filesystem playbooks with consistent stage and safety conventions.
-- Show parsed playbooks beside skills in the dashboard's Memory view, including
-  descriptions, stages, tools, schedules, status, and output files.
 - Playbook system — numbered markdown stages with `## Read` / `## Do` / `## Write`.
-  Filesystem is the executor. Mini-loop with 3 retries per stage. Memory routes
+  Filesystem is the executor. Mini-loop with retries per stage. Memory routes
   vague prompts to the right playbook via embeddings + FTS5.
-- Pass the original user request into every playbook stage so routed workflows
-  retain task-specific context.
-- Add an external systemd timer and Telegram delivery runner for the daily
-  Malaysia news playbook.
-- Add `schedule_playbook` so Mino can schedule existing playbooks through the
-  external systemd dispatcher without hand-editing shell or unit files.
-- Add persistent one-time reminders with Telegram delivery, listing, and cancellation.
-- Select essential tools on every normal turn and retrieve specialist tools from
-  the assembled context through FTS5 and optional embeddings.
+- Built-in `playbook-authoring` skill so Mino can create, improve, validate,
+  and resume filesystem playbooks.
+- Show parsed playbooks beside skills in the dashboard Memory view.\- `schedule_playbook` tool — schedule existing playbooks through the external
+  systemd dispatcher without hand-editing shell or unit files.
+- External systemd timer and Telegram delivery runner for scheduled playbooks.
+- Persistent one-time reminders with Telegram delivery, listing, and cancellation.
+- Context-aware tool selection — essential tools on every turn, specialist tools
+  retrieved via FTS5 and optional embeddings.
+- OpenRouter provider routing support with configurable provider preference.
+- Multi-provider LLM support with priority, fallback, and circuit breaking.
 
 ### Changed
-- Clarify playbook documentation: config values are read from files, and
-  embeddings are a routing fallback after keyword matching.
-- Rewrite the agent-facing architecture and handoff documentation around
-  optional playbook selection, the canonical runtime, filesystem state, human
-  checkpoints, and external systemd scheduling.
-
-- Integrated the Mino logo into the dashboard sidebar, favicon, and onboarding screen with embedded PNG assets.
-- Keep dashboard tool activity rows compact; full tool arguments and output remain collapsed until opened.
-
-### Fixed
-- Allow playbook stages to write derived summaries of untrusted web content while
-  continuing to block execution of instructions found in that content.
-- Keep Telegram delivery in the scheduled runner instead of hardcoding credentials
-  or curl commands inside the Malaysia news stage.
-- Keep the AI news stage within its runtime budget by using a bounded search plan
-  and requiring its declared output file.
-- Inject Mino's configured local date and time into playbook stages so generated
-  reports use the authoritative runtime date.
-- Let Mino choose whether to use a matched playbook instead of bypassing its
-  normal reasoning loop for high-scoring matches.
+- Pass the original user request into every playbook stage so routed workflows
+  retain task-specific context.
 - Run playbook stages through the canonical Mino runtime instead of a second
   playbook-specific LLM/tool loop.
+- Rewrite architecture and handoff documentation around playbook selection,
+  the canonical runtime, filesystem state, and human checkpoints.
+- Integrated Mino logo into dashboard sidebar, favicon, and onboarding screen.
+- Keep dashboard tool activity rows compact; full arguments collapsed until opened.
+- Increased playbook stage iterations from 8 to 10 for complex workflows.
+- Default reasoning effort set to medium for Xiaomi MiMo providers.
+
+### Fixed
+- Always include `read_file` in playbook stage tools so `## Read` sections work.
+- Allow playbook stages to write derived summaries of untrusted web content while
+  blocking execution of instructions found in that content.
+- Inject Mino's configured local date and time into playbook stages.
+- Let Mino choose whether to use a matched playbook instead of bypassing reasoning.
 - Keep the canonical loop as reason → tool execution → observation without a
   second deduplication cache or repeated-call state machine.
-- Feed playbook stages through the session context and artifact catalog while
-  avoiding nested playbook routing inside an executing stage.
-- Return every completed stage output path in the playbook receipt and register
-  it in the session artifact catalog so later turns can inspect existing state.
 - Accept an output created or updated by the current stage attempt even when
   the model reaches its iteration limit, while rejecting unchanged old output.
-- Remove an unused test helper that still fabricated the deleted completion tool.
-- Align decisions, handoff, contributing, and playbook design notes with the
-  current filesystem playbook architecture.
 - Make deploy builds reproducible and fail deployment if the VPS binary hash
   differs from the just-built local binary.
-- Remove the obsolete sqlite_fts5 build-tag advice from the FTS rebuild error.
-- Remove the obsolete Malaysia-specific systemd runner and units now that the
-  generic playbook dispatcher owns scheduled delivery.
 - Make scheduled runners encode API JSON safely, select only output created by
   the current run, and avoid overlapping executions per playbook.
-- Remove the obsolete programmatic approval tools and use explicit human
-  checkpoints in playbook stages.
-- Remove the unused completion tool/protocol remnants and tell the model to stop
-  calling tools when a turn is complete.
-- Remove the obsolete `complete_task` protocol from the session system prompt;
-  playbooks and ad-hoc turns now finish when the model has no more work.
-- Retire stale checkpoints on explicit stop, consume restart recovery only once per conversation, and recognize common punctuated stop phrases.
-- Reject empty provider responses so fallback/error handling runs instead of emitting misleading no-progress replies.
+- Remove obsolete programmatic approval tools; use explicit human checkpoints.
+- Remove unused completion tool/protocol remnants.
+- Retire stale checkpoints on explicit stop and consume restart recovery only once.
+- Reject empty provider responses so fallback/error handling runs correctly.
+- Remove dead rollback wiring and stale comments from config and tools.
+- Remove dead `sessions` table query from dashboard metrics.
 
 ## [v1.2.0] — Agent Intelligence Upgrade
 
