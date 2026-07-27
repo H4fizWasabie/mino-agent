@@ -12,3 +12,4 @@ extensions/minowrap/minowrap
 .mino-test/
 graphify-out/
 extensions/threads/threads-extension
+playbooks/
