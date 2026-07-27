@@ -353,7 +353,18 @@ func executeStage(
 
 		stageTools := tools.Static()
 		if len(stage.Tools) > 0 {
-			stageTools = tools.Only(stage.Tools...)
+			names := stage.Tools
+			hasReadFile := false
+			for _, n := range names {
+				if n == "read_file" {
+					hasReadFile = true
+					break
+				}
+			}
+			if !hasReadFile {
+				names = append(names, "read_file")
+			}
+			stageTools = tools.Only(names...)
 		}
 		stageResult := RunLoopContext(ctx, client, sessionID, system, messages, stageTools,
 			maxStageIterations, maxTokens, obs, true, traceHome, nil)
