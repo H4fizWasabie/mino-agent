@@ -49,7 +49,8 @@ func NewGraphMemory(dir string, cfg *Settings) *GraphMemory {
 	return gm
 }
 
-// loadAll scans memories/ and parses every .md file into memory.
+// loadAll scans memories/ and parses every .md file into memory,
+// then discovers edges between unlinked facts.
 func (gm *GraphMemory) loadAll() {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
@@ -67,6 +68,7 @@ func (gm *GraphMemory) loadAll() {
 		}
 		gm.facts[fact.ID] = fact
 	}
+	gm.discoverEdges()
 }
 
 // readFile parses a single .md file into a Fact.
@@ -131,6 +133,10 @@ func (gm *GraphMemory) RecordFact(fact Fact) error {
 
 	if err := gm.writeFile(fact); err != nil {
 		return err
+	}
+	// Auto-discover edges for new facts with none declared
+	if len(fact.Edges) == 0 {
+		gm.discoverEdgesFor(&fact)
 	}
 	gm.facts[fact.ID] = &fact
 	return nil
@@ -234,15 +240,27 @@ func (gm *GraphMemory) bfsEdges(fact *Fact, indent string, depth, maxDepth int, 
 	}
 }
 
-// fts5Entry finds matching fact IDs. Uses FTS5 if available, else substring search.
+// fts5Entry finds matching fact IDs by substring search on subjects and bodies.
+// FTS5 (if wired) is used as secondary signal only.
 func (gm *GraphMemory) fts5Entry(query string) []string {
-	// Try FTS5 first
-	if gm.searchFn != nil {
-		result := gm.searchFn(query)
-		return gm.parseFTS5Result(query, result)
+	results := gm.substringMatch(query)
+	// FTS5 supplement: add any facts found by FTS5 but missed by substring
+	if gm.searchFn != nil && len(results) < 3 {
+		ftsResult := gm.searchFn(query)
+		for _, id := range gm.parseFTS5Result(query, ftsResult) {
+			found := false
+			for _, r := range results {
+				if r == id {
+					found = true
+					break
+				}
+			}
+			if !found {
+				results = append(results, id)
+			}
+		}
 	}
-	// Fallback: substring match on subjects
-	return gm.substringMatch(query)
+	return results
 }
 
 // parseFTS5Result extracts fact IDs from FTS5 output like "- **Subject**: content"
@@ -272,28 +290,35 @@ func (gm *GraphMemory) parseFTS5Result(query, result string) []string {
 	return ids
 }
 
-// substringMatch finds fact IDs by substring matching against subject and body.
+// substringMatch finds fact IDs by matching individual query words against subjects.
 func (gm *GraphMemory) substringMatch(query string) []string {
 	type scored struct {
 		id    string
 		score int
 	}
 	var ranked []scored
-	qlower := strings.ToLower(query)
+	// Tokenize query into individual words
+	queryWords := make(map[string]bool)
+	for _, w := range strings.Fields(strings.ToLower(query)) {
+		if len(w) >= 2 {
+			queryWords[w] = true
+		}
+	}
 	for id, fact := range gm.facts {
 		subj := strings.ToLower(fact.Subject)
-		// Score: exact match > word match > substring match
+		body := strings.ToLower(fact.Body)
 		score := 0
-		if subj == qlower {
-			score = 100
-		} else if strings.Contains(subj, " "+qlower+" ") || strings.HasPrefix(subj, qlower+" ") {
-			score = 50
-		} else if strings.Contains(subj, qlower) {
-			score = 10
+		for w := range queryWords {
+			if strings.Contains(subj, w) {
+				score += 10
+			}
+			if strings.Contains(body, w) {
+				score += 3
+			}
 		}
-		// Also search body
-		if strings.Contains(strings.ToLower(fact.Body), qlower) {
-			score += 5
+		// Bonus for exact subject match
+		if subj == strings.ToLower(strings.TrimSpace(query)) {
+			score += 100
 		}
 		if score > 0 {
 			ranked = append(ranked, scored{id, score})
@@ -410,6 +435,96 @@ func (gm *GraphMemory) Stat() int {
 	gm.mu.RLock()
 	defer gm.mu.RUnlock()
 	return len(gm.facts)
+}
+
+// --- Edge discovery (startup pass) ---
+
+// discoverEdges links unconnected facts by word-overlap similarity.
+// Only runs for facts that have zero existing edges.
+func (gm *GraphMemory) discoverEdges() {
+	// Build word sets for all facts
+	type indexed struct {
+		id    string
+		words map[string]struct{}
+	}
+	var facts []indexed
+	for id, fact := range gm.facts {
+		words := wordSet(fact.Subject + " " + fact.Body)
+		facts = append(facts, indexed{id, words})
+	}
+
+	// Compare each fact with zero edges against all others
+	for i, a := range facts {
+		fact := gm.facts[a.id]
+		if len(fact.Edges) > 0 {
+			continue
+		}
+		for j, b := range facts {
+			if i == j {
+				continue
+			}
+			overlap := 0
+			for w := range a.words {
+				if _, ok := b.words[w]; ok {
+					overlap++
+				}
+			}
+			total := len(a.words) + len(b.words) - overlap
+			if total == 0 {
+				continue
+			}
+			jaccard := float64(overlap) / float64(total)
+			if jaccard > 0.25 {
+				fact.Edges = append(fact.Edges, Edge{Target: b.id, Rel: "related_to"})
+			}
+		}
+		// Limit edges to avoid dense hubs
+		if len(fact.Edges) > 8 {
+			fact.Edges = fact.Edges[:8]
+		}
+		// Persist discovered edges to disk
+		if len(fact.Edges) > 0 {
+			gm.writeFile(*fact)
+		}
+	}
+}
+
+// wordSet returns a set of lowercase words (min 3 chars) from text.
+func wordSet(text string) map[string]struct{} {
+	set := make(map[string]struct{})
+	for _, w := range strings.Fields(strings.ToLower(text)) {
+		if len(w) >= 3 {
+			set[w] = struct{}{}
+		}
+	}
+	return set
+}
+
+// discoverEdgesFor links a single new fact to existing facts by word overlap.
+func (gm *GraphMemory) discoverEdgesFor(fact *Fact) {
+	words := wordSet(fact.Subject + " " + fact.Body)
+	for id, other := range gm.facts {
+		if id == fact.ID {
+			continue
+		}
+		otherWords := wordSet(other.Subject + " " + other.Body)
+		overlap := 0
+		for w := range words {
+			if _, ok := otherWords[w]; ok {
+				overlap++
+			}
+		}
+		total := len(words) + len(otherWords) - overlap
+		if total == 0 {
+			continue
+		}
+		if float64(overlap)/float64(total) > 0.25 {
+			fact.Edges = append(fact.Edges, Edge{Target: id, Rel: "related_to"})
+		}
+	}
+	if len(fact.Edges) > 8 {
+		fact.Edges = fact.Edges[:8]
+	}
 }
 
 // --- Migration from flat DB ---

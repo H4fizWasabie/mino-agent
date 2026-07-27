@@ -13,3 +13,7 @@ extensions/minowrap/minowrap
 graphify-out/
 extensions/threads/threads-extension
 playbooks/
+test-*.md
+ep_*.md
+hafiz_works_vet.md
+user_preference.md
