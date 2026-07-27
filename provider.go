@@ -54,10 +54,11 @@ type Message struct {
 // --- Client ---
 
 type Client struct {
-	apiKey       string
-	baseURL      string
-	client       *http.Client
-	usageLogPath string
+	apiKey          string
+	baseURL         string
+	client          *http.Client
+	usageLogPath    string
+	providerRouting []string // openrouter provider routing, e.g. ["DigitalOcean"]
 }
 
 func NewClient(apiKey, baseURL string) *Client {
@@ -107,6 +108,12 @@ func (c *Client) create(ctx context.Context, model, reasoning string, messages [
 		"messages":              oaiMsgs,
 		"max_completion_tokens": maxTokens,
 		"stream":                stream,
+	}
+	if len(c.providerRouting) > 0 {
+		payload["provider"] = map[string]any{
+			"order":           c.providerRouting,
+			"allow_fallbacks": false,
+		}
 	}
 	if reasoning != "" {
 		payload["reasoning_effort"] = reasoning

@@ -33,6 +33,7 @@ type ProviderConfig struct {
 	ReasoningEffort string   `json:"reasoning_effort,omitempty"`
 	ReasoningLevels []string `json:"reasoning_levels,omitempty"`
 	TextOnly        bool     `json:"text_only"` // provider rejects image input; skipped for vision turns
+	ProviderRouting []string `json:"provider_routing,omitempty"` // openrouter: force specific providers
 }
 
 type providerFile struct {
@@ -110,6 +111,7 @@ func NewProviderManager(home string, legacy *Settings, authStore *AuthStore) (*P
 		}
 		c := NewClient(key, p.BaseURL)
 		c.usageLogPath = filepath.Join(home, "usage.jsonl")
+		c.providerRouting = p.ProviderRouting
 		m.providers = append(m.providers, p)
 		m.clients[p.Name] = c
 		m.state[p.Name] = &providerState{}
@@ -490,6 +492,7 @@ func (m *ProviderManager) ReloadProviders(home string) error {
 		key, _ := m.resolveKey(p)
 		c := NewClient(key, p.BaseURL)
 		c.usageLogPath = filepath.Join(home, "usage.jsonl")
+		c.providerRouting = p.ProviderRouting
 		m.clients[p.Name] = c
 		m.state[p.Name] = &providerState{}
 		m.providers = append(m.providers, p)
