@@ -613,7 +613,7 @@ func BuildRegistry(db *sql.DB, home, workspace string, mem *Memory, location ...
 	// remember — graph-aware memory traversal
 	r.Register(behaves(&Tool{
 		Name:        "remember",
-		Description: "Recall facts as a connected graph. Returns an indented tree showing facts and their relationships. Use for personal questions, context about people/projects/preferences, or understanding how things relate.",
+		Description: "Recall facts as a connected graph. Returns ALL matching facts and their relationships in a single call — one well-chosen query is sufficient, do not call repeatedly with variations. Use for personal questions, context about people/projects/preferences, or understanding how things relate.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

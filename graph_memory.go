@@ -5,6 +5,7 @@ package main
 // remember() traverses the graph; FTS5 provides the entry point.
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,18 +36,85 @@ type Edge struct {
 // --- Graph memory ---
 
 type GraphMemory struct {
-	dir      string
-	mu       sync.RWMutex
-	facts    map[string]*Fact // id → Fact
-	searchFn func(query string) string
-	cfg      *Settings
+	dir   string
+	mu    sync.RWMutex
+	facts map[string]*Fact // id → Fact
+	cfg   *Settings
+}
+
+// --- Index cache types ---
+
+type indexEntry struct {
+	ID      string `json:"id"`
+	Type    string `json:"type"`
+	Subject string `json:"subject"`
+	At      string `json:"at"`
+	Edges   []Edge `json:"edges,omitempty"`
+}
+
+type index struct {
+	Version int                   `json:"version"`
+	Facts   map[string]indexEntry `json:"facts"`
+}
+
+func (gm *GraphMemory) indexPath() string {
+	return filepath.Join(gm.dir, "index.json")
 }
 
 func NewGraphMemory(dir string, cfg *Settings) *GraphMemory {
 	os.MkdirAll(dir, 0755)
 	gm := &GraphMemory{dir: dir, cfg: cfg, facts: make(map[string]*Fact)}
+	if gm.loadIndex() {
+		return gm
+	}
 	gm.loadAll()
+	gm.saveIndex()
 	return gm
+}
+
+// loadIndex reads the index.json cache. Returns false if missing or stale.
+func (gm *GraphMemory) loadIndex() bool {
+	data, err := os.ReadFile(gm.indexPath())
+	if err != nil {
+		return false
+	}
+	var idx index
+	if err := json.Unmarshal(data, &idx); err != nil || idx.Version != 1 {
+		return false
+	}
+	for id, entry := range idx.Facts {
+		at, _ := time.Parse(time.RFC3339, entry.At)
+		if at.IsZero() {
+			at = time.Now()
+		}
+		gm.facts[id] = &Fact{
+			ID:      entry.ID,
+			Type:    entry.Type,
+			Subject: entry.Subject,
+			At:      at,
+			Edges:   entry.Edges,
+		}
+	}
+	return len(gm.facts) > 0
+}
+
+// saveIndex writes the current facts (minus bodies) to index.json.
+func (gm *GraphMemory) saveIndex() {
+	entries := make(map[string]indexEntry, len(gm.facts))
+	for id, f := range gm.facts {
+		entries[id] = indexEntry{
+			ID:      f.ID,
+			Type:    f.Type,
+			Subject: f.Subject,
+			At:      f.At.Format(time.RFC3339),
+			Edges:   f.Edges,
+		}
+	}
+	data, err := json.MarshalIndent(index{Version: 1, Facts: entries}, "", "  ")
+	if err != nil {
+		return
+	}
+	os.WriteFile(gm.indexPath(), data, 0644)
 }
 
 // loadAll scans memories/ and parses every .md file into memory,
@@ -131,6 +199,9 @@ func (gm *GraphMemory) RecordFact(fact Fact) error {
 		fact = *existing
 	}
 
+	// Drop edges that reference non-existent facts
+	fact.Edges = gm.validEdges(fact.Edges)
+
 	if err := gm.writeFile(fact); err != nil {
 		return err
 	}
@@ -139,7 +210,22 @@ func (gm *GraphMemory) RecordFact(fact Fact) error {
 		gm.discoverEdgesFor(&fact)
 	}
 	gm.facts[fact.ID] = &fact
+	gm.saveIndex()
 	return nil
+}
+
+// validEdges filters edges to only those whose targets exist in gm.facts.
+func (gm *GraphMemory) validEdges(edges []Edge) []Edge {
+	if len(edges) == 0 {
+		return edges
+	}
+	filtered := make([]Edge, 0, len(edges))
+	for _, e := range edges {
+		if _, ok := gm.facts[e.Target]; ok {
+			filtered = append(filtered, e)
+		}
+	}
+	return filtered
 }
 
 // writeFile serializes a Fact to a .md file.
@@ -165,13 +251,6 @@ func (gm *GraphMemory) writeFile(fact Fact) error {
 		b.WriteString("\n")
 	}
 	return os.WriteFile(path, []byte(b.String()), 0644)
-}
-
-// SetSearch sets the FTS5 search backend (Memory) for entry-point queries.
-func (gm *GraphMemory) SetSearch(fts5 func(query string) string) {
-	gm.mu.Lock()
-	defer gm.mu.Unlock()
-	gm.searchFn = fts5
 }
 
 // Remember is the graph-aware recall tool. Returns an indented tree.
@@ -241,53 +320,8 @@ func (gm *GraphMemory) bfsEdges(fact *Fact, indent string, depth, maxDepth int, 
 }
 
 // fts5Entry finds matching fact IDs by substring search on subjects and bodies.
-// FTS5 (if wired) is used as secondary signal only.
 func (gm *GraphMemory) fts5Entry(query string) []string {
-	results := gm.substringMatch(query)
-	// FTS5 supplement: add any facts found by FTS5 but missed by substring
-	if gm.searchFn != nil && len(results) < 3 {
-		ftsResult := gm.searchFn(query)
-		for _, id := range gm.parseFTS5Result(query, ftsResult) {
-			found := false
-			for _, r := range results {
-				if r == id {
-					found = true
-					break
-				}
-			}
-			if !found {
-				results = append(results, id)
-			}
-		}
-	}
-	return results
-}
-
-// parseFTS5Result extracts fact IDs from FTS5 output like "- **Subject**: content"
-func (gm *GraphMemory) parseFTS5Result(query, result string) []string {
-	var ids []string
-	for _, line := range strings.Split(result, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "- **") {
-			continue
-		}
-		// Match subject text to a fact ID
-		subject := strings.TrimPrefix(line, "- **")
-		if idx := strings.Index(subject, "**"); idx > 0 {
-			subject = subject[:idx]
-		}
-		for id, fact := range gm.facts {
-			if strings.EqualFold(fact.Subject, subject) || strings.Contains(strings.ToLower(fact.Subject), strings.ToLower(subject)) {
-				ids = append(ids, id)
-				break
-			}
-		}
-	}
-	if len(ids) == 0 {
-		// FTS5 had results but no matching graph nodes — fallback to substring
-		return gm.substringMatch(query)
-	}
-	return ids
+	return gm.substringMatch(query)
 }
 
 // substringMatch finds fact IDs by matching individual query words against subjects.

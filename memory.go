@@ -26,7 +26,6 @@ type Memory struct {
 func NewMemory(db *sql.DB, client *ProviderManager, cfg *Settings) *Memory {
 	m := &Memory{db: db, client: client, cfg: cfg}
 	m.graph = NewGraphMemory(cfg.MemoriesDir, cfg)
-	m.graph.SetSearch(m.Search)
 	return m
 }
 

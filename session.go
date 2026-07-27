@@ -143,9 +143,10 @@ func (s *Session) AddExchange(userRaw, userContext, reply string, toolCalls []To
 		}
 		record = fmt.Sprintf("%s\n[tools used: %s]", reply, strings.Join(parts, "; "))
 	}
+	// History: clean reply only — no tool trail (prevents LLM from copying [tools used:] pattern)
 	s.history = append(s.history,
 		Message{Role: "user", Content: userContext},
-		Message{Role: "assistant", Content: record},
+		Message{Role: "assistant", Content: reply},
 	)
 	if s.mem != nil {
 		s.mem.LogChat("user", userRaw, s.sessionID, source)
