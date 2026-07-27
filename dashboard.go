@@ -1494,7 +1494,7 @@ func traceTelemetry(home string) (skips, retrieves, toolErrors int) {
 			if ev["status"] == "error" {
 				toolErrors++
 			}
-			if inTurn && ev["tool"] == "recall" {
+			if inTurn && ev["tool"] == "remember" {
 				recalled = true
 			}
 		case "turn_end":

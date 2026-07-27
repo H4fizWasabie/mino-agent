@@ -23,6 +23,10 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "migrate-memories", "--migrate-memories":
+			s := LoadSettings()
+			MigrateMemories(s.Home, s.MemoriesDir)
+			return
 		case "eval":
 			s := LoadSettings()
 			os.Exit(RunEval(s.Home))

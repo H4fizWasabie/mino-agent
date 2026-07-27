@@ -18,6 +18,7 @@ type Settings struct {
 	SmallModel       string
 	Home             string
 	Workspace        string
+	MemoriesDir      string
 	MaxIter          int
 	MaxTokens        int
 	TopK             int
@@ -55,6 +56,7 @@ func LoadSettings() *Settings {
 		SmallModel:       envOr("MINO_SMALL_MODEL", "mimo-v2.5"),
 		Home:             home,
 		Workspace:        envOr("MINO_WORKSPACE", defaultWorkspace()),
+		MemoriesDir:      envOr("MINO_MEMORIES_DIR", filepath.Join(home, "memories")),
 		MaxIter:          envInt("MINO_MAX_ITERATIONS", 25),
 		MaxTokens:        envInt("MINO_MAX_TOKENS", 16384),
 		TopK:             envInt("MINO_RETRIEVAL_TOP_K", 4),

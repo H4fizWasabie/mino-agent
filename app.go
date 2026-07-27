@@ -57,7 +57,6 @@ func NewCore() *Core {
 		for _, entry := range PruneRecentFixes(s.Home, 7*24*time.Hour) {
 			mem.embedder.Remove("working_memory", entry)
 		}
-		go mem.BackfillEmbeddings()
 	} else {
 		PruneRecentFixes(s.Home, 7*24*time.Hour)
 	}

@@ -85,10 +85,10 @@ func RunLoopContext(
 	result := &LoopResult{}
 
 	defer func() {
-		decision, reason := "skip", "recall tool not invoked"
+		decision, reason := "skip", "memory tool not invoked"
 		for _, call := range result.ToolCalls {
-			if call.Name == "recall" {
-				decision, reason = "retrieve", "recall tool invoked"
+			if call.Name == "remember" {
+				decision, reason = "retrieve", "memory tool invoked"
 				break
 			}
 		}

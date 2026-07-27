@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Memory struct {
@@ -18,12 +19,15 @@ type Memory struct {
 	client        *ProviderManager
 	cfg           *Settings
 	embedder      *EmbeddingStore
+	graph         *GraphMemory
 	consolidateMu sync.Mutex
-	recallCtx     string // §19: conversation context for context_boost in scoreFact
 }
 
 func NewMemory(db *sql.DB, client *ProviderManager, cfg *Settings) *Memory {
-	return &Memory{db: db, client: client, cfg: cfg}
+	m := &Memory{db: db, client: client, cfg: cfg}
+	m.graph = NewGraphMemory(cfg.MemoriesDir, cfg)
+	m.graph.SetSearch(m.Search)
+	return m
 }
 
 // --- Chat log (Core: log_chat) ---
@@ -103,8 +107,9 @@ func (m *Memory) Search(query string) string {
 	return out.String()
 }
 
-// --- Episodic search ---
+// --- Episodic search (deprecated — use remember for graph-aware retrieval) ---
 
+// SearchEpisodes is kept for dashboard/migration use only.
 func (m *Memory) SearchEpisodes(query string) string {
 	rows, err := m.db.Query(
 		"SELECT happened_at, summary FROM episodes_fts WHERE episodes_fts MATCH ? ORDER BY rank LIMIT 3",
@@ -173,10 +178,16 @@ const summarizerPrompt = `You distill a personal assistant's recent conversation
 From the exchanges below, extract:
 1. durable facts about the user, their people, projects, or preferences —
    only things worth remembering in a month; skip chit-chat and one-offs.
+   For each fact, include edges to existing facts listed below when there's a clear relationship.
 2. one single-sentence episode summarizing what happened in this conversation.
 
+Available fact IDs (use as edge targets when relevant):
+%s
+
 Reply with ONLY this JSON:
-{"facts": [{"subject": "<who/what>", "content": "<one sentence>"}], "episode": "<one sentence>"}
+{"facts": [{"id": "snake_case_id", "subject": "<one sentence>", "content": "<optional body>", "edges": [{"target": "<existing_id>", "rel": "<relation>"}]}], "episode": "<one sentence>"}
+
+Edge relations: attributed_to, prefers, maintains, depends_on, supersedes, located_at, requires, deployed_on, scheduled_at, calls, used_in, related_to
 
 Exchanges:
 %s`
@@ -267,8 +278,17 @@ func (m *Memory) consolidateSession(sid string) int {
 	if len(ids) == 0 {
 		return 0
 	}
+
+	// Build list of available fact IDs for edge targets
+	var availableIDs strings.Builder
+	m.graph.mu.RLock()
+	for id, fact := range m.graph.facts {
+		fmt.Fprintf(&availableIDs, "- %s (%s)\n", id, fact.Subject)
+	}
+	m.graph.mu.RUnlock()
+
 	resp, err := m.client.Create("consolidation", SmallModel,
-		[]Message{{Role: "user", Content: fmt.Sprintf(summarizerPrompt, log.String())}}, 600, "", nil)
+		[]Message{{Role: "user", Content: fmt.Sprintf(summarizerPrompt, availableIDs.String(), log.String())}}, 600, "", nil)
 	if err != nil {
 		return 0
 	}
@@ -286,8 +306,10 @@ func (m *Memory) consolidateSession(sid string) int {
 	}
 	var distilled struct {
 		Facts []struct {
+			ID      string `json:"id"`
 			Subject string `json:"subject"`
 			Content string `json:"content"`
+			Edges   []Edge `json:"edges"`
 		} `json:"facts"`
 		Episode string `json:"episode"`
 	}
@@ -298,25 +320,36 @@ func (m *Memory) consolidateSession(sid string) int {
 	placeholder := func(s string) bool { return s == "" || strings.Contains(s, "<") }
 	written := 0
 	for _, f := range distilled.Facts {
-		if placeholder(f.Subject) || placeholder(f.Content) {
+		if placeholder(f.ID) || placeholder(f.Subject) {
 			continue
 		}
-		res, err := m.db.Exec(`INSERT INTO facts (subject, content, source) SELECT ?, ?, 'consolidation'
-			WHERE NOT EXISTS (SELECT 1 FROM facts WHERE subject = ? AND content = ?)`,
-			f.Subject, f.Content, f.Subject, f.Content)
-		if err != nil {
+		fact := Fact{
+			ID:      f.ID,
+			Type:    "semantic",
+			Subject: f.Subject,
+			At:      time.Now(),
+			Edges:   f.Edges,
+			Body:    f.Content,
+		}
+		if err := m.graph.RecordFact(fact); err != nil {
 			continue
 		}
-		if n, _ := res.RowsAffected(); n > 0 {
-			written++
-			if m.embedder != nil {
-				m.embedder.Index("fact", f.Subject+": "+f.Content)
-			}
+		written++
+		if m.embedder != nil {
+			m.embedder.Index("fact", f.Subject+": "+f.Content)
 		}
 	}
 	if !placeholder(distilled.Episode) {
-		m.db.Exec("INSERT INTO episodes (happened_at, summary, session_id, source) VALUES (date('now'), ?, ?, 'consolidation')",
-			distilled.Episode, sid)
+		epID := fmt.Sprintf("ep_%s", strings.ToLower(strings.ReplaceAll(
+			strings.ReplaceAll(distilled.Episode[:min(40, len(distilled.Episode))], " ", "_"), ",", "")))
+		epFact := Fact{
+			ID:      epID,
+			Type:    "episodic",
+			Subject: distilled.Episode,
+			At:      time.Now(),
+			Body:    fmt.Sprintf("Session: %s", sid),
+		}
+		m.graph.RecordFact(epFact)
 		if m.embedder != nil {
 			m.embedder.Index("episode", distilled.Episode)
 		}

@@ -170,7 +170,7 @@ func (r *Registry) Schemas() []ToolDef {
 }
 
 var essentialToolNames = map[string]bool{
-	"recall": true, "read_file": true, "write_file": true, "edit_file": true,
+	"remember": true, "read_file": true, "write_file": true, "edit_file": true,
 	"save_note": true, "search_web": true, "create_event": true, "list_events": true,
 	"list_playbooks": true, "run_playbook": true,
 	"create_reminder": true, "list_reminders": true, "cancel_reminder": true,
@@ -610,10 +610,10 @@ func BuildRegistry(db *sql.DB, home, workspace string, mem *Memory, location ...
 	r.Register(behaves(makeSearchTool(), BehaviorObserve))
 	r.Register(behaves(makeFetchURLTool(), BehaviorObserve))
 
-	// recall — original pull-based memory retrieval
+	// remember — graph-aware memory traversal
 	r.Register(behaves(&Tool{
-		Name:        "recall",
-		Description: "Search your memory for facts about the user. Call before answering personal questions.",
+		Name:        "remember",
+		Description: "Recall facts as a connected graph. Returns an indented tree showing facts and their relationships. Use for personal questions, context about people/projects/preferences, or understanding how things relate.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -623,15 +623,7 @@ func BuildRegistry(db *sql.DB, home, workspace string, mem *Memory, location ...
 		},
 		Fn: func(args map[string]any) string {
 			query, _ := args["query"].(string)
-			mem.recallCtx = query // §19: conversation context for context_boost scoring
-			if mem.embedder != nil {
-				return mem.SemanticSearch(query, mem.embedder)
-			}
-			results := mem.Search(query)
-			if results == "" {
-				return fmt.Sprintf("No memories found for: %s", query)
-			}
-			return results
+			return mem.graph.Remember(query)
 		},
 	}, BehaviorObserve))
 
@@ -1218,25 +1210,49 @@ func makeListCalendarTool(db *sql.DB, location *time.Location) *Tool {
 func makeNotesTool(db *sql.DB, mem *Memory) *Tool {
 	return &Tool{
 		Name:        "save_note",
-		Description: "Save a durable fact to memory. Use when user shares something about people, projects, or preferences worth remembering.",
+		Description: "Save a durable fact to memory as a .md file with YAML front matter. Only for facts worth remembering in a month — skip one-off tasks and transient intent. Use when user shares something about people, projects, or preferences.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"subject":    map[string]any{"type": "string", "description": "Who or what this is about"},
-				"content":    map[string]any{"type": "string", "description": "The fact to remember"},
-				"importance": map[string]any{"type": "integer", "description": "Optional importance from 1 (low) to 5 (critical); default 3 for a direct user fact"},
+				"id":        map[string]any{"type": "string", "description": "snake_case unique identifier"},
+				"subject":   map[string]any{"type": "string", "description": "Who or what this is about, one sentence"},
+				"content":   map[string]any{"type": "string", "description": "Optional body text, 1-3 sentences"},
+				"edge":      map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"target": map[string]any{"type": "string"}, "rel": map[string]any{"type": "string"}}}, "description": "Related facts: [{target: id, rel: relation}]"},
 			},
-			"required": []string{"subject", "content"},
+			"required": []string{"id", "subject"},
 		},
 		Fn: func(args map[string]any) string {
+			id, _ := args["id"].(string)
 			subject, _ := args["subject"].(string)
 			content, _ := args["content"].(string)
-			importance := 3
-			if value, ok := args["importance"].(float64); ok {
-				importance = int(value)
+
+			var edges []Edge
+			if raw, ok := args["edge"]; ok {
+				if arr, ok := raw.([]any); ok {
+					for _, e := range arr {
+						em, _ := e.(map[string]any)
+						target, _ := em["target"].(string)
+						rel, _ := em["rel"].(string)
+						if target != "" && rel != "" {
+							edges = append(edges, Edge{Target: target, Rel: rel})
+						}
+					}
+				}
 			}
-			importance = min(5, max(1, importance))
-			db.Exec("INSERT INTO facts (subject, content, source, importance) VALUES (?,?,?,?)", subject, content, "user", importance)
+
+			fact := Fact{
+				ID:      id,
+				Type:    "semantic",
+				Subject: subject,
+				At:      time.Now(),
+				Edges:   edges,
+				Body:    content,
+			}
+			if err := mem.graph.RecordFact(fact); err != nil {
+				return fmt.Sprintf("Error saving: %v", err)
+			}
+
+			// Also index for embedding similarity
 			if mem.embedder != nil {
 				mem.embedder.Index("fact", subject+": "+content)
 			}
