@@ -3,19 +3,22 @@
 One binary. One SQLite file. Your own AI assistant.
 
 [![DeepWiki](https://img.shields.io/badge/DeepWiki-Architecture%20Docs-blue)](https://deepwiki.com/H4fizWasabie/mino-agent)
-![Version](https://img.shields.io/badge/version-v1.0.0-blue)
+![Version](https://img.shields.io/badge/version-v1.3.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 - **Dashboard** — chat, memory, tools, database, ops
 - **Telegram** — same agent, any device
-- **10 coding tools** — list_files, grep, glob, git, graphify, codegraph, read/write/edit, bash
+- **Playbooks** — repeatable markdown workflows, stage-by-stage execution with retry, resume on restart
+- **Coding tools** — read, write, edit, grep, glob, git, graphify, codegraph, bash
+- **Memory** — SQLite + FTS5 semantic search, auto-consolidation, one-time reminders with Telegram delivery
+- **Multi-provider** — priority, fallback, circuit breaking across LLM backends. OpenRouter routing.
 - **OAuth login** — Claude, Codex (ChatGPT), GitHub Copilot, xAI/Grok
 - **Web search** — Tavily API (free tier available)
-- **Memory** — SQLite + FTS5 semantic search, auto-consolidation
-- **Guardrails** — prefers specialized tools over bash, verifies file claims before completion
+- **Guardrails** — prefers specialized tools over bash, workspace boundary enforcement
 - **MCP + Extensions** — plug in external tools via HTTP or stdio
 
 📋 **[DECISIONS.md](DECISIONS.md)** — architecture decisions, philosophy, and what NOT to build.
+📋 **[CHANGELOG.md](CHANGELOG.md)** — release history.
 
 ## Quickstart
 
@@ -74,8 +77,8 @@ mino
 | `MINO_HOME` | `~/.mino` | State directory (DB, config, traces) |
 | `MINO_API_KEY` | — | OpenAI-compatible API key |
 | `MINO_BASE_URL` | — | API base URL |
-| `MINO_MODEL` | `deepseek-v4-flash-free` | Main model |
-| `MINO_SMALL_MODEL` | `deepseek-v4-flash-free` | Model for background tasks |
+| `MINO_MODEL` | `mimo-v2.5` | Main model |
+| `MINO_SMALL_MODEL` | `mimo-v2.5` | Model for background tasks |
 | `MINO_DASHBOARD_PORT` | `7779` | Dashboard port |
 | `MINO_DASHBOARD_HOST` | (all interfaces) | Bind address |
 | `MINO_MAX_ITERATIONS` | `25` | Max tool calls per turn |
@@ -144,30 +147,37 @@ Empty `api_key_env` means no auth. Works with any OpenAI-compatible local server
 ## Architecture
 
 ```
-mino (~2500 lines of Go)
+mino (~13,000 lines of Go)
 
 main.go              — entry point, CLI routing
+app.go               — Core struct, Respond, session wiring
 loop.go              — agent loop: observe → reason → act → repeat
 session.go           — SOUL.md, system prompt, context assembly
 memory.go            — SQLite + FTS5 retrieval, consolidation
 tools.go             — built-in tools (file, bash, calendar, notes, search, image)
+coding_tools.go      — read, write, edit, grep, glob, git, graphify, codegraph
 provider.go          — OpenAI + Anthropic + Codex clients, SSE streaming
 provider_manager.go  — priority, retry, fallback, circuit breaking
 oauth.go             — PKCE + device-code OAuth, embedded provider configs
-dashboard.go         — web UI + REST API
+dashboard.go         — web UI + REST API + SSE streaming
 telegram.go          — Telegram bot gateway
 mcp.go               — MCP bridge (stdio-based servers)
 skill.go             — skill loader (SKILL.md files)
 extensions.go        — HTTP extension protocol
 playbook.go          — numbered Markdown workflows and stage runner
 adapters.go          — working memory, patterns, embeddings
+reminder.go          — persistent one-time reminders with Telegram delivery
+eval.go              — evaluation harness for automated correctness
+db.go                — SQLite schema and migrations
+config.go            — environment variable → Settings
+update.go            — self-update from GitHub releases
 ```
 
-Playbooks are optional repeatable procedures, not a separate chat mode. Mino
-receives a possibly relevant playbook in context and chooses whether to call
-`run_playbook`, much as it chooses whether to call `recall`. Selected stages
-then execute through the same runtime, tools, reasoning settings, and context
-management as ordinary work. See [PLAYBOOKS_DESIGN.md](PLAYBOOKS_DESIGN.md).
+Playbooks are the state machine. Each is a numbered Markdown file with
+`## Read`, `## Do`, and `## Write` stages. Memory routes vague prompts to the
+right playbook. Mino runs each stage through the canonical agent loop with
+retries. Progress is written back to the playbook file — resume on restart.
+See [PLAYBOOKS_DESIGN.md](PLAYBOOKS_DESIGN.md).
 
 ## Free AI stack
 
