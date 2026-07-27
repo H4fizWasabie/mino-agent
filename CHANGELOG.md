@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Memory graph index cache (`index.json`): O(1) startup, skips re-parsing all .md files
+- Edge validation: dangling edge targets filtered on write
+
+### Changed
+- History split from chat_log: LLM sees clean reply, consolidation sees full tool trail
+- `remember` tool description tuned: single call sufficient, reduces redundant queries ~60%
+
+### Removed
+- FTS5 supplement path in graph traversal (dead code since migration to .md files)
+
 ## [v1.4.0] — Cross-Platform Scheduler & Dashboard Polish
 
 ### Changed
