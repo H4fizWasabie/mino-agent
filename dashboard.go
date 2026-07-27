@@ -1634,11 +1634,7 @@ func handleMetrics(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		// active sessions
-		var sessions int
-		if dashCore.DB.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&sessions) == nil {
-			b.WriteString(fmt.Sprintf("mino_active_sessions %d\n", sessions))
-		}
+
 	}
 	w.Write([]byte(b.String()))
 }

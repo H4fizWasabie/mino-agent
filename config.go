@@ -26,7 +26,6 @@ type Settings struct {
 	ContextChars     int
 	MaxHistoryTurns  int // keep only last N turns (0 = unlimited, default 5)
 	MaxToolDescChars int // trim tool descriptions exceeding this (0 = no limit)
-	RollbackDir      string
 	BashTimeout      time.Duration
 	CodingTimeout    time.Duration
 	SyncTimeout      time.Duration
@@ -71,7 +70,6 @@ func LoadSettings() *Settings {
 		Telegram:         os.Getenv("TELEGRAM_BOT_TOKEN"),
 		TelegramChatID:   envInt64("MINO_TELEGRAM_CHAT_ID", 0),
 		Timezone:         envOr("MINO_TIMEZONE", "Asia/Kuala_Lumpur"),
-		RollbackDir:      filepath.Join(home, "rollback"),
 	}
 }
 

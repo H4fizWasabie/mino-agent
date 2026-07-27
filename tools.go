@@ -31,7 +31,6 @@ type ToolFunc func(args map[string]any) string
 type ContextToolFunc func(context.Context, map[string]any) string
 type sessionIDKey struct{}
 type userMessageKey struct{}
-type rollbackDirKey struct{}
 
 type ToolBehavior uint8
 
@@ -645,8 +644,6 @@ func BuildRegistry(db *sql.DB, home, workspace string, mem *Memory, location ...
 
 	// image generation (OpenRouter images API)
 	r.Register(behaves(makeGenerateImageTool(home), BehaviorMutate))
-
-	// rollback — restore files from a session snapshot
 
 	return r
 }
@@ -1714,8 +1711,6 @@ func makeViewImageTool() *Tool {
 		},
 	}
 }
-
-// --- Approval tools (multi-turn gate for destructive ops) ---
 
 func makeGenerateImageTool(home string) *Tool {
 	return &Tool{

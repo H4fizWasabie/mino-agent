@@ -81,8 +81,7 @@ func RunLoopContext(
 	}
 	ctx = context.WithValue(ctx, sessionIDKey{}, sessionID)
 	ctx = context.WithValue(ctx, userMessageKey{}, lastUserContent(messages))
-	rbDir := filepath.Join(traceHome, "rollback", sessionID)
-	ctx = context.WithValue(ctx, rollbackDirKey{}, rbDir)
+
 	result := &LoopResult{}
 
 	defer func() {
