@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -186,7 +187,30 @@ Available fact IDs (use as edge targets when relevant):
 Reply with ONLY this JSON:
 {"facts": [{"id": "snake_case_id", "subject": "<one sentence>", "content": "<optional body>", "edges": [{"target": "<existing_id>", "rel": "<relation>"}]}], "episode": "<one sentence>"}
 
-Edge relations: attributed_to, prefers, maintains, depends_on, supersedes, located_at, requires, deployed_on, scheduled_at, calls, used_in, related_to
+Edge relations (pick the MOST SPECIFIC one that fits):
+- attributed_to: property or attribute belonging to target
+  ex: "User's Gmail account" attributed_to "User profile"
+- prefers: user preference about the target
+  ex: "User prefers dark theme" prefers "UI settings"
+- maintains: user is responsible for the target project/system
+  ex: "User" maintains "Project repo"
+- depends_on: this requires the target to function
+  ex: "Deploy script" depends_on "Production server"
+- supersedes: this replaces or obsoletes the target
+  ex: "New CRM system" supersedes "Old spreadsheet tracker"
+- located_at: physical or logical location
+  ex: "Project database" located_at "Cloud server"
+- requires: needs the target as a prerequisite
+  ex: "API integration" requires "API access key"
+- deployed_on: software running on the target infrastructure
+  ex: "Web app" deployed_on "VPS instance"
+- scheduled_at: task scheduled at a specific time or cadence
+  ex: "Weekly report" scheduled_at "Monday 9am"
+- calls: invokes or uses the target as a function/service
+  ex: "Backup script" calls "rsync utility"
+- used_in: this is used within the target context
+  ex: "SQLite library" used_in "Database module"
+- related_to: generic relationship — only when nothing above fits
 
 Exchanges:
 %s`
@@ -355,4 +379,194 @@ func (m *Memory) consolidateSession(sid string) int {
 	}
 	m.db.Exec("UPDATE chat_log SET consolidated = 1 WHERE id IN (" + strings.Join(ids, ",") + ")")
 	return written
+}
+
+// --- Dedup (background, every 6h, offset from consolidation) ---
+
+const dedupPrompt = `Merge these duplicate facts from a knowledge graph.
+They say the same thing with slightly different wording.
+Produce ONE clean fact preserving all unique information.
+Keep the best existing ID.
+
+Duplicate facts:
+%s
+
+Reply with ONLY this JSON:
+{"id": "keep_one_existing_id", "subject": "<merged one-sentence subject>", "content": "<merged body, 1-3 sentences>"}`
+
+// DedupDue clusters near-duplicate facts by embedding similarity and
+// merges each cluster into one clean fact via the small model.
+func (m *Memory) DedupDue() int {
+	if m.embedder == nil || m.client == nil {
+		return 0
+	}
+
+	// Ensure all facts are embedded
+	m.graph.mu.RLock()
+	for _, f := range m.graph.facts {
+		text := f.Subject + ": " + f.Body
+		m.embedder.Index("fact", text) // idempotent — skips if cached
+	}
+	m.graph.mu.RUnlock()
+
+	// Get all fact embeddings
+	docs := m.embedder.DocsBySource("fact")
+	if len(docs) < 2 {
+		return 0
+	}
+
+	// Cluster by cosine similarity > 0.85
+	clusters := clusterDocs(docs, 0.85)
+
+	merged := 0
+	limit := 5 // ponytail: cap per run, backlog drains over later passes
+	for _, cluster := range clusters {
+		if len(cluster) < 2 || merged >= limit {
+			continue
+		}
+		if m.mergeCluster(cluster) {
+			merged++
+		}
+	}
+	return merged
+}
+
+// mergeCluster sends duplicate facts to the small model for merging,
+// then replaces them with the merged result.
+func (m *Memory) mergeCluster(docs []embeddedDoc) bool {
+	m.graph.mu.Lock()
+	// Map content → fact ID
+	contentToID := make(map[string]string)
+	var facts []*Fact
+	for _, d := range docs {
+		// Find the fact by matching content against subject+body
+		for id, f := range m.graph.facts {
+			candidate := f.Subject + ": " + f.Body
+			if candidate == d.Content {
+				contentToID[d.Content] = id
+				facts = append(facts, f)
+				break
+			}
+		}
+	}
+	m.graph.mu.Unlock()
+
+	if len(facts) < 2 {
+		return false
+	}
+
+	// Build prompt
+	var sb strings.Builder
+	for _, f := range facts {
+		sb.WriteString(fmt.Sprintf("ID: %s\nSubject: %s\nBody: %s\n\n", f.ID, f.Subject, f.Body))
+	}
+
+	resp, err := m.client.Create("dedup", SmallModel,
+		[]Message{{Role: "user", Content: fmt.Sprintf(dedupPrompt, sb.String())}}, 600, "", nil)
+	if err != nil {
+		return false
+	}
+	text := resp.FinalText
+	if text == "" {
+		for _, b := range resp.Content {
+			if b.Type == "text" {
+				text += b.Text
+			}
+		}
+	}
+	start, end := strings.Index(text, "{"), strings.LastIndex(text, "}")
+	if start < 0 || end <= start {
+		return false
+	}
+	var merged struct {
+		ID      string `json:"id"`
+		Subject string `json:"subject"`
+		Content string `json:"content"`
+	}
+	if json.Unmarshal([]byte(text[start:end+1]), &merged) != nil {
+		return false
+	}
+	if merged.ID == "" || merged.Subject == "" {
+		return false
+	}
+
+	// Collect edges from all merged facts
+	m.graph.mu.Lock()
+	var allEdges []Edge
+	seenEdges := make(map[string]bool)
+	for _, f := range facts {
+		for _, e := range f.Edges {
+			key := e.Target + e.Rel
+			if !seenEdges[key] {
+				allEdges = append(allEdges, e)
+				seenEdges[key] = true
+			}
+		}
+	}
+
+	// Delete old .md files (except the one we're keeping)
+	for _, f := range facts {
+		if f.ID == merged.ID {
+			continue
+		}
+		os.Remove(filepath.Join(m.graph.dir, f.ID+".md"))
+		delete(m.graph.facts, f.ID)
+		m.embedder.Remove("fact", f.Subject+": "+f.Body)
+	}
+
+	// Write merged fact
+	mergedFact := Fact{
+		ID:      merged.ID,
+		Type:    "semantic",
+		Subject: merged.Subject,
+		At:      time.Now(),
+		Edges:   allEdges,
+		Body:    merged.Content,
+	}
+	m.graph.facts[merged.ID] = &mergedFact
+	m.graph.writeFile(mergedFact)
+	m.graph.saveIndex()
+	m.embedder.Index("fact", merged.Subject+": "+merged.Content)
+	m.graph.mu.Unlock()
+
+	return true
+}
+
+// clusterDocs groups documents by cosine similarity using union-find.
+func clusterDocs(docs []embeddedDoc, threshold float64) [][]embeddedDoc {
+	n := len(docs)
+	parent := make([]int, n)
+	for i := range parent {
+		parent[i] = i
+	}
+	var find func(int) int
+	find = func(x int) int {
+		if parent[x] != x {
+			parent[x] = find(parent[x])
+		}
+		return parent[x]
+	}
+	union := func(a, b int) {
+		parent[find(a)] = find(b)
+	}
+
+	for i := 0; i < n; i++ {
+		for j := i + 1; j < n; j++ {
+			if cosineSimilarity(docs[i].Embedding, docs[j].Embedding) > threshold {
+				union(i, j)
+			}
+		}
+	}
+
+	groups := make(map[int][]embeddedDoc)
+	for i, doc := range docs {
+		root := find(i)
+		groups[root] = append(groups[root], doc)
+	}
+
+	var out [][]embeddedDoc
+	for _, g := range groups {
+		out = append(out, g)
+	}
+	return out
 }

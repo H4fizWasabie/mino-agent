@@ -75,6 +75,15 @@ func NewCore() *Core {
 				}
 			}
 		}()
+		go func() { // dedup — 6-hour, offset +30min from consolidation
+			time.Sleep(30 * time.Minute)
+			for {
+				time.Sleep(6 * time.Hour)
+				if n := mem.DedupDue(); n > 0 {
+					slog.Info("dedup", "merged_clusters", n)
+				}
+			}
+		}()
 		go func() { // 5-minute threshold check — triggers when context nears 80% full
 			for {
 				time.Sleep(5 * time.Minute)

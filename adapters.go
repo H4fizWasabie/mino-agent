@@ -189,6 +189,17 @@ func (es *EmbeddingStore) Prune(valid map[string]bool) {
 	}
 }
 
+// DocsBySource returns all cached embeddings for the given source.
+func (es *EmbeddingStore) DocsBySource(source string) []embeddedDoc {
+	var out []embeddedDoc
+	for _, d := range es.docs {
+		if d.Source == source && len(d.Embedding) > 0 {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 func (es *EmbeddingStore) Remove(source, content string) {
 	filtered := es.docs[:0]
 	for _, doc := range es.docs {
