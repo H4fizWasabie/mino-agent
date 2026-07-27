@@ -254,7 +254,7 @@ const turnCard = t => `<div class="card">
   <div class="u">${esc(t.user_message)}</div>
   <div class="meta" style="margin-top:4px">${gateBadge(t.gate)}</div>
   ${(t.tools||[]).map(toolRow).join("")}
-  <div class="r">${renderMarkdown(t.reply)}</div>
+  <div class="r">${renderMarkdown(stripTools(t.reply))}</div>
   <div class="meta">${esc((t.ts||"").replace("T"," ").slice(0,19))} · ${secs(t.latency_ms)} · ${t.iterations??"?"} iter · ${money(t.cost||0)}${t.consolidation?` · consolidated ${t.consolidation.new_facts} fact(s)`:""}</div>
 </div>`;
 
@@ -269,7 +269,7 @@ function executionTurn(t, index){
     <div class="turn-prompt"><span>USER INPUT</span><strong>${esc(t.user_message||"No prompt recorded")}</strong></div>
     <div class="execution-path"><div class="execution-stage"><span class="stage-node">→</span><div class="stage-copy"><span class="stage-label">RECEIVE</span><strong>Context assembled</strong><small>session history · working context · available tools</small></div></div>
       <div class="execution-stage"><span class="stage-node model-node">✦</span><div class="stage-copy"><span class="stage-label">REASON</span><strong>${llms.length||t.iterations||1} model pass${(llms.length||t.iterations||1)===1?"":"es"}</strong><small>${tokensIn.toLocaleString()} tokens in · ${tokensOut.toLocaleString()} out</small></div></div>
-      ${toolSteps}<div class="execution-stage"><span class="stage-node reply-node">✓</span><div class="stage-copy response-copy"><span class="stage-label">RESPOND</span><details ${index===0?"open":""}><summary>View final response</summary><div class="r">${renderMarkdown(t.reply||"")}</div></details></div></div></div>
+      ${toolSteps}<div class="execution-stage"><span class="stage-node reply-node">✓</span><div class="stage-copy response-copy"><span class="stage-label">RESPOND</span><details ${index===0?"open":""}><summary>View final response</summary><div class="r">${renderMarkdown(stripTools(t.reply||""))}</div></details></div></div></div>
     <footer><span>${secs(t.latency_ms)} elapsed</span><span>${t.iterations ?? (llms.length || 1)} iterations</span><span>${money(t.cost||0)}</span></footer></article>`;
 }
 
@@ -299,7 +299,7 @@ const chatTurnCard = t => `<div class="card">
   ${t.gate?`<div class="stages"><span class="stage done">gate · ${esc(t.gate.decision)}</span>${(t.tools||[]).map(x=>`<span class="stage done">tool · ${esc(x.tool)}</span>`).join("")}<span class="stage done">reply</span></div>
     <div class="meta" style="margin:0 0 6px">${esc(t.gate.reason||"")}</div>`:""}
   ${(t.tools||[]).map(toolRow).join("")}
-  <div class="r" style="margin-top:8px">${renderCardBody(t.reply)}</div>
+  <div class="r" style="margin-top:8px">${renderCardBody(stripTools(t.reply))}</div>
   <div class="meta">${secs(t.latency_ms)} · ${t.iterations??"?"} iter${t.consolidation?` · consolidated ${t.consolidation.new_facts} fact(s)`:""}</div>
 </div>`;
 
