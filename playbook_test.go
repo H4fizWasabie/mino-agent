@@ -445,14 +445,26 @@ func TestSchedulePlaybook(t *testing.T) {
 	if !strings.Contains(got, "Scheduled news daily at 20:00") {
 		t.Fatalf("schedule result = %q", got)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "config.md"))
+
+	// verify schedules.json was written
+	scheds, err := loadSchedules(home)
 	if err != nil {
 		t.Fatal(err)
 	}
-	config := string(data)
-	for _, want := range []string{"schedule: 20:00 Asia/Kuala_Lumpur", "notify: true", "status: active"} {
-		if !strings.Contains(config, want) {
-			t.Errorf("config missing %q: %s", want, config)
-		}
+	if len(scheds) != 1 {
+		t.Fatalf("expected 1 schedule, got %d", len(scheds))
+	}
+	if scheds[0].Name != "news" || scheds[0].Time != "20:00" || scheds[0].Timezone != "Asia/Kuala_Lumpur" {
+		t.Fatalf("schedule = %+v", scheds[0])
+	}
+
+	// cancel
+	cancelGot := makeCancelScheduleTool(home).ContextFn(nil, map[string]any{"name": "news"})
+	if !strings.Contains(cancelGot, "Cancelled schedule for news") {
+		t.Fatalf("cancel result = %q", cancelGot)
+	}
+	scheds, _ = loadSchedules(home)
+	if len(scheds) != 0 {
+		t.Fatalf("expected 0 schedules after cancel, got %d", len(scheds))
 	}
 }

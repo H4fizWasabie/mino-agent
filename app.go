@@ -118,10 +118,15 @@ func NewCore() *Core {
 	tools.Register(behaves(makeListPlaybooksTool(s.Home), BehaviorObserve))
 	tools.Register(behaves(makeRunPlaybookTool(w), BehaviorMutate))
 	tools.Register(behaves(makeSchedulePlaybookTool(s.Home, s.Timezone), BehaviorMutate))
+	tools.Register(behaves(makeListSchedulesTool(s.Home), BehaviorObserve))
+	tools.Register(behaves(makeCancelScheduleTool(s.Home), BehaviorMutate))
 	// seed example playbook if none exist
 	if len(ListPlaybooks(s.Home)) == 0 {
 		CreateExamplePlaybook(s.Home)
 	}
+
+	// In-process playbook scheduler — checks schedules.json every minute
+	go runScheduleDispatcher(w)
 
 	// Alert checker (§18.1): error rate + dead man's switch, every 5 minutes
 	go checkAlerts(db, w.sendAlertMessage, 5*time.Minute)

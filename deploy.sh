@@ -126,7 +126,7 @@ ssh "$VPS_USER@$VPS" '
     systemctl daemon-reload
     systemctl enable mino mino-fileingest minowrap
     systemctl disable --now mino-daily-malaysia-news.timer || true
-    systemctl enable --now mino-playbook-dispatcher.timer
+    systemctl disable --now mino-playbook-dispatcher.timer 2>/dev/null || true  # replaced by in-process scheduler
     systemctl restart minowrap
     systemctl restart mino-fileingest
     systemctl restart mino

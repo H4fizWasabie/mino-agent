@@ -2,7 +2,16 @@
 
 ## [Unreleased]
 
-_No unreleased changes._
+### Changed
+- Playbook scheduler: replaced systemd dispatcher with in-process Go ticker.
+  `schedule_playbook` now writes `~/.mino/schedules.json` instead of systemd
+  unit files. Scheduler runs cross-platform (Linux, macOS, Windows) with zero
+  external dependencies. Added `list_schedules` and `cancel_schedule` tools.
+  Existing systemd dispatcher is disabled on deploy.
+
+### Fixed
+- Dashboard reply cards now strip `[tools used: ...]` annotation from displayed
+  replies (turnCard, executionTurn, chatTurnCard were missing `stripTools`).
 
 ## [v1.3.0] — Playbook Architecture & Production Hardening
 

@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math"
@@ -725,10 +726,49 @@ func makeListPlaybooksTool(home string) *Tool {
 	}
 }
 
+// PlaybookSchedule is one scheduled playbook entry in ~/.mino/schedules.json.
+type PlaybookSchedule struct {
+	Name     string `json:"name"`
+	Time     string `json:"time"`     // HH:MM local time
+	Timezone string `json:"timezone"` // IANA timezone
+	LastRun  string `json:"last_run"` // RFC3339 of last execution, empty if never
+}
+
+func scheduleFilePath(home string) string { return filepath.Join(home, "schedules.json") }
+
+func loadSchedules(home string) ([]PlaybookSchedule, error) {
+	path := scheduleFilePath(home)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var scheds []PlaybookSchedule
+	if err := json.Unmarshal(data, &scheds); err != nil {
+		return nil, err
+	}
+	return scheds, nil
+}
+
+func saveSchedules(home string, scheds []PlaybookSchedule) error {
+	path := scheduleFilePath(home)
+	if len(scheds) == 0 {
+		os.Remove(path)
+		return nil
+	}
+	data, err := json.MarshalIndent(scheds, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0600)
+}
+
 func makeSchedulePlaybookTool(home, timezone string) *Tool {
 	return &Tool{
 		Name:        "schedule_playbook",
-		Description: "Schedule an existing playbook daily at a local time. The external systemd dispatcher will run it and deliver its output to Telegram.",
+		Description: "Schedule an existing playbook to run daily at a local time. Mino's in-process scheduler will execute it and the output will be visible in the dashboard under the scheduled-<name> session.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -754,40 +794,94 @@ func makeSchedulePlaybookTool(home, timezone string) *Tool {
 			if _, err := time.LoadLocation(zone); err != nil {
 				return fmt.Sprintf("Error: invalid timezone %q", zone)
 			}
-			configPath := filepath.Join(home, "playbooks", name, "config.md")
 			if _, err := LoadPlaybook(filepath.Join(home, "playbooks"), name); err != nil {
 				return fmt.Sprintf("Error: %v", err)
 			}
-			data, err := os.ReadFile(configPath)
+			scheds, err := loadSchedules(home)
 			if err != nil {
-				return fmt.Sprintf("Error reading config: %v", err)
+				return fmt.Sprintf("Error reading schedules: %v", err)
 			}
-			lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
-			set := map[string]string{"schedule:": fmt.Sprintf("schedule: %s %s", at, zone), "notify:": "notify: true", "status:": "status: active"}
-			seen := make(map[string]bool)
-			for i, line := range lines {
-				key := strings.Fields(line)
-				if len(key) == 0 {
+			// update or append
+			found := false
+			for i, s := range scheds {
+				if s.Name == name {
+					scheds[i].Time = at
+					scheds[i].Timezone = zone
+					found = true
+					break
+				}
+			}
+			if !found {
+				scheds = append(scheds, PlaybookSchedule{Name: name, Time: at, Timezone: zone})
+			}
+			if err := saveSchedules(home, scheds); err != nil {
+				return fmt.Sprintf("Error saving schedule: %v", err)
+			}
+			return fmt.Sprintf("Scheduled %s daily at %s (%s). Output will appear in the dashboard under session scheduled-%s.", name, at, zone, name)
+		},
+	}
+}
+
+func makeListSchedulesTool(home string) *Tool {
+	return &Tool{
+		Name:        "list_schedules",
+		Description: "List all scheduled playbook runs.",
+		Schema:      map[string]any{"type": "object", "properties": map[string]any{}},
+		ContextFn: func(ctx context.Context, args map[string]any) string {
+			scheds, err := loadSchedules(home)
+			if err != nil {
+				return fmt.Sprintf("Error: %v", err)
+			}
+			if len(scheds) == 0 {
+				return "No scheduled playbooks."
+			}
+			var b strings.Builder
+			b.WriteString("Scheduled playbooks:\n")
+			for _, s := range scheds {
+				last := "never"
+				if s.LastRun != "" {
+					last = s.LastRun
+				}
+				b.WriteString(fmt.Sprintf("- %s: daily at %s %s (last run: %s)\n", s.Name, s.Time, s.Timezone, last))
+			}
+			return b.String()
+		},
+	}
+}
+
+func makeCancelScheduleTool(home string) *Tool {
+	return &Tool{
+		Name:        "cancel_schedule",
+		Description: "Cancel a scheduled playbook by name.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string", "description": "Playbook name to unschedule"},
+			},
+			"required": []string{"name"},
+		},
+		ContextFn: func(ctx context.Context, args map[string]any) string {
+			name, _ := args["name"].(string)
+			scheds, err := loadSchedules(home)
+			if err != nil {
+				return fmt.Sprintf("Error: %v", err)
+			}
+			found := false
+			filtered := make([]PlaybookSchedule, 0, len(scheds))
+			for _, s := range scheds {
+				if s.Name == name {
+					found = true
 					continue
 				}
-				if replacement, ok := set[key[0]]; ok {
-					lines[i], seen[key[0]] = replacement, true
-				}
+				filtered = append(filtered, s)
 			}
-			for _, key := range []string{"schedule:", "notify:", "status:"} {
-				if !seen[key] {
-					lines = append(lines, set[key])
-				}
+			if !found {
+				return fmt.Sprintf("No schedule found for '%s'.", name)
 			}
-			tmp := configPath + ".tmp"
-			if err := os.WriteFile(tmp, []byte(strings.Join(lines, "\n")+"\n"), 0600); err != nil {
-				return fmt.Sprintf("Error writing config: %v", err)
+			if err := saveSchedules(home, filtered); err != nil {
+				return fmt.Sprintf("Error: %v", err)
 			}
-			if err := os.Rename(tmp, configPath); err != nil {
-				os.Remove(tmp)
-				return fmt.Sprintf("Error installing config: %v", err)
-			}
-			return fmt.Sprintf("Scheduled %s daily at %s (%s); systemd will deliver the output to Telegram.", name, at, zone)
+			return fmt.Sprintf("Cancelled schedule for %s.", name)
 		},
 	}
 }
@@ -834,6 +928,66 @@ func listActiveTasksPlaybook(home string) []map[string]any {
 		})
 	}
 	return tasks
+}
+
+// runScheduleDispatcher checks schedules.json every minute and fires due playbooks.
+func runScheduleDispatcher(core *Core) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		dispatchDueSchedules(core)
+	}
+}
+
+func dispatchDueSchedules(core *Core) {
+	scheds, err := loadSchedules(core.Settings.Home)
+	if err != nil || len(scheds) == 0 {
+		return
+	}
+	now := time.Now()
+	updated := false
+	for i, s := range scheds {
+		loc, err := time.LoadLocation(s.Timezone)
+		if err != nil {
+			continue
+		}
+		// parse scheduled time in the target timezone
+		schedTime, err := time.ParseInLocation("15:04", s.Time, loc)
+		if err != nil {
+			continue
+		}
+		// rebase to today in that timezone
+		today := time.Date(now.Year(), now.Month(), now.Day(), schedTime.Hour(), schedTime.Minute(), 0, 0, loc)
+		// schedule window: current time is within [scheduled, scheduled+1min)
+		nowInLoc := now.In(loc)
+		if nowInLoc.Before(today) || nowInLoc.After(today.Add(time.Minute)) {
+			continue
+		}
+		// already ran today?
+		if s.LastRun != "" {
+			last, err := time.Parse(time.RFC3339, s.LastRun)
+			if err == nil {
+				lastInLoc := last.In(loc)
+				if lastInLoc.Year() == today.Year() && lastInLoc.YearDay() == today.YearDay() {
+					continue
+				}
+			}
+		}
+		slog.Info("schedule firing playbook", "name", s.Name, "time", s.Time)
+		sessionID := "scheduled-" + s.Name
+		result, err := RunPlaybook(context.Background(), core, s.Name, "Scheduled run", sessionID, nil)
+		if err != nil {
+			slog.Error("schedule playbook failed", "name", s.Name, "error", err)
+		}
+		if result != nil {
+			slog.Info("schedule playbook result", "name", s.Name, "status", result.Status, "stages", result.StagesRun)
+		}
+		scheds[i].LastRun = now.UTC().Format(time.RFC3339)
+		updated = true
+	}
+	if updated {
+		saveSchedules(core.Settings.Home, scheds)
+	}
 }
 
 // ensure playbook types are compatible with existing interfaces

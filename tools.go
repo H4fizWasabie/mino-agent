@@ -174,6 +174,7 @@ var essentialToolNames = map[string]bool{
 	"save_note": true, "search_web": true, "create_event": true, "list_events": true,
 	"list_playbooks": true, "run_playbook": true,
 	"create_reminder": true, "list_reminders": true, "cancel_reminder": true,
+	"list_schedules": true, "cancel_schedule": true,
 }
 
 var toolFamilies = [][]string{
@@ -181,6 +182,7 @@ var toolFamilies = [][]string{
 	{"create_event", "list_events"},
 	{"create_reminder", "list_reminders", "cancel_reminder"},
 	{"list_playbooks", "run_playbook", "schedule_playbook"},
+	{"list_schedules", "cancel_schedule"},
 	{"search_web", "fetch_url"},
 }
 
