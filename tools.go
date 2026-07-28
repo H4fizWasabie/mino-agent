@@ -1005,7 +1005,7 @@ func makeBashToolFor(home string, timeout time.Duration) *Tool {
 			out = out[:1<<20] + fmt.Sprintf("\n... (truncated at 1 MiB, %d bytes total)", len(out))
 		}
 		if out == "" {
-			return "(no output)"
+			return "(no output — state may have changed; verify with ls, cat, grep, or appropriate check before declaring done)"
 		}
 		return out
 	}
