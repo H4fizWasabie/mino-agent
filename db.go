@@ -125,6 +125,7 @@ func Connect(home string) *sql.DB {
 		}
 	}
 	runMigrations(db)
+	initAudit(db)
 	_ = migrateChatLog(db)
 	_ = migrateFacts(db)
 	_ = migrateEpisodes(db)

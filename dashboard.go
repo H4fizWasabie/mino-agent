@@ -61,6 +61,7 @@ func RunDashboard(w *Core) {
 	http.HandleFunc("/api/memory", handleMemoryAPI)
 	http.HandleFunc("/api/query", handleQueryAPI)
 	http.HandleFunc("/api/events", handleEventsAPI)
+	http.HandleFunc("/api/nerves", handleNervesAPI)
 	http.HandleFunc("/api/data", handleDataAPI)
 	http.HandleFunc("/api/reveal", handleRevealAPI)
 	http.HandleFunc("/api/files", handleFilesAPI)
@@ -127,6 +128,17 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"reply": map[bool]string{true: "Stopped.", false: "No active task."}[stopped], "status": "cancelled", "iterations": 0})
 		return
 	}
+
+	// Interrupt routing (non-stream: block until reply ready)
+	if query, ok := isInterrupt(body.Message); ok && dashCore.snapshot(sid) != nil {
+		dashCore.handleInterrupt(sid, query, func(reply string) {
+			json.NewEncoder(w).Encode(map[string]any{
+				"reply": reply, "status": "interrupt", "iterations": 0,
+			})
+		})
+		return
+	}
+
 	result := dashCore.RespondForContext(r.Context(), sid, body.Message, "dashboard", nil, false)
 
 	json.NewEncoder(w).Encode(map[string]any{
@@ -177,6 +189,16 @@ func handleChatStream(w http.ResponseWriter, r *http.Request) {
 		data, _ := json.Marshal(map[string]any{"kind": "done", "reply": reply, "status": "cancelled", "iterations": 0})
 		fmt.Fprintf(w, "data: %s\n\n", data)
 		flusher.Flush()
+		return
+	}
+
+	// Interrupt routing (SSE: push response as event)
+	if query, ok := isInterrupt(body.Message); ok && dashCore.snapshot(sid) != nil {
+		go dashCore.handleInterrupt(sid, query, func(reply string) {
+			data, _ := json.Marshal(map[string]any{"kind": "interrupt", "reply": reply})
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		})
 		return
 	}
 
@@ -429,6 +451,34 @@ func handleEventsAPI(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"events": events,
 		"cursor": fmt.Sprintf("%d", dashCursor),
+	})
+}
+
+// handleNervesAPI returns the live nervous-system snapshot for a session.
+func handleNervesAPI(w http.ResponseWriter, r *http.Request) {
+	sid := r.URL.Query().Get("session_id")
+	if sid == "" {
+		sid = "default"
+	}
+	if dashCore == nil {
+		json.NewEncoder(w).Encode(map[string]any{"active": false})
+		return
+	}
+	snap := dashCore.snapshot(sid)
+	if snap == nil {
+		json.NewEncoder(w).Encode(map[string]any{"active": false})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{
+		"active":       true,
+		"session_id":   sid,
+		"iteration":    snap.Iteration,
+		"status":       snap.Status,
+		"current_tool": snap.CurrentTool,
+		"last_output":  snap.LastOutput,
+		"tool_history": snap.ToolHistory,
+		"started_at":   snap.StartedAt.Format(time.RFC3339),
+		"elapsed":      time.Since(snap.StartedAt).String(),
 	})
 }
 

@@ -29,6 +29,7 @@ type Core struct {
 	Memory         *Memory
 	Tools          *Registry
 	Sessions       *SessionManager
+	snapshots      sync.Map // sessionID → *LoopSnapshot (ephemeral, per-loop state)
 }
 
 func NewCore() *Core {
@@ -124,6 +125,7 @@ func NewCore() *Core {
 	// Tool filter: use embeddings to send only relevant tools per turn
 
 	// Playbook tools — LLM can discover and run playbooks
+	tools.Register(behaves(makeQueryAuditTool(db), BehaviorObserve))
 	tools.Register(behaves(makeListPlaybooksTool(s.Home), BehaviorObserve))
 	tools.Register(behaves(makeRunPlaybookTool(w), BehaviorMutate))
 	tools.Register(behaves(makeSchedulePlaybookTool(s.Home, s.Timezone), BehaviorMutate))
@@ -139,6 +141,14 @@ func NewCore() *Core {
 
 	// Alert checker (§18.1): error rate + dead man's switch, every 5 minutes
 	go checkAlerts(db, w.sendAlertMessage, 5*time.Minute)
+
+	// Audit pruning: remove events older than 30 days, runs daily
+	go func() {
+		for {
+			time.Sleep(24 * time.Hour)
+			w.pruneOldAuditEvents()
+		}
+	}()
 
 	return w
 }
@@ -232,8 +242,17 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 	conversation.mu.Lock()
 	defer conversation.mu.Unlock()
 
+	w.startLoop(sessionID)
+	defer w.endLoop(sessionID)
+
 	ctx, finish := conversation.beginTurn(parent)
 	defer finish()
+	// Wire snapshot updates through context
+	ctx = context.WithValue(ctx, snapshotKey{}, w.snapshotUpdater(sessionID))
+	// Wire audit logging through context
+	ctx = context.WithValue(ctx, auditKey{}, func(eventType, message string, iteration int) {
+		w.auditLog(sessionID, eventType, message, iteration)
+	})
 	system := conversation.Session.BuildSystem(userMessage, source)
 	// time context: injected as system message so it doesn't clutter the chat display
 	local := time.Now().In(w.Settings.Location())
