@@ -9,6 +9,7 @@
 ### Changed
 - History split from chat_log: LLM sees clean reply, consolidation sees full tool trail
 - `remember` tool description tuned: single call sufficient, reduces redundant queries ~60%
+- **Tool schema selection tightened:** essentials shrunk 15→8 tools (+3 family), semantic threshold 0.25→0.40, cap 12→8, MCP tools keyword-gated, embedding input narrowed to last turn. Schemas per turn: 30→21 (-30%), trivial-turn tokens: ~14.5k→~12k (-17%).
 
 ### Removed
 - FTS5 supplement path in graph traversal (dead code since migration to .md files)

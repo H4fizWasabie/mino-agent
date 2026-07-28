@@ -40,13 +40,14 @@ func TestSchemasForContextKeepsCoreAndRetrievesSpecialist(t *testing.T) {
 	defer db.Close()
 	r := NewRegistry()
 	r.SetSearchDB(db)
-	for _, name := range []string{"remember", "read_file", "write_file", "edit_file", "save_note", "search_web", "create_event", "list_events", "list_playbooks", "run_playbook", "create_reminder", "list_reminders", "cancel_reminder"} {
+	for _, name := range []string{"remember", "read_file", "write_file", "save_note", "search_web", "list_playbooks", "run_playbook", "bash", "create_reminder"} {
 		r.Register(&Tool{Name: name, Description: name + " everyday capability", Schema: map[string]any{"type": "object"}})
 	}
 	r.Register(&Tool{Name: "procurement_report", Description: "Analyze supplier purchase orders and procurement audit data", Schema: map[string]any{"type": "object"}})
 	r.Register(&Tool{Name: "image_transform", Description: "Transform and generate raster images", Schema: map[string]any{"type": "object"}})
 
-	got := r.SchemasForContext("The procurement skill says to analyze supplier purchase orders and produce the weekly audit.", nil)
+	ctx := "The procurement skill says to analyze supplier purchase orders and produce the weekly audit."
+	got := r.SchemasForContext(ctx, ctx, nil)
 	names := make(map[string]bool, len(got))
 	for _, schema := range got {
 		names[schema.Name] = true
@@ -57,7 +58,7 @@ func TestSchemasForContextKeepsCoreAndRetrievesSpecialist(t *testing.T) {
 	if names["image_transform"] {
 		t.Fatalf("unrelated specialist tool was retrieved: %v", names)
 	}
-	if !names["remember"] || !names["run_playbook"] || !names["create_reminder"] {
+	if !names["remember"] || !names["run_playbook"] || !names["bash"] {
 		t.Fatalf("essential tools missing: %v", names)
 	}
 }

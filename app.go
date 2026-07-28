@@ -260,8 +260,12 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 	system += fmt.Sprintf("\n[System time: %s %s (UTC%+03d:%02d). Today is %s.]",
 		local.Format("Monday, 2006-01-02 15:04:05"), zone, offset/3600, (abs(offset)%3600)/60,
 		local.Format("2006-01-02"))
-	logTrace(w.Settings.Home, "turn_start", map[string]any{"user_message": userMessage})
 	messages, userContext := conversation.Session.ContextFor(system, userMessage)
+	msgLen := 0
+	for _, m := range messages {
+		msgLen += len(m.Content)
+	}
+	logTrace(w.Settings.Home, "turn_start", map[string]any{"user_message": userMessage, "system_chars": len(system), "msg_count": len(messages), "msg_chars": msgLen})
 	if len(images) > 0 {
 		messages[len(messages)-1].Images = images
 	}

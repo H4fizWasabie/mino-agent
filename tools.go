@@ -170,11 +170,9 @@ func (r *Registry) Schemas() []ToolDef {
 }
 
 var essentialToolNames = map[string]bool{
-	"remember": true, "read_file": true, "write_file": true, "edit_file": true,
-	"save_note": true, "search_web": true, "create_event": true, "list_events": true,
+	"remember": true, "read_file": true, "write_file": true,
+	"save_note": true, "search_web": true, "bash": true,
 	"list_playbooks": true, "run_playbook": true,
-	"create_reminder": true, "list_reminders": true, "cancel_reminder": true,
-	"list_schedules": true, "cancel_schedule": true,
 }
 
 var toolFamilies = [][]string{
@@ -190,7 +188,11 @@ var toolFamilies = [][]string{
 // schemas from the full assembled context, including skills, playbooks, history,
 // and prior observations. A registry without an index is static (used by tests
 // and explicit playbook stage registries).
-func (r *Registry) SchemasForContext(contextText string, es *EmbeddingStore) []ToolDef {
+//
+// oneTurnText is the last user message + last assistant reply — used for semantic
+// embedding and MCP keyword gating so the signal is task-specific, not diluted by
+// full history and system prompt noise.
+func (r *Registry) SchemasForContext(fullCtx string, oneTurnText string, es *EmbeddingStore) []ToolDef {
 	if r.searchDB == nil {
 		return r.Schemas()
 	}
@@ -200,12 +202,36 @@ func (r *Registry) SchemasForContext(contextText string, es *EmbeddingStore) []T
 			selected[name] = true
 		}
 	}
-	for _, name := range r.searchToolNames(contextText) {
-		selected[name] = true
+
+	// Built-in tools: keyword FTS5 on full context + semantic on one-turn window
+	for _, name := range r.searchToolNames(fullCtx) {
+		if !strings.HasPrefix(name, "MCP_") {
+			selected[name] = true
+		}
 	}
-	for _, name := range r.semanticToolNames(contextText, es) {
-		selected[name] = true
+	for _, name := range r.semanticToolNames(oneTurnText, es) {
+		if !strings.HasPrefix(name, "MCP_") {
+			selected[name] = true
+		}
 	}
+
+	// MCP tools: keyword FTS5 only on one-turn window (keyword-gate)
+	mcpSelected := make(map[string]bool)
+	for _, name := range r.searchToolNames(oneTurnText) {
+		if strings.HasPrefix(name, "MCP_") {
+			mcpSelected[name] = true
+		}
+	}
+	// Cap MCP tools at 3 to prevent bloat
+	mcpCount := 0
+	for name := range mcpSelected {
+		if mcpCount >= 3 {
+			break
+		}
+		selected[name] = true
+		mcpCount++
+	}
+
 	for _, family := range toolFamilies {
 		matched := false
 		for _, name := range family {
@@ -306,14 +332,14 @@ func (r *Registry) semanticToolNames(contextText string, es *EmbeddingStore) []s
 	var candidates []candidate
 	r.searchMu.Lock()
 	for name, embedding := range r.toolEmbeddings {
-		if score := cosineSimilarity(query, embedding); score >= 0.25 {
+		if score := cosineSimilarity(query, embedding); score >= 0.40 {
 			candidates = append(candidates, candidate{name, score})
 		}
 	}
 	r.searchMu.Unlock()
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
-	if len(candidates) > 12 {
-		candidates = candidates[:12]
+	if len(candidates) > 8 {
+		candidates = candidates[:8]
 	}
 	names := make([]string, len(candidates))
 	for i, candidate := range candidates {

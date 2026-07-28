@@ -112,7 +112,15 @@ func RunLoopContext(
 			update(LoopSnapshot{Iteration: i, Status: "thinking"})
 		}
 
-		schemas := tools.SchemasForContext(toolSelectionContext(system, messages), es)
+		oneTurnText := lastTurnContext(messages)
+		schemas := tools.SchemasForContext(toolSelectionContext(system, messages), oneTurnText, es)
+		if i == 1 {
+			schemaChars := 0
+			for _, s := range schemas {
+				schemaChars += len(s.Name) + len(s.Description) + 200 // ~params JSON
+			}
+			logTrace(traceHome, "context_diag", map[string]any{"system_chars": len(system), "msg_count": len(messages), "schema_count": len(schemas), "schema_est_chars": schemaChars, "one_turn_chars": len(oneTurnText)})
+		}
 
 		_, llmCancel := context.WithTimeout(ctx, 90*time.Second)
 		resp, err := client.Create(sessionID, MainModel, messages, maxTokens, system, schemas)
@@ -242,6 +250,24 @@ func toolSelectionContext(system string, messages []Message) string {
 		text = text[len(text)-24000:]
 	}
 	return text
+}
+
+// lastTurnContext returns the last user message + last assistant reply for
+// targeted tool matching (semantic embedding and MCP keyword gating).
+func lastTurnContext(messages []Message) string {
+	var user, assistant string
+	for i := len(messages) - 1; i >= 0; i-- {
+		m := messages[i]
+		if m.Role == "user" && user == "" {
+			user = m.Content
+		} else if m.Role == "assistant" && assistant == "" {
+			assistant = m.Content
+		}
+		if user != "" && assistant != "" {
+			break
+		}
+	}
+	return user + "\n" + assistant
 }
 
 func toolOutputStatus(output string) string {
