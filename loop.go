@@ -139,6 +139,7 @@ func RunLoopContext(
 			"stopReason": resp.StopReason,
 			"usage":      map[string]int{"in": resp.Usage.InputTokens, "out": resp.Usage.OutputTokens},
 		})
+		logTrace(traceHome, "llm", map[string]any{"iteration": i, "in": resp.Usage.InputTokens, "out": resp.Usage.OutputTokens})
 
 		messages = append(messages, Message{Role: "assistant", Content: assembleAssistantContent(resp.Content)})
 
