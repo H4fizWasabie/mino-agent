@@ -173,6 +173,7 @@ var essentialToolNames = map[string]bool{
 	"remember": true, "read_file": true, "write_file": true,
 	"save_note": true, "search_web": true, "bash": true,
 	"list_playbooks": true, "run_playbook": true,
+	"list_schedules": true, "cancel_schedule": true,
 }
 
 var toolFamilies = [][]string{
