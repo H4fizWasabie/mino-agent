@@ -140,7 +140,7 @@ func NewCore() *Core {
 	go runScheduleDispatcher(w)
 
 	// Alert checker (§18.1): error rate + dead man's switch, every 5 minutes
-	go checkAlerts(db, w.sendAlertMessage, 5*time.Minute)
+	go checkAlerts(db, w.sendAlertMessage, 5*time.Minute, w.Settings.Location())
 
 	// Audit pruning: remove events older than 30 days, runs daily
 	go func() {
