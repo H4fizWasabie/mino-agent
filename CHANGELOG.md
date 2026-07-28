@@ -17,6 +17,7 @@
 
 ### Fixed
 - Consolidation now requests JSON mode and tolerates wrapped model output; graph memory also reads legacy front matter with unquoted scalar colons.
+- Graph edge rebuild now uses JSON mode and never erases existing edges on empty or invalid inference output.
 
 ### Removed
 - FTS5 supplement path in graph traversal (dead code since migration to .md files)

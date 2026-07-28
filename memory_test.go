@@ -143,6 +143,43 @@ func TestConsolidationUsesFakeProviderResponse(t *testing.T) {
 	}
 }
 
+func TestGraphRebuildDoesNotEraseEdgesOnEmptyResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"edges\":[]}"}}]}`)
+	}))
+	defer server.Close()
+	pm := &ProviderManager{
+		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
+		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
+		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
+		sleep: func(time.Duration) {}, now: time.Now,
+	}
+	dir := t.TempDir()
+	gm := NewGraphMemory(filepath.Join(dir, "memories"), nil)
+	if err := gm.RecordFact(Fact{ID: "target", Type: "semantic", Subject: "Target"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gm.RecordFact(Fact{ID: "source", Type: "semantic", Subject: "Source", Body: "Source", Edges: []Edge{{Target: "target", Rel: "depends_on", Kind: "inferred", Confidence: 0.95, Source: "consolidation"}}}); err != nil {
+		t.Fatal(err)
+	}
+	m := &Memory{
+		client: pm,
+		graph:  gm,
+		embedder: &EmbeddingStore{docs: []embeddedDoc{
+			{Source: "fact:source", Embedding: []float32{1, 0}},
+			{Source: "fact:target", Embedding: []float32{0.9, 0.1}},
+		}},
+	}
+	if _, err := m.RebuildGraphEdges(); err == nil {
+		t.Fatal("empty rebuild response was accepted")
+	}
+	fact, ok := gm.FindFact("source")
+	if !ok || len(fact.Edges) != 1 || fact.Edges[0].Target != "target" {
+		t.Fatalf("existing edge was erased: %+v", fact)
+	}
+}
+
 func TestToolOutputStatus(t *testing.T) {
 	tests := []struct {
 		name, output, want string

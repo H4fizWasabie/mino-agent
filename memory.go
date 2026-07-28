@@ -470,6 +470,27 @@ type graphRebuildEdge struct {
 	Confidence float64 `json:"confidence"`
 }
 
+func parseGraphRebuildResponse(text string) ([]graphRebuildEdge, error) {
+	text = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(text, "```json"), "```"))
+	for start := 0; start < len(text); start++ {
+		if text[start] != '{' {
+			continue
+		}
+		for end := start + 1; end <= len(text); end++ {
+			if text[end-1] != '}' || !json.Valid([]byte(text[start:end])) {
+				continue
+			}
+			var output struct {
+				Edges []graphRebuildEdge `json:"edges"`
+			}
+			if err := json.Unmarshal([]byte(text[start:end]), &output); err == nil {
+				return output.Edges, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("no valid graph rebuild object")
+}
+
 func (m *Memory) RebuildGraphEdges() (int, error) {
 	if m.client == nil || m.embedder == nil {
 		return 0, fmt.Errorf("graph rebuild requires provider and embedding store")
@@ -500,7 +521,7 @@ func (m *Memory) RebuildGraphEdges() (int, error) {
 				fmt.Fprintf(&claims, "  CANDIDATE %s (%0.2f): %s | %s\n", candidate.ID, candidate.Score, byID[candidate.ID].Subject, byID[candidate.ID].Body)
 			}
 		}
-		resp, err := m.client.Create("graph-rebuild", SmallModel, []Message{{Role: "user", Content: fmt.Sprintf(graphRebuildPrompt, claims.String())}}, 1400, "", nil)
+		resp, err := m.client.CreateJSON("graph-rebuild", SmallModel, []Message{{Role: "user", Content: fmt.Sprintf(graphRebuildPrompt, claims.String())}}, 1400, "")
 		if err != nil {
 			failed++
 			continue
@@ -513,20 +534,13 @@ func (m *Memory) RebuildGraphEdges() (int, error) {
 				}
 			}
 		}
-		startJSON, endJSON := strings.Index(text, "{"), strings.LastIndex(text, "}")
-		if startJSON < 0 || endJSON <= startJSON {
-			failed++
-			continue
-		}
-		var output struct {
-			Edges []graphRebuildEdge `json:"edges"`
-		}
-		if json.Unmarshal([]byte(text[startJSON:endJSON+1]), &output) != nil {
+		edges, err := parseGraphRebuildResponse(text)
+		if err != nil || len(edges) == 0 {
 			failed++
 			continue
 		}
 		inferred := make(map[string][]Edge)
-		for _, edge := range output.Edges {
+		for _, edge := range edges {
 			if !allowed[edge.Source][edge.Target] {
 				continue
 			}
