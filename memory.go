@@ -296,9 +296,10 @@ func (m *Memory) consolidateSession(sid string) int {
 	// Embeddings select a bounded candidate set; they never create edges.
 	availableIDs := m.graphCandidates(log.String())
 
-	resp, err := m.client.Create("consolidation", SmallModel,
-		[]Message{{Role: "user", Content: fmt.Sprintf(summarizerPrompt, availableIDs.prompt, log.String())}}, 600, "", nil)
+	resp, err := m.client.CreateJSON("consolidation", SmallModel,
+		[]Message{{Role: "user", Content: fmt.Sprintf(summarizerPrompt, availableIDs.prompt, log.String())}}, 600, "")
 	if err != nil {
+		slog.Warn("consolidation model call failed", "session", sid, "error", err)
 		return 0
 	}
 	text := resp.FinalText
@@ -309,12 +310,9 @@ func (m *Memory) consolidateSession(sid string) int {
 			}
 		}
 	}
-	start, end := strings.Index(text, "{"), strings.LastIndex(text, "}")
-	if start < 0 || end <= start {
-		return 0
-	}
-	distilled, err := parseConsolidationResponse(text[start : end+1])
+	distilled, err := parseConsolidationResponse(text)
 	if err != nil {
+		slog.Warn("consolidation response JSON invalid", "session", sid, "error", err)
 		return 0
 	}
 	// reasoning models sometimes echo the prompt's JSON template verbatim
@@ -385,11 +383,27 @@ type distilledMemory struct {
 }
 
 func parseConsolidationResponse(text string) (distilledMemory, error) {
-	var distilled distilledMemory
-	if err := json.Unmarshal([]byte(text), &distilled); err != nil {
-		return distilledMemory{}, err
+	text = strings.TrimSpace(strings.TrimPrefix(text, "```json"))
+	text = strings.TrimSpace(strings.TrimSuffix(text, "```"))
+	if text == "" {
+		return distilledMemory{}, fmt.Errorf("empty response")
 	}
-	return distilled, nil
+	for start := 0; start < len(text); start++ {
+		if text[start] != '{' {
+			continue
+		}
+		for end := start + 1; end <= len(text); end++ {
+			if text[end-1] != '}' || !json.Valid([]byte(text[start:end])) {
+				continue
+			}
+			var distilled distilledMemory
+			if err := json.Unmarshal([]byte(text[start:end]), &distilled); err == nil &&
+				(distilled.Facts != nil || strings.TrimSpace(distilled.Episode) != "") {
+				return distilled, nil
+			}
+		}
+	}
+	return distilledMemory{}, fmt.Errorf("no valid consolidation object")
 }
 
 func (m *Memory) graphCandidates(text string) graphCandidateSet {
@@ -574,14 +588,9 @@ func (m *Memory) DedupDue() int {
 		return 0
 	}
 
-	// Ensure all facts are embedded
-	m.graph.mu.RLock()
-	for _, f := range m.graph.facts {
-		m.embedder.IndexFact(f.ID, *f) // idempotent by stable graph identity
-	}
-	m.graph.mu.RUnlock()
-
-	// Get all fact embeddings
+	// Get existing fact embeddings. Claims without vectors join a later pass
+	// after their normal write path indexes them; dedup never creates an API
+	// request burst just to start a maintenance run.
 	docs := m.embedder.DocsBySource("fact")
 	if len(docs) < 2 {
 		return 0
@@ -610,12 +619,22 @@ func (m *Memory) mergeCluster(docs []embeddedDoc) bool {
 	// Map content → fact ID
 	contentToID := make(map[string]string)
 	var facts []*Fact
+	seenFacts := make(map[string]bool)
 	for _, d := range docs {
+		if strings.HasPrefix(d.Source, "fact:") {
+			id := strings.TrimPrefix(d.Source, "fact:")
+			if fact, ok := m.graph.facts[id]; ok && !seenFacts[id] {
+				seenFacts[id] = true
+				facts = append(facts, fact)
+				continue
+			}
+		}
 		// Find the fact by matching content against subject+body
 		for id, f := range m.graph.facts {
 			candidate := f.Subject + ": " + f.Body
-			if candidate == d.Content {
+			if candidate == d.Content && !seenFacts[id] {
 				contentToID[d.Content] = id
+				seenFacts[id] = true
 				facts = append(facts, f)
 				break
 			}
@@ -661,6 +680,9 @@ func (m *Memory) mergeCluster(docs []embeddedDoc) bool {
 	if merged.ID == "" || merged.Subject == "" {
 		return false
 	}
+	if _, ok := m.graph.facts[merged.ID]; !ok {
+		return false
+	}
 
 	// Collect edges from all merged facts
 	m.graph.mu.Lock()
@@ -683,7 +705,9 @@ func (m *Memory) mergeCluster(docs []embeddedDoc) bool {
 		}
 		os.Remove(filepath.Join(m.graph.dir, f.ID+".md"))
 		delete(m.graph.facts, f.ID)
+		delete(m.graph.files, f.ID+".md")
 		m.embedder.RemoveFact(f.ID)
+		m.embedder.Remove("fact", f.Subject+": "+f.Body)
 	}
 
 	// Write merged fact
@@ -791,4 +815,44 @@ func CleanMemoryEdges(s *Settings) {
 	m := NewMemory(db, nil, s)
 	removed := m.graph.RemoveMutualInferredEdges()
 	fmt.Printf("Removed %d contradictory inferred edges\n", removed)
+}
+
+func DeduplicateMemory(s *Settings) {
+	db := Connect(s.Home)
+	defer db.Close()
+	authStore := LoadAuthStore(s.Home)
+	client, err := NewProviderManager(s.Home, s, authStore)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "deduplication unavailable: %v\n", err)
+		return
+	}
+	m := NewMemory(db, client, s)
+	key := os.Getenv("MINO_OPENROUTER_KEY")
+	if key == "" {
+		fmt.Fprintln(os.Stderr, "deduplication requires MINO_OPENROUTER_KEY")
+		return
+	}
+	m.embedder = NewEmbeddingStore(db, key, envOr("MINO_EMBED_MODEL", "openai/text-embedding-3-large"))
+	merged := m.DedupDue()
+	fmt.Printf("Deduplicated %d graph clusters\n", merged)
+}
+
+func ConsolidateMemory(s *Settings) {
+	db := Connect(s.Home)
+	defer db.Close()
+	authStore := LoadAuthStore(s.Home)
+	client, err := NewProviderManager(s.Home, s, authStore)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "consolidation unavailable: %v\n", err)
+		return
+	}
+	m := NewMemory(db, client, s)
+	key := os.Getenv("MINO_OPENROUTER_KEY")
+	if key == "" {
+		fmt.Fprintln(os.Stderr, "consolidation requires MINO_OPENROUTER_KEY")
+		return
+	}
+	m.embedder = NewEmbeddingStore(db, key, envOr("MINO_EMBED_MODEL", "openai/text-embedding-3-large"))
+	written := m.ConsolidateDue()
+	fmt.Printf("Consolidated %d durable graph facts\n", written)
 }

@@ -32,7 +32,7 @@ type ProviderConfig struct {
 	Small           string   `json:"small_model"`
 	ReasoningEffort string   `json:"reasoning_effort,omitempty"`
 	ReasoningLevels []string `json:"reasoning_levels,omitempty"`
-	TextOnly        bool     `json:"text_only"` // provider rejects image input; skipped for vision turns
+	TextOnly        bool     `json:"text_only"`                  // provider rejects image input; skipped for vision turns
 	ProviderRouting []string `json:"provider_routing,omitempty"` // openrouter: force specific providers
 }
 
@@ -143,25 +143,31 @@ func loadProviders(home string, legacy *Settings) ([]ProviderConfig, error) {
 
 func (m *ProviderManager) Create(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
 	return m.call(session, routeRole(role, messages), func(c *Client, model, reasoning string) (*LLMResponse, error) {
-		return c.create(context.Background(), model, reasoning, messages, maxTokens, system, tools, false, nil)
+		return c.create(context.Background(), model, reasoning, messages, maxTokens, system, tools, false, false, nil)
+	})
+}
+
+func (m *ProviderManager) CreateJSON(session string, role ModelRole, messages []Message, maxTokens int, system string) (*LLMResponse, error) {
+	return m.call(session, routeRole(role, messages), func(c *Client, model, reasoning string) (*LLMResponse, error) {
+		return c.create(context.Background(), model, reasoning, messages, maxTokens, system, nil, false, true, nil)
 	})
 }
 
 func (m *ProviderManager) CreateContext(ctx context.Context, session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
 	return m.callContext(ctx, session, routeRole(role, messages), func(c *Client, model, reasoning string) (*LLMResponse, error) {
-		return c.create(ctx, model, reasoning, messages, maxTokens, system, tools, false, nil)
+		return c.create(ctx, model, reasoning, messages, maxTokens, system, tools, false, false, nil)
 	})
 }
 
 func (m *ProviderManager) Stream(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
 	return m.call(session, routeRole(role, messages), func(c *Client, model, reasoning string) (*LLMResponse, error) {
-		return c.create(context.Background(), model, reasoning, messages, maxTokens, system, tools, true, onText)
+		return c.create(context.Background(), model, reasoning, messages, maxTokens, system, tools, true, false, onText)
 	})
 }
 
 func (m *ProviderManager) StreamContext(ctx context.Context, session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
 	return m.callContext(ctx, session, routeRole(role, messages), func(c *Client, model, reasoning string) (*LLMResponse, error) {
-		return c.create(ctx, model, reasoning, messages, maxTokens, system, tools, true, onText)
+		return c.create(ctx, model, reasoning, messages, maxTokens, system, tools, true, false, onText)
 	})
 }
 

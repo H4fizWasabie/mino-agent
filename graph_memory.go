@@ -163,6 +163,9 @@ func (gm *GraphMemory) loadIndex() bool {
 			Feedback: entry.Feedback,
 			Edges:    edges,
 		}
+		if loaded, err := gm.readFile(filepath.Join(gm.dir, entry.ID+".md")); err == nil {
+			gm.facts[id].Body = loaded.Body
+		}
 	}
 	gm.files = idx.Files
 	if cleaned {
@@ -334,10 +337,47 @@ func (gm *GraphMemory) parseFrontMatter(raw []byte) (*Fact, error) {
 
 	var fact Fact
 	if err := yaml.Unmarshal([]byte(fm), &fact); err != nil {
+		// Older writers emitted plain scalars such as `subject: A: B`.
+		// Quote only known top-level scalar fields before retrying; bodies and
+		// edge structure remain untouched.
+		if repaired, ok := repairFrontMatter(fm); ok {
+			if retryErr := yaml.Unmarshal([]byte(repaired), &fact); retryErr == nil {
+				fact.Body = body
+				return &fact, nil
+			}
+		}
 		return nil, err
 	}
 	fact.Body = body
 	return &fact, nil
+}
+
+func repairFrontMatter(fm string) (string, bool) {
+	var out []string
+	changed := false
+	for _, line := range strings.Split(fm, "\n") {
+		if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
+			out = append(out, line)
+			continue
+		}
+		for _, key := range []string{"id", "type", "subject", "at", "why", "source"} {
+			prefix := key + ":"
+			if !strings.HasPrefix(line, prefix) {
+				continue
+			}
+			value := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+			if value != "" && !strings.HasPrefix(value, "\"") && !strings.HasPrefix(value, "'") && strings.Contains(value, ": ") {
+				out = append(out, prefix+" "+fmt.Sprintf("%q", value))
+				changed = true
+			} else {
+				out = append(out, line)
+			}
+			goto next
+		}
+		out = append(out, line)
+	next:
+	}
+	return strings.Join(out, "\n"), changed
 }
 
 // RecordFact writes a Fact to disk. If the file exists and args say "merge",

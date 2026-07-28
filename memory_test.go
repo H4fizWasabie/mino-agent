@@ -106,6 +106,14 @@ func TestConsolidationResponseRejectsMalformedOutput(t *testing.T) {
 	if err != nil || len(got.Facts) != 1 || got.Episode != "An episode" {
 		t.Fatalf("parsed response = %+v, err=%v", got, err)
 	}
+	for _, response := range []string{
+		"Here is the result:\n```json\n{\"facts\":[],\"episode\":\"An episode\"}\n```",
+		"reasoning {not JSON} final: {\"facts\":[],\"episode\":\"An episode\"}",
+	} {
+		if _, err := parseConsolidationResponse(response); err != nil {
+			t.Fatalf("wrapped response rejected: %q: %v", response, err)
+		}
+	}
 }
 
 func TestConsolidationUsesFakeProviderResponse(t *testing.T) {

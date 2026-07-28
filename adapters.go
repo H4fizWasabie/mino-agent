@@ -198,7 +198,8 @@ func (es *EmbeddingStore) Prune(valid map[string]bool) {
 func (es *EmbeddingStore) DocsBySource(source string) []embeddedDoc {
 	var out []embeddedDoc
 	for _, d := range es.docs {
-		if d.Source == source && len(d.Embedding) > 0 {
+		isFact := source == "fact" && (d.Source == "fact" || strings.HasPrefix(d.Source, "fact:"))
+		if (d.Source == source || isFact) && len(d.Embedding) > 0 {
 			out = append(out, d)
 		}
 	}

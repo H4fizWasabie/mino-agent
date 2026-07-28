@@ -199,3 +199,14 @@ func TestGraphMemoryKeepsLastValidFactOnMalformedEdit(t *testing.T) {
 		t.Fatalf("last valid fact was lost: %q", got)
 	}
 }
+
+func TestGraphMemoryReadsLegacyColonScalar(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), nil)
+	fact, err := gm.parseFrontMatter([]byte("---\nid: ai-learning-20260728-a2a-protocol\ntype: semantic\nsubject: AI Learning: Google's Agent2Agent (A2A) protocol for cross-platform AI agent interoperability\nat: 2026-07-28T13:45:22Z\n---\n\nbody"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fact.Subject != "AI Learning: Google's Agent2Agent (A2A) protocol for cross-platform AI agent interoperability" || fact.Body != "body" {
+		t.Fatalf("legacy fact = %+v", fact)
+	}
+}

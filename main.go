@@ -35,6 +35,14 @@ func main() {
 			s := LoadSettings()
 			CleanMemoryEdges(s)
 			return
+		case "dedup-memory", "--dedup-memory":
+			s := LoadSettings()
+			DeduplicateMemory(s)
+			return
+		case "consolidate-memory", "--consolidate-memory":
+			s := LoadSettings()
+			ConsolidateMemory(s)
+			return
 		case "eval":
 			s := LoadSettings()
 			os.Exit(RunEval(s.Home))

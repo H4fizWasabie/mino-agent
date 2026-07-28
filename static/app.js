@@ -1,4 +1,5 @@
 const esc = s => (s??"").toString().replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const jsArg = s => JSON.stringify(String(s)).replace(/"/g, "&quot;");
 
 // --- provider switcher ---
 async function switchProvider(name, model="", reasoning="default") {
@@ -159,7 +160,7 @@ function editFact(id){
   const cell = row.querySelector(".fc"); const cur = cell.textContent;
   cell.innerHTML = `<textarea class="editor" id="ef-${id}">${cur.replace(/</g,"&lt;")}</textarea>`;
   const act = row.lastElementChild;
-  act.innerHTML = `<a class="reveal" onclick="saveFact(${id})">save</a> · <a class="reveal" onclick="editing=false;refresh()">cancel</a>`;
+  act.innerHTML = `<a class="reveal" onclick="saveFact(${jsArg(id)})">save</a> · <a class="reveal" onclick="editing=false;refresh()">cancel</a>`;
   document.getElementById("ef-"+id).focus();
 }
 async function saveFact(id){
@@ -637,7 +638,7 @@ function memSemantic(d){
   const facts = d.facts || [];
   let h = `<section class="memory-tab-head"><div><span class="section-kicker">SEMANTIC MEMORY</span><h2>Durable facts</h2><p>The smallest, most reusable knowledge store. Corrections and deletions are active on the next turn.</p></div><strong>${facts.length}</strong></section>`;
   if (!facts.length) return h + `<div class="memory-empty"><span>✦</span><strong>No facts stored yet</strong><p>Mino will place durable knowledge here when memory tools or consolidation save it.</p></div>`;
-  h += `<div class="memory-records">${facts.map(f => { const id=JSON.stringify(String(f.id)); return `<div class="memory-record" id="fact-${esc(String(f.id))}">
+  h += `<div class="memory-records">${facts.map(f => { const rawId=String(f.id), id=jsArg(rawId); return `<div class="memory-record" id="fact-${esc(rawId)}">
       <div class="record-subject"><span>${esc(f.subject)}</span><small>${esc(f.source||"unknown source")}</small></div>
       <div class="fc">${esc(f.content)}</div><div class="record-date">${esc((f.created_at||"").slice(0,10)||"—")}</div>
       <div class="record-actions"><a class="reveal" onclick="editFact(${id})">edit</a><a class="reveal del" onclick="delMem('delete_fact',${id})">delete</a></div></div>`; }).join("")}</div>`;
