@@ -458,13 +458,13 @@ function archSVG(d){
   };
   const toolLines=[`${builtinCount} built-ins · ${mcpCount} MCP`,`${extensionCount} sidecar tools · ${toolCount} total`];
   const sqliteLines=[`${tables} tables · ${fmtBytes((d.db||{}).size)}`,`${records} memory records · WAL state`];
-  const taskLabel=active?short(active.goal,24,"active task"):short(latest.user_message,24,"waiting for a turn");
+  const taskLabel=active?short(active.goal,24,"active schedule"):short(latest.user_message,24,"waiting for a turn");
 
   if(window.innerWidth<720)return `<div class="arch-wrap core-wrap"><svg viewBox="0 0 420 1750" class="arch core-arch compact" role="img" aria-labelledby="spine-title spine-desc"><title id="spine-title">Mino Runtime Spine</title><desc id="spine-desc">A vertical live map of Mino gateways, session, context, RunLoop, provider, tools, SQLite state, verification telemetry, and external sidecars.</desc>${defs}<rect class="core-stage" x="7" y="7" width="406" height="1362" rx="22"/><rect class="core-grid" x="8" y="8" width="404" height="1360" rx="21"/>${header(24,22,372)}
     <text class="boundary-label" x="25" y="104">REQUEST SPINE</text>${wire("M210 174V211","e-gw-session")}${wire("M210 299V408","e-session-context")}${wire("M210 493V527","e-context-loop")}${wire("M210 739V772","e-loop-provider")}${wire("M210 857V892","e-loop-tools")}${wire("M210 988V1022","e-tools-db")}${wire("M210 1107V1142","e-db-trace")}
     <g class="node core-node gateway-stack" ${attrs("gateway","gateway","Gateways",`${sessions} sessions`)}><rect class="target spine-card" x="45" y="119" width="330" height="55" rx="12"/><text class="card-kicker" x="61" y="140">INGRESS</text><text class="gateway-list" x="61" y="160">TELEGRAM  ·  DASHBOARD  ·  SCHEDULER</text></g>
     ${node(65,211,290,88,"TURN STATE","Session",[taskLabel,`${sessions} known threads`],"gateway","session","S")}${wire("M155 299V323","e-session-cancel","dashed")}${wire("M265 299V323","e-session-checkpoint","dashed")}
-    ${node(45,323,155,70,"CONTROL","Cancel",["context signal"],"activetasks","cancel","×","control-card")}${node(220,323,155,70,"SURVIVAL","Checkpoint",[`${(d.active_tasks||[]).length} active`],"activetasks","checkpoint","C","control-card")}
+    ${node(45,323,155,70,"CONTROL","Cancel",["context signal"],"activetasks","cancel","×","control-card")}${node(220,323,155,70,"SCHEDULER","Schedules",[`${(d.active_tasks||[]).length} scheduled`],"activetasks","checkpoint","C","control-card")}
     ${node(65,408,290,85,"ASSEMBLY","Context",[`${fmt(d.chat_pending)} pending messages`,`${records} recall records ready`],"memory/overview","context","C")}${loop(45,527,330,212)}
     ${node(65,772,290,85,"MODEL ROUTER","Provider",[`${short(providerRaw,18,"provider")} · ${short(modelRaw,24,"model")}`,`${esc(d.reasoning||"default")} reasoning`],"settings","provider","P")}
     ${node(65,892,290,96,"EXECUTION","Tool Registry",toolLines,"tools","tools","⌘")}
@@ -484,7 +484,7 @@ function archSVG(d){
     ${loop(544,96,210,217)}
     ${node(784,151,145,98,"MODEL ROUTER","Provider",[`${short(providerRaw,15,"provider")} · ${short(modelRaw,18,"model")}`,`${esc(d.reasoning||"default")} reasoning`],"settings","provider","P")}
     ${node(194,291,155,76,"CONTROL","Cancel",["context signal"],"activetasks","cancel","×","control-card")}
-    ${node(369,291,155,76,"SURVIVAL","Checkpoint",[`${(d.active_tasks||[]).length} active · round ${iteration||"—"}`],"activetasks","checkpoint","C","control-card")}
+    ${node(369,291,155,76,"SCHEDULER","Schedules",[`${(d.active_tasks||[]).length} scheduled · round ${iteration||"—"}`],"activetasks","checkpoint","C","control-card")}
     ${node(559,373,190,112,"EXECUTION","Tool Registry",toolLines,"tools","tools","⌘")}
     ${node(359,501,210,90,"PERSISTENCE","SQLite",sqliteLines,"database","sqlite","DB")}
     <text class="boundary-label" x="30" y="614">OBSERVABILITY · TRACE LOGS</text>${telemetry(29,628,142)}
@@ -825,9 +825,9 @@ function settingsView(d){
 
 function activeTasksView(d){
   const tasks=d.active_tasks||[];
-  return `<section class="tasks-hero"><div><span class="section-kicker">CHECKPOINTS</span><h2>Work that survives a restart.</h2><p>Mino records long-running progress after tool calls, then resumes from the latest checkpoint.</p></div><div class="tasks-count"><strong>${tasks.length}</strong><span>active task${tasks.length===1?"":"s"}</span><small>${tasks.reduce((n,t)=>n+(t.tools_used||[]).length,0)} tools recorded</small></div></section>
-    ${tasks.length?`<div class="task-list">${tasks.map((t,i)=>`<article><header><span class="task-index">${String(i+1).padStart(2,"0")}</span><span class="status-chip good"><i></i> ${esc(t.status||"active")}</span></header><h3>${esc(t.goal)}</h3><div class="task-progress"><span style="width:${Math.min(92,20+(t.round||0)*12)}%"></span></div><div class="task-meta"><span>round ${t.round||0}</span><span>${(t.tools_used||[]).length} tools used</span><span>${(t.discoveries||[]).length} discoveries</span></div>${(t.tools_used||[]).length?`<div class="task-tools">${t.tools_used.map(x=>`<code>${esc(x)}</code>`).join("")}</div>`:""}${(t.discoveries||[]).length?`<ul>${t.discoveries.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>`:""}</article>`).join("")}</div>`:`<div class="tasks-empty"><div class="checkpoint-orbit"><span>✓</span></div><strong>No interrupted work</strong><p>Everything is complete. If Mino stops during a tool-heavy task, its checkpoint will appear here automatically.</p><a href="#loop">Inspect recent turns →</a></div>`}
-    <section class="checkpoint-flow"><div><span>1</span><strong>Tool runs</strong><small>progress changes</small></div><b>→</b><div><span>2</span><strong>Checkpoint</strong><small>saved to disk</small></div><b>→</b><div><span>3</span><strong>Restart</strong><small>context restored</small></div></section>`;
+  return `<section class="tasks-hero"><div><span class="section-kicker">SCHEDULES</span><h2>Work that runs on a schedule.</h2><p>Playbooks fire at their configured times and deliver results automatically.</p></div><div class="tasks-count"><strong>${tasks.length}</strong><span>active schedule${tasks.length===1?"":"s"}</span><small>${tasks.reduce((n,t)=>n+(t.stages||0),0)} stages configured</small></div></section>
+    ${tasks.length?`<div class="task-list">${tasks.map((t,i)=>`<article><header><span class="task-index">${String(i+1).padStart(2,"0")}</span><span class="status-chip good"><i></i> ${esc(t.status||"active")}</span></header><h3>${esc(t.goal)}</h3><div class="task-progress"><span style="width:${Math.min(92,20+(t.round||0)*12)}%"></span></div><div class="task-meta"><span>round ${t.round||0}</span><span>${(t.tools_used||[]).length} tools used</span><span>${(t.discoveries||[]).length} discoveries</span></div>${(t.tools_used||[]).length?`<div class="task-tools">${t.tools_used.map(x=>`<code>${esc(x)}</code>`).join("")}</div>`:""}${(t.discoveries||[]).length?`<ul>${t.discoveries.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>`:""}</article>`).join("")}</div>`:`<div class="tasks-empty"><div class="checkpoint-orbit"><span>✓</span></div><strong>No scheduled playbooks</strong><p>Add a schedule by asking Mino to run a playbook on a recurring basis.</p><a href="#memory/playbooks">Browse playbooks →</a></div>`}
+    <section class="checkpoint-flow"><div><span>1</span><strong>Schedule</strong><small>time & playbook</small></div><b>→</b><div><span>2</span><strong>Fire</strong><small>at scheduled time</small></div><b>→</b><div><span>3</span><strong>Deliver</strong><small>result to Telegram</small></div></section>`;
 }
 
 function onboardingView(){
@@ -1009,7 +1009,7 @@ async function pollEvents(){
 
 let activeView = null, activeSub = null;
 const TITLES = {chat:"Chat & watch", ops:"LLM Ops",
-                database:"Database — everything Mino stores (state.db)", activetasks:"Active Tasks — surviving restarts",
+                database:"Database — everything Mino stores (state.db)", activetasks:"Active Schedules — playbook runs",
                 files:"Files — VPS artifacts and outputs",
                 onboarding:"Welcome — set up your Mino"};
 function render(){
