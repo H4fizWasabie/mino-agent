@@ -107,9 +107,6 @@ func (w *Core) handleInterrupt(sessionID, query string, replyFunc func(string)) 
 	conversation := w.Sessions.Get(sessionID)
 	system := w.buildInterruptSystem(snap, query)
 
-	readOnlyTools := w.Tools.ObserveOnly()
-	schemas := readOnlyTools.Schemas()
-
 	if w.Client == nil {
 		replyFunc("(provider not configured)")
 		return
@@ -119,7 +116,7 @@ func (w *Core) handleInterrupt(sessionID, query string, replyFunc func(string)) 
 	defer cancel()
 
 	messages := []Message{{Role: "user", Content: query}}
-	resp, err := w.Client.CreateContext(ctx, sessionID+"_intr", MainModel, messages, 1024, system, schemas)
+	resp, err := w.Client.CreateContext(ctx, sessionID+"_intr", MainModel, messages, 1024, system, nil)
 	if err != nil {
 		replyFunc(fmt.Sprintf("(interrupt error: %v)", err))
 		return
@@ -156,8 +153,7 @@ func (w *Core) handleInterrupt(sessionID, query string, replyFunc func(string)) 
 func (w *Core) buildInterruptSystem(snap *LoopSnapshot, query string) string {
 	var b strings.Builder
 	b.WriteString(`You are Mino's self-awareness system. Answer the user's mid-task query concisely and factually.
-Use the tools available to inspect files, recall facts, or check state if needed.
-Do NOT modify anything, create files, or run write operations.
+Base your answer on the CURRENT STATE below. Do NOT call tools — respond immediately from the state provided.
 Be direct — the user is checking in on a running task.
 
 CURRENT STATE:
