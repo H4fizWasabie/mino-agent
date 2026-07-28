@@ -1241,10 +1241,10 @@ func makeNotesTool(db *sql.DB, mem *Memory) *Tool {
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"id":        map[string]any{"type": "string", "description": "snake_case unique identifier"},
-				"subject":   map[string]any{"type": "string", "description": "Who or what this is about, one sentence"},
-				"content":   map[string]any{"type": "string", "description": "Optional body text, 1-3 sentences"},
-				"edge":      map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"target": map[string]any{"type": "string"}, "rel": map[string]any{"type": "string"}}}, "description": "Related facts: [{target: id, rel: relation}]"},
+				"id":      map[string]any{"type": "string", "description": "snake_case unique identifier"},
+				"subject": map[string]any{"type": "string", "description": "Who or what this is about, one sentence"},
+				"content": map[string]any{"type": "string", "description": "Optional body text, 1-3 sentences"},
+				"edge":    map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"target": map[string]any{"type": "string"}, "rel": map[string]any{"type": "string"}}}, "description": "Related facts: [{target: id, rel: relation}]"},
 			},
 			"required": []string{"id", "subject"},
 		},
@@ -1281,7 +1281,7 @@ func makeNotesTool(db *sql.DB, mem *Memory) *Tool {
 
 			// Also index for embedding similarity
 			if mem.embedder != nil {
-				mem.embedder.Index("fact", subject+": "+content)
+				mem.embedder.IndexFact(id, fact)
 			}
 			return fmt.Sprintf("Saved: %s — %s", subject, content)
 		},
@@ -1479,42 +1479,27 @@ func makeManageMemoryTool(mem *Memory) *Tool {
 			action, _ := args["action"].(string)
 			subject, _ := args["subject"].(string)
 			content, _ := args["content"].(string)
+			fact, ok := mem.graph.FindFact(subject)
+			if !ok {
+				return fmt.Sprintf("Memory fact not found: %s", subject)
+			}
 			if action == "forget" {
-				rows, _ := mem.db.Query("SELECT content FROM facts WHERE subject = ?", subject)
-				var contents []string
-				if rows != nil {
-					for rows.Next() {
-						var old string
-						rows.Scan(&old)
-						contents = append(contents, old)
-					}
-					rows.Close()
+				if _, err := mem.graph.DeleteFact(fact.ID); err != nil {
+					return fmt.Sprintf("Error forgetting: %v", err)
 				}
-				mem.db.Exec("DELETE FROM facts WHERE subject = ?", subject)
 				if mem.embedder != nil {
-					for _, old := range contents {
-						mem.embedder.Remove("fact", subject+": "+old)
-					}
+					mem.embedder.RemoveFact(fact.ID)
 				}
-				return fmt.Sprintf("Forgot all facts about: %s", subject)
+				return fmt.Sprintf("Forgot: %s", fact.Subject)
 			}
 			if action == "correct" {
-				rows, _ := mem.db.Query("SELECT content FROM facts WHERE subject = ?", subject)
-				var oldContents []string
-				if rows != nil {
-					for rows.Next() {
-						var old string
-						rows.Scan(&old)
-						oldContents = append(oldContents, old)
-					}
-					rows.Close()
+				fact.Body = content
+				fact.Feedback = 0
+				if err := mem.graph.ReplaceFact(*fact); err != nil {
+					return fmt.Sprintf("Error correcting: %v", err)
 				}
-				mem.db.Exec("UPDATE facts SET content = ?, feedback = 0 WHERE subject = ?", content, subject)
 				if mem.embedder != nil {
-					for _, old := range oldContents {
-						mem.embedder.Remove("fact", subject+": "+old)
-					}
-					mem.embedder.Index("fact", subject+": "+content)
+					mem.embedder.IndexFact(fact.ID, *fact)
 				}
 				return fmt.Sprintf("Corrected fact about %s", subject)
 			}
@@ -1523,7 +1508,9 @@ func makeManageMemoryTool(mem *Memory) *Tool {
 				if action == "reject" {
 					delta = -1
 				}
-				mem.db.Exec("UPDATE facts SET feedback = MIN(5, MAX(-5, feedback + ?)) WHERE subject = ?", delta, subject)
+				if _, err := mem.graph.Feedback(fact.ID, delta); err != nil {
+					return fmt.Sprintf("Error recording feedback: %v", err)
+				}
 				return fmt.Sprintf("Recorded %s feedback for %s", action, subject)
 			}
 			return "Unknown memory action."

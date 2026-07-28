@@ -46,6 +46,10 @@ func RunDashboard(w *Core) {
 	static, _ := fs.Sub(staticFiles, "static")
 	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(static))))
 
+	// Serve graph memory .md files so the frontend can fetch fact bodies on click
+	memDir := w.Settings.MemoriesDir
+	http.Handle("/memories/", http.StripPrefix("/memories/", http.FileServer(http.Dir(memDir))))
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -311,7 +315,7 @@ func handleMemoryAPI(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		var body struct {
 			Action  string `json:"action"`
-			ID      int    `json:"id"`
+			ID      any    `json:"id"`
 			Path    string `json:"path"`
 			Content string `json:"content"`
 		}
@@ -320,26 +324,51 @@ func handleMemoryAPI(w http.ResponseWriter, r *http.Request) {
 		db := dashCore.DB
 		switch body.Action {
 		case "update_fact":
-			var subject, old string
-			if db.QueryRow("SELECT subject, content FROM facts WHERE id = ?", body.ID).Scan(&subject, &old) == nil {
-				db.Exec("UPDATE facts SET content = ?, feedback = 0 WHERE id = ?", body.Content, body.ID)
-				if dashCore.Memory.embedder != nil {
-					dashCore.Memory.embedder.Remove("fact", subject+": "+old)
-					dashCore.Memory.embedder.Index("fact", subject+": "+body.Content)
+			if graphID, ok := body.ID.(string); ok {
+				if dashCore.Memory == nil || dashCore.Memory.graph == nil {
+					http.Error(w, "graph memory unavailable", http.StatusServiceUnavailable)
+					return
 				}
+				if err := dashCore.Memory.graph.UpdateBody(graphID, body.Content); err != nil {
+					http.Error(w, err.Error(), http.StatusNotFound)
+					return
+				}
+				if dashCore.Memory.embedder != nil {
+					if fact, found := dashCore.Memory.graph.FindFact(graphID); found {
+						fact.Body = body.Content
+						dashCore.Memory.embedder.IndexFact(graphID, *fact)
+					}
+				}
+				json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+				return
 			}
+			http.Error(w, "graph fact id required", http.StatusBadRequest)
+			return
 		case "delete_fact":
-			var subject, content string
-			if db.QueryRow("SELECT subject, content FROM facts WHERE id = ?", body.ID).Scan(&subject, &content) == nil {
-				db.Exec("DELETE FROM facts WHERE id = ?", body.ID)
-				if dashCore.Memory.embedder != nil {
-					dashCore.Memory.embedder.Remove("fact", subject+": "+content)
-				}
+			factID, ok := body.ID.(string)
+			if !ok || dashCore.Memory == nil || dashCore.Memory.graph == nil {
+				http.Error(w, "invalid fact id", http.StatusBadRequest)
+				return
 			}
+			fact, err := dashCore.Memory.graph.DeleteFact(factID)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
+			if dashCore.Memory.embedder != nil {
+				dashCore.Memory.embedder.RemoveFact(fact.ID)
+			}
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			return
 		case "delete_episode":
+			episodeID, ok := body.ID.(float64)
+			if !ok {
+				http.Error(w, "invalid episode id", http.StatusBadRequest)
+				return
+			}
 			var summary string
-			if db.QueryRow("SELECT summary FROM episodes WHERE id = ?", body.ID).Scan(&summary) == nil {
-				db.Exec("DELETE FROM episodes WHERE id = ?", body.ID)
+			if db.QueryRow("SELECT summary FROM episodes WHERE id = ?", int64(episodeID)).Scan(&summary) == nil {
+				db.Exec("DELETE FROM episodes WHERE id = ?", int64(episodeID))
 				if dashCore.Memory != nil && dashCore.Memory.embedder != nil {
 					dashCore.Memory.embedder.Remove("episode", summary)
 				}
@@ -364,7 +393,16 @@ func handleMemoryAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// GET: return memory data
-	facts := queryAll(dashCore.DB, "SELECT id, subject, content, source, created_at FROM facts ORDER BY id")
+	facts := []map[string]any{}
+	if dashCore.Memory != nil && dashCore.Memory.graph != nil {
+		for _, fact := range dashCore.Memory.graph.Facts() {
+			facts = append(facts, map[string]any{
+				"id": fact.ID, "subject": fact.Subject, "content": fact.Body,
+				"source": fact.Source, "created_at": fact.At.Format(time.RFC3339),
+				"feedback": fact.Feedback, "edges": fact.Edges,
+			})
+		}
+	}
 	episodes := queryAll(dashCore.DB, "SELECT id, summary, happened_at FROM episodes ORDER BY id DESC")
 	skills := skillCatalog(dashCore.Settings.Home)
 	playbooks := playbookCatalog(dashCore.Settings.Home)
@@ -573,8 +611,24 @@ func sortedFiles(pattern string) []string {
 	return files
 }
 
+// loadGraphIndex reads the memory graph index.json and returns it as a JSON object.
+func loadGraphIndex(dir string) any {
+	data, err := os.ReadFile(filepath.Join(dir, "index.json"))
+	if err != nil {
+		return nil
+	}
+	var index any
+	if json.Unmarshal(data, &index) != nil {
+		return nil
+	}
+	return index
+}
+
 func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 	db := dashCore.DB
+	if dashCore.Memory != nil && dashCore.Memory.graph != nil {
+		dashCore.Memory.graph.Refresh()
+	}
 
 	// chat_log from DB (last 80 messages, reversed for frontend)
 	chatLog := queryAll(db,
@@ -587,8 +641,19 @@ func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 	// sessions — grouped by session_id
 	sessions := sessionList(db)
 
-	// facts, episodes, calendar — ensure non-nil
-	factsData := queryAll(db, "SELECT id, subject, content, source, created_at FROM facts ORDER BY id DESC")
+	// Semantic facts come from the graph. SQLite facts remain visible only as
+	// migration diagnostics until the separate retirement release.
+	factsData := []map[string]any{}
+	if dashCore.Memory != nil && dashCore.Memory.graph != nil {
+		for _, fact := range dashCore.Memory.graph.Facts() {
+			factsData = append(factsData, map[string]any{
+				"id": fact.ID, "subject": fact.Subject, "content": fact.Body,
+				"source": fact.Source, "created_at": fact.At.Format(time.RFC3339),
+				"feedback": fact.Feedback, "edges": fact.Edges,
+			})
+		}
+	}
+	legacyFactsData := queryAll(db, "SELECT id, subject, content, source, created_at FROM facts ORDER BY id DESC")
 	episodesData := queryAll(db, "SELECT id, happened_at, summary FROM episodes ORDER BY happened_at DESC")
 	calendarData := queryAll(db, "SELECT title, start, \"end\", attendees, created_at FROM calendar_events ORDER BY start")
 	skillsData := skillCatalog(dashCore.Settings.Home)
@@ -614,7 +679,8 @@ func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// counts
-	factsN, _ := countRows(db, "facts")
+	factsN := len(factsData)
+	legacyFactsN, _ := countRows(db, "facts")
 	episodesN, _ := countRows(db, "episodes")
 	calendarN, _ := countRows(db, "calendar_events")
 	chatN, _ := countRows(db, "chat_log")
@@ -657,8 +723,9 @@ func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 		"turns":             traceTurns(dashCore.Settings.Home),
 		"trace_tail":        traceTail(dashCore.Settings.Home),
 		"trace_file":        traceFileName(dashCore.Settings.Home),
-		"tables":            map[string]int{"facts": factsN, "episodes": episodesN, "calendar_events": calendarN, "chat_log": chatN},
+		"tables":            map[string]int{"facts": factsN, "legacy_facts": legacyFactsN, "episodes": episodesN, "calendar_events": calendarN, "chat_log": chatN},
 		"facts":             factsData,
+		"legacy_facts":      legacyFactsData,
 		"episodes":          episodesData,
 		"calendar":          calendarData,
 		"outbox":            outboxData,
@@ -677,6 +744,7 @@ func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 		"reports":          []any{},
 		"active_tasks":     activeTasks,
 		"needs_onboarding": needsOnboarding(dashCore.Settings.Home),
+		"graph":            loadGraphIndex(dashCore.Settings.MemoriesDir),
 	}
 	json.NewEncoder(w).Encode(resp)
 }

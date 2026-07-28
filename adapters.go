@@ -122,6 +122,11 @@ type embeddedDoc struct {
 	Embedding []float32 `json:"embedding,omitempty"`
 }
 
+type graphCandidate struct {
+	ID    string
+	Score float64
+}
+
 type scoredDoc struct {
 	doc   embeddedDoc
 	score float64
@@ -209,6 +214,92 @@ func (es *EmbeddingStore) Remove(source, content string) {
 	}
 	es.docs = filtered
 	es.saveCache()
+}
+
+// IndexFact gives a graph claim a stable embedding identity independent of
+// wording changes. The content remains derived from the current claim.
+func (es *EmbeddingStore) IndexFact(id string, fact Fact) {
+	source := "fact:" + id
+	es.RemoveSource(source)
+	es.Index(source, fact.Subject+": "+fact.Body)
+}
+
+func (es *EmbeddingStore) RemoveFact(id string) {
+	es.RemoveSource("fact:" + id)
+}
+
+func (es *EmbeddingStore) RemoveSource(source string) {
+	filtered := es.docs[:0]
+	for _, doc := range es.docs {
+		if doc.Source != source {
+			filtered = append(filtered, doc)
+		}
+	}
+	es.docs = filtered
+	es.saveCache()
+}
+
+// RekeyFacts upgrades pre-cutover fact embeddings to stable graph identities
+// without making new API calls. Content remains the matching key.
+func (es *EmbeddingStore) RekeyFacts(facts []Fact) int {
+	byContent := make(map[string][]string)
+	for _, fact := range facts {
+		byContent[fact.Subject+": "+fact.Body] = append(byContent[fact.Subject+": "+fact.Body], fact.ID)
+	}
+	used := make(map[string]bool)
+	changed := 0
+	for i := range es.docs {
+		if es.docs[i].Source != "fact" {
+			continue
+		}
+		ids := byContent[es.docs[i].Content]
+		for _, id := range ids {
+			if !used[id] {
+				es.docs[i].Source = "fact:" + id
+				used[id] = true
+				changed++
+				break
+			}
+		}
+	}
+	if changed > 0 {
+		es.saveCache()
+	}
+	return changed
+}
+
+func (es *EmbeddingStore) GraphCandidates(facts []Fact, limit int) map[string][]graphCandidate {
+	if limit <= 0 {
+		limit = 6
+	}
+	vectors := make(map[string]embeddedDoc)
+	for _, doc := range es.docs {
+		if strings.HasPrefix(doc.Source, "fact:") && len(doc.Embedding) > 0 {
+			vectors[strings.TrimPrefix(doc.Source, "fact:")] = doc
+		}
+	}
+	out := make(map[string][]graphCandidate)
+	for _, fact := range facts {
+		self, ok := vectors[fact.ID]
+		if !ok {
+			continue
+		}
+		var candidates []graphCandidate
+		for _, other := range facts {
+			if other.ID == fact.ID {
+				continue
+			}
+			if doc, ok := vectors[other.ID]; ok {
+				candidates = append(candidates, graphCandidate{ID: other.ID, Score: cosineSimilarity(self.Embedding, doc.Embedding)})
+			}
+		}
+		sort.Slice(candidates, func(i, j int) bool { return candidates[i].Score > candidates[j].Score })
+		if len(candidates) > limit {
+			candidates = candidates[:limit]
+		}
+		out[fact.ID] = candidates
+	}
+	return out
 }
 
 func (es *EmbeddingStore) SearchScored(query string, topK int) []scoredDoc {

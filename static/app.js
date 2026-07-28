@@ -629,7 +629,7 @@ function memOverview(d){
       <div class="memory-health"><span class="runtime-kicker"><i></i> MEMORY STATUS</span><strong>${facts+episodes+skills+playbooks} records</strong><span>${d.chat_pending||0} messages queued</span><small>SQLite · FTS5 · human-readable mirror</small></div></section>
     <section class="memory-pillar-grid">${pillars}</section>
     <section class="memory-retrieval"><div class="overview-section-head"><div><span class="section-kicker">RETRIEVAL</span><h2>Memory enters only when needed</h2></div><span class="section-note">the gate protects latency and relevance</span></div>${gateSplit(s)}</section>
-    <section class="memory-source"><div><span class="section-kicker">ONE SOURCE · TWO VIEWS</span><h3>Curated here. Auditable in SQLite.</h3><p>Memory presents the useful mental model; Database exposes the exact same facts, episodes, and FTS5 indexes at row level.</p></div>
+    <section class="memory-source"><div><span class="section-kicker">GRAPH SOURCE · SQLITE DIAGNOSTIC</span><h3>Curated in Markdown. Audited in SQLite.</h3><p>Graph claims are authoritative semantic memory. SQLite remains available for migration parity and operational history.</p></div>
       <a href="#database">Open database →</a></section>
     <div class="memory-files"><span>FILES</span>${reveal("state.db","state.db")}${reveal("MEMORY.md","MEMORY.md")}${reveal("SOUL.md","SOUL.md")}${reveal("skills","skills/")}${reveal("playbooks","playbooks/")}</div>`;
 }
@@ -637,10 +637,10 @@ function memSemantic(d){
   const facts = d.facts || [];
   let h = `<section class="memory-tab-head"><div><span class="section-kicker">SEMANTIC MEMORY</span><h2>Durable facts</h2><p>The smallest, most reusable knowledge store. Corrections and deletions are active on the next turn.</p></div><strong>${facts.length}</strong></section>`;
   if (!facts.length) return h + `<div class="memory-empty"><span>✦</span><strong>No facts stored yet</strong><p>Mino will place durable knowledge here when memory tools or consolidation save it.</p></div>`;
-  h += `<div class="memory-records">${facts.map(f => `<div class="memory-record" id="fact-${f.id}">
+  h += `<div class="memory-records">${facts.map(f => { const id=JSON.stringify(String(f.id)); return `<div class="memory-record" id="fact-${esc(String(f.id))}">
       <div class="record-subject"><span>${esc(f.subject)}</span><small>${esc(f.source||"unknown source")}</small></div>
       <div class="fc">${esc(f.content)}</div><div class="record-date">${esc((f.created_at||"").slice(0,10)||"—")}</div>
-      <div class="record-actions"><a class="reveal" onclick="editFact(${f.id})">edit</a><a class="reveal del" onclick="delMem('delete_fact',${f.id})">delete</a></div></div>`).join("")}</div>`;
+      <div class="record-actions"><a class="reveal" onclick="editFact(${id})">edit</a><a class="reveal del" onclick="delMem('delete_fact',${id})">delete</a></div></div>`; }).join("")}</div>`;
   return h;
 }
 function memEpisodic(d){
@@ -958,6 +958,20 @@ const VIEWS = {
     }, 50);
     return h;
   },
+
+  graph(d){
+    const raw = d.graph;
+    if (!raw || !raw.facts) return `<section class="graph-hero"><div><span class="section-kicker">KNOWLEDGE GRAPH</span><h2>Memory Graph</h2><p>No graph data yet. Memories are built during conversations.</p></div></section>`;
+    setTimeout(() => initGraph(raw), 50);
+    return `<section class="graph-hero"><div><span class="section-kicker">KNOWLEDGE GRAPH</span><h2>Memory Graph</h2><p>${Object.keys(raw.facts).length} facts · ${countEdges(raw.facts)} relationships</p></div>
+      <div class="graph-controls">
+        <input id="graph-search" placeholder="Search facts..." oninput="filterGraph()">
+        <label class="graph-toggle"><input type="checkbox" checked onchange="filterGraph()" data-type="semantic"> Semantic</label>
+        <label class="graph-toggle"><input type="checkbox" checked onchange="filterGraph()" data-type="episodic"> Episodic</label>
+      </div></section>
+      <div class="graph-viewport"><canvas id="graph-canvas"></canvas></div>
+      <aside id="graph-detail" class="graph-detail"></aside>`;
+  },
 };
 
 // ---- Live Runtime Spine animation: illuminate only the active trace stage,
@@ -1011,6 +1025,7 @@ let activeView = null, activeSub = null;
 const TITLES = {chat:"Chat & watch", ops:"LLM Ops",
                 database:"Database — everything Mino stores (state.db)", activetasks:"Active Schedules — playbook runs",
                 files:"Files — VPS artifacts and outputs",
+                graph:"Memory Graph — interactive visualization",
                 onboarding:"Welcome — set up your Mino"};
 function render(){
   if (!D) return;
@@ -1033,6 +1048,8 @@ function render(){
     if (activeView !== "overview" || !animating){ document.getElementById("view").innerHTML = VIEWS.overview(D); }
   } else if ((view === "memory" || view === "settings" || view === "database" || view === "onboarding") && editing && !subChanged){
     // don't wipe an in-progress edit on the 5s refresh — but DO switch sub-tabs
+  } else if (view === "graph" && activeView === "graph" && !subChanged) {
+    // don't rebuild graph on 5s refresh — force sim keeps running
   } else {
     editing = false;
     document.getElementById("view").innerHTML = VIEWS[view](D, sub);
@@ -1175,6 +1192,404 @@ function renderFileTree(tree, parent){
   return tree.map(n => item(n, 0)).join("");
 }
 function formatSize(b){ if (!b) return ""; if (b < 1024) return b + " B"; if (b < 1048576) return (b/1024).toFixed(1) + " KB"; return (b/1048576).toFixed(1) + " MB"; }
+
+// --- Memory Graph: Canvas force-directed graph ---
+
+function countEdges(facts) {
+  let n = 0;
+  for (const id in facts) {
+    const f = facts[id];
+    n += (f.edges || f.Edges || []).length;
+  }
+  return n;
+}
+
+let graphState = null;
+
+function initGraph(raw) {
+  const canvas = document.getElementById("graph-canvas");
+  if (!canvas) return;
+  const viewport = canvas.parentElement;
+  const detail = document.getElementById("graph-detail");
+
+  // Parse nodes from index.json facts map
+  const factMap = raw.facts || {};
+  const nodes = [];
+  const nodeMap = {};
+  for (const id in factMap) {
+    const f = factMap[id];
+    const node = {
+      id: f.id || id,
+      type: f.type || "semantic",
+      subject: f.subject || id,
+      edges: f.edges || f.Edges || [],
+      x: (Math.random() - 0.5) * 200,
+      y: (Math.random() - 0.5) * 200,
+      vx: 0, vy: 0,
+      visible: true,
+    };
+    nodes.push(node);
+    nodeMap[node.id] = node;
+  }
+
+  // Build edge list
+  const edges = [];
+  for (const node of nodes) {
+    for (const e of node.edges) {
+      const target = typeof e === "string" ? e : (e.target || e.Target || "");
+      const rel = typeof e === "string" ? "related_to" : (e.rel || e.Rel || "related_to");
+      if (nodeMap[target]) {
+        edges.push({ source: node.id, target, rel, visible: true });
+      }
+    }
+  }
+
+  // Colors by type
+  const typeColors = { semantic: "#4F8BC9", episodic: "#D4A855" };
+
+  let hoveredNode = null;
+  let selectedNode = null;
+  let dragNode = null;
+  let panX = 0, panY = 0, zoom = 1;
+  let panning = false, panStart = null;
+
+  // Force simulation params
+  const repel = 5000;
+  const springLen = 120;
+  const springK = 0.02;
+  const damp = 0.85;
+  const centerGrav = 0.02;
+
+  function resize() {
+    canvas.width = viewport.clientWidth || 800;
+    canvas.height = viewport.clientHeight || 600;
+  }
+  resize();
+  window.addEventListener("resize", () => { resize(); draw(); });
+
+  const ctx = canvas.getContext("2d");
+
+  function nodeRadius(node) {
+    if (node === selectedNode) return 14;
+    if (node === hoveredNode) return 10;
+    const ec = node.edges.length;
+    return Math.max(3, Math.min(8, 3 + ec * 1.5));
+  }
+
+  function draw() {
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    ctx.save();
+    ctx.translate(w / 2 + panX, h / 2 + panY);
+    ctx.scale(zoom, zoom);
+
+    // Draw edges
+    for (const e of edges) {
+      const src = nodeMap[e.source], tgt = nodeMap[e.target];
+      if (!src || !tgt || !src.visible || !tgt.visible) continue;
+      ctx.beginPath();
+      ctx.moveTo(src.x, src.y);
+      ctx.lineTo(tgt.x, tgt.y);
+      ctx.strokeStyle = "rgba(136,136,136,0.35)";
+      ctx.lineWidth = 0.8 / zoom;
+      ctx.stroke();
+
+      // Edge label at midpoint (when zoomed in enough)
+      if (zoom > 0.5) {
+        const mx = (src.x + tgt.x) / 2, my = (src.y + tgt.y) / 2;
+        const fontSize = Math.max(8, 11 / zoom);
+        ctx.font = `${fontSize}px system-ui, sans-serif`;
+        const tw = ctx.measureText(e.rel).width;
+        const pad = 2 / zoom;
+        ctx.fillStyle = "rgba(0,0,0,0.75)";
+        ctx.fillRect(mx - tw / 2 - pad, my - fontSize / 2 - pad, tw + pad * 2, fontSize + pad * 2);
+        ctx.fillStyle = "#fff";
+        ctx.fillText(e.rel, mx - tw / 2, my + fontSize / 3);
+      }
+    }
+
+    // Draw nodes
+    for (const node of nodes) {
+      if (!node.visible) continue;
+      const r = nodeRadius(node);
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
+      const color = typeColors[node.type] || "#888";
+      ctx.fillStyle = node === selectedNode ? "#fff" : color;
+      ctx.fill();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = (node === selectedNode || node === hoveredNode) ? 2.5 / zoom : 1.2 / zoom;
+      ctx.stroke();
+
+      // Highlight ring for search matches
+      if (node._highlight) {
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, r + 4 / zoom, 0, Math.PI * 2);
+        ctx.strokeStyle = "#FFD700";
+        ctx.lineWidth = 2 / zoom;
+        ctx.stroke();
+      }
+    }
+
+    // Draw subject on hovered/selected node
+    if (zoom > 0.4) {
+      for (const node of [hoveredNode, selectedNode]) {
+        if (!node || !node.visible) continue;
+        const fontSize = Math.max(7, 10 / zoom);
+        ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
+        const label = node.subject.length > 40 ? node.subject.slice(0, 38) + "…" : node.subject;
+        const tw = ctx.measureText(label).width;
+        const r = nodeRadius(node);
+        const pad = 3 / zoom;
+        ctx.fillStyle = "rgba(0,0,0,0.85)";
+        ctx.fillRect(node.x - tw / 2 - pad, node.y + r + 4 / zoom, tw + pad * 2, fontSize + pad * 2);
+        ctx.fillStyle = "#fff";
+        ctx.fillText(label, node.x - tw / 2, node.y + r + fontSize + 2 / zoom);
+      }
+    }
+
+    ctx.restore();
+  }
+
+  function simulate() {
+    const w = canvas.width, h = canvas.height;
+
+    for (const node of nodes) {
+      if (!node.visible || node === dragNode) continue;
+      let fx = 0, fy = 0;
+
+      // Repel all-to-all
+      for (const other of nodes) {
+        if (other === node || !other.visible) continue;
+        let dx = node.x - other.x, dy = node.y - other.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) + 1;
+        const force = repel / (dist * dist);
+        fx += (dx / dist) * force;
+        fy += (dy / dist) * force;
+      }
+
+      // Spring attraction along edges
+      for (const e of edges) {
+        const other = e.source === node.id ? nodeMap[e.target] : (e.target === node.id ? nodeMap[e.source] : null);
+        if (!other || !other.visible) continue;
+        let dx = other.x - node.x, dy = other.y - node.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) + 1;
+        const force = (dist - springLen) * springK;
+        fx += (dx / dist) * force;
+        fy += (dy / dist) * force;
+      }
+
+      // Center gravity — pulls toward world origin (0,0),
+      // which draw() translates to canvas center
+      fx += -node.x * centerGrav;
+      fy += -node.y * centerGrav;
+
+      node.vx = (node.vx + fx) * damp;
+      node.vy = (node.vy + fy) * damp;
+      node.x += node.vx;
+      node.y += node.vy;
+    }
+  }
+
+  function tick() {
+    for (let i = 0; i < 3; i++) simulate(); // run multiple sim steps per frame
+    draw();
+    if (graphState) requestAnimationFrame(tick);
+  }
+
+  // Interaction: screen-to-world helper
+  function screenToWorld(ex, ey) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (ex - rect.left - canvas.width / 2 - panX) / zoom,
+      y: (ey - rect.top - canvas.height / 2 - panY) / zoom,
+    };
+  }
+
+  // Find node at world point
+  function nodeAt(wx, wy) {
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      const n = nodes[i];
+      if (!n.visible) continue;
+      const dx = wx - n.x, dy = wy - n.y;
+      if (dx * dx + dy * dy < (nodeRadius(n) + 5) ** 2) return n;
+    }
+    return null;
+  }
+
+  canvas.onmousedown = (ev) => {
+    const p = screenToWorld(ev.clientX, ev.clientY);
+    const hit = nodeAt(p.x, p.y);
+    if (hit) {
+      dragNode = hit;
+      selectedNode = hit;
+      showDetail(hit);
+    } else {
+      panning = true;
+      panStart = { x: ev.clientX - panX, y: ev.clientY - panY };
+    }
+    draw();
+  };
+
+  canvas.onmousemove = (ev) => {
+    if (dragNode) {
+      const p = screenToWorld(ev.clientX, ev.clientY);
+      dragNode.x = p.x;
+      dragNode.y = p.y;
+      dragNode.vx = 0;
+      dragNode.vy = 0;
+      draw();
+      return;
+    }
+    if (panning && panStart) {
+      panX = ev.clientX - panStart.x;
+      panY = ev.clientY - panStart.y;
+      draw();
+      return;
+    }
+    const p = screenToWorld(ev.clientX, ev.clientY);
+    const prev = hoveredNode;
+    hoveredNode = nodeAt(p.x, p.y);
+    if (hoveredNode !== prev) draw();
+  };
+
+  canvas.onmouseup = () => {
+    dragNode = null;
+    panning = false;
+    panStart = null;
+  };
+
+  canvas.onwheel = (ev) => {
+    ev.preventDefault();
+    const delta = ev.deltaY > 0 ? 0.9 : 1.1;
+    zoom = Math.max(0.1, Math.min(3, zoom * delta));
+    draw();
+  };
+
+  canvas.ondblclick = (ev) => {
+    const p = screenToWorld(ev.clientX, ev.clientY);
+    const hit = nodeAt(p.x, p.y);
+    if (hit && hit.edges.length > 0) {
+      ev.preventDefault();
+      // Expand: traverse one hop, show related nodes
+      const related = new Set();
+      for (const e of hit.edges) {
+        const tid = typeof e === "string" ? e : (e.target || e.Target);
+        if (nodeMap[tid] && !nodeMap[tid].visible) {
+          nodeMap[tid].visible = true;
+          related.add(tid);
+        }
+      }
+      if (related.size > 0) {
+        filterGraph(); // re-sync visibility
+      }
+      draw();
+    }
+  };
+
+  // Detail panel
+  async function showDetail(node) {
+    const edg = node.edges || [];
+    const edgeList = edg.map(e => {
+      const tid = typeof e === "string" ? e : (e.target || e.Target);
+      const rel = typeof e === "string" ? "related_to" : (e.rel || e.Rel);
+      const tgt = nodeMap[tid];
+      const label = tgt ? tgt.subject : tid;
+      return `<div class="graph-edge-row" onclick="document.getElementById('graph-detail').classList.remove('open'); graphState.selectNode('${esc(tid)}')"><span class="edge-rel">${esc(rel)}</span> → ${esc(label)}</div>`;
+    }).join("");
+
+    detail.innerHTML = `
+      <button class="graph-detail-close" onclick="document.getElementById('graph-detail').classList.remove('open'); graphState.selectedNode=null; graphState.draw()">×</button>
+      <div class="graph-detail-type ${esc(node.type)}">${esc(node.type)}</div>
+      <h3 class="graph-detail-subject">${esc(node.subject)}</h3>
+      <div class="graph-detail-body" id="graph-detail-body">Loading…</div>
+      <div class="graph-detail-edges"><strong>${edg.length} relationship${edg.length!==1?"s":""}</strong>${edgeList}</div>
+      <div class="graph-detail-actions">
+        <button onclick="graphState.editFact('${esc(node.id)}')">Edit</button>
+        <span class="graph-detail-id">${esc(node.id)}</span>
+      </div>`;
+    detail.classList.add("open");
+
+    // Lazy-fetch body from .md file
+    try {
+      const r = await fetch(`/memories/${encodeURIComponent(node.id)}.md`);
+      const md = await r.text();
+      const body = parseFrontMatter(md);
+      document.getElementById("graph-detail-body").textContent = body || "(no body)";
+    } catch(e) {
+      document.getElementById("graph-detail-body").textContent = "(could not load body)";
+    }
+  }
+
+  function parseFrontMatter(md) {
+    if (!md.startsWith("---\n")) return md;
+    const end = md.indexOf("\n---", 4);
+    if (end < 0) return md;
+    return md.slice(end + 5).trim();
+  }
+
+  graphState = {
+    nodes, nodeMap, edges, typeColors,
+    selectNode(id) {
+      const n = nodeMap[id];
+      if (n) { selectedNode = n; showDetail(n); draw(); }
+    },
+    editFact(id) {
+      const n = nodeMap[id];
+      if (!n) return;
+      const bodyEl = document.getElementById("graph-detail-body");
+      if (!bodyEl) return;
+      const current = bodyEl.textContent;
+      bodyEl.innerHTML = `<textarea id="graph-edit-ta" style="width:100%;min-height:80px;font:inherit;padding:6px">${esc(current)}</textarea>
+        <button onclick="graphState.saveFact('${esc(id)}')" style="margin-top:4px">Save</button>`;
+    },
+    async saveFact(id) {
+      const ta = document.getElementById("graph-edit-ta");
+      if (!ta) return;
+      await postJSON("/api/memory", { action: "update_fact", id, content: ta.value });
+      document.getElementById("graph-detail-body").textContent = ta.value;
+      refresh();
+    },
+    draw,
+  };
+
+  // Start simulation
+  requestAnimationFrame(tick);
+}
+
+function filterGraph() {
+  if (!graphState) return;
+  const q = (document.getElementById("graph-search")?.value || "").toLowerCase();
+  const sem = document.querySelector(".graph-toggle input[data-type=semantic]")?.checked ?? true;
+  const epi = document.querySelector(".graph-toggle input[data-type=episodic]")?.checked ?? true;
+
+  for (const n of graphState.nodes) {
+    n.visible = true;
+    if (!sem && n.type === "semantic") n.visible = false;
+    if (!epi && n.type === "episodic") n.visible = false;
+    n._highlight = false;
+    if (q && n.subject.toLowerCase().includes(q)) {
+      n.visible = true;
+      n._highlight = true;
+    } else if (q && !n.subject.toLowerCase().includes(q)) {
+      n.visible = false;
+    }
+  }
+  // Always show connected nodes
+  for (const e of graphState.edges) {
+    const src = graphState.nodeMap[e.source], tgt = graphState.nodeMap[e.target];
+    if (src && tgt) {
+      if (src.visible && !tgt.visible && !q) tgt.visible = true;
+      if (tgt.visible && !src.visible && !q) src.visible = true;
+    }
+  }
+  graphState.draw();
+  // Update edge visibility
+  for (const e of graphState.edges) {
+    const src = graphState.nodeMap[e.source], tgt = graphState.nodeMap[e.target];
+    e.visible = src && tgt && src.visible && tgt.visible;
+  }
+}
 
 window.addEventListener("hashchange", render);
 let orbitNarrow = window.innerWidth < 720;

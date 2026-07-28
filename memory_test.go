@@ -82,6 +82,59 @@ func TestDashboardDataIncludesSoul(t *testing.T) {
 	}
 }
 
+func TestConsolidationEdgesRequireCandidatesConfidenceAndSpecificRelations(t *testing.T) {
+	m := &Memory{}
+	edges := m.validInferredEdges([]Edge{
+		{Target: "keep", Rel: "depends_on", Confidence: 0.9},
+		{Target: "weak", Rel: "depends_on", Confidence: 0.84},
+		{Target: "generic", Rel: "related_to", Confidence: 0.99},
+		{Target: "missing", Rel: "requires", Confidence: 0.99},
+		{Target: "keep", Rel: "depends_on", Confidence: 0.95},
+		{Target: "conflict", Rel: "depends_on", Confidence: 0.9},
+		{Target: "conflict", Rel: "supersedes", Confidence: 0.9},
+	}, map[string]bool{"keep": true, "conflict": true})
+	if len(edges) != 1 || edges[0].Target != "keep" || edges[0].Kind != "inferred" || edges[0].Source != "consolidation" {
+		t.Fatalf("validated edges = %+v", edges)
+	}
+}
+
+func TestConsolidationResponseRejectsMalformedOutput(t *testing.T) {
+	if _, err := parseConsolidationResponse("not json"); err == nil {
+		t.Fatal("malformed response was accepted")
+	}
+	got, err := parseConsolidationResponse(`{"facts":[{"id":"claim","subject":"A claim","edges":[]}],"episode":"An episode"}`)
+	if err != nil || len(got.Facts) != 1 || got.Episode != "An episode" {
+		t.Fatalf("parsed response = %+v, err=%v", got, err)
+	}
+}
+
+func TestConsolidationUsesFakeProviderResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"facts\":[{\"id\":\"fake_claim\",\"subject\":\"A fake-provider claim\",\"content\":\"Tested\",\"edges\":[]}],\"episode\":\"A fake-provider episode\"}"}}]}`)
+	}))
+	defer server.Close()
+	home := t.TempDir()
+	db := Connect(home)
+	defer db.Close()
+	if _, err := db.Exec("INSERT INTO chat_log (role, content, session_id) VALUES ('user', 'remember this', 'fake-session'), ('assistant', 'okay', 'fake-session')"); err != nil {
+		t.Fatal(err)
+	}
+	pm := &ProviderManager{
+		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
+		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
+		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
+		sleep: func(time.Duration) {}, now: time.Now,
+	}
+	mem := &Memory{db: db, client: pm, cfg: &Settings{Home: home, MemoriesDir: filepath.Join(home, "memories"), ConsolidateEvery: 1}, graph: NewGraphMemory(filepath.Join(home, "memories"), nil)}
+	if got := mem.ConsolidateDue(); got != 1 {
+		t.Fatalf("consolidated facts = %d", got)
+	}
+	if fact, ok := mem.graph.FindFact("fake_claim"); !ok || fact.Body != "Tested" {
+		t.Fatalf("fake-provider fact = %+v, found=%v", fact, ok)
+	}
+}
+
 func TestToolOutputStatus(t *testing.T) {
 	tests := []struct {
 		name, output, want string

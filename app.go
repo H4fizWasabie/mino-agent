@@ -48,6 +48,7 @@ func NewCore() *Core {
 	}
 
 	mem := NewMemory(db, client, s)
+	mem.graph.StartReconciler(5 * time.Second)
 	mem.CleanupArtifacts()
 
 	// embedding store (OpenRouter, Phase 3)

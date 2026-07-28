@@ -5,8 +5,10 @@ package main
 // remember() traverses the graph; FTS5 provides the entry point.
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,17 +22,23 @@ import (
 // --- Fact ---
 
 type Fact struct {
-	ID      string    `yaml:"id"`
-	Type    string    `yaml:"type"` // "semantic" or "episodic"
-	Subject string    `yaml:"subject"`
-	At      time.Time `yaml:"at"`
-	Edges   []Edge    `yaml:"edge"`
-	Body    string    `yaml:"-"` // everything after front matter
+	ID       string    `yaml:"id"`
+	Type     string    `yaml:"type"` // "semantic" or "episodic"
+	Subject  string    `yaml:"subject"`
+	At       time.Time `yaml:"at"`
+	Why      string    `yaml:"why,omitempty"`
+	Source   string    `yaml:"source,omitempty"`
+	Feedback int       `yaml:"feedback,omitempty"`
+	Edges    []Edge    `yaml:"edge"`
+	Body     string    `yaml:"-"` // everything after front matter
 }
 
 type Edge struct {
-	Target string `yaml:"target"`
-	Rel    string `yaml:"rel"`
+	Target     string  `yaml:"target" json:"target"`
+	Rel        string  `yaml:"rel" json:"rel"`
+	Kind       string  `yaml:"kind,omitempty" json:"kind,omitempty"`
+	Confidence float64 `yaml:"confidence,omitempty" json:"confidence,omitempty"`
+	Source     string  `yaml:"source,omitempty" json:"source,omitempty"`
 }
 
 // --- Graph memory ---
@@ -39,6 +47,7 @@ type GraphMemory struct {
 	dir      string
 	mu       sync.RWMutex
 	facts    map[string]*Fact // id → Fact
+	files    map[string]fileStamp
 	cfg      *Settings
 	embedder interface {
 		SearchScored(query string, topK int) []scoredDoc
@@ -49,16 +58,26 @@ type GraphMemory struct {
 // --- Index cache types ---
 
 type indexEntry struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Subject  string `json:"subject"`
+	At       string `json:"at"`
+	Why      string `json:"why,omitempty"`
+	Source   string `json:"source,omitempty"`
+	Feedback int    `json:"feedback,omitempty"`
+	Edges    []Edge `json:"edges,omitempty"`
+}
+
+type fileStamp struct {
 	ID      string `json:"id"`
-	Type    string `json:"type"`
-	Subject string `json:"subject"`
-	At      string `json:"at"`
-	Edges   []Edge `json:"edges,omitempty"`
+	Size    int64  `json:"size"`
+	ModTime int64  `json:"mod_time"`
 }
 
 type index struct {
 	Version int                   `json:"version"`
 	Facts   map[string]indexEntry `json:"facts"`
+	Files   map[string]fileStamp  `json:"files"`
 }
 
 func (gm *GraphMemory) indexPath() string {
@@ -75,7 +94,7 @@ func (gm *GraphMemory) SetEmbedder(e interface {
 
 func NewGraphMemory(dir string, cfg *Settings) *GraphMemory {
 	os.MkdirAll(dir, 0755)
-	gm := &GraphMemory{dir: dir, cfg: cfg, facts: make(map[string]*Fact)}
+	gm := &GraphMemory{dir: dir, cfg: cfg, facts: make(map[string]*Fact), files: make(map[string]fileStamp)}
 	if gm.loadIndex() {
 		return gm
 	}
@@ -91,21 +110,69 @@ func (gm *GraphMemory) loadIndex() bool {
 		return false
 	}
 	var idx index
-	if err := json.Unmarshal(data, &idx); err != nil || idx.Version != 1 {
+	if err := json.Unmarshal(data, &idx); err != nil || idx.Version != 2 || idx.Files == nil {
 		return false
 	}
+	entries, err := os.ReadDir(gm.dir)
+	if err != nil {
+		return false
+	}
+	seen := make(map[string]bool)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		seen[entry.Name()] = true
+		stamp, ok := idx.Files[entry.Name()]
+		if !ok {
+			return false
+		}
+		info, err := entry.Info()
+		if err != nil || info.Size() != stamp.Size || info.ModTime().UnixNano() != stamp.ModTime {
+			return false
+		}
+	}
+	if len(seen) != len(idx.Files) {
+		return false
+	}
+	if len(idx.Facts) != len(idx.Files) {
+		return false
+	}
+	for _, stamp := range idx.Files {
+		if _, ok := idx.Facts[stamp.ID]; !ok {
+			return false
+		}
+	}
+	cleaned := false
 	for id, entry := range idx.Facts {
 		at, _ := time.Parse(time.RFC3339, entry.At)
 		if at.IsZero() {
 			at = time.Now()
 		}
-		gm.facts[id] = &Fact{
-			ID:      entry.ID,
-			Type:    entry.Type,
-			Subject: entry.Subject,
-			At:      at,
-			Edges:   entry.Edges,
+		edges := cleanStoredEdges(entry.Edges)
+		if !sameEdges(edges, entry.Edges) {
+			cleaned = true
 		}
+		gm.facts[id] = &Fact{
+			ID:       entry.ID,
+			Type:     entry.Type,
+			Subject:  entry.Subject,
+			At:       at,
+			Why:      entry.Why,
+			Source:   entry.Source,
+			Feedback: entry.Feedback,
+			Edges:    edges,
+		}
+	}
+	gm.files = idx.Files
+	if cleaned {
+		for _, fact := range gm.facts {
+			if err := gm.writeFile(*fact); err != nil {
+				return false
+			}
+			gm.files[fact.ID+".md"] = gm.fileStamp(fact.ID)
+		}
+		gm.saveIndex()
 	}
 	return len(gm.facts) > 0
 }
@@ -115,18 +182,27 @@ func (gm *GraphMemory) saveIndex() {
 	entries := make(map[string]indexEntry, len(gm.facts))
 	for id, f := range gm.facts {
 		entries[id] = indexEntry{
-			ID:      f.ID,
-			Type:    f.Type,
-			Subject: f.Subject,
-			At:      f.At.Format(time.RFC3339),
-			Edges:   f.Edges,
+			ID:       f.ID,
+			Type:     f.Type,
+			Subject:  f.Subject,
+			At:       f.At.Format(time.RFC3339),
+			Why:      f.Why,
+			Source:   f.Source,
+			Feedback: f.Feedback,
+			Edges:    f.Edges,
 		}
 	}
-	data, err := json.MarshalIndent(index{Version: 1, Facts: entries}, "", "  ")
+	data, err := json.MarshalIndent(index{Version: 2, Facts: entries, Files: gm.files}, "", "  ")
 	if err != nil {
 		return
 	}
-	os.WriteFile(gm.indexPath(), data, 0644)
+	tmp := gm.indexPath() + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return
+	}
+	if err := os.Rename(tmp, gm.indexPath()); err != nil {
+		os.Remove(tmp)
+	}
 }
 
 // loadAll scans memories/ and parses every .md file into memory,
@@ -146,9 +222,91 @@ func (gm *GraphMemory) loadAll() {
 		if err != nil || fact == nil {
 			continue
 		}
+		fact.Edges = cleanStoredEdges(fact.Edges)
 		gm.facts[fact.ID] = fact
+		gm.files[e.Name()] = gm.fileStamp(fact.ID)
 	}
-	gm.discoverEdges()
+}
+
+// Refresh reconciles changed Markdown files into the in-memory graph and index.
+// It is deterministic and never calls an LLM.
+func (gm *GraphMemory) Refresh() error {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+	return gm.refreshLocked()
+}
+
+func (gm *GraphMemory) refreshLocked() error {
+	entries, err := os.ReadDir(gm.dir)
+	if err != nil {
+		return err
+	}
+	current := make(map[string]fileStamp)
+	changed := false
+	var firstErr error
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		stamp, tracked := gm.files[entry.Name()]
+		if tracked && stamp.Size == info.Size() && stamp.ModTime == info.ModTime().UnixNano() {
+			current[entry.Name()] = stamp
+			continue
+		}
+		path := filepath.Join(gm.dir, entry.Name())
+		fact, err := gm.readFile(path)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("parse %s: %w", entry.Name(), err)
+			}
+			if tracked {
+				current[entry.Name()] = stamp
+			}
+			continue
+		}
+		if tracked && stamp.ID != fact.ID {
+			delete(gm.facts, stamp.ID)
+		}
+		fact.Edges = cleanStoredEdges(fact.Edges)
+		gm.facts[fact.ID] = fact
+		current[entry.Name()] = fileStamp{ID: fact.ID, Size: info.Size(), ModTime: info.ModTime().UnixNano()}
+		changed = true
+	}
+	for name, stamp := range gm.files {
+		if _, ok := current[name]; !ok {
+			delete(gm.facts, stamp.ID)
+			changed = true
+		}
+	}
+	gm.files = current
+	if changed {
+		gm.saveIndex()
+	}
+	if firstErr != nil {
+		slog.Warn("graph memory reconciliation", "error", firstErr)
+	}
+	return firstErr
+}
+
+// StartReconciler keeps external Markdown edits visible while Mino runs.
+func (gm *GraphMemory) StartReconciler(interval time.Duration) {
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for range ticker.C {
+			gm.Refresh()
+		}
+	}()
 }
 
 // readFile parses a single .md file into a Fact.
@@ -187,6 +345,9 @@ func (gm *GraphMemory) parseFrontMatter(raw []byte) (*Fact, error) {
 func (gm *GraphMemory) RecordFact(fact Fact) error {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
+	if fact.At.IsZero() {
+		fact.At = time.Now().UTC()
+	}
 
 	if existing, ok := gm.facts[fact.ID]; ok {
 		// Merge: keep existing edges, add new ones
@@ -204,9 +365,10 @@ func (gm *GraphMemory) RecordFact(fact Fact) error {
 		if fact.Subject != "" && fact.Subject != existing.Subject {
 			existing.Subject = fact.Subject
 		}
-		if fact.Body != "" {
-			existing.Body = fact.Body
-		}
+		existing.Body = fact.Body
+		existing.Why = fact.Why
+		existing.Source = fact.Source
+		existing.Feedback = fact.Feedback
 		existing.At = fact.At
 		fact = *existing
 	}
@@ -217,13 +379,160 @@ func (gm *GraphMemory) RecordFact(fact Fact) error {
 	if err := gm.writeFile(fact); err != nil {
 		return err
 	}
-	// Auto-discover edges for new facts with none declared
-	if len(fact.Edges) == 0 {
-		gm.discoverEdgesFor(&fact)
-	}
 	gm.facts[fact.ID] = &fact
+	gm.files[fact.ID+".md"] = gm.fileStamp(fact.ID)
 	gm.saveIndex()
 	return nil
+}
+
+// ReplaceFact overwrites a claim, including its edges, without touching SQLite.
+func (gm *GraphMemory) ReplaceFact(fact Fact) error {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+	if fact.At.IsZero() {
+		fact.At = time.Now().UTC()
+	}
+	fact.Edges = gm.validEdges(fact.Edges)
+	if err := gm.writeFile(fact); err != nil {
+		return err
+	}
+	gm.facts[fact.ID] = &fact
+	gm.files[fact.ID+".md"] = gm.fileStamp(fact.ID)
+	gm.saveIndex()
+	return nil
+}
+
+// UpdateBody changes only the body of an existing graph fact.
+func (gm *GraphMemory) UpdateBody(id, body string) error {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+	fact, ok := gm.facts[id]
+	if !ok {
+		return fmt.Errorf("memory fact not found: %s", id)
+	}
+	fact.Body = body
+	if err := gm.writeFile(*fact); err != nil {
+		return err
+	}
+	gm.files[id+".md"] = gm.fileStamp(id)
+	gm.saveIndex()
+	return nil
+}
+
+// FindFact resolves a graph claim by stable ID or exact subject.
+func (gm *GraphMemory) FindFact(query string) (*Fact, bool) {
+	gm.Refresh()
+	gm.mu.RLock()
+	defer gm.mu.RUnlock()
+	if fact, ok := gm.facts[query]; ok {
+		copy := *fact
+		return &copy, true
+	}
+	for _, fact := range gm.facts {
+		if strings.EqualFold(fact.Subject, strings.TrimSpace(query)) {
+			copy := *fact
+			return &copy, true
+		}
+	}
+	return nil, false
+}
+
+// DeleteFact removes a claim and all inbound references deterministically.
+func (gm *GraphMemory) DeleteFact(id string) (*Fact, error) {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+	fact, ok := gm.facts[id]
+	if !ok {
+		return nil, fmt.Errorf("memory fact not found: %s", id)
+	}
+	copy := *fact
+	for _, other := range gm.facts {
+		if other.ID == id {
+			continue
+		}
+		filtered := other.Edges[:0]
+		for _, edge := range other.Edges {
+			if edge.Target != id {
+				filtered = append(filtered, edge)
+			}
+		}
+		other.Edges = filtered
+		if err := gm.writeFile(*other); err != nil {
+			return nil, err
+		}
+		gm.files[other.ID+".md"] = gm.fileStamp(other.ID)
+	}
+	if err := os.Remove(filepath.Join(gm.dir, id+".md")); err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	delete(gm.facts, id)
+	delete(gm.files, id+".md")
+	gm.saveIndex()
+	return &copy, nil
+}
+
+// Feedback records confirmation or rejection on the graph claim itself.
+func (gm *GraphMemory) Feedback(id string, delta int) (*Fact, error) {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+	fact, ok := gm.facts[id]
+	if !ok {
+		return nil, fmt.Errorf("memory fact not found: %s", id)
+	}
+	fact.Feedback += delta
+	if fact.Feedback > 5 {
+		fact.Feedback = 5
+	}
+	if fact.Feedback < -5 {
+		fact.Feedback = -5
+	}
+	if err := gm.writeFile(*fact); err != nil {
+		return nil, err
+	}
+	gm.files[id+".md"] = gm.fileStamp(id)
+	gm.saveIndex()
+	copy := *fact
+	return &copy, nil
+}
+
+// RemoveMutualInferredEdges drops impossible reciprocal claims such as
+// A supersedes B and B supersedes A while preserving explicit edges.
+func (gm *GraphMemory) RemoveMutualInferredEdges() int {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+	removed := 0
+	for _, fact := range gm.facts {
+		filtered := fact.Edges[:0]
+		for _, edge := range fact.Edges {
+			if edge.Kind != "inferred" || edge.Rel != "supersedes" {
+				filtered = append(filtered, edge)
+				continue
+			}
+			target := gm.facts[edge.Target]
+			mutual := false
+			if target != nil {
+				for _, reverse := range target.Edges {
+					if reverse.Kind == "inferred" && reverse.Rel == edge.Rel && reverse.Target == fact.ID {
+						mutual = true
+						break
+					}
+				}
+			}
+			if mutual {
+				removed++
+				continue
+			}
+			filtered = append(filtered, edge)
+		}
+		fact.Edges = filtered
+		if err := gm.writeFile(*fact); err == nil {
+			gm.files[fact.ID+".md"] = gm.fileStamp(fact.ID)
+		}
+	}
+	if removed > 0 {
+		gm.saveIndex()
+	}
+	return removed
 }
 
 // validEdges filters edges to only those whose targets exist in gm.facts.
@@ -240,29 +549,91 @@ func (gm *GraphMemory) validEdges(edges []Edge) []Edge {
 	return filtered
 }
 
+func cleanStoredEdges(edges []Edge) []Edge {
+	cleaned := make([]Edge, 0, len(edges))
+	for _, edge := range edges {
+		if edge.Target == "" || edge.Rel == "" {
+			continue
+		}
+		if edge.Rel == "related_to" && edge.Kind == "" {
+			continue
+		}
+		if edge.Kind == "inferred" && edge.Confidence < 0.85 {
+			continue
+		}
+		if edge.Kind == "" {
+			edge.Kind = "explicit"
+			if edge.Confidence == 0 {
+				edge.Confidence = 1
+			}
+			if edge.Source == "" {
+				edge.Source = "legacy"
+			}
+		}
+		cleaned = append(cleaned, edge)
+	}
+	return cleaned
+}
+
+func sameEdges(a, b []Edge) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // writeFile serializes a Fact to a .md file.
 func (gm *GraphMemory) writeFile(fact Fact) error {
 	path := filepath.Join(gm.dir, fact.ID+".md")
+	return writeMarkdownFact(path, fact)
+}
+
+func writeMarkdownFact(path string, fact Fact) error {
+	front := struct {
+		ID       string    `yaml:"id"`
+		Type     string    `yaml:"type"`
+		Subject  string    `yaml:"subject"`
+		At       time.Time `yaml:"at"`
+		Why      string    `yaml:"why,omitempty"`
+		Source   string    `yaml:"source,omitempty"`
+		Feedback int       `yaml:"feedback,omitempty"`
+		Edges    []Edge    `yaml:"edge,omitempty"`
+	}{fact.ID, fact.Type, fact.Subject, fact.At, fact.Why, fact.Source, fact.Feedback, fact.Edges}
+	fm, err := yaml.Marshal(front)
+	if err != nil {
+		return err
+	}
 	var b strings.Builder
 	b.WriteString("---\n")
-	b.WriteString(fmt.Sprintf("id: %s\n", fact.ID))
-	b.WriteString(fmt.Sprintf("type: %s\n", fact.Type))
-	b.WriteString(fmt.Sprintf("subject: %s\n", fact.Subject))
-	b.WriteString(fmt.Sprintf("at: %s\n", fact.At.Format(time.RFC3339)))
-	if len(fact.Edges) > 0 {
-		b.WriteString("edge:\n")
-		for _, e := range fact.Edges {
-			b.WriteString(fmt.Sprintf("  - target: %s\n", e.Target))
-			b.WriteString(fmt.Sprintf("    rel: %s\n", e.Rel))
-		}
-	}
+	b.Write(fm)
 	b.WriteString("---\n")
 	if fact.Body != "" {
 		b.WriteString("\n")
 		b.WriteString(fact.Body)
 		b.WriteString("\n")
 	}
-	return os.WriteFile(path, []byte(b.String()), 0644)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(b.String()), 0644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+func (gm *GraphMemory) fileStamp(id string) fileStamp {
+	info, err := os.Stat(filepath.Join(gm.dir, id+".md"))
+	if err != nil {
+		return fileStamp{ID: id}
+	}
+	return fileStamp{ID: id, Size: info.Size(), ModTime: info.ModTime().UnixNano()}
 }
 
 // Remember is the graph-aware recall tool. Returns an indented tree.
@@ -273,6 +644,7 @@ func (gm *GraphMemory) writeFile(fact Fact) error {
 //	  → [depends_on] procura_db_location
 //	    → [located_at] vps_server
 func (gm *GraphMemory) Remember(query string) string {
+	gm.Refresh()
 	gm.mu.RLock()
 	defer gm.mu.RUnlock()
 
@@ -405,6 +777,7 @@ func (gm *GraphMemory) substringMatch(query string) []string {
 
 // RememberPath finds shortest path between two facts. Returns indented path.
 func (gm *GraphMemory) RememberPath(from, to string) string {
+	gm.Refresh()
 	gm.mu.RLock()
 	defer gm.mu.RUnlock()
 
@@ -508,6 +881,25 @@ func (gm *GraphMemory) Stat() int {
 	return len(gm.facts)
 }
 
+// Facts returns a stable snapshot for APIs and dashboards.
+func (gm *GraphMemory) Facts() []Fact {
+	gm.Refresh()
+	gm.mu.RLock()
+	defer gm.mu.RUnlock()
+	facts := make([]Fact, 0, len(gm.facts))
+	for _, fact := range gm.facts {
+		copy := *fact
+		if copy.Body == "" {
+			if loaded, err := gm.readFile(filepath.Join(gm.dir, copy.ID+".md")); err == nil {
+				copy.Body = loaded.Body
+			}
+		}
+		facts = append(facts, copy)
+	}
+	sort.Slice(facts, func(i, j int) bool { return facts[i].ID < facts[j].ID })
+	return facts
+}
+
 // --- Edge discovery (startup pass) ---
 
 // discoverEdges links unconnected facts by word-overlap similarity.
@@ -600,86 +992,166 @@ func (gm *GraphMemory) discoverEdgesFor(fact *Fact) {
 
 // --- Migration from flat DB ---
 
-// MigrateMemories converts existing facts and episodes from the SQLite DB
-// into .md files in the memories directory.
+type legacyManifest struct {
+	Version int                          `json:"version"`
+	Facts   map[string]legacyFactMapping `json:"facts"`
+}
+
+type legacyFactMapping struct {
+	SQLiteID    int64  `json:"sqlite_id"`
+	Archive     string `json:"archive"`
+	CanonicalID string `json:"canonical_id"`
+	Status      string `json:"status"`
+}
+
+type MigrationReport struct {
+	Archived      int
+	Canonicalized int
+	Duplicates    int
+}
+
+// MigrateLegacyFacts preserves every SQLite fact in an inactive archive and
+// maps it to a collision-safe active graph node. SQLite is never modified.
+func MigrateLegacyFacts(db *sql.DB, home, memoriesDir string) (MigrationReport, error) {
+	var report MigrationReport
+	if db == nil {
+		return report, fmt.Errorf("nil database")
+	}
+	archiveDir := filepath.Join(home, "memory-migration", "legacy")
+	manifestPath := filepath.Join(home, "memory-migration", "manifest.json")
+	if err := os.MkdirAll(archiveDir, 0755); err != nil {
+		return report, err
+	}
+	if err := os.MkdirAll(memoriesDir, 0755); err != nil {
+		return report, err
+	}
+	manifest := legacyManifest{Version: 1, Facts: make(map[string]legacyFactMapping)}
+	if data, err := os.ReadFile(manifestPath); err == nil {
+		if json.Unmarshal(data, &manifest) != nil || manifest.Version != 1 || manifest.Facts == nil {
+			manifest = legacyManifest{Version: 1, Facts: make(map[string]legacyFactMapping)}
+		}
+	}
+	gm := NewGraphMemory(memoriesDir, nil)
+	rows, err := db.Query("SELECT id, subject, content, source, created_at FROM facts ORDER BY id")
+	if err != nil {
+		return report, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var subject, content, source, createdAt string
+		if err := rows.Scan(&id, &subject, &content, &source, &createdAt); err != nil {
+			return report, err
+		}
+		archiveName := fmt.Sprintf("fact_%d.md", id)
+		archiveFact := Fact{ID: fmt.Sprintf("legacy_fact_%d", id), Type: "semantic", Subject: subject, At: parseMemoryTime(createdAt), Why: fmt.Sprintf("sqlite:fact:%d", id), Source: source, Body: content}
+		archivePath := filepath.Join(archiveDir, archiveName)
+		if _, err := os.Stat(archivePath); os.IsNotExist(err) {
+			if err := writeMarkdownFact(archivePath, archiveFact); err != nil {
+				return report, err
+			}
+			report.Archived++
+		}
+
+		mapping, mapped := manifest.Facts[fmt.Sprint(id)]
+		if mapped && mapping.CanonicalID != "" && graphHasFact(gm, mapping.CanonicalID) {
+			continue
+		}
+		canonicalID, duplicate := migrationCanonicalID(gm, subject, content, id)
+		if duplicate {
+			manifest.Facts[fmt.Sprint(id)] = legacyFactMapping{SQLiteID: id, Archive: archiveName, CanonicalID: canonicalID, Status: "duplicate"}
+			report.Duplicates++
+			continue
+		}
+		fact := archiveFact
+		fact.ID = canonicalID
+		if err := gm.RecordFact(fact); err != nil {
+			return report, err
+		}
+		manifest.Facts[fmt.Sprint(id)] = legacyFactMapping{SQLiteID: id, Archive: archiveName, CanonicalID: canonicalID, Status: "canonical"}
+		report.Canonicalized++
+	}
+	if err := rows.Err(); err != nil {
+		return report, err
+	}
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return report, err
+	}
+	if err := writeAtomic(manifestPath, data, 0644); err != nil {
+		return report, err
+	}
+	return report, nil
+}
+
+func graphHasFact(gm *GraphMemory, id string) bool {
+	gm.mu.RLock()
+	defer gm.mu.RUnlock()
+	_, ok := gm.facts[id]
+	return ok
+}
+
+func migrationCanonicalID(gm *GraphMemory, subject, body string, sqliteID int64) (string, bool) {
+	base := slugify(subject)
+	if base == "" {
+		base = fmt.Sprintf("legacy_fact_%d", sqliteID)
+	}
+	candidate := base
+	for n := 0; ; n++ {
+		gm.mu.RLock()
+		existing := gm.facts[candidate]
+		gm.mu.RUnlock()
+		if existing == nil {
+			return candidate, false
+		}
+		existingBody := existing.Body
+		if existingBody == "" {
+			if loaded, err := gm.readFile(filepath.Join(gm.dir, candidate+".md")); err == nil {
+				existingBody = loaded.Body
+			}
+		}
+		if existing.Subject == subject && existingBody == body {
+			return candidate, true
+		}
+		candidate = fmt.Sprintf("%s__legacy_%d", base, sqliteID)
+		if n > 0 {
+			candidate = fmt.Sprintf("%s_%d", candidate, n+1)
+		}
+	}
+}
+
+func parseMemoryTime(value string) time.Time {
+	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05", "2006-01-02"} {
+		if at, err := time.Parse(layout, value); err == nil {
+			return at
+		}
+	}
+	return time.Now().UTC()
+}
+
+func writeAtomic(path string, data []byte, mode os.FileMode) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, mode); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// MigrateMemories is the explicit migration command. Episodes remain in
+// SQLite as operational history; only durable facts enter the graph.
 func MigrateMemories(home, memoriesDir string) {
 	db := Connect(home)
 	defer db.Close()
-
-	os.MkdirAll(memoriesDir, 0755)
-	gm := NewGraphMemory(memoriesDir, nil)
-
-	// Migrate facts
-	rows, err := db.Query("SELECT subject, content, created_at FROM facts ORDER BY id")
+	report, err := MigrateLegacyFacts(db, home, memoriesDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading facts: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Memory migration failed: %v\n", err)
 		return
 	}
-	defer rows.Close()
-
-	factCount := 0
-	for rows.Next() {
-		var subject, content, createdAt string
-		if rows.Scan(&subject, &content, &createdAt) != nil {
-			continue
-		}
-		at, _ := time.Parse("2006-01-02 15:04:05", createdAt)
-		if at.IsZero() {
-			at = time.Now()
-		}
-		id := slugify(subject)
-		fact := Fact{
-			ID:      id,
-			Type:    "semantic",
-			Subject: subject,
-			At:      at,
-			Body:    content,
-		}
-		if err := gm.RecordFact(fact); err != nil {
-			fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", id, err)
-			continue
-		}
-		factCount++
-	}
-	fmt.Printf("Migrated %d facts\n", factCount)
-
-	// Migrate episodes
-	epRows, err := db.Query("SELECT happened_at, summary FROM episodes ORDER BY id")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading episodes: %v\n", err)
-		return
-	}
-	defer epRows.Close()
-
-	epCount := 0
-	for epRows.Next() {
-		var happenedAt, summary string
-		if epRows.Scan(&happenedAt, &summary) != nil {
-			continue
-		}
-		at, _ := time.Parse("2006-01-02", happenedAt)
-		if at.IsZero() {
-			at = time.Now()
-		}
-		id := "ep_" + slugify(summary)
-		if len(id) > 60 {
-			id = id[:60]
-		}
-		fact := Fact{
-			ID:      id,
-			Type:    "episodic",
-			Subject: summary,
-			At:      at,
-			Body:    summary,
-		}
-		if err := gm.RecordFact(fact); err != nil {
-			fmt.Fprintf(os.Stderr, "Error writing episode %s: %v\n", id, err)
-			continue
-		}
-		epCount++
-	}
-	fmt.Printf("Migrated %d episodes\n", epCount)
-	fmt.Printf("Total: %d memories in %s/\n", gm.Stat(), memoriesDir)
+	fmt.Printf("Archived %d facts; canonicalized %d; duplicates %d\n", report.Archived, report.Canonicalized, report.Duplicates)
 }
 
 // slugify converts a string to a snake_case identifier.

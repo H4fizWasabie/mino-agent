@@ -27,6 +27,14 @@ func main() {
 			s := LoadSettings()
 			MigrateMemories(s.Home, s.MemoriesDir)
 			return
+		case "rebuild-memory-edges", "--rebuild-memory-edges":
+			s := LoadSettings()
+			RebuildMemoryEdges(s)
+			return
+		case "clean-memory-edges", "--clean-memory-edges":
+			s := LoadSettings()
+			CleanMemoryEdges(s)
+			return
 		case "eval":
 			s := LoadSettings()
 			os.Exit(RunEval(s.Home))
