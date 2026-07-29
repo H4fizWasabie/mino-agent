@@ -17,6 +17,9 @@ go build -trimpath -buildvcs=false -tags "$BUILD_TAGS" -ldflags "-buildid= -X ma
 echo "--- Building minowrap ---"
 (cd extensions/minowrap && go build -o minowrap .)
 
+echo "--- Building threads-extension ---"
+(cd extensions/threads && go build -o threads-extension .)
+
 # 1. Create mino user if not exists
 echo "--- Creating mino user ---"
 ssh "$VPS_USER@$VPS" '
@@ -46,6 +49,8 @@ REMOTE_SHA=$(ssh "$VPS_USER@$VPS" "sha256sum /usr/local/bin/mino | awk '{print \
 [ "$LOCAL_SHA" = "$REMOTE_SHA" ] || { echo "Mino binary hash mismatch: local=$LOCAL_SHA remote=$REMOTE_SHA" >&2; exit 1; }
 scp extensions/minowrap/minowrap "$VPS_USER@$VPS:/usr/local/bin/minowrap.new"
 ssh "$VPS_USER@$VPS" 'chmod +x /usr/local/bin/minowrap.new && mv /usr/local/bin/minowrap.new /usr/local/bin/minowrap'
+scp extensions/threads/threads-extension "$VPS_USER@$VPS:/usr/local/bin/threads-extension.new"
+ssh "$VPS_USER@$VPS" 'chmod +x /usr/local/bin/threads-extension.new && mv /usr/local/bin/threads-extension.new /usr/local/bin/threads-extension'
 
 # 3. Push extensions
 echo "--- Pushing extensions ---"
@@ -89,7 +94,8 @@ ssh "$VPS_USER@$VPS" '
 cat > /home/mino/.mino/extensions.json << EOF
 [
   {"name": "fileingest", "url": "http://127.0.0.1:9103"},
-  {"name": "minowrap", "url": "http://127.0.0.1:9876"}
+  {"name": "minowrap", "url": "http://127.0.0.1:9876"},
+  {"name": "threads", "url": "http://127.0.0.1:9200"}
 ]
 EOF
 chown -R mino:mino /home/mino
@@ -124,11 +130,12 @@ ssh "$VPS_USER@$VPS" '
         find "$backup_dir" -type f -name 'state.db-*' -mtime +30 -delete
     fi
     systemctl daemon-reload
-    systemctl enable mino mino-fileingest minowrap
+    systemctl enable mino mino-fileingest minowrap threads
     systemctl disable --now mino-daily-malaysia-news.timer || true
     systemctl disable --now mino-playbook-dispatcher.timer 2>/dev/null || true  # replaced by in-process scheduler
     systemctl restart minowrap
     systemctl restart mino-fileingest
+    systemctl restart threads
     systemctl restart mino
 '
 
