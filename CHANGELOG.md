@@ -10,6 +10,7 @@
 
 ### Changed
 - Markdown graph claims are now authoritative for semantic memory, dashboard views, correction, forgetting, confirmation, and search; SQLite facts remain read-only diagnostics
+- Memory graph keeps the full knowledge map visible while queries highlight matching neighborhoods, relationship labels appear on demand, and nodes use a richer deterministic color palette.
 - Graph edges carry provenance and confidence; legacy generic overlap edges are rejected
 - History split from chat_log: LLM sees clean reply, consolidation sees full tool trail
 - `remember` tool description tuned: single call sufficient, reduces redundant queries ~60%

@@ -966,9 +966,11 @@ const VIEWS = {
     setTimeout(() => initGraph(raw), 50);
     return `<section class="graph-hero"><div><span class="section-kicker">KNOWLEDGE GRAPH</span><h2>Memory Graph</h2><p>${Object.keys(raw.facts).length} facts · ${countEdges(raw.facts)} relationships</p></div>
       <div class="graph-controls">
-        <input id="graph-search" placeholder="Search facts..." oninput="filterGraph()">
+        <div class="graph-query"><input id="graph-search" type="search" placeholder="Query Mino's memories..." oninput="filterGraph()"><button onclick="clearGraphQuery()" title="Clear query">Clear</button></div>
         <label class="graph-toggle"><input type="checkbox" checked onchange="filterGraph()" data-type="semantic"> Semantic</label>
         <label class="graph-toggle"><input type="checkbox" checked onchange="filterGraph()" data-type="episodic"> Episodic</label>
+        <span id="graph-query-status" class="graph-query-status">All memories visible</span>
+        <span class="graph-hint"><i style="background:#4F8BC9"></i><i style="background:#7C6FD0"></i><i style="background:#39A98A"></i> hover an edge · select a memory</span>
       </div></section>
       <div class="graph-viewport"><canvas id="graph-canvas"></canvas></div>
       <aside id="graph-detail" class="graph-detail"></aside>`;
@@ -1207,6 +1209,29 @@ function countEdges(facts) {
 
 let graphState = null;
 
+const graphNodePalette = ["#4F8BC9", "#7C6FD0", "#39A98A", "#D97757", "#C05B89", "#2F9FB3", "#8A9A4A"];
+const graphEpisodePalette = ["#D4A855", "#E18A5B", "#C97A9B"];
+
+function stableGraphColor(id, type) {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = ((hash << 5) - hash + id.charCodeAt(i)) | 0;
+  const palette = type === "episodic" ? graphEpisodePalette : graphNodePalette;
+  return palette[Math.abs(hash) % palette.length];
+}
+
+function graphRelationColor(rel) {
+  const name = (rel || "").toLowerCase();
+  if (name === "supersedes") return "#E26464";
+  if (name === "requires" || name === "depends_on") return "#8B78D2";
+  if (name === "prefers") return "#D76E9E";
+  if (name === "maintains" || name === "calls") return "#4F8BC9";
+  if (name === "deployed_on" || name === "located_at") return "#39A98A";
+  if (name === "attributed_to") return "#D98A45";
+  if (name === "scheduled_at") return "#C49A35";
+  if (name === "used_in") return "#77A64A";
+  return "#7E8794";
+}
+
 function initGraph(raw) {
   const canvas = document.getElementById("graph-canvas");
   if (!canvas) return;
@@ -1228,6 +1253,7 @@ function initGraph(raw) {
       y: (Math.random() - 0.5) * 200,
       vx: 0, vy: 0,
       visible: true,
+      color: stableGraphColor(f.id || id, f.type || "semantic"),
     };
     nodes.push(node);
     nodeMap[node.id] = node;
@@ -1235,24 +1261,27 @@ function initGraph(raw) {
 
   // Build edge list
   const edges = [];
+  const neighbors = {};
+  for (const node of nodes) neighbors[node.id] = new Set();
   for (const node of nodes) {
     for (const e of node.edges) {
       const target = typeof e === "string" ? e : (e.target || e.Target || "");
       const rel = typeof e === "string" ? "related_to" : (e.rel || e.Rel || "related_to");
       if (nodeMap[target]) {
-        edges.push({ source: node.id, target, rel, visible: true });
+        edges.push({ source: node.id, target, rel, color: graphRelationColor(rel), visible: true });
+        neighbors[node.id].add(target);
+        neighbors[target].add(node.id);
       }
     }
   }
 
-  // Colors by type
-  const typeColors = { semantic: "#4F8BC9", episodic: "#D4A855" };
-
   let hoveredNode = null;
+  let hoveredEdge = null;
   let selectedNode = null;
   let dragNode = null;
   let panX = 0, panY = 0, zoom = 1;
   let panning = false, panStart = null;
+  let queryActive = false, lastQuery = "";
 
   // Force simulation params
   const repel = 5000;
@@ -1273,8 +1302,14 @@ function initGraph(raw) {
   function nodeRadius(node) {
     if (node === selectedNode) return 14;
     if (node === hoveredNode) return 10;
-    const ec = node.edges.length;
+    const ec = neighbors[node.id].size;
     return Math.max(3, Math.min(8, 3 + ec * 1.5));
+  }
+
+  function nodeOpacity(node) {
+    if (selectedNode && node !== selectedNode && !neighbors[selectedNode.id].has(node.id)) return 0.13;
+    if (queryActive && !node._highlight && !node._queryNeighbor) return 0.13;
+    return 1;
   }
 
   function draw() {
@@ -1288,22 +1323,27 @@ function initGraph(raw) {
     for (const e of edges) {
       const src = nodeMap[e.source], tgt = nodeMap[e.target];
       if (!src || !tgt || !src.visible || !tgt.visible) continue;
+      const selectedEdge = selectedNode && (e.source === selectedNode.id || e.target === selectedNode.id);
+      const queryEdge = queryActive && (src._highlight || tgt._highlight) && (src._queryNeighbor || tgt._queryNeighbor || src._highlight || tgt._highlight);
+      const edgeActive = e === hoveredEdge || selectedEdge || queryEdge;
       ctx.beginPath();
       ctx.moveTo(src.x, src.y);
       ctx.lineTo(tgt.x, tgt.y);
-      ctx.strokeStyle = "rgba(136,136,136,0.35)";
-      ctx.lineWidth = 0.8 / zoom;
+      ctx.globalAlpha = selectedNode ? (selectedEdge ? 0.9 : 0.05) : queryActive ? (queryEdge ? 0.78 : 0.05) : (e === hoveredEdge ? 1 : 0.34);
+      ctx.strokeStyle = e.color;
+      ctx.lineWidth = (edgeActive ? 2 : 0.85) / zoom;
       ctx.stroke();
+      ctx.globalAlpha = 1;
 
-      // Edge label at midpoint (when zoomed in enough)
-      if (zoom > 0.5) {
+      // Relationship text appears only when it is useful.
+      if (zoom > 0.35 && (e === hoveredEdge || selectedEdge)) {
         const mx = (src.x + tgt.x) / 2, my = (src.y + tgt.y) / 2;
-        const fontSize = Math.max(8, 11 / zoom);
-        ctx.font = `${fontSize}px system-ui, sans-serif`;
+        const fontSize = Math.max(8, 10 / zoom);
+        ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
         const tw = ctx.measureText(e.rel).width;
-        const pad = 2 / zoom;
-        ctx.fillStyle = "rgba(0,0,0,0.75)";
-        ctx.fillRect(mx - tw / 2 - pad, my - fontSize / 2 - pad, tw + pad * 2, fontSize + pad * 2);
+        const pad = 3 / zoom;
+        ctx.fillStyle = "rgba(19,22,28,0.88)";
+        ctx.fillRect(mx - tw / 2 - pad, my - fontSize / 2 - pad, tw + pad * 2, fontSize + pad * 2.2);
         ctx.fillStyle = "#fff";
         ctx.fillText(e.rel, mx - tw / 2, my + fontSize / 3);
       }
@@ -1313,14 +1353,16 @@ function initGraph(raw) {
     for (const node of nodes) {
       if (!node.visible) continue;
       const r = nodeRadius(node);
+      ctx.globalAlpha = nodeOpacity(node);
       ctx.beginPath();
       ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
-      const color = typeColors[node.type] || "#888";
+      const color = node.color;
       ctx.fillStyle = node === selectedNode ? "#fff" : color;
       ctx.fill();
       ctx.strokeStyle = color;
       ctx.lineWidth = (node === selectedNode || node === hoveredNode) ? 2.5 / zoom : 1.2 / zoom;
       ctx.stroke();
+      ctx.globalAlpha = 1;
 
       // Highlight ring for search matches
       if (node._highlight) {
@@ -1418,6 +1460,21 @@ function initGraph(raw) {
     return null;
   }
 
+  function edgeAt(wx, wy) {
+    let closest = null, best = 7 / zoom;
+    for (const e of edges) {
+      const a = nodeMap[e.source], b = nodeMap[e.target];
+      if (!a || !b || !a.visible || !b.visible) continue;
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const length2 = dx * dx + dy * dy;
+      const t = length2 ? Math.max(0, Math.min(1, ((wx - a.x) * dx + (wy - a.y) * dy) / length2)) : 0;
+      const px = a.x + t * dx, py = a.y + t * dy;
+      const distance = Math.hypot(wx - px, wy - py);
+      if (distance < best) { best = distance; closest = e; }
+    }
+    return closest;
+  }
+
   canvas.onmousedown = (ev) => {
     const p = screenToWorld(ev.clientX, ev.clientY);
     const hit = nodeAt(p.x, p.y);
@@ -1450,14 +1507,25 @@ function initGraph(raw) {
     }
     const p = screenToWorld(ev.clientX, ev.clientY);
     const prev = hoveredNode;
+    const previousEdge = hoveredEdge;
     hoveredNode = nodeAt(p.x, p.y);
-    if (hoveredNode !== prev) draw();
+    hoveredEdge = hoveredNode ? null : edgeAt(p.x, p.y);
+    canvas.style.cursor = hoveredNode || hoveredEdge ? "pointer" : "grab";
+    if (hoveredNode !== prev || hoveredEdge !== previousEdge) draw();
   };
 
   canvas.onmouseup = () => {
     dragNode = null;
     panning = false;
     panStart = null;
+  };
+  canvas.onmouseleave = () => {
+    hoveredNode = null;
+    hoveredEdge = null;
+    dragNode = null;
+    panning = false;
+    canvas.style.cursor = "grab";
+    draw();
   };
 
   canvas.onwheel = (ev) => {
@@ -1490,21 +1558,22 @@ function initGraph(raw) {
 
   // Detail panel
   async function showDetail(node) {
-    const edg = node.edges || [];
-    const edgeList = edg.map(e => {
-      const tid = typeof e === "string" ? e : (e.target || e.Target);
-      const rel = typeof e === "string" ? "related_to" : (e.rel || e.Rel);
+    const relationships = edges.filter(e => e.source === node.id || e.target === node.id);
+    const edgeList = relationships.map(e => {
+      const incoming = e.target === node.id;
+      const tid = incoming ? e.source : e.target;
+      const rel = e.rel;
       const tgt = nodeMap[tid];
       const label = tgt ? tgt.subject : tid;
-      return `<div class="graph-edge-row" onclick="document.getElementById('graph-detail').classList.remove('open'); graphState.selectNode('${esc(tid)}')"><span class="edge-rel">${esc(rel)}</span> → ${esc(label)}</div>`;
+      return `<div class="graph-edge-row" onclick="graphState.selectNode('${esc(tid)}')"><i style="background:${esc(e.color)}"></i><span class="edge-rel">${esc(rel)}</span><b>${incoming ? "←" : "→"}</b>${esc(label)}</div>`;
     }).join("");
 
     detail.innerHTML = `
-      <button class="graph-detail-close" onclick="document.getElementById('graph-detail').classList.remove('open'); graphState.selectedNode=null; graphState.draw()">×</button>
-      <div class="graph-detail-type ${esc(node.type)}">${esc(node.type)}</div>
+      <button class="graph-detail-close" onclick="graphState.clearSelection()">×</button>
+      <div class="graph-detail-type ${esc(node.type)}"><i style="background:${esc(node.color)}"></i>${esc(node.type)}</div>
       <h3 class="graph-detail-subject">${esc(node.subject)}</h3>
       <div class="graph-detail-body" id="graph-detail-body">Loading…</div>
-      <div class="graph-detail-edges"><strong>${edg.length} relationship${edg.length!==1?"s":""}</strong>${edgeList}</div>
+      <div class="graph-detail-edges"><strong>${relationships.length} relationship${relationships.length!==1?"s":""}</strong>${edgeList || `<span class="graph-no-edges">No relationships yet</span>`}</div>
       <div class="graph-detail-actions">
         <button onclick="graphState.editFact('${esc(node.id)}')">Edit</button>
         <span class="graph-detail-id">${esc(node.id)}</span>
@@ -1530,10 +1599,25 @@ function initGraph(raw) {
   }
 
   graphState = {
-    nodes, nodeMap, edges, typeColors,
+    nodes, nodeMap, edges, neighbors,
     selectNode(id) {
       const n = nodeMap[id];
       if (n) { selectedNode = n; showDetail(n); draw(); }
+    },
+    clearSelection() {
+      selectedNode = null;
+      detail.classList.remove("open");
+      draw();
+    },
+    setQuery(q, matches) {
+      queryActive = Boolean(q);
+      if (q && matches.length && q !== lastQuery) {
+        const n = nodeMap[matches[0]];
+        panX = -n.x * zoom;
+        panY = -n.y * zoom;
+      }
+      lastQuery = q;
+      draw();
     },
     editFact(id) {
       const n = nodeMap[id];
@@ -1560,36 +1644,47 @@ function initGraph(raw) {
 
 function filterGraph() {
   if (!graphState) return;
-  const q = (document.getElementById("graph-search")?.value || "").toLowerCase();
+  const q = (document.getElementById("graph-search")?.value || "").trim().toLowerCase();
+  const terms = q.split(/\s+/).filter(Boolean);
   const sem = document.querySelector(".graph-toggle input[data-type=semantic]")?.checked ?? true;
   const epi = document.querySelector(".graph-toggle input[data-type=episodic]")?.checked ?? true;
+  const matches = [];
 
   for (const n of graphState.nodes) {
-    n.visible = true;
-    if (!sem && n.type === "semantic") n.visible = false;
-    if (!epi && n.type === "episodic") n.visible = false;
+    n.visible = !((!sem && n.type === "semantic") || (!epi && n.type === "episodic"));
     n._highlight = false;
-    if (q && n.subject.toLowerCase().includes(q)) {
-      n.visible = true;
+    n._queryNeighbor = false;
+    const haystack = `${n.subject} ${n.id}`.toLowerCase();
+    if (q && n.visible && terms.every(term => haystack.includes(term))) {
       n._highlight = true;
-    } else if (q && !n.subject.toLowerCase().includes(q)) {
-      n.visible = false;
+      matches.push(n.id);
     }
   }
-  // Always show connected nodes
-  for (const e of graphState.edges) {
-    const src = graphState.nodeMap[e.source], tgt = graphState.nodeMap[e.target];
-    if (src && tgt) {
-      if (src.visible && !tgt.visible && !q) tgt.visible = true;
-      if (tgt.visible && !src.visible && !q) src.visible = true;
+
+  if (q) {
+    for (const id of matches) {
+      for (const neighborID of graphState.neighbors[id] || []) {
+        const neighbor = graphState.nodeMap[neighborID];
+        if (neighbor?.visible) neighbor._queryNeighbor = true;
+      }
     }
   }
-  graphState.draw();
-  // Update edge visibility
+
   for (const e of graphState.edges) {
     const src = graphState.nodeMap[e.source], tgt = graphState.nodeMap[e.target];
     e.visible = src && tgt && src.visible && tgt.visible;
   }
+  const status = document.getElementById("graph-query-status");
+  if (status) status.textContent = q ? `${matches.length} matching memor${matches.length===1?"y":"ies"} · full graph preserved` : "All memories visible";
+  graphState.setQuery(q, matches);
+}
+
+function clearGraphQuery() {
+  const input = document.getElementById("graph-search");
+  if (!input) return;
+  input.value = "";
+  filterGraph();
+  input.focus();
 }
 
 window.addEventListener("hashchange", render);
