@@ -255,13 +255,14 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 		w.auditLog(sessionID, eventType, message, iteration)
 	})
 	system := conversation.Session.BuildSystem(userMessage, source)
-	// time context: injected as system message so it doesn't clutter the chat display
-	local := time.Now().In(w.Settings.Location())
-	zone, offset := local.Zone()
-	system += fmt.Sprintf("\n[System time: %s %s (UTC%+03d:%02d). Today is %s.]",
-		local.Format("Monday, 2006-01-02 15:04:05"), zone, offset/3600, (abs(offset)%3600)/60,
-		local.Format("2006-01-02"))
+	// Keep the clock in the system prompt and the fresh user turn so stale
+	// schedule/history text cannot override the configured local time.
+	clock := authoritativeClock(time.Now(), w.Settings.Location())
+	system += "\n" + clock
 	messages, userContext := conversation.Session.ContextFor(system, userMessage)
+	if len(messages) > 0 {
+		messages[len(messages)-1].Content += "\n\n" + clock + "\nUse this clock; do not infer the current time from conversation history."
+	}
 	msgLen := 0
 	for _, m := range messages {
 		msgLen += len(m.Content)
@@ -285,6 +286,14 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 
 	conversation.Session.AddExchange(userMessage, userContext, result.Reply, result.ToolCalls, source)
 	return result
+}
+
+func authoritativeClock(now time.Time, loc *time.Location) string {
+	local := now.In(loc)
+	zone, offset := local.Zone()
+	return fmt.Sprintf("[AUTHORITATIVE LOCAL CLOCK: %s %s (UTC%+03d:%02d). Today is %s.]",
+		local.Format("Monday, 2006-01-02 15:04:05"), zone, offset/3600, (abs(offset)%3600)/60,
+		local.Format("2006-01-02"))
 }
 
 func (w *Core) CancelTurn(sessionID string) bool {
