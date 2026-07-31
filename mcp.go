@@ -39,10 +39,11 @@ type mcpActive struct {
 // Each server's tools are registered on the ToolRegistry so the agent
 // and dashboard treat them like any other tool.
 type MCPBridge struct {
-	dir      string
-	registry *Registry
-	servers  map[string]*mcpActive
-	mu       sync.Mutex
+	dir       string
+	registry  *Registry
+	servers   map[string]*mcpActive
+	mu        sync.Mutex
+	closeOnce sync.Once
 }
 
 func NewMCPBridge(home string, registry *Registry) *MCPBridge {
@@ -177,10 +178,16 @@ func (b *MCPBridge) call(server, tool string, args map[string]any) string {
 	return strings.TrimSpace(out.String())
 }
 
+// Close shuts down all MCP client connections. Idempotent — safe to call
+// multiple times (Core.Close may run on already-closed bridges).
 func (b *MCPBridge) Close() {
-	for _, s := range b.servers {
-		s.client.Close()
-	}
+	b.closeOnce.Do(func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		for _, s := range b.servers {
+			s.client.Close()
+		}
+	})
 }
 
 // Reload re-scans mcp.d/ for new server configs and connects them.

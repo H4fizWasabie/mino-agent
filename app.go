@@ -30,6 +30,7 @@ type Core struct {
 	Responsibilities *ResponsibilityStore
 	Tools            *Registry
 	Sessions         *SessionManager
+	mcp              *MCPBridge
 	snapshots        sync.Map // sessionID → *LoopSnapshot (ephemeral, per-loop state)
 }
 
@@ -128,8 +129,7 @@ func NewCore() *Core {
 	mcpBridge := NewMCPBridge(s.Home, tools)
 	mcpBridge.Start()
 	tools.Register(MakeReloadPluginsTool(s.Home, tools, mcpBridge))
-
-	// Tool filter: use embeddings to send only relevant tools per turn
+	w.mcp = mcpBridge
 
 	// Playbook tools — LLM can discover and run playbooks
 	tools.Register(behaves(makeQueryAuditTool(db), BehaviorObserve))
@@ -332,5 +332,8 @@ func (w *Core) Close() {
 	stopAlerts()
 	closeTrace(w.Settings.Home)
 	w.Tools.CloseAuditLog()
+	if w.mcp != nil {
+		w.mcp.Close()
+	}
 	w.DB.Close()
 }

@@ -12,6 +12,10 @@
 
 ### Fixed
 - `/api/memory` still listed episodes from the dead SQLite `episodes` table (its writer was removed in the graph migration), so the memory view was permanently empty while `delete_episode` operated on graph IDs. Both dashboard readers now share a `graphEpisodes` helper over graph episodic facts.
+- MCP connections leaked on shutdown: the bridge was a `NewCore` local, so `Core.Close()` could not stop it. The bridge is now stored on `Core`, closed on shutdown, and `Close` is idempotent (`sync.Once` + mutex).
+
+### Changed
+- Removed the orphaned tool-filter comment in `NewCore` (the feature lives in `loop.go`'s `SchemasForContext`).
 
 ### Fixed
 - JSON-mode LLM calls (consolidation, dedup, graph edge rebuild) failed on reasoning models like DeepSeek v4 flash: forced `response_format: json_object` makes them return `content: null` (the budget goes to reasoning), which surfaced as "empty model response" and silently stalled consolidation for days. The client now retries once without `response_format`; the tolerant JSON parsers extract facts from a normal reply.
