@@ -11,6 +11,9 @@
 - `TestQueryAuditToolWithToolErrors` guards the single-connection pool invariant: a nested query after a completed `rows.Next()` loop is safe.
 
 ### Fixed
+- `/api/memory` still listed episodes from the dead SQLite `episodes` table (its writer was removed in the graph migration), so the memory view was permanently empty while `delete_episode` operated on graph IDs. Both dashboard readers now share a `graphEpisodes` helper over graph episodic facts.
+
+### Fixed
 - JSON-mode LLM calls (consolidation, dedup, graph edge rebuild) failed on reasoning models like DeepSeek v4 flash: forced `response_format: json_object` makes them return `content: null` (the budget goes to reasoning), which surfaced as "empty model response" and silently stalled consolidation for days. The client now retries once without `response_format`; the tolerant JSON parsers extract facts from a normal reply.
 - `parseResponse`'s reasoning fallback never reached `FinalText` (it read the original empty content instead of the fallback-applied text).
 - Consolidation silent-failure paths: DB query errors and successful parses that produced no facts/episode (e.g. a template-echoing small model) returned 0 without logging, making a stalled consolidation look healthy. Both paths now log.

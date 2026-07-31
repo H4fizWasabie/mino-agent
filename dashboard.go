@@ -439,7 +439,7 @@ func handleMemoryAPI(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
-	episodes := queryAll(dashCore.DB, "SELECT id, summary, happened_at FROM episodes ORDER BY id DESC")
+	episodes := graphEpisodes(dashCore.Memory)
 	skills := skillCatalog(dashCore.Settings.Home)
 	playbooks := playbookCatalog(dashCore.Settings.Home)
 
@@ -512,6 +512,28 @@ func handleQueryAPI(w http.ResponseWriter, r *http.Request) {
 		result = append(result, row)
 	}
 	json.NewEncoder(w).Encode(map[string]any{"columns": cols, "rows": result})
+}
+
+// graphEpisodes lists episodic facts from the graph, newest first. The
+// SQLite episodes table has no writer since the graph migration, so both
+// dashboard readers must come from here.
+func graphEpisodes(mem *Memory) []map[string]any {
+	episodes := []map[string]any{}
+	if mem == nil || mem.graph == nil {
+		return episodes
+	}
+	for _, fact := range mem.graph.Facts() {
+		if fact.Type != "episodic" {
+			continue
+		}
+		episodes = append(episodes, map[string]any{
+			"id": fact.ID, "happened_at": fact.At.Format(time.RFC3339), "summary": fact.Subject,
+		})
+	}
+	sort.Slice(episodes, func(i, j int) bool {
+		return episodes[i]["happened_at"].(string) > episodes[j]["happened_at"].(string)
+	})
+	return episodes
 }
 
 func handleEventsAPI(w http.ResponseWriter, r *http.Request) {
@@ -720,22 +742,7 @@ func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	legacyFactsData := queryAll(db, "SELECT id, subject, content, source, created_at FROM facts ORDER BY id DESC")
-	episodesData := []map[string]any{}
-	if dashCore.Memory != nil && dashCore.Memory.graph != nil {
-		// Episodic memory lives in the graph as ep_* facts since the graph
-		// migration; the old SQLite episodes table has no writer anymore.
-		for _, fact := range dashCore.Memory.graph.Facts() {
-			if fact.Type != "episodic" {
-				continue
-			}
-			episodesData = append(episodesData, map[string]any{
-				"id": fact.ID, "happened_at": fact.At.Format(time.RFC3339), "summary": fact.Subject,
-			})
-		}
-		sort.Slice(episodesData, func(i, j int) bool {
-			return episodesData[i]["happened_at"].(string) > episodesData[j]["happened_at"].(string)
-		})
-	}
+	episodesData := graphEpisodes(dashCore.Memory)
 	calendarData := queryAll(db, "SELECT title, start, \"end\", attendees, created_at FROM calendar_events ORDER BY start")
 	skillsData := skillCatalog(dashCore.Settings.Home)
 	playbooksData := playbookCatalog(dashCore.Settings.Home)
