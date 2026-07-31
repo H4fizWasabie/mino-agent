@@ -2,7 +2,14 @@
 
 ## [Unreleased]
 
+## [v1.5.0] — The Owner Cockpit Release
+
+Mino grows from a capable agent into a more truthful personal operating system:
+it remembers durable knowledge, shows what it owns, reuses expensive context,
+and keeps runtime-authored playbooks safe across deployments.
+
 ### Added
+- Cross-platform release builds for Linux, macOS Intel, macOS Apple Silicon, and Windows
 - GitHub Actions CI for tests, race checks, vet, and the tagged production build
 - Explicit System, Light, and Dark dashboard themes with a calm stone/paper Light palette
 - Channel-neutral explicit capability selection and trace-visible tool schema names for registered extension tools
