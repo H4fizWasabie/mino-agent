@@ -889,6 +889,17 @@ function workView(d){
   return `<section class="responsibility-hero"><div><span class="section-kicker">RESPONSIBILITY PORTFOLIO</span><h2>Work Mino owns.</h2><p>Standing Routines and durable outcomes, grouped by their truthful current state.</p></div><div class="responsibility-tally"><strong>${entries.length}</strong><span>Responsibilities</span><small>${entries.filter(x=>!["verified","stopped"].includes(x.status)).length} currently open</small></div></section>
     ${entries.length?groups.map(status=>{const items=entries.filter(x=>x.status===status);return items.length?`<section class="work-group"><header><h3>${esc(responsibilityStatus(status))}</h3><span>${items.length}</span></header><div>${items.map(responsibilityEntry).join("")}</div></section>`:""}).join(""):`<div class="responsibility-empty"><span>□</span><strong>Mino owns no Work yet.</strong><p>A request appears here when it must survive a turn, dependency, deadline, or future verification.</p></div>`}`;
 }
+function overviewResponsibility(d){
+  const state=d.responsibilities||{}, entries=state.work||[];
+  if(state.error) return `<div class="responsibility-empty"><span>!</span><strong>Responsibility state is unavailable.</strong><p>${esc(state.error)}</p><a href="#ops">Inspect runtime health →</a></div>`;
+  const attention=entries.filter(x=>["needs_you","blocked","working"].includes(x.status)).slice(0,3);
+  const verified=(state.today||[]).filter(x=>x.status==="verified").slice(0,3);
+  const open=entries.filter(x=>!['verified','stopped'].includes(x.status)).length;
+  return `<section class="overview-responsibility"><div class="overview-responsibility-head"><div><span class="section-kicker">OWNER WORKSPACE</span><h2>What matters now.</h2><p>Accepted responsibilities, current truth, and verified outcomes in one place.</p></div><div class="overview-work-count"><strong>${open}</strong><span>open Responsibilit${open===1?"y":"ies"}</span><small>${entries.length} total in Work</small></div></div>
+    <div class="overview-responsibility-grid"><section><header><div><span class="section-kicker">CURRENT</span><h3>Needs attention</h3></div><a href="#work">Open Work →</a></header>${attention.length?`<div class="overview-entry-list">${attention.map(responsibilityEntry).join("")}</div>`:`<div class="overview-clear"><span>✓</span><strong>Nothing is waiting on you.</strong><p>Mino has no active blocked or owner-dependent Responsibility.</p></div>`}</section>
+      <section><header><div><span class="section-kicker">TODAY</span><h3>Verified outcomes</h3></div><a href="#today">Open journal →</a></header>${verified.length?`<div class="overview-entry-list">${verified.map(responsibilityEntry).join("")}</div>`:`<div class="overview-clear"><span>◉</span><strong>No verified outcome yet.</strong><p>Meaningful completed work will appear here as Mino proves it.</p></div>`}</section></div>
+    <nav class="overview-links" aria-label="Workspace shortcuts"><a href="#today"><span>◉</span><strong>Today</strong><small>Journal of meaningful changes</small></a><a href="#work"><span>□</span><strong>Work</strong><small>Everything Mino owns</small></a><a href="#gateway"><span>↔</span><strong>Conversations</strong><small>Every channel, one thread</small></a><a href="#ops"><span>⌁</span><strong>Runtime health</strong><small>Inspect the operating system</small></a></nav></section>`;
+}
 function responsibilityDetailView(detail){
   const history=detail.history||[];
   return `<div class="responsibility-detail-head"><a href="#work">← Work</a><span class="responsibility-status ${esc(detail.status)}">${esc(responsibilityStatus(detail.status))}</span><h2>${esc(detail.title)}</h2><p>${esc(detail.outcome)}</p></div>
@@ -946,8 +957,8 @@ const VIEWS = {
     return h;
   },
   overview(d){
-    return `<section class="cover-intro"><div><span class="section-kicker">MINO RUNTIME SPINE</span><h2>The entire process, live.</h2><p>Follow every turn from gateway to verified completion, with state, tools, sidecars, and telemetry in one map.</p></div><div class="cover-status"><span><i></i> Operational</span><span class="arch-status"></span><a href="#settings">Runtime settings →</a></div></section>
-      <section class="overview-cover">${archSVG(d)}</section>`;
+    return `${overviewResponsibility(d)}<section class="overview-runtime"><div class="cover-intro"><div><span class="section-kicker">RUNTIME INSPECTION</span><h2>Follow the process, live.</h2><p>Inspect every turn from gateway to verified completion, with state, tools, sidecars, and telemetry in one map.</p></div><div class="cover-status"><span><i></i> Operational</span><span class="arch-status"></span><a href="#settings">Runtime settings →</a></div></div>
+      <section class="overview-cover">${archSVG(d)}</section></section>`;
   },
   loop(d){
     const turns=d.turns||[], calls=turns.reduce((n,t)=>n+(t.llm_calls||[]).length,0), tools=turns.reduce((n,t)=>n+(t.tools||[]).length,0);
