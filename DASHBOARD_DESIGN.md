@@ -52,6 +52,24 @@ Visible status language stays owner-oriented:
 Specific conditions such as scheduled, awaiting a reply, or retrying later
 explain **Waiting** rather than becoming more primary statuses.
 
+### Adaptive entry density
+
+Journal entries use consistent anatomy but not uniform height. The space an
+entry receives reflects how much owner attention it requires:
+
+- **Needs you** and **Blocked** entries are expanded. They show the relevant
+  context, next-action owner, and immediate actions.
+- **Working** and **Waiting** entries use medium density. They show the latest
+  meaningful state, start or update time, and one way to open the work.
+- **Verified** entries are compact. They show the outcome and verification
+  channel without repeating execution detail.
+- Important observations use narrative density but do not present an owner
+  action unless one is genuinely required.
+
+The stable visual order is time, outcome-oriented title, owner-oriented status,
+latest meaningful state, next action when relevant, minimal actions, and
+expandable Evidence.
+
 ## Living entries, immutable history
 
 One piece of work has one living Journal Entry. Its visible summary and
@@ -141,7 +159,6 @@ records the receipt.
 
 ## Still to decide
 
-- Exact Today entry anatomy and density
 - Date navigation and search behavior
 - Work grouping, filtering, and recently-closed retention
 - Mobile behavior for entry detail and conversation
