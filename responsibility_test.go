@@ -1,8 +1,12 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -190,6 +194,13 @@ func TestResponsibilityStoreBootstrapsCurrentStateOnce(t *testing.T) {
 	if len(routineHistory) != 1 || len(baseline) != 1 {
 		t.Fatalf("bootstrap duplicated history: routine=%d baseline=%d", len(routineHistory), len(baseline))
 	}
+	views, err := store.Views(now, time.FixedZone("MYT", 8*60*60))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(views.Today) != 1 || views.Today[0].ID != "system:journal" || len(views.Work) != 2 {
+		t.Fatalf("migration views = %+v", views)
+	}
 }
 
 func TestResponsibilityStoreRequiresEvidenceToVerify(t *testing.T) {
@@ -251,5 +262,114 @@ func TestResponsibilityStoreAllowsResponsibilitiesWithoutExternalSource(t *testi
 	}
 	if len(got) != 2 {
 		t.Fatalf("one-off Responsibilities = %+v", got)
+	}
+}
+
+func TestDashboardReadsTodayWorkAndResponsibilityHistory(t *testing.T) {
+	home := t.TempDir()
+	db := Connect(home)
+	defer db.Close()
+	store := NewResponsibilityStore(db)
+	now := time.Now().UTC()
+	if _, err := store.Record(ResponsibilityEvent{
+		ResponsibilityID: "routine:ai-news-daily", Type: "imported", Kind: "routine",
+		Title: "Daily AI news", Owner: "mino", Status: "waiting",
+		Summary: "Imported.", SourceKind: "schedule", SourceRef: "ai-news-daily",
+		At: now.Add(-time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Record(ResponsibilityEvent{
+		ResponsibilityID: "routine:ai-news-daily", Type: "completed", Status: "verified",
+		Summary:  "Scheduled run completed with 1 verified output.",
+		Evidence: "session:scheduled-ai-news-daily\nartifact:playbooks/ai-news-daily/output/01-ai-news.md (42 bytes)",
+		At:       now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	previous := dashCore
+	dashCore = &Core{
+		Settings:         &Settings{Home: home, Timezone: "Asia/Kuala_Lumpur"},
+		DB:               db,
+		Responsibilities: store,
+		Tools:            NewRegistry(),
+	}
+	defer func() { dashCore = previous }()
+
+	recorder := httptest.NewRecorder()
+	handleDataAPI(recorder, httptest.NewRequest(http.MethodGet, "/api/data", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("data status = %d", recorder.Code)
+	}
+	var data struct {
+		Responsibilities ResponsibilityViews `json:"responsibilities"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&data); err != nil {
+		t.Fatal(err)
+	}
+	if len(data.Responsibilities.Today) != 1 || len(data.Responsibilities.Work) != 1 {
+		t.Fatalf("Responsibility views = %+v", data.Responsibilities)
+	}
+	entry := data.Responsibilities.Today[0]
+	if entry.ID != "routine:ai-news-daily" || entry.Latest.Status != "verified" ||
+		!strings.Contains(entry.Latest.Evidence, "artifact:playbooks/ai-news-daily/output/01-ai-news.md") {
+		t.Fatalf("Today Journal entry = %+v", entry)
+	}
+
+	recorder = httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/responsibilities?id=routine%3Aai-news-daily", nil)
+	handleResponsibilitiesAPI(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("detail status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var detail ResponsibilityDetail
+	if err := json.NewDecoder(recorder.Body).Decode(&detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.ID != "routine:ai-news-daily" || len(detail.History) != 2 ||
+		detail.History[1].Summary != "Scheduled run completed with 1 verified output." {
+		t.Fatalf("Responsibility detail = %+v", detail)
+	}
+}
+
+func TestResponsibilityEvidenceServesOnlyPlaybookOutputs(t *testing.T) {
+	home := t.TempDir()
+	output := filepath.Join(home, "playbooks", "ai-news-daily", "output", "01-ai-news.md")
+	if err := os.MkdirAll(filepath.Dir(output), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(output, []byte("# Verified AI news"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "providers.json"), []byte(`{"secret":"no"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(home, "providers.json"),
+		filepath.Join(home, "playbooks", "ai-news-daily", "output", "leak.md")); err != nil {
+		t.Fatal(err)
+	}
+	previous := dashCore
+	dashCore = &Core{Settings: &Settings{Home: home}}
+	defer func() { dashCore = previous }()
+
+	for _, tc := range []struct {
+		name, path string
+		status     int
+		body       string
+	}{
+		{"output", "playbooks/ai-news-daily/output/01-ai-news.md", http.StatusOK, "# Verified AI news"},
+		{"configuration", "providers.json", http.StatusForbidden, ""},
+		{"traversal", "playbooks/ai-news-daily/output/../../providers.json", http.StatusForbidden, ""},
+		{"symlink", "playbooks/ai-news-daily/output/leak.md", http.StatusForbidden, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet,
+				"/api/responsibility-evidence?path="+tc.path, nil)
+			handleResponsibilityEvidence(recorder, request)
+			if recorder.Code != tc.status || tc.body != "" && recorder.Body.String() != tc.body {
+				t.Fatalf("status=%d body=%q", recorder.Code, recorder.Body.String())
+			}
+		})
 	}
 }

@@ -5,6 +5,65 @@ import (
 	"time"
 )
 
+type ResponsibilityEntry struct {
+	Responsibility
+	Latest ResponsibilityEvent `json:"latest"`
+}
+
+type ResponsibilityViews struct {
+	Today []ResponsibilityEntry `json:"today"`
+	Work  []ResponsibilityEntry `json:"work"`
+	Error string                `json:"error,omitempty"`
+}
+
+type ResponsibilityDetail struct {
+	Responsibility
+	History []ResponsibilityEvent `json:"history"`
+}
+
+func (s *ResponsibilityStore) Views(now time.Time, location *time.Location) (ResponsibilityViews, error) {
+	if location == nil {
+		location = time.UTC
+	}
+	items, err := s.List(ResponsibilityFilter{})
+	if err != nil {
+		return ResponsibilityViews{}, err
+	}
+	views := ResponsibilityViews{
+		Today: []ResponsibilityEntry{},
+		Work:  []ResponsibilityEntry{},
+	}
+	today := now.In(location)
+	for _, item := range items {
+		history, err := s.History(item.ID)
+		if err != nil {
+			return views, err
+		}
+		if len(history) == 0 {
+			continue
+		}
+		entry := ResponsibilityEntry{Responsibility: item, Latest: history[len(history)-1]}
+		if item.Kind != "system" {
+			views.Work = append(views.Work, entry)
+		}
+		at := entry.Latest.At.In(location)
+		if entry.Latest.Type != "imported" &&
+			at.Year() == today.Year() && at.YearDay() == today.YearDay() {
+			views.Today = append(views.Today, entry)
+		}
+	}
+	return views, nil
+}
+
+func (s *ResponsibilityStore) Detail(id string) (ResponsibilityDetail, error) {
+	item, err := s.get(id)
+	if err != nil {
+		return ResponsibilityDetail{}, err
+	}
+	history, err := s.History(id)
+	return ResponsibilityDetail{Responsibility: item, History: history}, err
+}
+
 func (s *ResponsibilityStore) List(filter ResponsibilityFilter) ([]Responsibility, error) {
 	query := `SELECT id, kind, title, outcome, owner, status, next_action, next_owner, due_at,
 		last_run_at, schedule, source_kind, source_ref, verification, created_at, updated_at FROM responsibilities WHERE 1=1`

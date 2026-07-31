@@ -469,6 +469,199 @@ func TestSchedulePlaybook(t *testing.T) {
 	}
 }
 
+func TestDueRoutineRecordsVerifiedResultWithEvidence(t *testing.T) {
+	home := t.TempDir()
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	schedule := PlaybookSchedule{
+		Name: "ai-news-daily", Time: "20:00", Timezone: "Asia/Kuala_Lumpur",
+	}
+	if err := saveSchedules(home, []PlaybookSchedule{schedule}); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(home, "playbooks", schedule.Name, "output", "01-ai-news.md")
+	if err := os.MkdirAll(filepath.Dir(output), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(output, []byte("# AI news\n\nVerified report."), 0600); err != nil {
+		t.Fatal(err)
+	}
+	db := Connect(home)
+	defer db.Close()
+	store := NewResponsibilityStore(db)
+	if _, err := store.Record(ResponsibilityEvent{
+		ResponsibilityID: "routine:" + schedule.Name, Type: "imported", Kind: "routine",
+		Title: "Daily AI news", Owner: "mino", Status: "waiting",
+		Summary: "Imported from the existing schedule.", SourceKind: "schedule",
+		SourceRef: schedule.Name, Schedule: "20:00 Asia/Kuala_Lumpur", At: now.Add(-time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	core := &Core{
+		Settings:         &Settings{Home: home, Timezone: "Asia/Kuala_Lumpur"},
+		Responsibilities: store,
+	}
+	sawWorking := false
+	run := func(context.Context, *Core, string, string, string, Observer) (*PlaybookResult, error) {
+		items, err := store.List(ResponsibilityFilter{Kind: "routine"})
+		if err != nil || len(items) != 1 {
+			t.Fatalf("working projection: items=%+v err=%v", items, err)
+		}
+		sawWorking = items[0].Status == "working"
+		return &PlaybookResult{
+			Name: schedule.Name, Status: "complete", StagesRun: 1,
+			Outputs: []string{output}, Reply: "Report written.",
+		}, nil
+	}
+
+	dispatchDueSchedulesAt(core, now, run)
+
+	items, err := store.List(ResponsibilityFilter{Kind: "routine"})
+	if err != nil || len(items) != 1 {
+		t.Fatalf("Routine projection: items=%+v err=%v", items, err)
+	}
+	got := items[0]
+	if !sawWorking || got.ID != "routine:ai-news-daily" || got.Status != "verified" ||
+		got.LastRunAt == nil || !got.LastRunAt.Equal(now) ||
+		got.DueAt == nil || !got.DueAt.Equal(time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)) {
+		t.Fatalf("Routine projection = %+v, saw working=%v", got, sawWorking)
+	}
+	history, err := store.History(got.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 3 || history[1].Status != "working" || history[2].Status != "verified" {
+		t.Fatalf("Routine History = %+v", history)
+	}
+	if !strings.Contains(history[2].Evidence, "playbooks/ai-news-daily/output/01-ai-news.md") ||
+		strings.Contains(strings.ToLower(history[2].Evidence), "telegram delivered") {
+		t.Fatalf("completion Evidence = %q", history[2].Evidence)
+	}
+	schedules, err := loadSchedules(home)
+	if err != nil || len(schedules) != 1 || schedules[0].LastRun != now.Format(time.RFC3339) {
+		t.Fatalf("saved schedules = %+v, err=%v", schedules, err)
+	}
+}
+
+func TestVerifiedRoutineRunsAgainOnTheNextScheduledDay(t *testing.T) {
+	home := t.TempDir()
+	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	schedule := PlaybookSchedule{
+		Name: "ai-news-daily", Time: "20:00", Timezone: "Asia/Kuala_Lumpur",
+		LastRun: now.AddDate(0, 0, -1).Format(time.RFC3339),
+	}
+	if err := saveSchedules(home, []PlaybookSchedule{schedule}); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(home, "playbooks", schedule.Name, "output", "01-ai-news.md")
+	if err := os.MkdirAll(filepath.Dir(output), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(output, []byte("# AI news\n\nSecond report."), 0600); err != nil {
+		t.Fatal(err)
+	}
+	db := Connect(home)
+	defer db.Close()
+	store := NewResponsibilityStore(db)
+	if _, err := store.Record(ResponsibilityEvent{
+		ResponsibilityID: "routine:" + schedule.Name, Type: "completed", Kind: "routine",
+		Title: "Daily AI news", Owner: "mino", Status: "verified",
+		Summary: "Yesterday's run completed.", Evidence: "artifact:yesterday.md",
+		SourceKind: "schedule", SourceRef: schedule.Name, At: now.AddDate(0, 0, -1),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	core := &Core{
+		Settings:         &Settings{Home: home, Timezone: "Asia/Kuala_Lumpur"},
+		Responsibilities: store,
+	}
+	run := func(context.Context, *Core, string, string, string, Observer) (*PlaybookResult, error) {
+		return &PlaybookResult{Name: schedule.Name, Status: "complete", StagesRun: 1, Outputs: []string{output}}, nil
+	}
+
+	dispatchDueSchedulesAt(core, now, run)
+
+	history, err := store.History("routine:" + schedule.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 3 || history[1].Status != "working" || history[2].Status != "verified" {
+		t.Fatalf("recurring Routine History = %+v", history)
+	}
+}
+
+func TestDueRoutineUsesTheScheduleTimezoneDate(t *testing.T) {
+	home := t.TempDir()
+	now := time.Date(2026, 8, 1, 16, 0, 0, 0, time.UTC) // midnight on 2 August in Malaysia
+	schedule := PlaybookSchedule{Name: "midnight-brief", Time: "00:00", Timezone: "Asia/Kuala_Lumpur"}
+	if err := saveSchedules(home, []PlaybookSchedule{schedule}); err != nil {
+		t.Fatal(err)
+	}
+	db := Connect(home)
+	defer db.Close()
+	store := NewResponsibilityStore(db)
+	if _, err := store.Record(ResponsibilityEvent{
+		ResponsibilityID: "routine:" + schedule.Name, Type: "imported", Kind: "routine",
+		Title: "Midnight brief", Owner: "mino", Status: "waiting", Summary: "Imported.",
+		SourceKind: "schedule", SourceRef: schedule.Name, At: now.Add(-time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	core := &Core{Settings: &Settings{Home: home}, Responsibilities: store}
+	ran := false
+	run := func(context.Context, *Core, string, string, string, Observer) (*PlaybookResult, error) {
+		ran = true
+		return &PlaybookResult{Name: schedule.Name, Status: "failed", Reply: "Provider unavailable."}, nil
+	}
+
+	dispatchDueSchedulesAt(core, now, run)
+
+	history, err := store.History("routine:" + schedule.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ran || len(history) != 3 || history[1].Status != "working" || history[2].Status != "blocked" {
+		t.Fatalf("midnight Routine ran=%v History=%+v", ran, history)
+	}
+}
+
+func TestDueRoutineBlocksCompletionWithoutReadableEvidence(t *testing.T) {
+	home := t.TempDir()
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	schedule := PlaybookSchedule{Name: "ai-news-daily", Time: "20:00", Timezone: "Asia/Kuala_Lumpur"}
+	if err := saveSchedules(home, []PlaybookSchedule{schedule}); err != nil {
+		t.Fatal(err)
+	}
+	db := Connect(home)
+	defer db.Close()
+	store := NewResponsibilityStore(db)
+	if _, err := store.Record(ResponsibilityEvent{
+		ResponsibilityID: "routine:" + schedule.Name, Type: "imported", Kind: "routine",
+		Title: "Daily AI news", Owner: "mino", Status: "waiting", Summary: "Imported.",
+		SourceKind: "schedule", SourceRef: schedule.Name, At: now.Add(-time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	core := &Core{Settings: &Settings{Home: home}, Responsibilities: store}
+	run := func(context.Context, *Core, string, string, string, Observer) (*PlaybookResult, error) {
+		return &PlaybookResult{
+			Name: schedule.Name, Status: "complete",
+			Outputs: []string{filepath.Join(home, "playbooks", schedule.Name, "output", "missing.md")},
+		}, nil
+	}
+
+	dispatchDueSchedulesAt(core, now, run)
+
+	detail, err := store.Detail("routine:" + schedule.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest := detail.History[len(detail.History)-1]
+	if detail.Status != "blocked" || latest.Type != "blocked" ||
+		latest.Summary != "Scheduled run completed without a readable output." {
+		t.Fatalf("unverified Routine = %+v", detail)
+	}
+}
+
 func TestSystemCheckReportsState(t *testing.T) {
 	home := t.TempDir()
 	db := Connect(home)

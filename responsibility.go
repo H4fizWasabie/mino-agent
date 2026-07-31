@@ -7,18 +7,43 @@ import (
 )
 
 type Responsibility struct {
-	ID, Kind, Title, Outcome, Owner, Status, NextAction, NextOwner string
-	DueAt, LastRunAt                                               *time.Time
-	Schedule, SourceKind, SourceRef, Verification                  string
-	CreatedAt, UpdatedAt                                           time.Time
+	ID           string     `json:"id"`
+	Kind         string     `json:"kind"`
+	Title        string     `json:"title"`
+	Outcome      string     `json:"outcome"`
+	Owner        string     `json:"owner"`
+	Status       string     `json:"status"`
+	NextAction   string     `json:"next_action"`
+	NextOwner    string     `json:"next_owner"`
+	DueAt        *time.Time `json:"due_at,omitempty"`
+	LastRunAt    *time.Time `json:"last_run_at,omitempty"`
+	Schedule     string     `json:"schedule"`
+	SourceKind   string     `json:"source_kind"`
+	SourceRef    string     `json:"source_ref"`
+	Verification string     `json:"verification"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 type ResponsibilityEvent struct {
-	ResponsibilityID, Type, Kind, Title, Outcome, Owner, Status string
-	NextAction, NextOwner, Summary, Evidence                    string
-	DueAt, LastRunAt                                            *time.Time
-	Schedule, SourceKind, SourceRef, Verification               string
-	At                                                          time.Time
+	ResponsibilityID string     `json:"responsibility_id"`
+	Type             string     `json:"type"`
+	Kind             string     `json:"kind,omitempty"`
+	Title            string     `json:"title,omitempty"`
+	Outcome          string     `json:"outcome"`
+	Owner            string     `json:"owner"`
+	Status           string     `json:"status"`
+	NextAction       string     `json:"next_action"`
+	NextOwner        string     `json:"next_owner"`
+	Summary          string     `json:"summary"`
+	Evidence         string     `json:"evidence"`
+	DueAt            *time.Time `json:"due_at,omitempty"`
+	LastRunAt        *time.Time `json:"last_run_at,omitempty"`
+	Schedule         string     `json:"schedule"`
+	SourceKind       string     `json:"source_kind,omitempty"`
+	SourceRef        string     `json:"source_ref,omitempty"`
+	Verification     string     `json:"verification"`
+	At               time.Time  `json:"at"`
 }
 
 type ResponsibilityFilter struct{ Kind, Status string }
@@ -79,7 +104,7 @@ func (s *ResponsibilityStore) Record(event ResponsibilityEvent) (Responsibility,
 	case getErr != nil:
 		return Responsibility{}, getErr
 	default:
-		if !validResponsibilityTransition(current.Status, event.Status) {
+		if !validResponsibilityTransition(current.Kind, current.Status, event.Status) {
 			return Responsibility{}, fmt.Errorf("cannot move responsibility from %q to %q", current.Status, event.Status)
 		}
 		if event.Outcome == "" {
@@ -136,7 +161,10 @@ func validResponsibilityStatus(status string) bool {
 	return false
 }
 
-func validResponsibilityTransition(from, to string) bool {
+func validResponsibilityTransition(kind, from, to string) bool {
+	if kind == "routine" && from == "verified" && to == "working" {
+		return true
+	}
 	if from == "verified" || from == "stopped" {
 		return from == to
 	}

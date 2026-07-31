@@ -68,6 +68,8 @@ func RunDashboard(w *Core) {
 	http.HandleFunc("/api/events", handleEventsAPI)
 	http.HandleFunc("/api/nerves", handleNervesAPI)
 	http.HandleFunc("/api/data", handleDataAPI)
+	http.HandleFunc("/api/responsibilities", handleResponsibilitiesAPI)
+	http.HandleFunc("/api/responsibility-evidence", handleResponsibilityEvidence)
 	http.HandleFunc("/api/reveal", handleRevealAPI)
 	http.HandleFunc("/api/files", handleFilesAPI)
 	http.HandleFunc("/api/active-tasks", handleActiveTasks)
@@ -680,6 +682,14 @@ func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 	outboxData := outboxList(dashCore.Settings.Home)
 	soulData, _ := os.ReadFile(filepath.Join(dashCore.Settings.Home, "SOUL.md"))
 	activeTasks := listActiveTasksPlaybook(dashCore.Settings.Home)
+	responsibilities := ResponsibilityViews{Today: []ResponsibilityEntry{}, Work: []ResponsibilityEntry{}}
+	if dashCore.Responsibilities != nil {
+		if views, err := dashCore.Responsibilities.Views(time.Now(), dashCore.Settings.Location()); err == nil {
+			responsibilities = views
+		} else {
+			responsibilities.Error = err.Error()
+		}
+	}
 	if activeTasks == nil {
 		activeTasks = []map[string]any{}
 	}
@@ -730,6 +740,7 @@ func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 		"provider":          dashCore.Settings.Provider,
 		"model":             activeModel,
 		"reasoning":         activeReasoning,
+		"timezone":          dashCore.Settings.Timezone,
 		"active_provider":   activeProvider,
 		"home":              dashCore.Settings.Home,
 		"chat_log":          chatLog,
@@ -762,10 +773,78 @@ func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 		"wake_scans":       []any{},
 		"reports":          []any{},
 		"active_tasks":     activeTasks,
+		"responsibilities": responsibilities,
 		"needs_onboarding": needsOnboarding(dashCore.Settings.Home),
 		"graph":            loadGraphIndex(dashCore.Settings.MemoriesDir),
 	}
 	json.NewEncoder(w).Encode(resp)
+}
+
+func handleResponsibilitiesAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	if dashCore == nil || dashCore.Responsibilities == nil {
+		http.Error(w, "responsibility state unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		views, err := dashCore.Responsibilities.Views(time.Now(), dashCore.Settings.Location())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(views)
+		return
+	}
+	detail, err := dashCore.Responsibilities.Detail(id)
+	if err == sql.ErrNoRows {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(detail)
+}
+
+func handleResponsibilityEvidence(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	path := filepath.FromSlash(r.URL.Query().Get("path"))
+	clean := filepath.Clean(path)
+	parts := strings.Split(clean, string(filepath.Separator))
+	if dashCore == nil || dashCore.Settings == nil || filepath.IsAbs(path) ||
+		clean != path || len(parts) < 4 || parts[0] != "playbooks" || parts[2] != "output" {
+		http.Error(w, "evidence path not allowed", http.StatusForbidden)
+		return
+	}
+	home, err := filepath.EvalSymlinks(dashCore.Settings.Home)
+	if err != nil {
+		http.Error(w, "evidence storage unavailable", http.StatusInternalServerError)
+		return
+	}
+	outputDir, outputErr := filepath.EvalSymlinks(filepath.Join(home, parts[0], parts[1], parts[2]))
+	resolved, resolveErr := filepath.EvalSymlinks(filepath.Join(home, clean))
+	if resolveErr != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if outputErr != nil || !pathWithin(home, outputDir) || !pathWithin(outputDir, resolved) {
+		http.Error(w, "evidence path not allowed", http.StatusForbidden)
+		return
+	}
+	http.ServeFile(w, r, resolved)
+}
+
+func pathWithin(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // evalReport reads a release-evidence record written by the certification gate.

@@ -976,11 +976,16 @@ func runScheduleDispatcher(core *Core) {
 }
 
 func dispatchDueSchedules(core *Core) {
+	dispatchDueSchedulesAt(core, time.Now(), RunPlaybook)
+}
+
+type scheduledPlaybookRunner func(context.Context, *Core, string, string, string, Observer) (*PlaybookResult, error)
+
+func dispatchDueSchedulesAt(core *Core, now time.Time, run scheduledPlaybookRunner) {
 	scheds, err := loadSchedules(core.Settings.Home)
 	if err != nil || len(scheds) == 0 {
 		return
 	}
-	now := time.Now()
 	updated := false
 	for i, s := range scheds {
 		loc, err := time.LoadLocation(s.Timezone)
@@ -993,9 +998,9 @@ func dispatchDueSchedules(core *Core) {
 			continue
 		}
 		// rebase to today in that timezone
-		today := time.Date(now.Year(), now.Month(), now.Day(), schedTime.Hour(), schedTime.Minute(), 0, 0, loc)
-		// schedule window: current time is within [scheduled, scheduled+1min)
 		nowInLoc := now.In(loc)
+		today := time.Date(nowInLoc.Year(), nowInLoc.Month(), nowInLoc.Day(), schedTime.Hour(), schedTime.Minute(), 0, 0, loc)
+		// schedule window: current time is within [scheduled, scheduled+1min)
 		if nowInLoc.Before(today) || nowInLoc.After(today.Add(time.Minute)) {
 			continue
 		}
@@ -1011,12 +1016,19 @@ func dispatchDueSchedules(core *Core) {
 		}
 		slog.Info("schedule firing playbook", "name", s.Name, "time", s.Time)
 		sessionID := "scheduled-" + s.Name
-		result, err := RunPlaybook(context.Background(), core, s.Name, "Scheduled run", sessionID, nil)
+		if err := core.Responsibilities.startRoutine(s, now); err != nil {
+			slog.Error("schedule responsibility start failed", "name", s.Name, "error", err)
+			continue
+		}
+		result, err := run(context.Background(), core, s.Name, "Scheduled run", sessionID, nil)
 		if err != nil {
 			slog.Error("schedule playbook failed", "name", s.Name, "error", err)
 		}
 		if result != nil {
 			slog.Info("schedule playbook result", "name", s.Name, "status", result.Status, "stages", result.StagesRun)
+		}
+		if recordErr := core.Responsibilities.finishRoutine(core.Settings.Home, sessionID, s, result, err, now); recordErr != nil {
+			slog.Error("schedule responsibility finish failed", "name", s.Name, "error", recordErr)
 		}
 		scheds[i].LastRun = now.UTC().Format(time.RFC3339)
 		updated = true
