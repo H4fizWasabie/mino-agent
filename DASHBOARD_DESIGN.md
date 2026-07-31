@@ -12,6 +12,21 @@ The selected visual direction is prototype **B — Operator Timeline**. Its
 editorial hierarchy, chronological journal, compact navigation, and
 non-dominant conversation composer form the redesign foundation.
 
+## Visual language
+
+B uses an editorial-operational typography system:
+
+- Editorial serif for page titles and meaningful journal outcomes
+- Neutral sans-serif for summaries, navigation, actions, and controls
+- Restrained monospace only for timestamps, identifiers, and Evidence
+  references
+
+The palette stays quiet: a warm off-white background, near-black text, and
+subtle rules provide most structure. Mino blue is reserved for Working state
+and primary actions, amber for Needs you, red for genuine blocks or failures,
+and green for Verified outcomes. Decorative card shadows and technical
+monospace styling do not define the main interface.
+
 ## Information architecture
 
 - **Today** answers: What changed, what matters now, and what needs the owner?
