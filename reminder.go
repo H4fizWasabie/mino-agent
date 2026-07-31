@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 func makeReminderTools(db *sql.DB, location *time.Location) []*Tool {
@@ -142,31 +140,48 @@ func reminderID(raw any) (int64, bool) {
 	}
 }
 
-func runReminderDispatcher(core *Core, bot *tgbotapi.BotAPI) {
+func runReminderDispatcher(core *Core) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for range ticker.C {
-		dispatchDueReminders(core, bot)
+		dispatchDueReminders(core)
 	}
 }
 
-func dispatchDueReminders(core *Core, bot *tgbotapi.BotAPI) {
+// dispatchDueReminders delivers due reminders via the raw-HTTP Telegram path
+// (same as the outbox) so it works in any gateway mode and survives bot-init
+// failures. No delivery channel configured → reminders stay pending.
+func dispatchDueReminders(core *Core) {
+	if core.Settings.Telegram == "" || core.Settings.TelegramChatID <= 0 {
+		return
+	}
 	rows, err := core.DB.Query("SELECT id, message FROM reminders WHERE status = 'pending' AND remind_at <= ? ORDER BY remind_at LIMIT 20", time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
 		return
 	}
-	defer rows.Close()
+	// Collect first, then close: SetMaxOpenConns(1) means an open rows set
+	// blocks any Exec (delivery/UPDATE) on the same DB.
+	var dueReminders []struct {
+		id      int64
+		message string
+	}
 	for rows.Next() {
-		var id int64
-		var message string
-		if rows.Scan(&id, &message) != nil {
+		var d struct {
+			id      int64
+			message string
+		}
+		if rows.Scan(&d.id, &d.message) != nil {
 			continue
 		}
-		reply := "⏰ Reminder: " + message
-		if _, err := bot.Send(tgbotapi.NewMessage(core.Settings.TelegramChatID, reply)); err != nil {
+		dueReminders = append(dueReminders, d)
+	}
+	rows.Close()
+	for _, d := range dueReminders {
+		reply := "⏰ Reminder: " + d.message
+		if !sendTelegramText(core.Settings.Telegram, core.Settings.TelegramChatID, reply, true) {
 			continue
 		}
 		core.recordTelegramNotification(core.Settings.TelegramChatID, reply)
-		core.DB.Exec("UPDATE reminders SET status = 'delivered', delivered_at = datetime('now') WHERE id = ? AND status = 'pending'", id)
+		core.DB.Exec("UPDATE reminders SET status = 'delivered', delivered_at = datetime('now') WHERE id = ? AND status = 'pending'", d.id)
 	}
 }

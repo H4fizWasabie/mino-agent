@@ -118,8 +118,6 @@ func RunTelegram(w *Core) {
 		return
 	}
 	slog.Info("telegram bot started", "username", bot.Self.UserName)
-	dispatchDueReminders(w, bot)
-	go runReminderDispatcher(w, bot)
 
 	w.restoreTelegramChatID()
 	w.captureBot(bot, w.telegramChatID()) // restore from DB or 0; real chatID captured below

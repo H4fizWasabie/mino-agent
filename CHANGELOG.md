@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Fixed
+- Reminders never fired in dashboard/CLI mode: the dispatcher was started only inside the Telegram gateway (`RunTelegram`), so `create_reminder` rows stayed pending forever when Mino ran without a bot connection. The dispatcher now starts in `NewCore` for every gateway mode and delivers via the raw-HTTP `sendTelegramText` path (markdown + plain-text fallback) instead of a live bot instance, so it also survives bot-init failures.
+- Reminder dispatch deadlocked on the first due reminder: `db.SetMaxOpenConns(1)` combined with an `UPDATE` issued while the due-reminder rows were still open held the only connection forever (rows auto-close only at EOF). The dispatcher now collects due rows first, closes them, then sends + marks delivered.
+
+### Added
+- Table-driven `TestDispatchDueReminders` (fake bot API): due → delivered, future → stays pending, no Telegram config → untouched, API rejection → stays pending.
+- `TestQueryAuditToolWithToolErrors` guards the single-connection pool invariant: a nested query after a completed `rows.Next()` loop is safe.
+
+### Fixed
 - JSON-mode LLM calls (consolidation, dedup, graph edge rebuild) failed on reasoning models like DeepSeek v4 flash: forced `response_format: json_object` makes them return `content: null` (the budget goes to reasoning), which surfaced as "empty model response" and silently stalled consolidation for days. The client now retries once without `response_format`; the tolerant JSON parsers extract facts from a normal reply.
 - `parseResponse`'s reasoning fallback never reached `FinalText` (it read the original empty content instead of the fallback-applied text).
 - Consolidation silent-failure paths: DB query errors and successful parses that produced no facts/episode (e.g. a template-echoing small model) returned 0 without logging, making a stalled consolidation look healthy. Both paths now log.

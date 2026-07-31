@@ -151,6 +151,9 @@ func NewCore() *Core {
 	// to Telegram so scheduled reports actually arrive.
 	go runOutboxDispatcher(w)
 
+	// Reminder delivery — runs in every gateway mode; no-ops without Telegram config.
+	go runReminderDispatcher(w)
+
 	// Alert checker (§18.1): error rate + dead man's switch, every 5 minutes
 	go checkAlerts(db, w.sendAlertMessage, 5*time.Minute, w.Settings.Location())
 
