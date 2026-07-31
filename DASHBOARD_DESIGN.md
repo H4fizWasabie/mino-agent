@@ -290,6 +290,27 @@ restores the previous journal date and scroll position.
 Mobile uses explicit controls. It does not use hidden swipe actions for state
 changes.
 
+## Truthful empty states
+
+Production never uses sample Responsibilities, fake journal activity,
+placeholder metrics, invented alerts, or synthetic health events.
+
+For a new owner, Today states that nothing needs attention and Mino has not
+accepted any Responsibilities. It may offer clearly labelled example prompts
+that distinguish asking a question, assigning Responsibility, and creating a
+Routine.
+
+A quiet day with existing Work says that nothing has materially changed,
+summarizes how many Responsibilities are proceeding normally, and identifies
+the next Routine. This is distinct from Mino owning nothing.
+
+Empty Work explains that a request appears there when Mino must carry an
+outcome across time, Conversations, dependencies, or future verification.
+
+After Responsibility migration, the first real Journal Entry is the visible
+baseline describing imported Routines and pending reminders and pointing to
+historical traces under System.
+
 ## Authoritative responsibility state
 
 Mino needs one small authoritative module for Responsibility state. Its narrow
