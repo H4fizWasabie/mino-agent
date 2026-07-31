@@ -41,6 +41,7 @@
 - OpenRouter provider preferences now allow fallback to the next compatible host when a pinned route returns an empty response.
 - Empty consolidation results now remain pending for retry instead of marking chat rows complete.
 - OpenRouter calls now use opaque session IDs for sticky prompt-cache routing, and embedding/query cache usage is reused locally.
+- Deployment no longer copies local playbooks; VPS playbooks remain runtime-owned and Mino-edited definitions are preserved.
 
 ### Removed
 - FTS5 supplement path in graph traversal (dead code since migration to .md files)
