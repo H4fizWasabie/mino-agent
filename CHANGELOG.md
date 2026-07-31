@@ -16,6 +16,7 @@
 
 ### Changed
 - Removed the orphaned tool-filter comment in `NewCore` (the feature lives in `loop.go`'s `SchemasForContext`).
+- Removed dead code left by the graph migration: `SearchEpisodes` (zero callers, `episodes_fts` has no writer since the SQLite episodes table stopped being written) and its two `episodes_fts` INSERT/DELETE triggers, plus the write-only `telegramCore` global.
 
 ### Fixed
 - JSON-mode LLM calls (consolidation, dedup, graph edge rebuild) failed on reasoning models like DeepSeek v4 flash: forced `response_format: json_object` makes them return `content: null` (the budget goes to reasoning), which surfaced as "empty model response" and silently stalled consolidation for days. The client now retries once without `response_format`; the tolerant JSON parsers extract facts from a normal reply.

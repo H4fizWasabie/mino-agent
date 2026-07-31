@@ -18,9 +18,6 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
-var telegramCore *Core
-
-// telegramAPIBase is overridable in tests to point at a fake bot API.
 var telegramAPIBase = "https://api.telegram.org"
 
 // runOutboxDispatcher drains the outbox to Abah's Telegram. send_message only
@@ -101,7 +98,6 @@ func postTelegram(token string, payload map[string]any) bool {
 }
 
 func RunTelegram(w *Core) {
-	telegramCore = w
 	token := w.Settings.Telegram
 	if token == "" {
 		slog.Error("TELEGRAM_BOT_TOKEN not set")

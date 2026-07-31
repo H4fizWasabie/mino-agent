@@ -96,27 +96,6 @@ func (m *Memory) Search(query string) string {
 	return m.graph.Remember(query)
 }
 
-// --- Episodic search (deprecated — use remember for graph-aware retrieval) ---
-
-// SearchEpisodes is kept for dashboard/migration use only.
-func (m *Memory) SearchEpisodes(query string) string {
-	rows, err := m.db.Query(
-		"SELECT happened_at, summary FROM episodes_fts WHERE episodes_fts MATCH ? ORDER BY rank LIMIT 3",
-		query,
-	)
-	if err != nil {
-		return ""
-	}
-	defer rows.Close()
-	var out strings.Builder
-	for rows.Next() {
-		var happenedAt, summary string
-		rows.Scan(&happenedAt, &summary)
-		out.WriteString(fmt.Sprintf("- **%s**: %s\n", happenedAt, summary))
-	}
-	return out.String()
-}
-
 // --- Skills (Core: procedural memory) ---
 
 func (m *Memory) MatchingSkills(message string) string {

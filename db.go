@@ -53,8 +53,6 @@ var schemaStatements = []string{
 		created_at TEXT DEFAULT (datetime('now'))
 	)`,
 	`CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(summary, content=episodes, content_rowid=id)`,
-	`CREATE TRIGGER IF NOT EXISTS episodes_ai AFTER INSERT ON episodes BEGIN INSERT INTO episodes_fts(rowid, summary) VALUES (new.id, new.summary); END`,
-	`CREATE TRIGGER IF NOT EXISTS episodes_ad AFTER DELETE ON episodes BEGIN INSERT INTO episodes_fts(episodes_fts, rowid, summary) VALUES ('delete', old.id, old.summary); END`,
 	`CREATE TABLE IF NOT EXISTS chat_log (
 		id INTEGER PRIMARY KEY,
 		role TEXT NOT NULL,
