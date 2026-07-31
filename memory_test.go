@@ -328,19 +328,20 @@ func TestDashboardMemoryActions(t *testing.T) {
 		},
 		{
 			name: "delete episode",
-			setup: func(t *testing.T, _ string, core *Core) string {
-				result, err := core.DB.Exec("INSERT INTO episodes (happened_at, summary) VALUES (?, ?)", "2026-07-18", "A useful day")
-				if err != nil {
+			setup: func(t *testing.T, home string, core *Core) string {
+				memories := filepath.Join(home, "memories")
+				core.Memory = &Memory{db: core.DB, cfg: &Settings{Home: home, MemoriesDir: memories}, graph: NewGraphMemory(memories, nil)}
+				if err := core.Memory.graph.RecordFact(Fact{ID: "ep_test_day", Type: "episodic", Subject: "A useful day", At: time.Now()}); err != nil {
 					t.Fatal(err)
 				}
-				id, _ := result.LastInsertId()
-				return fmt.Sprintf(`{"action":"delete_episode","id":%d}`, id)
+				return `{"action":"delete_episode","id":"ep_test_day"}`
 			},
 			verify: func(t *testing.T, _ string, core *Core) {
-				var count int
-				core.DB.QueryRow("SELECT COUNT(*) FROM episodes").Scan(&count)
-				if count != 0 {
-					t.Fatalf("episode was not deleted: %d remain", count)
+				if _, ok := core.Memory.graph.FindFact("ep_test_day"); ok {
+					t.Fatalf("episode still in graph")
+				}
+				if _, err := os.Stat(filepath.Join(core.Memory.graph.dir, "ep_test_day.md")); err == nil {
+					t.Fatalf("episode file still exists")
 				}
 			},
 		},
