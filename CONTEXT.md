@@ -30,6 +30,11 @@ The owner-wide portfolio of Responsibilities Mino currently owns, including
 working, waiting, blocked, and recently closed responsibilities.
 _Avoid_: To-do list, conversation history
 
+**Routine**:
+A standing recurring Responsibility whose executions contribute journal and
+history events without creating another Responsibility.
+_Avoid_: Repeated task, cron job, schedule
+
 **Evidence**:
 Runtime-recorded proof supporting a claimed state or outcome, such as a
 receipt, artifact, read-back, or external confirmation.

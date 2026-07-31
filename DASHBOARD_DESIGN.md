@@ -126,6 +126,26 @@ Work is not another chronological feed. It is the canonical portfolio of open
 Responsibility grouped by current owner-oriented status, with recently closed
 items available for continuity.
 
+Work uses three scopes:
+
+- **Current** contains active one-off Responsibilities grouped vertically as
+  Needs you, Blocked, Working, and Waiting.
+- **Routines** contains standing recurring Responsibilities. Each row leads
+  with its next run and most recent verified outcome.
+- **Closed** contains the complete searchable Responsibility archive.
+
+Work does not use a kanban board. The vertical portfolio preserves B's
+editorial character and remains usable on narrow screens.
+
+Current may include a compact **Recently verified** section for the previous
+seven days. Older closed Responsibilities leave the default workspace but
+remain accessible through Closed and journal search.
+
+Filters remain limited to owner-oriented status, due or overdue state,
+one-off or recurring kind, and outcome or Responsibility search. Channel is
+not a primary filter because it is a communication path rather than an
+ownership domain.
+
 Not every Journal Entry creates a Responsibility. A meaningful observation
 may appear only in Today. Anything Mino claims to own across time must appear
 in Work until it is truthfully closed.
@@ -175,7 +195,6 @@ records the receipt.
 
 ## Still to decide
 
-- Work grouping, filtering, and recently-closed retention
 - Mobile behavior for entry detail and conversation
 - Migration from existing dashboard data to Responsibility and journal state
 - Which existing runtime records can support the design without duplicating
