@@ -493,7 +493,17 @@ func TestConsolidateDue(t *testing.T) {
 		t.Fatalf("failure must leave rows unconsolidated: pending = %d", pending)
 	}
 
-	// 2. Success: fact + episode saved to .md files; session a only; b untouched.
+	// 2. A valid but empty result is still a consolidation failure and must retry.
+	response = `{"facts":[],"episode":""}`
+	if got := mem.ConsolidateDue(); got != 0 {
+		t.Fatalf("empty result wrote %d facts", got)
+	}
+	db.QueryRow("SELECT COUNT(*) FROM chat_log WHERE consolidated = 0").Scan(&pending)
+	if pending != 6 {
+		t.Fatalf("empty result must leave rows unconsolidated: pending = %d", pending)
+	}
+
+	// 3. Success: fact + episode saved to .md files; session a only; b untouched.
 	response = `{"facts":[{"id":"hafiz_works_vet","subject":"Hafiz works at a veterinary hospital","content":"Works at a veterinary hospital","edges":[]},{"id":"","subject":"","content":"dropped"}],"episode":"Chatted about work"}`
 	if got := mem.ConsolidateDue(); got != 1 {
 		t.Fatalf("written = %d, want 1", got)
@@ -506,14 +516,14 @@ func TestConsolidateDue(t *testing.T) {
 		t.Fatalf("pending=%d, want 2 (session b untouched)", pending)
 	}
 
-	// 3. Nothing due: no LLM call at all.
+	// 4. Nothing due: no LLM call at all.
 	before := calls
 	mem.ConsolidateDue()
 	if calls != before {
 		t.Fatal("consolidation called the LLM with nothing due")
 	}
 
-	// 4. Echoed template placeholders: rejected, not saved.
+	// 5. Echoed template placeholders: rejected, not saved.
 	response = `{"facts":[{"id":"<snake_case_id>","subject":"<one sentence>","content":"<optional body>","edges":[]}],"episode":"<one sentence>"}`
 	seed("c", 2)
 	before = mem.graph.Stat()
@@ -525,7 +535,7 @@ func TestConsolidateDue(t *testing.T) {
 	}
 
 	response = `{"facts":[{"id":"hafiz_works_vet","subject":"Hafiz works at a veterinary hospital","content":"Works at a veterinary hospital","edges":[]}],"episode":"Chatted about work"}`
-	// 5. Same fact distilled again: merge (no new file, just edge merge).
+	// 6. Same fact distilled again: merge (no new file, just edge merge).
 	seed("a", 2)
 	before = mem.graph.Stat()
 	mem.ConsolidateDue() // returns 0 because merge skips, but that's fine

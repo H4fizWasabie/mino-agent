@@ -235,3 +235,23 @@ func TestAllTextOnlyVisionFails(t *testing.T) {
 		t.Fatal("expected error when no vision-capable provider")
 	}
 }
+
+func TestRoutingForRoleUsesSmallRoute(t *testing.T) {
+	p := ProviderConfig{ProviderRouting: []string{"OpenAI"}, SmallRouting: []string{"GMICloud"}}
+	if got := routingForRole(p, MainModel); len(got) != 1 || got[0] != "OpenAI" {
+		t.Fatalf("main routing = %#v, want OpenAI", got)
+	}
+	if got := routingForRole(p, SmallModel); len(got) != 1 || got[0] != "GMICloud" {
+		t.Fatalf("small routing = %#v, want GMICloud", got)
+	}
+}
+
+func TestReasoningForRoleKeepsSmallModelIndependent(t *testing.T) {
+	p := ProviderConfig{ReasoningEffort: "medium"}
+	if got := reasoningForRole(p, MainModel); got != "medium" {
+		t.Fatalf("main reasoning = %q, want medium", got)
+	}
+	if got := reasoningForRole(p, SmallModel); got != "" {
+		t.Fatalf("small reasoning = %q, want omitted", got)
+	}
+}

@@ -36,6 +36,10 @@
 - Consolidation now requests JSON mode and tolerates wrapped model output; graph memory also reads legacy front matter with unquoted scalar colons.
 - Graph edge rebuild now uses JSON mode and never erases existing edges on empty or invalid inference output.
 - Current-time grounding now repeats the configured local clock on the fresh user turn so stale history cannot override it.
+- Small-model OpenRouter routing can use a separate provider route, keeping background consolidation independent from the main model route.
+- Small-model reasoning settings are independent from the main model, preventing consolidation output starvation on efficient models.
+- OpenRouter provider preferences now allow fallback to the next compatible host when a pinned route returns an empty response.
+- Empty consolidation results now remain pending for retry instead of marking chat rows complete.
 
 ### Removed
 - FTS5 supplement path in graph traversal (dead code since migration to .md files)

@@ -31,9 +31,11 @@ type ProviderConfig struct {
 	Models          []string `json:"models,omitempty"`
 	Small           string   `json:"small_model"`
 	ReasoningEffort string   `json:"reasoning_effort,omitempty"`
+	SmallReasoning  string   `json:"small_reasoning_effort,omitempty"`
 	ReasoningLevels []string `json:"reasoning_levels,omitempty"`
-	TextOnly        bool     `json:"text_only"`                  // provider rejects image input; skipped for vision turns
-	ProviderRouting []string `json:"provider_routing,omitempty"` // openrouter: force specific providers
+	TextOnly        bool     `json:"text_only"`                        // provider rejects image input; skipped for vision turns
+	ProviderRouting []string `json:"provider_routing,omitempty"`       // openrouter: force specific providers
+	SmallRouting    []string `json:"small_provider_routing,omitempty"` // openrouter route for background calls
 }
 
 type providerFile struct {
@@ -142,32 +144,32 @@ func loadProviders(home string, legacy *Settings) ([]ProviderConfig, error) {
 }
 
 func (m *ProviderManager) Create(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
-	return m.call(session, routeRole(role, messages), func(c *Client, model, reasoning string) (*LLMResponse, error) {
-		return c.create(context.Background(), model, reasoning, messages, maxTokens, system, tools, false, false, nil)
+	return m.callWithConfig(session, routeRole(role, messages), func(c *Client, model, reasoning string, p ProviderConfig) (*LLMResponse, error) {
+		return c.createWithRouting(context.Background(), model, reasoningForRole(p, role), messages, maxTokens, system, tools, false, false, nil, routingForRole(p, role))
 	})
 }
 
 func (m *ProviderManager) CreateJSON(session string, role ModelRole, messages []Message, maxTokens int, system string) (*LLMResponse, error) {
-	return m.call(session, routeRole(role, messages), func(c *Client, model, reasoning string) (*LLMResponse, error) {
-		return c.create(context.Background(), model, reasoning, messages, maxTokens, system, nil, false, true, nil)
+	return m.callWithConfig(session, routeRole(role, messages), func(c *Client, model, reasoning string, p ProviderConfig) (*LLMResponse, error) {
+		return c.createWithRouting(context.Background(), model, reasoningForRole(p, role), messages, maxTokens, system, nil, false, true, nil, routingForRole(p, role))
 	})
 }
 
 func (m *ProviderManager) CreateContext(ctx context.Context, session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
-	return m.callContext(ctx, session, routeRole(role, messages), func(c *Client, model, reasoning string) (*LLMResponse, error) {
-		return c.create(ctx, model, reasoning, messages, maxTokens, system, tools, false, false, nil)
+	return m.callContextWithConfig(ctx, session, routeRole(role, messages), func(c *Client, model, reasoning string, p ProviderConfig) (*LLMResponse, error) {
+		return c.createWithRouting(ctx, model, reasoningForRole(p, role), messages, maxTokens, system, tools, false, false, nil, routingForRole(p, role))
 	})
 }
 
 func (m *ProviderManager) Stream(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
-	return m.call(session, routeRole(role, messages), func(c *Client, model, reasoning string) (*LLMResponse, error) {
-		return c.create(context.Background(), model, reasoning, messages, maxTokens, system, tools, true, false, onText)
+	return m.callWithConfig(session, routeRole(role, messages), func(c *Client, model, reasoning string, p ProviderConfig) (*LLMResponse, error) {
+		return c.createWithRouting(context.Background(), model, reasoningForRole(p, role), messages, maxTokens, system, tools, true, false, onText, routingForRole(p, role))
 	})
 }
 
 func (m *ProviderManager) StreamContext(ctx context.Context, session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
-	return m.callContext(ctx, session, routeRole(role, messages), func(c *Client, model, reasoning string) (*LLMResponse, error) {
-		return c.create(ctx, model, reasoning, messages, maxTokens, system, tools, true, false, onText)
+	return m.callContextWithConfig(ctx, session, routeRole(role, messages), func(c *Client, model, reasoning string, p ProviderConfig) (*LLMResponse, error) {
+		return c.createWithRouting(ctx, model, reasoningForRole(p, role), messages, maxTokens, system, tools, true, false, onText, routingForRole(p, role))
 	})
 }
 
@@ -214,6 +216,12 @@ func (m *ProviderManager) resolveKey(p ProviderConfig) (string, error) {
 }
 
 func (m *ProviderManager) call(session string, role ModelRole, call func(*Client, string, string) (*LLMResponse, error)) (*LLMResponse, error) {
+	return m.callWithConfig(session, role, func(c *Client, model, reasoning string, _ ProviderConfig) (*LLMResponse, error) {
+		return call(c, model, reasoning)
+	})
+}
+
+func (m *ProviderManager) callWithConfig(session string, role ModelRole, call func(*Client, string, string, ProviderConfig) (*LLMResponse, error)) (*LLMResponse, error) {
 	var lastErr error
 	for _, p := range m.candidates(session, role) {
 		// refresh key from env/auth.json (supports runtime key changes)
@@ -227,7 +235,7 @@ func (m *ProviderManager) call(session string, role ModelRole, call func(*Client
 			client.apiKey = key
 		}
 		for attempt := 0; attempt < 3; attempt++ {
-			resp, err := call(client, modelFor(p, role), p.ReasoningEffort)
+			resp, err := call(client, modelFor(p, role), p.ReasoningEffort, p)
 			if err == nil {
 				m.success(session, role, p.Name)
 				return resp, nil
@@ -246,6 +254,12 @@ func (m *ProviderManager) call(session string, role ModelRole, call func(*Client
 }
 
 func (m *ProviderManager) callContext(ctx context.Context, session string, role ModelRole, call func(*Client, string, string) (*LLMResponse, error)) (*LLMResponse, error) {
+	return m.callContextWithConfig(ctx, session, role, func(c *Client, model, reasoning string, _ ProviderConfig) (*LLMResponse, error) {
+		return call(c, model, reasoning)
+	})
+}
+
+func (m *ProviderManager) callContextWithConfig(ctx context.Context, session string, role ModelRole, call func(*Client, string, string, ProviderConfig) (*LLMResponse, error)) (*LLMResponse, error) {
 	var lastErr error
 	for _, p := range m.candidates(session, role) {
 		if ctx.Err() != nil {
@@ -261,7 +275,7 @@ func (m *ProviderManager) callContext(ctx context.Context, session string, role 
 			client.apiKey = key
 		}
 		for attempt := 0; attempt < 3; attempt++ {
-			resp, err := call(client, modelFor(p, role), p.ReasoningEffort)
+			resp, err := call(client, modelFor(p, role), p.ReasoningEffort, p)
 			if err == nil {
 				m.success(session, role, p.Name)
 				return resp, nil
@@ -286,6 +300,20 @@ func (m *ProviderManager) callContext(ctx context.Context, session string, role 
 		return nil, fmt.Errorf("all %s providers failed: %w", role, lastErr)
 	}
 	return nil, fmt.Errorf("all %s providers failed", role)
+}
+
+func routingForRole(p ProviderConfig, role ModelRole) []string {
+	if role == SmallModel && len(p.SmallRouting) > 0 {
+		return p.SmallRouting
+	}
+	return p.ProviderRouting
+}
+
+func reasoningForRole(p ProviderConfig, role ModelRole) string {
+	if role == SmallModel {
+		return p.SmallReasoning
+	}
+	return p.ReasoningEffort
 }
 
 func modelFor(p ProviderConfig, role ModelRole) string {

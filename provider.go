@@ -30,8 +30,10 @@ type ContentBlock struct {
 }
 
 type UsageInfo struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens          int `json:"input_tokens"`
+	OutputTokens         int `json:"output_tokens"`
+	CacheReadTokens      int `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationTokens  int `json:"cache_creation_input_tokens,omitempty"`
 }
 
 type LLMResponse struct {
@@ -82,6 +84,10 @@ func (c *Client) Stream(model string, messages []Message, maxTokens int, system 
 }
 
 func (c *Client) create(ctx context.Context, model, reasoning string, messages []Message, maxTokens int, system string, tools []ToolDef, stream, jsonOutput bool, onText func(string)) (*LLMResponse, error) {
+	return c.createWithRouting(ctx, model, reasoning, messages, maxTokens, system, tools, stream, jsonOutput, onText, c.providerRouting)
+}
+
+func (c *Client) createWithRouting(ctx context.Context, model, reasoning string, messages []Message, maxTokens int, system string, tools []ToolDef, stream, jsonOutput bool, onText func(string), routing []string) (*LLMResponse, error) {
 	if c.isCodex() {
 		return c.createCodex(ctx, model, reasoning, messages, system, tools, onText)
 	}
@@ -113,10 +119,10 @@ func (c *Client) create(ctx context.Context, model, reasoning string, messages [
 		"max_completion_tokens": maxTokens,
 		"stream":                stream,
 	}
-	if len(c.providerRouting) > 0 {
+	if len(routing) > 0 {
 		payload["provider"] = map[string]any{
-			"order":           c.providerRouting,
-			"allow_fallbacks": false,
+			"order":           routing,
+			"allow_fallbacks": true,
 		}
 	}
 	if reasoning != "" {
@@ -387,8 +393,15 @@ func (c *Client) createAnthropic(ctx context.Context, model string, messages []M
 		}
 	}
 
+	// Prompt caching: cache system + all but the last 2 messages.
+	// The last user+assistant pair changes each turn; everything before is stable.
+	cacheBreak := len(messages) - 2
+	if cacheBreak < 0 {
+		cacheBreak = 0
+	}
+
 	anthropicMsgs := make([]map[string]any, 0)
-	for _, m := range messages {
+	for i, m := range messages {
 		content := []map[string]any{{"type": "text", "text": m.Content}}
 		if len(m.Images) > 0 {
 			for _, img := range m.Images {
@@ -406,6 +419,10 @@ func (c *Client) createAnthropic(ctx context.Context, model string, messages []M
 				}
 			}
 		}
+		// Mark last content block as cache breakpoint for historical messages
+		if i < cacheBreak {
+			content[len(content)-1]["cache_control"] = map[string]string{"type": "ephemeral"}
+		}
 		role := m.Role
 		if role == "assistant" {
 			role = "assistant"
@@ -419,7 +436,10 @@ func (c *Client) createAnthropic(ctx context.Context, model string, messages []M
 		"max_tokens": maxTokens,
 	}
 	if system != "" {
-		payload["system"] = system
+		// Wrap system in content block with cache_control for prompt caching
+		payload["system"] = []map[string]any{
+			{"type": "text", "text": system, "cache_control": map[string]string{"type": "ephemeral"}},
+		}
 	}
 	if len(anthropicTools) > 0 {
 		payload["tools"] = anthropicTools
@@ -468,8 +488,10 @@ func parseAnthropicResponse(r io.Reader) (*LLMResponse, error) {
 		} `json:"content"`
 		StopReason string `json:"stop_reason"`
 		Usage      struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
+			InputTokens         int `json:"input_tokens"`
+			OutputTokens        int `json:"output_tokens"`
+			CacheReadTokens     int `json:"cache_read_input_tokens"`
+			CacheCreationTokens int `json:"cache_creation_input_tokens"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(data, &result); err != nil {
@@ -496,8 +518,10 @@ func parseAnthropicResponse(r io.Reader) (*LLMResponse, error) {
 	return &LLMResponse{
 		StopReason: stopReason,
 		Usage: UsageInfo{
-			InputTokens:  result.Usage.InputTokens,
-			OutputTokens: result.Usage.OutputTokens,
+			InputTokens:         result.Usage.InputTokens,
+			OutputTokens:        result.Usage.OutputTokens,
+			CacheReadTokens:     result.Usage.CacheReadTokens,
+			CacheCreationTokens: result.Usage.CacheCreationTokens,
 		},
 		Content:   blocks,
 		FinalText: finalText,
