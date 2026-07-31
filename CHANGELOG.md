@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Dashboard redesign decision record and canonical responsibility/journal product language
 - Throwaway owner-cockpit UI prototype with three responsive design directions for redesign evaluation
 - Memory graph index cache (`index.json`): O(1) startup, skips re-parsing all .md files
 - Edge validation: dangling edge targets filtered on write
