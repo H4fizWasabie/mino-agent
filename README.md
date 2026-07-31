@@ -11,8 +11,8 @@ One binary. One SQLite file. Your own AI assistant.
 - **Telegram** — same agent, any device
 - **Playbooks** — repeatable markdown workflows, stage-by-stage execution with retry, resume on restart
 - **Coding tools** — read, write, edit, grep, glob, git, graphify, codegraph, bash
-- **Memory** — SQLite + FTS5 semantic search, auto-consolidation, one-time reminders
-- **Multi-provider** — priority, fallback, circuit breaking across LLM backends. OpenRouter routing.
+- **Memory** — Markdown-authoritative graph memory, SQLite operational state and diagnostics, auto-consolidation, one-time reminders
+- **Multi-provider** — priority, fallback, circuit breaking, and OpenRouter provider routing (including Exacto tool-call routing)
 - **OAuth login** — Claude, Codex (ChatGPT), GitHub Copilot, xAI/Grok
 - **Web search** — Tavily API (free tier available)
 - **Guardrails** — prefers specialized tools over bash, workspace boundary enforcement
@@ -87,7 +87,7 @@ mino
 | `MINO_CONTEXT_CHARS` | `100000` | Context window budget |
 | `TELEGRAM_BOT_TOKEN` | — | Optional Telegram bot token |
 | `TAVILY_API_KEY` | — | Web search (free key at tavily.com) |
-| `MINO_OPENROUTER_KEY` | — | Embeddings (free tier available) |
+| `MINO_OPENROUTER_KEY` | — | OpenRouter API key for providers and embeddings |
 
 See `.env.example` for a copy-paste template.
 
@@ -122,6 +122,26 @@ Set the key in the dashboard onboarding form, or write to `~/.mino/auth.json`:
 }
 ```
 
+For OpenRouter, use the OpenRouter base URL and model slug. `:exacto` asks
+OpenRouter to prefer providers with stronger tool-calling reliability; the
+optional `provider_routing` list can pin a discounted provider route.
+
+```json
+{
+  "providers": [
+    {
+      "name": "openrouter",
+      "priority": 1,
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "MINO_OPENROUTER_KEY",
+      "model": "xiaomi/mimo-v2.5:exacto",
+      "small_model": "deepseek/deepseek-v4-flash",
+      "provider_routing": ["GMICloud"]
+    }
+  ]
+}
+```
+
 ### OAuth (no API key needed)
 
 Mino ships with OAuth configs for Claude, Codex (ChatGPT), GitHub Copilot, and xAI/Grok. Login from the Settings page — no API key required.
@@ -148,13 +168,14 @@ Empty `api_key_env` means no auth. Works with any OpenAI-compatible local server
 ## Architecture
 
 ```
-mino (~13,000 lines of Go)
+mino (single Go binary)
 
 main.go              — entry point, CLI routing
 app.go               — Core struct, Respond, session wiring
 loop.go              — agent loop: observe → reason → act → repeat
 session.go           — SOUL.md, system prompt, context assembly
-memory.go            — SQLite + FTS5 retrieval, consolidation
+memory.go            — operational SQLite state and consolidation bridge
+graph_memory.go      — Markdown-authoritative semantic graph memory
 tools.go             — built-in tools (file, bash, calendar, notes, search, image)
 coding_tools.go      — read, write, edit, grep, glob, git, graphify, codegraph
 provider.go          — OpenAI + Anthropic + Codex clients, SSE streaming

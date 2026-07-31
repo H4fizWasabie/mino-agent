@@ -9,6 +9,7 @@
 - Graph-backed memory management, bounded consolidation edge inference, and graph edge rebuild maintenance commands
 
 ### Changed
+- README now documents Markdown-authoritative graph memory, OpenRouter Exacto routing, and provider configuration without credentials
 - Markdown graph claims are now authoritative for semantic memory, dashboard views, correction, forgetting, confirmation, and search; SQLite facts remain read-only diagnostics
 - Interrupt status checks may use read-only tool schemas and dashboard SSE keeps the response handler alive until the interrupt reply is delivered
 - State-changing tools expose verification-oriented summaries; `system_check` reports schedules, reminders, playbooks, and crontab state
