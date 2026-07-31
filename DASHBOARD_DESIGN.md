@@ -48,6 +48,27 @@ Desktop keeps a restrained, fixed, single-line conversation composer at the
 bottom centre. It expands on focus or during conversation, replacing the
 former permanent chat dock without turning Today into a chat page.
 
+### Truthful health
+
+The global health indicator reports runtime health rather than owner workload:
+
+- **Operational** means essential runtime surfaces are healthy.
+- **Degraded** means a surface is impaired but fallback or recovery keeps
+  Responsibility moving.
+- **Attention** means a system problem has blocked or jeopardized a
+  Responsibility.
+- **Connection lost** means the dashboard cannot obtain current state.
+
+A Needs-you Responsibility does not make Mino unhealthy. When degradation
+materially changes a Responsibility, the runtime also creates or updates the
+relevant Today entry.
+
+Opening health shows core uptime, database integrity and backup state,
+provider and fallback availability, scheduler heartbeat, Telegram gateway,
+extensions and MCP connections, and data freshness. The header shows the last
+successful refresh and never continues displaying Operational when its state
+is stale or unreachable.
+
 ## Information architecture
 
 - **Today** answers: What changed, what matters now, and what needs the owner?
