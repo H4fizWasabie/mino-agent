@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Explicit System, Light, and Dark dashboard themes with a calm stone/paper Light palette
 - Channel-neutral explicit capability selection and trace-visible tool schema names for registered extension tools
 - Compact Option B desktop top navigation with the chat surface kept secondary
 - Responsibility-aware Overview command center with current attention, verified outcomes, workspace shortcuts, and a separate runtime inspection surface

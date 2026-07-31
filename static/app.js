@@ -1781,6 +1781,20 @@ function clearGraphQuery() {
 }
 
 window.addEventListener("hashchange", render);
+const THEME_KEY = "mino-theme";
+function applyTheme(mode) {
+  const value = ["system", "light", "dark"].includes(mode) ? mode : "system";
+  document.documentElement.toggleAttribute("data-theme", value !== "system");
+  if (value !== "system") document.documentElement.dataset.theme = value;
+  localStorage.setItem(THEME_KEY, value);
+  const select = document.getElementById("theme-mode");
+  if (select) select.value = value;
+}
+function initTheme() {
+  applyTheme(localStorage.getItem(THEME_KEY) || "system");
+  document.getElementById("theme-mode")?.addEventListener("change", event => applyTheme(event.target.value));
+}
+initTheme();
 let orbitNarrow = window.innerWidth < 720;
 window.addEventListener("resize", () => {
   const narrow = window.innerWidth < 720;
