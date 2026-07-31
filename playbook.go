@@ -685,11 +685,11 @@ func makeRunPlaybookTool(core *Core) *Tool {
 				sid, _ = v.(string)
 			}
 			request, _ := ctx.Value(userMessageKey{}).(string)
-			result, err := RunPlaybook(ctx, core, name, request, sid, nil)
+			output, err := runPlaybookWithResponsibility(ctx, core, name, request, sid, RunPlaybook, time.Now().UTC())
 			if err != nil {
 				return fmt.Sprintf("Error: %v", err)
 			}
-			return formatPlaybookResult(result)
+			return output
 		},
 	}
 }

@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- One-off playbook Responsibility lifecycle: explicit runs now record acceptance, truthful completion or blocked outcomes, and read-back Evidence
 - Truthful Routine journal slice connecting scheduled playbook results to Today, Work, dedicated history, and read-back Evidence
 - Authoritative SQLite Responsibility projections, append-only history, and idempotent schedule/reminder baseline migration
 - Dashboard redesign decision record covering the authoritative responsibility journal, editorial frame, truthful health and empty states, adaptive density, dated navigation, portfolio and detail views, channel conversations, mobile behavior, canonical product language, and state-first delivery sequence

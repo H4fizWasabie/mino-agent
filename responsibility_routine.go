@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,6 +21,91 @@ func (s *ResponsibilityStore) startRoutine(schedule PlaybookSchedule, at time.Ti
 		At:               at,
 	})
 	return err
+}
+
+func (s *ResponsibilityStore) startOneOff(id, name, request, sessionID string, at time.Time) error {
+	title := strings.TrimSpace(request)
+	if title == "" {
+		title = "Run playbook " + name
+	}
+	_, err := s.Record(ResponsibilityEvent{
+		ResponsibilityID: id,
+		Type:             "accepted",
+		Kind:             "one_off",
+		Title:            title,
+		Outcome:          title,
+		Owner:            "mino",
+		Status:           "working",
+		NextAction:       "Complete playbook",
+		NextOwner:        "mino",
+		SourceKind:       "playbook",
+		SourceRef:        id,
+		Verification:     "Declared playbook outputs must exist before verification.",
+		Summary:          "Accepted one-off playbook run.",
+		Evidence:         "session:" + sessionID,
+		At:               at,
+	})
+	return err
+}
+
+func (s *ResponsibilityStore) finishOneOff(home, id, sessionID string, result *PlaybookResult, runErr error, at time.Time) error {
+	event := ResponsibilityEvent{
+		ResponsibilityID: id,
+		Type:             "blocked",
+		Status:           "blocked",
+		Summary:          "One-off playbook did not return a result.",
+		NextAction:       "Inspect the playbook run",
+		NextOwner:        "mino",
+		Evidence:         "session:" + sessionID,
+		At:               at,
+	}
+	if runErr != nil {
+		event.Summary = "One-off playbook failed before producing a result."
+		event.Evidence += "\nerror:" + runErr.Error()
+	} else if result != nil {
+		event.Summary = strings.TrimSpace(result.Reply)
+		if event.Summary == "" {
+			event.Summary = fmt.Sprintf("One-off playbook ended %s.", result.Status)
+		}
+		var verified int
+		event.Evidence, verified = routineEvidence(home, sessionID, result.Outputs)
+		if result.Status == "complete" && verified > 0 {
+			event.Type = "completed"
+			event.Status = "verified"
+			event.Summary = fmt.Sprintf("One-off playbook completed with %d verified %s.", verified, plural(verified, "output", "outputs"))
+			event.NextAction = "Closed"
+		} else if result.Status == "blocked" {
+			event.Summary = "One-off playbook needs owner input. " + event.Summary
+		} else if result.Status == "complete" {
+			event.Summary = "One-off playbook completed without a readable output."
+		}
+	}
+	_, err := s.Record(event)
+	return err
+}
+
+type playbookResponsibilityRunner func(context.Context, *Core, string, string, string, Observer) (*PlaybookResult, error)
+
+func runPlaybookWithResponsibility(ctx context.Context, core *Core, name, request, sessionID string, run playbookResponsibilityRunner, at time.Time) (string, error) {
+	if core.Responsibilities == nil {
+		result, err := run(ctx, core, name, request, sessionID, nil)
+		if err != nil {
+			return "", err
+		}
+		return formatPlaybookResult(result), nil
+	}
+	id := fmt.Sprintf("one-off:%s:%s:%d", name, sessionID, at.UnixNano())
+	if err := core.Responsibilities.startOneOff(id, name, request, sessionID, at); err != nil {
+		return "", err
+	}
+	result, runErr := run(ctx, core, name, request, sessionID, nil)
+	if err := core.Responsibilities.finishOneOff(core.Settings.Home, id, sessionID, result, runErr, time.Now().UTC()); err != nil {
+		return "", err
+	}
+	if runErr != nil {
+		return "", runErr
+	}
+	return formatPlaybookResult(result), nil
 }
 
 func (s *ResponsibilityStore) finishRoutine(

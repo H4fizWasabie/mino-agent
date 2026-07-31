@@ -552,6 +552,77 @@ func TestDueRoutineRecordsVerifiedResultWithEvidence(t *testing.T) {
 	}
 }
 
+func TestOneOffPlaybookRecordsVerifiedResponsibility(t *testing.T) {
+	home := t.TempDir()
+	output := filepath.Join(home, "playbooks", "audit", "output", "report.md")
+	if err := os.MkdirAll(filepath.Dir(output), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(output, []byte("verified report"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	db := Connect(home)
+	defer db.Close()
+	store := NewResponsibilityStore(db)
+	core := &Core{
+		Settings:         &Settings{Home: home},
+		Responsibilities: store,
+	}
+	at := time.Date(2026, 7, 31, 4, 0, 0, 0, time.UTC)
+	run := func(context.Context, *Core, string, string, string, Observer) (*PlaybookResult, error) {
+		return &PlaybookResult{Name: "audit", Status: "complete", StagesRun: 1, Outputs: []string{output}, Reply: "Report written."}, nil
+	}
+
+	got, err := runPlaybookWithResponsibility(context.Background(), core, "audit", "Run the audit", "dashboard-1", run, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "audit — complete") {
+		t.Fatalf("tool result = %q", got)
+	}
+	items, err := store.List(ResponsibilityFilter{Kind: "one_off"})
+	if err != nil || len(items) != 1 {
+		t.Fatalf("one-off responsibilities = %+v, err=%v", items, err)
+	}
+	item := items[0]
+	if item.Status != "verified" || item.SourceKind != "playbook" || !strings.HasPrefix(item.SourceRef, "one-off:audit:dashboard-1:") {
+		t.Fatalf("one-off projection = %+v", item)
+	}
+	history, err := store.History(item.ID)
+	if err != nil || len(history) != 2 {
+		t.Fatalf("history = %+v, err=%v", history, err)
+	}
+	if history[0].Type != "accepted" || history[0].Status != "working" || history[1].Type != "completed" || history[1].Status != "verified" {
+		t.Fatalf("history = %+v", history)
+	}
+	if !strings.Contains(history[1].Evidence, "artifact:playbooks/audit/output/report.md") {
+		t.Fatalf("evidence = %q", history[1].Evidence)
+	}
+}
+
+func TestOneOffPlaybookBlocksWithoutReadableEvidence(t *testing.T) {
+	home := t.TempDir()
+	db := Connect(home)
+	defer db.Close()
+	store := NewResponsibilityStore(db)
+	core := &Core{Settings: &Settings{Home: home}, Responsibilities: store}
+	at := time.Date(2026, 7, 31, 4, 0, 0, 0, time.UTC)
+	run := func(context.Context, *Core, string, string, string, Observer) (*PlaybookResult, error) {
+		return &PlaybookResult{Name: "audit", Status: "complete", Reply: "Nothing written."}, nil
+	}
+	if _, err := runPlaybookWithResponsibility(context.Background(), core, "audit", "Run the audit", "dashboard-2", run, at); err != nil {
+		t.Fatal(err)
+	}
+	items, err := store.List(ResponsibilityFilter{Kind: "one_off", Status: "blocked"})
+	if err != nil || len(items) != 1 {
+		t.Fatalf("blocked one-off responsibilities = %+v, err=%v", items, err)
+	}
+	history, err := store.History(items[0].ID)
+	if err != nil || len(history) != 2 || history[1].Status != "blocked" {
+		t.Fatalf("history = %+v, err=%v", history, err)
+	}
+}
+
 func TestVerifiedRoutineRunsAgainOnTheNextScheduledDay(t *testing.T) {
 	home := t.TempDir()
 	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
