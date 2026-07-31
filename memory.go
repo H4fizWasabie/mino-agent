@@ -7,9 +7,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Memory struct {
@@ -18,12 +22,15 @@ type Memory struct {
 	client        *ProviderManager
 	cfg           *Settings
 	embedder      *EmbeddingStore
+	graph         *GraphMemory
 	consolidateMu sync.Mutex
-	recallCtx     string // §19: conversation context for context_boost in scoreFact
 }
 
 func NewMemory(db *sql.DB, client *ProviderManager, cfg *Settings) *Memory {
-	return &Memory{db: db, client: client, cfg: cfg}
+	m := &Memory{db: db, client: client, cfg: cfg}
+	m.graph = NewGraphMemory(cfg.MemoriesDir, cfg)
+	m.MigrateMissingFacts()
+	return m
 }
 
 // --- Chat log (Core: log_chat) ---
@@ -83,28 +90,15 @@ func (m *Memory) CleanupArtifacts() {
 	m.db.Exec("DELETE FROM session_artifacts WHERE created_at < datetime('now', '-1 day')")
 }
 
-// --- Semantic search (Core: FTS5) ---
+// --- Semantic search (graph-backed) ---
 
 func (m *Memory) Search(query string) string {
-	rows, err := m.db.Query(
-		"SELECT subject, content FROM facts_fts WHERE facts_fts MATCH ? ORDER BY rank LIMIT ?",
-		query, m.cfg.TopK,
-	)
-	if err != nil {
-		return ""
-	}
-	defer rows.Close()
-	var out strings.Builder
-	for rows.Next() {
-		var subject, content string
-		rows.Scan(&subject, &content)
-		out.WriteString(fmt.Sprintf("- **%s**: %s\n", subject, content))
-	}
-	return out.String()
+	return m.graph.Remember(query)
 }
 
-// --- Episodic search ---
+// --- Episodic search (deprecated — use remember for graph-aware retrieval) ---
 
+// SearchEpisodes is kept for dashboard/migration use only.
 func (m *Memory) SearchEpisodes(query string) string {
 	rows, err := m.db.Query(
 		"SELECT happened_at, summary FROM episodes_fts WHERE episodes_fts MATCH ? ORDER BY rank LIMIT 3",
@@ -173,10 +167,41 @@ const summarizerPrompt = `You distill a personal assistant's recent conversation
 From the exchanges below, extract:
 1. durable facts about the user, their people, projects, or preferences —
    only things worth remembering in a month; skip chit-chat and one-offs.
+   For each fact, include only high-confidence edges to candidate facts listed below.
 2. one single-sentence episode summarizing what happened in this conversation.
 
+Available fact IDs (use as edge targets when relevant):
+%s
+
 Reply with ONLY this JSON:
-{"facts": [{"subject": "<who/what>", "content": "<one sentence>"}], "episode": "<one sentence>"}
+{"facts": [{"id": "snake_case_id", "subject": "<one sentence>", "content": "<optional body>", "edges": [{"target": "<existing_id>", "rel": "<specific relation>", "kind": "inferred", "confidence": 0.0}]}], "episode": "<one sentence>"}
+
+Only emit an edge when confidence is at least 0.85. Never emit generic related_to.
+
+Edge relations (pick the MOST SPECIFIC one that fits):
+- attributed_to: property or attribute belonging to target
+  ex: "User's Gmail account" attributed_to "User profile"
+- prefers: user preference about the target
+  ex: "User prefers dark theme" prefers "UI settings"
+- maintains: user is responsible for the target project/system
+  ex: "User" maintains "Project repo"
+- depends_on: this requires the target to function
+  ex: "Deploy script" depends_on "Production server"
+- supersedes: this replaces or obsoletes the target
+  ex: "New CRM system" supersedes "Old spreadsheet tracker"
+- located_at: physical or logical location
+  ex: "Project database" located_at "Cloud server"
+- requires: needs the target as a prerequisite
+  ex: "API integration" requires "API access key"
+- deployed_on: software running on the target infrastructure
+  ex: "Web app" deployed_on "VPS instance"
+- scheduled_at: task scheduled at a specific time or cadence
+  ex: "Weekly report" scheduled_at "Monday 9am"
+- calls: invokes or uses the target as a function/service
+  ex: "Backup script" calls "rsync utility"
+- used_in: this is used within the target context
+  ex: "SQLite library" used_in "Database module"
+- related_to: generic relationship — only when nothing above fits
 
 Exchanges:
 %s`
@@ -267,9 +292,14 @@ func (m *Memory) consolidateSession(sid string) int {
 	if len(ids) == 0 {
 		return 0
 	}
-	resp, err := m.client.Create("consolidation", SmallModel,
-		[]Message{{Role: "user", Content: fmt.Sprintf(summarizerPrompt, log.String())}}, 600, "", nil)
+
+	// Embeddings select a bounded candidate set; they never create edges.
+	availableIDs := m.graphCandidates(log.String())
+
+	resp, err := m.client.CreateJSON("consolidation", SmallModel,
+		[]Message{{Role: "user", Content: fmt.Sprintf(summarizerPrompt, availableIDs.prompt, log.String())}}, 600, "")
 	if err != nil {
+		slog.Warn("consolidation model call failed", "session", sid, "error", err)
 		return 0
 	}
 	text := resp.FinalText
@@ -280,47 +310,563 @@ func (m *Memory) consolidateSession(sid string) int {
 			}
 		}
 	}
-	start, end := strings.Index(text, "{"), strings.LastIndex(text, "}")
-	if start < 0 || end <= start {
-		return 0
-	}
-	var distilled struct {
-		Facts []struct {
-			Subject string `json:"subject"`
-			Content string `json:"content"`
-		} `json:"facts"`
-		Episode string `json:"episode"`
-	}
-	if json.Unmarshal([]byte(text[start:end+1]), &distilled) != nil {
+	distilled, err := parseConsolidationResponse(text)
+	if err != nil {
+		slog.Warn("consolidation response JSON invalid", "session", sid, "error", err)
 		return 0
 	}
 	// reasoning models sometimes echo the prompt's JSON template verbatim
 	placeholder := func(s string) bool { return s == "" || strings.Contains(s, "<") }
 	written := 0
 	for _, f := range distilled.Facts {
-		if placeholder(f.Subject) || placeholder(f.Content) {
+		if placeholder(f.ID) || placeholder(f.Subject) {
 			continue
 		}
-		res, err := m.db.Exec(`INSERT INTO facts (subject, content, source) SELECT ?, ?, 'consolidation'
-			WHERE NOT EXISTS (SELECT 1 FROM facts WHERE subject = ? AND content = ?)`,
-			f.Subject, f.Content, f.Subject, f.Content)
-		if err != nil {
-			continue
+		fact := Fact{
+			ID:      f.ID,
+			Type:    "semantic",
+			Subject: f.Subject,
+			At:      time.Now(),
+			Body:    f.Content,
 		}
-		if n, _ := res.RowsAffected(); n > 0 {
-			written++
-			if m.embedder != nil {
-				m.embedder.Index("fact", f.Subject+": "+f.Content)
+		fact.Edges = m.validInferredEdges(f.Edges, availableIDs.ids)
+		if existing, ok := m.graph.FindFact(f.ID); ok {
+			fact.At = existing.At
+			fact.Why = existing.Why
+			fact.Source = "consolidation"
+			for _, edge := range existing.Edges {
+				if edge.Kind == "explicit" {
+					fact.Edges = append(fact.Edges, edge)
+				}
 			}
+		}
+		if err := m.graph.ReplaceFact(fact); err != nil {
+			continue
+		}
+		written++
+		if m.embedder != nil {
+			m.embedder.IndexFact(f.ID, fact)
 		}
 	}
 	if !placeholder(distilled.Episode) {
-		m.db.Exec("INSERT INTO episodes (happened_at, summary, session_id, source) VALUES (date('now'), ?, ?, 'consolidation')",
-			distilled.Episode, sid)
+		epID := fmt.Sprintf("ep_%s", strings.ToLower(strings.ReplaceAll(
+			strings.ReplaceAll(distilled.Episode[:min(40, len(distilled.Episode))], " ", "_"), ",", "")))
+		epFact := Fact{
+			ID:      epID,
+			Type:    "episodic",
+			Subject: distilled.Episode,
+			At:      time.Now(),
+			Body:    fmt.Sprintf("Session: %s", sid),
+		}
+		m.graph.RecordFact(epFact)
 		if m.embedder != nil {
 			m.embedder.Index("episode", distilled.Episode)
 		}
 	}
 	m.db.Exec("UPDATE chat_log SET consolidated = 1 WHERE id IN (" + strings.Join(ids, ",") + ")")
 	return written
+}
+
+type graphCandidateSet struct {
+	ids    map[string]bool
+	prompt string
+}
+
+type distilledMemory struct {
+	Facts []struct {
+		ID      string `json:"id"`
+		Subject string `json:"subject"`
+		Content string `json:"content"`
+		Edges   []Edge `json:"edges"`
+	} `json:"facts"`
+	Episode string `json:"episode"`
+}
+
+func parseConsolidationResponse(text string) (distilledMemory, error) {
+	text = strings.TrimSpace(strings.TrimPrefix(text, "```json"))
+	text = strings.TrimSpace(strings.TrimSuffix(text, "```"))
+	if text == "" {
+		return distilledMemory{}, fmt.Errorf("empty response")
+	}
+	for start := 0; start < len(text); start++ {
+		if text[start] != '{' {
+			continue
+		}
+		for end := start + 1; end <= len(text); end++ {
+			if text[end-1] != '}' || !json.Valid([]byte(text[start:end])) {
+				continue
+			}
+			var distilled distilledMemory
+			if err := json.Unmarshal([]byte(text[start:end]), &distilled); err == nil &&
+				(distilled.Facts != nil || strings.TrimSpace(distilled.Episode) != "") {
+				return distilled, nil
+			}
+		}
+	}
+	return distilledMemory{}, fmt.Errorf("no valid consolidation object")
+}
+
+func (m *Memory) graphCandidates(text string) graphCandidateSet {
+	set := graphCandidateSet{ids: make(map[string]bool)}
+	if m.embedder == nil {
+		return set
+	}
+	for _, hit := range m.embedder.SearchScored(text, 8) {
+		if !strings.HasPrefix(hit.doc.Source, "fact:") {
+			continue
+		}
+		id := strings.TrimPrefix(hit.doc.Source, "fact:")
+		set.ids[id] = true
+		set.prompt += fmt.Sprintf("- %s (%s)\n", id, hit.doc.Content)
+	}
+	return set
+}
+
+func (m *Memory) validInferredEdges(edges []Edge, candidates map[string]bool) []Edge {
+	valid := make([]Edge, 0, len(edges))
+	seen := make(map[string]bool)
+	contradictory := make(map[string]bool)
+	relations := make(map[string]string)
+	for _, edge := range edges {
+		if edge.Target == "" || edge.Rel == "" || edge.Rel == "related_to" || edge.Confidence < 0.85 || !candidates[edge.Target] {
+			continue
+		}
+		if edge.Kind != "" && edge.Kind != "inferred" {
+			continue
+		}
+		if previous, ok := relations[edge.Target]; ok && previous != edge.Rel {
+			contradictory[edge.Target] = true
+		}
+		relations[edge.Target] = edge.Rel
+	}
+	for _, edge := range edges {
+		if edge.Target == "" || edge.Rel == "" || edge.Rel == "related_to" || edge.Confidence < 0.85 || !candidates[edge.Target] || (edge.Kind != "" && edge.Kind != "inferred") || contradictory[edge.Target] {
+			continue
+		}
+		key := edge.Target + "\x00" + edge.Rel
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		edge.Kind = "inferred"
+		edge.Source = "consolidation"
+		valid = append(valid, edge)
+	}
+	return valid
+}
+
+const graphRebuildPrompt = `You are rebuilding relationships in a personal knowledge graph.
+Return only JSON: {"edges":[{"source":"claim_id","target":"candidate_id","rel":"specific_relation","confidence":0.0}]}.
+For every candidate pair, actively check whether the claim bodies establish a direct relationship. Emit an edge when the relationship is clear and useful; do not require the exact relationship words to appear verbatim.
+Use a specific relation such as depends_on, maintains, prefers, attributed_to, located_at, requires, supersedes, deployed_on, scheduled_at, calls, or used_in. Never use related_to. Confidence must be at least 0.85. Do not invent IDs or relationships that are merely topical.
+
+Claims and bounded candidates:
+%s`
+
+type graphRebuildEdge struct {
+	Source     string  `json:"source"`
+	Target     string  `json:"target"`
+	Rel        string  `json:"rel"`
+	Confidence float64 `json:"confidence"`
+}
+
+func parseGraphRebuildResponse(text string) ([]graphRebuildEdge, error) {
+	text = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(text, "```json"), "```"))
+	for start := 0; start < len(text); start++ {
+		if text[start] != '{' {
+			continue
+		}
+		for end := start + 1; end <= len(text); end++ {
+			if text[end-1] != '}' || !json.Valid([]byte(text[start:end])) {
+				continue
+			}
+			var output struct {
+				Edges []graphRebuildEdge `json:"edges"`
+			}
+			if err := json.Unmarshal([]byte(text[start:end]), &output); err == nil {
+				return output.Edges, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("no valid graph rebuild object")
+}
+
+func (m *Memory) RebuildGraphEdges() (int, error) {
+	if m.client == nil || m.embedder == nil {
+		return 0, fmt.Errorf("graph rebuild requires provider and embedding store")
+	}
+	facts := m.graph.Facts()
+	rekeyed := m.embedder.RekeyFacts(facts)
+	candidates := m.embedder.GraphCandidates(facts, 6)
+	byID := make(map[string]Fact, len(facts))
+	for _, fact := range facts {
+		byID[fact.ID] = fact
+	}
+	var ids []string
+	for id := range candidates {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	edgesWritten := 0
+	failed := 0
+	for start := 0; start < len(ids); start += 16 {
+		end := min(start+16, len(ids))
+		var claims strings.Builder
+		allowed := make(map[string]map[string]bool)
+		for _, sourceID := range ids[start:end] {
+			fmt.Fprintf(&claims, "SOURCE %s: %s | %s\n", sourceID, byID[sourceID].Subject, byID[sourceID].Body)
+			allowed[sourceID] = make(map[string]bool)
+			for _, candidate := range candidates[sourceID] {
+				allowed[sourceID][candidate.ID] = true
+				fmt.Fprintf(&claims, "  CANDIDATE %s (%0.2f): %s | %s\n", candidate.ID, candidate.Score, byID[candidate.ID].Subject, byID[candidate.ID].Body)
+			}
+		}
+		resp, err := m.client.CreateJSON("graph-rebuild", SmallModel, []Message{{Role: "user", Content: fmt.Sprintf(graphRebuildPrompt, claims.String())}}, 1400, "")
+		if err != nil {
+			failed++
+			continue
+		}
+		text := resp.FinalText
+		if text == "" {
+			for _, block := range resp.Content {
+				if block.Type == "text" {
+					text += block.Text
+				}
+			}
+		}
+		edges, err := parseGraphRebuildResponse(text)
+		if err != nil || len(edges) == 0 {
+			failed++
+			continue
+		}
+		inferred := make(map[string][]Edge)
+		for _, edge := range edges {
+			if !allowed[edge.Source][edge.Target] {
+				continue
+			}
+			valid := m.validInferredEdges([]Edge{{Target: edge.Target, Rel: edge.Rel, Confidence: edge.Confidence}}, allowed[edge.Source])
+			if len(valid) > 0 {
+				inferred[edge.Source] = append(inferred[edge.Source], valid...)
+			}
+		}
+		for _, sourceID := range ids[start:end] {
+			fact := byID[sourceID]
+			fact.Edges = nil
+			for _, existing := range facts {
+				if existing.ID == sourceID {
+					for _, edge := range existing.Edges {
+						if edge.Kind == "explicit" {
+							fact.Edges = append(fact.Edges, edge)
+						}
+					}
+					break
+				}
+			}
+			fact.Edges = append(fact.Edges, inferred[sourceID]...)
+			fact.Source = "graph-rebuild"
+			if err := m.graph.ReplaceFact(fact); err == nil {
+				edgesWritten += len(inferred[sourceID])
+			}
+		}
+	}
+	if rekeyed > 0 {
+		slog.Info("graph embeddings rekeyed", "facts", rekeyed)
+	}
+	removed := m.graph.RemoveMutualInferredEdges()
+	if removed > 0 {
+		slog.Warn("graph rebuild removed contradictory reciprocal edges", "edges", removed)
+	}
+	if failed > 0 {
+		return edgesWritten, fmt.Errorf("graph rebuild had %d failed batches", failed)
+	}
+	return edgesWritten, nil
+}
+
+// --- Dedup (background, every 6h, offset from consolidation) ---
+
+const dedupPrompt = `Merge these duplicate facts from a knowledge graph.
+They say the same thing with slightly different wording.
+Produce ONE clean fact preserving all unique information.
+Keep the best existing ID.
+
+Duplicate facts:
+%s
+
+Reply with ONLY this JSON:
+{"id": "keep_one_existing_id", "subject": "<merged one-sentence subject>", "content": "<merged body, 1-3 sentences>"}`
+
+// DedupDue clusters near-duplicate facts by embedding similarity and
+// merges each cluster into one clean fact via the small model.
+func (m *Memory) DedupDue() int {
+	if m.embedder == nil || m.client == nil {
+		return 0
+	}
+
+	// Get existing fact embeddings. Claims without vectors join a later pass
+	// after their normal write path indexes them; dedup never creates an API
+	// request burst just to start a maintenance run.
+	docs := m.embedder.DocsBySource("fact")
+	if len(docs) < 2 {
+		return 0
+	}
+
+	// Cluster by cosine similarity > 0.85
+	clusters := clusterDocs(docs, 0.85)
+
+	merged := 0
+	limit := 5 // ponytail: cap per run, backlog drains over later passes
+	for _, cluster := range clusters {
+		if len(cluster) < 2 || merged >= limit {
+			continue
+		}
+		if m.mergeCluster(cluster) {
+			merged++
+		}
+	}
+	return merged
+}
+
+// mergeCluster sends duplicate facts to the small model for merging,
+// then replaces them with the merged result.
+func (m *Memory) mergeCluster(docs []embeddedDoc) bool {
+	m.graph.mu.Lock()
+	// Map content → fact ID
+	contentToID := make(map[string]string)
+	var facts []*Fact
+	seenFacts := make(map[string]bool)
+	for _, d := range docs {
+		if strings.HasPrefix(d.Source, "fact:") {
+			id := strings.TrimPrefix(d.Source, "fact:")
+			if fact, ok := m.graph.facts[id]; ok && !seenFacts[id] {
+				seenFacts[id] = true
+				facts = append(facts, fact)
+				continue
+			}
+		}
+		// Find the fact by matching content against subject+body
+		for id, f := range m.graph.facts {
+			candidate := f.Subject + ": " + f.Body
+			if candidate == d.Content && !seenFacts[id] {
+				contentToID[d.Content] = id
+				seenFacts[id] = true
+				facts = append(facts, f)
+				break
+			}
+		}
+	}
+	m.graph.mu.Unlock()
+
+	if len(facts) < 2 {
+		return false
+	}
+
+	// Build prompt
+	var sb strings.Builder
+	for _, f := range facts {
+		sb.WriteString(fmt.Sprintf("ID: %s\nSubject: %s\nBody: %s\n\n", f.ID, f.Subject, f.Body))
+	}
+
+	resp, err := m.client.Create("dedup", SmallModel,
+		[]Message{{Role: "user", Content: fmt.Sprintf(dedupPrompt, sb.String())}}, 600, "", nil)
+	if err != nil {
+		return false
+	}
+	text := resp.FinalText
+	if text == "" {
+		for _, b := range resp.Content {
+			if b.Type == "text" {
+				text += b.Text
+			}
+		}
+	}
+	start, end := strings.Index(text, "{"), strings.LastIndex(text, "}")
+	if start < 0 || end <= start {
+		return false
+	}
+	var merged struct {
+		ID      string `json:"id"`
+		Subject string `json:"subject"`
+		Content string `json:"content"`
+	}
+	if json.Unmarshal([]byte(text[start:end+1]), &merged) != nil {
+		return false
+	}
+	if merged.ID == "" || merged.Subject == "" {
+		return false
+	}
+	if _, ok := m.graph.facts[merged.ID]; !ok {
+		return false
+	}
+
+	// Collect edges from all merged facts
+	m.graph.mu.Lock()
+	var allEdges []Edge
+	seenEdges := make(map[string]bool)
+	for _, f := range facts {
+		for _, e := range f.Edges {
+			key := e.Target + e.Rel
+			if !seenEdges[key] {
+				allEdges = append(allEdges, e)
+				seenEdges[key] = true
+			}
+		}
+	}
+
+	// Delete old .md files (except the one we're keeping)
+	for _, f := range facts {
+		if f.ID == merged.ID {
+			continue
+		}
+		os.Remove(filepath.Join(m.graph.dir, f.ID+".md"))
+		delete(m.graph.facts, f.ID)
+		delete(m.graph.files, f.ID+".md")
+		m.embedder.RemoveFact(f.ID)
+		m.embedder.Remove("fact", f.Subject+": "+f.Body)
+	}
+
+	// Write merged fact
+	mergedFact := Fact{
+		ID:      merged.ID,
+		Type:    "semantic",
+		Subject: merged.Subject,
+		At:      time.Now(),
+		Edges:   allEdges,
+		Body:    merged.Content,
+	}
+	m.graph.facts[merged.ID] = &mergedFact
+	m.graph.writeFile(mergedFact)
+	m.graph.saveIndex()
+	m.embedder.IndexFact(merged.ID, mergedFact)
+	m.graph.mu.Unlock()
+
+	return true
+}
+
+// clusterDocs groups documents by cosine similarity using union-find.
+func clusterDocs(docs []embeddedDoc, threshold float64) [][]embeddedDoc {
+	n := len(docs)
+	parent := make([]int, n)
+	for i := range parent {
+		parent[i] = i
+	}
+	var find func(int) int
+	find = func(x int) int {
+		if parent[x] != x {
+			parent[x] = find(parent[x])
+		}
+		return parent[x]
+	}
+	union := func(a, b int) {
+		parent[find(a)] = find(b)
+	}
+
+	for i := 0; i < n; i++ {
+		for j := i + 1; j < n; j++ {
+			if cosineSimilarity(docs[i].Embedding, docs[j].Embedding) > threshold {
+				union(i, j)
+			}
+		}
+	}
+
+	groups := make(map[int][]embeddedDoc)
+	for i, doc := range docs {
+		root := find(i)
+		groups[root] = append(groups[root], doc)
+	}
+
+	var out [][]embeddedDoc
+	for _, g := range groups {
+		out = append(out, g)
+	}
+	return out
+}
+
+// MigrateMissingFacts reads facts from SQLite that are not yet in the graph
+// memory system and writes them as .md files. SELECT-only on SQLite — never
+// writes to the database.
+func (m *Memory) MigrateMissingFacts() {
+	if m.db == nil || m.graph == nil {
+		return
+	}
+	report, err := MigrateLegacyFacts(m.db, m.cfg.Home, m.cfg.MemoriesDir)
+	if err != nil {
+		slog.Warn("graph migration", "error", err)
+		return
+	}
+	if report.Archived > 0 || report.Canonicalized > 0 || report.Duplicates > 0 {
+		slog.Info("graph migration", "archived", report.Archived, "canonicalized", report.Canonicalized, "duplicates", report.Duplicates, "dir", m.graph.dir)
+	}
+}
+
+// RebuildMemoryEdges is an explicit, bounded maintenance pass for existing
+// graph claims. It never touches SQLite facts or chat history.
+func RebuildMemoryEdges(s *Settings) {
+	db := Connect(s.Home)
+	defer db.Close()
+	authStore := LoadAuthStore(s.Home)
+	client, err := NewProviderManager(s.Home, s, authStore)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "graph edge rebuild unavailable: %v\n", err)
+		return
+	}
+	m := NewMemory(db, client, s)
+	key := os.Getenv("MINO_OPENROUTER_KEY")
+	if key == "" {
+		fmt.Fprintln(os.Stderr, "graph edge rebuild requires MINO_OPENROUTER_KEY")
+		return
+	}
+	m.embedder = NewEmbeddingStore(db, key, envOr("MINO_EMBED_MODEL", "openai/text-embedding-3-large"))
+	n, err := m.RebuildGraphEdges()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "graph edge rebuild incomplete: %v\n", err)
+	}
+	fmt.Printf("Rebuilt %d inferred graph edges\n", n)
+}
+
+func CleanMemoryEdges(s *Settings) {
+	db := Connect(s.Home)
+	defer db.Close()
+	m := NewMemory(db, nil, s)
+	removed := m.graph.RemoveMutualInferredEdges()
+	fmt.Printf("Removed %d contradictory inferred edges\n", removed)
+}
+
+func DeduplicateMemory(s *Settings) {
+	db := Connect(s.Home)
+	defer db.Close()
+	authStore := LoadAuthStore(s.Home)
+	client, err := NewProviderManager(s.Home, s, authStore)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "deduplication unavailable: %v\n", err)
+		return
+	}
+	m := NewMemory(db, client, s)
+	key := os.Getenv("MINO_OPENROUTER_KEY")
+	if key == "" {
+		fmt.Fprintln(os.Stderr, "deduplication requires MINO_OPENROUTER_KEY")
+		return
+	}
+	m.embedder = NewEmbeddingStore(db, key, envOr("MINO_EMBED_MODEL", "openai/text-embedding-3-large"))
+	merged := m.DedupDue()
+	fmt.Printf("Deduplicated %d graph clusters\n", merged)
+}
+
+func ConsolidateMemory(s *Settings) {
+	db := Connect(s.Home)
+	defer db.Close()
+	authStore := LoadAuthStore(s.Home)
+	client, err := NewProviderManager(s.Home, s, authStore)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "consolidation unavailable: %v\n", err)
+		return
+	}
+	m := NewMemory(db, client, s)
+	key := os.Getenv("MINO_OPENROUTER_KEY")
+	if key == "" {
+		fmt.Fprintln(os.Stderr, "consolidation requires MINO_OPENROUTER_KEY")
+		return
+	}
+	m.embedder = NewEmbeddingStore(db, key, envOr("MINO_EMBED_MODEL", "openai/text-embedding-3-large"))
+	written := m.ConsolidateDue()
+	fmt.Printf("Consolidated %d durable graph facts\n", written)
 }

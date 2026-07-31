@@ -24,7 +24,7 @@ mino/
   config.go         # env vars → Settings
   db.go             # SQLite schema and connection
   loop.go           # canonical reasoning and tool runtime
-  memory.go         # SQLite + FTS5 + consolidation
+  memory.go         # SQLite operational state + semantic graph bridge
   tools.go          # tool registry + built-in tools
   session.go        # session, history, context assembly
   provider.go       # LLM protocol adapters
@@ -42,7 +42,7 @@ services managed by systemd.
 ### Code quality
 - **Go stdlib first.** No external dependency without explicit discussion.
 - **Readable in an afternoon.** The entire codebase should be understandable in one sitting.
-- **~100 lines per file max** for core modules (loop, tools, memory). If it's growing, split it.
+- **~100 lines per file target** for core modules (loop, tools, memory). Split new growth where practical; the current GraphMemory migration is a deliberate transitional exception and must remain covered by behavior tests.
 - **No frameworks.** Stdlib HTTP, stdlib SQL, stdlib templates. No gin, no echo, no gorm.
 - **Single binary.** Everything embedded via `embed.FS`. One `go build`, one deploy.
 
@@ -70,7 +70,7 @@ services managed by systemd.
 - **One task per PR.** If it takes more than an afternoon, split it.
 
 ### Architecture
-- **SQLite only.** Single file. Never share across processes (Mino corruption lesson).
+- **SQLite for operational state.** Single file, never shared across processes (Mino corruption lesson). Semantic graph claims are the deliberate production exception: Markdown files under the configured memories directory are authoritative, while SQLite facts remain a read-only diagnostic archive.
 - **No Apple-specific code.** Mino runs on Linux VPS.
 - **Telegram is the primary interface.** Dashboard is secondary.
 - **Extensions are separate processes** (HTTP, not embedded). Systemd manages lifecycle.
@@ -78,11 +78,13 @@ services managed by systemd.
   whether to call `run_playbook`.
 - **Human checkpoints stay in the procedure.** Use `Stop here. Ask Abah.` in a
   stage instead of adding an approval tool or approval state machine.
-- **Keep the loop mechanical.** Call the model, execute requested tools, return
-  observations, and repeat. Do not add dedup caches or streak protocols.
+- **Keep the loop canonical and mechanical.** Call the model, execute requested
+  tools, return observations, and repeat. Bounded snapshot, interrupt, and loop
+  detection hooks may observe or correct runtime behavior, but they must not
+  create a second agent loop or a tool-result deduplication cache.
 - **Tool results compacted inline:** `[tools used: name(args) -> summary]`.
 - **Context is bounded without deleting history.** Recent turns, artifact
-  catalogs, compaction, consolidation, and pull-based `recall` work together.
+  catalogs, compaction, consolidation, and pull-based `remember` work together.
 
 ### Code patterns
 - Flat project structure (see above). No `cmd/`, `internal/`, `pkg/` — that's premature layering.

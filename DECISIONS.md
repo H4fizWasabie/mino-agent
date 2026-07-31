@@ -294,3 +294,20 @@ Two tiers by confidence:
 **Why not scheduled user review:** Adds friction. Thumbs-up is one click in the existing dashboard workflow. Auto-harvest is zero-touch.
 
 **Revisit when:** Auto-generated cases consistently disagree with manual cases (confidence scoring needs tuning), or the case pool exceeds ~100 entries (add sampling: N random cases per commit, full suite before release).
+
+## 23. Current production branch baseline
+
+As of 2026-07-31, `feat/memory-graph` is the canonical next-generation Mino
+branch and the intended production path. It supersedes the earlier flat
+SQLite-only semantic-memory implementation while retaining SQLite for
+operational state, chat history, episodes, embeddings, audit records, and
+diagnostics.
+
+Semantic claims are authoritative Markdown graph facts under the configured
+memories directory. The canonical runtime remains one loop; bounded snapshots,
+read-only interrupts, loop detection, and audit events observe or correct that
+loop without creating a second agent runtime.
+
+This branch is not production-certified until the exact binary is deployed,
+live behavior is tested in one continuous session, backup/database integrity is
+verified, and local/VPS binary identity matches.

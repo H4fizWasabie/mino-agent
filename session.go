@@ -30,7 +30,7 @@ TOOL DISCIPLINE (STRICT):
 TASK COMPLETION (STRICT):
 - Continue until every requested step is complete, or you are genuinely blocked by
   required user input, confirmation, or an unavailable external dependency.
-- Before replying, silently verify what the user asked you to do and whether each
+- Before replying, verify with tools what the user asked you to do and whether each
   action actually succeeded. Saying "Done" does not count; tool evidence does.
 - Do not hand unfinished work back to the user merely because a tool failed or output
   was large. Ask the user only when their input or authority is truly required.
@@ -54,7 +54,7 @@ LARGE TOOL OUTPUTS:
 - Never guess missing output or ask the user to fix Mino's output handling.
 
 MEMORY:
-- When asked about past conversations, facts, or user preferences, call recall FIRST.
+- When asked about past conversations, facts, or user preferences, call remember FIRST.
 - When the user tells you something worth remembering, call save_note.
 
 IDENTITY: your name is Mino. You are a personal AI assistant running on a VPS.
@@ -143,9 +143,10 @@ func (s *Session) AddExchange(userRaw, userContext, reply string, toolCalls []To
 		}
 		record = fmt.Sprintf("%s\n[tools used: %s]", reply, strings.Join(parts, "; "))
 	}
+	// History: clean reply only — no tool trail (prevents LLM from copying [tools used:] pattern)
 	s.history = append(s.history,
 		Message{Role: "user", Content: userContext},
-		Message{Role: "assistant", Content: record},
+		Message{Role: "assistant", Content: reply},
 	)
 	if s.mem != nil {
 		s.mem.LogChat("user", userRaw, s.sessionID, source)
@@ -186,7 +187,7 @@ func (s *Session) ContextMessages(maxChars int) []Message {
 	if s.settings.MaxHistoryTurns > 0 && len(history) > 2 {
 		keep := s.settings.MaxHistoryTurns * 2
 		if len(history) > keep {
-			marker := Message{Role: "assistant", Content: fmt.Sprintf("[%d earlier turns compacted. Use recall for details.]", (len(history)-keep)/2)}
+			marker := Message{Role: "assistant", Content: fmt.Sprintf("[%d earlier turns compacted. Use remember for details.]", (len(history)-keep)/2)}
 			history = append([]Message{marker}, history[len(history)-keep:]...)
 		}
 	}
@@ -203,7 +204,7 @@ func (s *Session) ContextMessages(maxChars int) []Message {
 		if total <= maxChars {
 			return history
 		}
-		marker := "[Earlier conversation is retained but compacted. Use recall when details matter.]"
+		marker := "[Earlier conversation is retained but compacted. Use remember when details matter.]"
 		used := len(marker)
 		start := len(history)
 		for start-2 >= 0 {

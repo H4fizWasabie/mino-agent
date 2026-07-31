@@ -460,11 +460,22 @@ func TestSchedulePlaybook(t *testing.T) {
 
 	// cancel
 	cancelGot := makeCancelScheduleTool(home).ContextFn(nil, map[string]any{"name": "news"})
-	if !strings.Contains(cancelGot, "Cancelled schedule for news") {
+	if !strings.Contains(cancelGot, "Cancelled schedule for news") || !strings.Contains(cancelGot, "0 schedule(s) remain") {
 		t.Fatalf("cancel result = %q", cancelGot)
 	}
 	scheds, _ = loadSchedules(home)
 	if len(scheds) != 0 {
 		t.Fatalf("expected 0 schedules after cancel, got %d", len(scheds))
+	}
+}
+
+func TestSystemCheckReportsState(t *testing.T) {
+	home := t.TempDir()
+	db := Connect(home)
+	defer db.Close()
+	tool := makeSystemCheckTool(db, home)
+	got := tool.Fn(nil)
+	if !strings.Contains(got, "schedules: 0") || !strings.Contains(got, "pending_reminders: 0") || !strings.Contains(got, "playbooks: 0") {
+		t.Fatalf("system check = %q", got)
 	}
 }

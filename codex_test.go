@@ -151,7 +151,7 @@ func TestCodexResponsesTransport(t *testing.T) {
 
 	client := NewClient(token, server.URL+"/codex")
 	var streamed strings.Builder
-	response, err := client.create(context.Background(), "gpt-5.6-sol", "high", []Message{{Role: "user", Content: "hello"}}, 100, "system", []ToolDef{{Name: "read_file"}}, true, func(delta string) { streamed.WriteString(delta) })
+	response, err := client.create(context.Background(), "gpt-5.6-sol", "high", []Message{{Role: "user", Content: "hello"}}, 100, "system", []ToolDef{{Name: "read_file"}}, true, false, func(delta string) { streamed.WriteString(delta) })
 	if err != nil {
 		t.Fatal(err)
 	}

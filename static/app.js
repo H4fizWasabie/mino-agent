@@ -1,4 +1,5 @@
 const esc = s => (s??"").toString().replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const jsArg = s => JSON.stringify(String(s)).replace(/"/g, "&quot;");
 
 // --- provider switcher ---
 async function switchProvider(name, model="", reasoning="default") {
@@ -159,7 +160,7 @@ function editFact(id){
   const cell = row.querySelector(".fc"); const cur = cell.textContent;
   cell.innerHTML = `<textarea class="editor" id="ef-${id}">${cur.replace(/</g,"&lt;")}</textarea>`;
   const act = row.lastElementChild;
-  act.innerHTML = `<a class="reveal" onclick="saveFact(${id})">save</a> · <a class="reveal" onclick="editing=false;refresh()">cancel</a>`;
+  act.innerHTML = `<a class="reveal" onclick="saveFact(${jsArg(id)})">save</a> · <a class="reveal" onclick="editing=false;refresh()">cancel</a>`;
   document.getElementById("ef-"+id).focus();
 }
 async function saveFact(id){
@@ -458,13 +459,13 @@ function archSVG(d){
   };
   const toolLines=[`${builtinCount} built-ins · ${mcpCount} MCP`,`${extensionCount} sidecar tools · ${toolCount} total`];
   const sqliteLines=[`${tables} tables · ${fmtBytes((d.db||{}).size)}`,`${records} memory records · WAL state`];
-  const taskLabel=active?short(active.goal,24,"active task"):short(latest.user_message,24,"waiting for a turn");
+  const taskLabel=active?short(active.goal,24,"active schedule"):short(latest.user_message,24,"waiting for a turn");
 
   if(window.innerWidth<720)return `<div class="arch-wrap core-wrap"><svg viewBox="0 0 420 1750" class="arch core-arch compact" role="img" aria-labelledby="spine-title spine-desc"><title id="spine-title">Mino Runtime Spine</title><desc id="spine-desc">A vertical live map of Mino gateways, session, context, RunLoop, provider, tools, SQLite state, verification telemetry, and external sidecars.</desc>${defs}<rect class="core-stage" x="7" y="7" width="406" height="1362" rx="22"/><rect class="core-grid" x="8" y="8" width="404" height="1360" rx="21"/>${header(24,22,372)}
     <text class="boundary-label" x="25" y="104">REQUEST SPINE</text>${wire("M210 174V211","e-gw-session")}${wire("M210 299V408","e-session-context")}${wire("M210 493V527","e-context-loop")}${wire("M210 739V772","e-loop-provider")}${wire("M210 857V892","e-loop-tools")}${wire("M210 988V1022","e-tools-db")}${wire("M210 1107V1142","e-db-trace")}
     <g class="node core-node gateway-stack" ${attrs("gateway","gateway","Gateways",`${sessions} sessions`)}><rect class="target spine-card" x="45" y="119" width="330" height="55" rx="12"/><text class="card-kicker" x="61" y="140">INGRESS</text><text class="gateway-list" x="61" y="160">TELEGRAM  ·  DASHBOARD  ·  SCHEDULER</text></g>
     ${node(65,211,290,88,"TURN STATE","Session",[taskLabel,`${sessions} known threads`],"gateway","session","S")}${wire("M155 299V323","e-session-cancel","dashed")}${wire("M265 299V323","e-session-checkpoint","dashed")}
-    ${node(45,323,155,70,"CONTROL","Cancel",["context signal"],"activetasks","cancel","×","control-card")}${node(220,323,155,70,"SURVIVAL","Checkpoint",[`${(d.active_tasks||[]).length} active`],"activetasks","checkpoint","C","control-card")}
+    ${node(45,323,155,70,"CONTROL","Cancel",["context signal"],"activetasks","cancel","×","control-card")}${node(220,323,155,70,"SCHEDULER","Schedules",[`${(d.active_tasks||[]).length} scheduled`],"activetasks","checkpoint","C","control-card")}
     ${node(65,408,290,85,"ASSEMBLY","Context",[`${fmt(d.chat_pending)} pending messages`,`${records} recall records ready`],"memory/overview","context","C")}${loop(45,527,330,212)}
     ${node(65,772,290,85,"MODEL ROUTER","Provider",[`${short(providerRaw,18,"provider")} · ${short(modelRaw,24,"model")}`,`${esc(d.reasoning||"default")} reasoning`],"settings","provider","P")}
     ${node(65,892,290,96,"EXECUTION","Tool Registry",toolLines,"tools","tools","⌘")}
@@ -484,7 +485,7 @@ function archSVG(d){
     ${loop(544,96,210,217)}
     ${node(784,151,145,98,"MODEL ROUTER","Provider",[`${short(providerRaw,15,"provider")} · ${short(modelRaw,18,"model")}`,`${esc(d.reasoning||"default")} reasoning`],"settings","provider","P")}
     ${node(194,291,155,76,"CONTROL","Cancel",["context signal"],"activetasks","cancel","×","control-card")}
-    ${node(369,291,155,76,"SURVIVAL","Checkpoint",[`${(d.active_tasks||[]).length} active · round ${iteration||"—"}`],"activetasks","checkpoint","C","control-card")}
+    ${node(369,291,155,76,"SCHEDULER","Schedules",[`${(d.active_tasks||[]).length} scheduled · round ${iteration||"—"}`],"activetasks","checkpoint","C","control-card")}
     ${node(559,373,190,112,"EXECUTION","Tool Registry",toolLines,"tools","tools","⌘")}
     ${node(359,501,210,90,"PERSISTENCE","SQLite",sqliteLines,"database","sqlite","DB")}
     <text class="boundary-label" x="30" y="614">OBSERVABILITY · TRACE LOGS</text>${telemetry(29,628,142)}
@@ -629,7 +630,7 @@ function memOverview(d){
       <div class="memory-health"><span class="runtime-kicker"><i></i> MEMORY STATUS</span><strong>${facts+episodes+skills+playbooks} records</strong><span>${d.chat_pending||0} messages queued</span><small>SQLite · FTS5 · human-readable mirror</small></div></section>
     <section class="memory-pillar-grid">${pillars}</section>
     <section class="memory-retrieval"><div class="overview-section-head"><div><span class="section-kicker">RETRIEVAL</span><h2>Memory enters only when needed</h2></div><span class="section-note">the gate protects latency and relevance</span></div>${gateSplit(s)}</section>
-    <section class="memory-source"><div><span class="section-kicker">ONE SOURCE · TWO VIEWS</span><h3>Curated here. Auditable in SQLite.</h3><p>Memory presents the useful mental model; Database exposes the exact same facts, episodes, and FTS5 indexes at row level.</p></div>
+    <section class="memory-source"><div><span class="section-kicker">GRAPH SOURCE · SQLITE DIAGNOSTIC</span><h3>Curated in Markdown. Audited in SQLite.</h3><p>Graph claims are authoritative semantic memory. SQLite remains available for migration parity and operational history.</p></div>
       <a href="#database">Open database →</a></section>
     <div class="memory-files"><span>FILES</span>${reveal("state.db","state.db")}${reveal("MEMORY.md","MEMORY.md")}${reveal("SOUL.md","SOUL.md")}${reveal("skills","skills/")}${reveal("playbooks","playbooks/")}</div>`;
 }
@@ -637,10 +638,10 @@ function memSemantic(d){
   const facts = d.facts || [];
   let h = `<section class="memory-tab-head"><div><span class="section-kicker">SEMANTIC MEMORY</span><h2>Durable facts</h2><p>The smallest, most reusable knowledge store. Corrections and deletions are active on the next turn.</p></div><strong>${facts.length}</strong></section>`;
   if (!facts.length) return h + `<div class="memory-empty"><span>✦</span><strong>No facts stored yet</strong><p>Mino will place durable knowledge here when memory tools or consolidation save it.</p></div>`;
-  h += `<div class="memory-records">${facts.map(f => `<div class="memory-record" id="fact-${f.id}">
+  h += `<div class="memory-records">${facts.map(f => { const rawId=String(f.id), id=jsArg(rawId); return `<div class="memory-record" id="fact-${esc(rawId)}">
       <div class="record-subject"><span>${esc(f.subject)}</span><small>${esc(f.source||"unknown source")}</small></div>
       <div class="fc">${esc(f.content)}</div><div class="record-date">${esc((f.created_at||"").slice(0,10)||"—")}</div>
-      <div class="record-actions"><a class="reveal" onclick="editFact(${f.id})">edit</a><a class="reveal del" onclick="delMem('delete_fact',${f.id})">delete</a></div></div>`).join("")}</div>`;
+      <div class="record-actions"><a class="reveal" onclick="editFact(${id})">edit</a><a class="reveal del" onclick="delMem('delete_fact',${id})">delete</a></div></div>`; }).join("")}</div>`;
   return h;
 }
 function memEpisodic(d){
@@ -825,9 +826,9 @@ function settingsView(d){
 
 function activeTasksView(d){
   const tasks=d.active_tasks||[];
-  return `<section class="tasks-hero"><div><span class="section-kicker">CHECKPOINTS</span><h2>Work that survives a restart.</h2><p>Mino records long-running progress after tool calls, then resumes from the latest checkpoint.</p></div><div class="tasks-count"><strong>${tasks.length}</strong><span>active task${tasks.length===1?"":"s"}</span><small>${tasks.reduce((n,t)=>n+(t.tools_used||[]).length,0)} tools recorded</small></div></section>
-    ${tasks.length?`<div class="task-list">${tasks.map((t,i)=>`<article><header><span class="task-index">${String(i+1).padStart(2,"0")}</span><span class="status-chip good"><i></i> ${esc(t.status||"active")}</span></header><h3>${esc(t.goal)}</h3><div class="task-progress"><span style="width:${Math.min(92,20+(t.round||0)*12)}%"></span></div><div class="task-meta"><span>round ${t.round||0}</span><span>${(t.tools_used||[]).length} tools used</span><span>${(t.discoveries||[]).length} discoveries</span></div>${(t.tools_used||[]).length?`<div class="task-tools">${t.tools_used.map(x=>`<code>${esc(x)}</code>`).join("")}</div>`:""}${(t.discoveries||[]).length?`<ul>${t.discoveries.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>`:""}</article>`).join("")}</div>`:`<div class="tasks-empty"><div class="checkpoint-orbit"><span>✓</span></div><strong>No interrupted work</strong><p>Everything is complete. If Mino stops during a tool-heavy task, its checkpoint will appear here automatically.</p><a href="#loop">Inspect recent turns →</a></div>`}
-    <section class="checkpoint-flow"><div><span>1</span><strong>Tool runs</strong><small>progress changes</small></div><b>→</b><div><span>2</span><strong>Checkpoint</strong><small>saved to disk</small></div><b>→</b><div><span>3</span><strong>Restart</strong><small>context restored</small></div></section>`;
+  return `<section class="tasks-hero"><div><span class="section-kicker">SCHEDULES</span><h2>Work that runs on a schedule.</h2><p>Playbooks fire at their configured times and deliver results automatically.</p></div><div class="tasks-count"><strong>${tasks.length}</strong><span>active schedule${tasks.length===1?"":"s"}</span><small>${tasks.reduce((n,t)=>n+(t.stages||0),0)} stages configured</small></div></section>
+    ${tasks.length?`<div class="task-list">${tasks.map((t,i)=>`<article><header><span class="task-index">${String(i+1).padStart(2,"0")}</span><span class="status-chip good"><i></i> ${esc(t.status||"active")}</span></header><h3>${esc(t.goal)}</h3><div class="task-progress"><span style="width:${Math.min(92,20+(t.round||0)*12)}%"></span></div><div class="task-meta"><span>round ${t.round||0}</span><span>${(t.tools_used||[]).length} tools used</span><span>${(t.discoveries||[]).length} discoveries</span></div>${(t.tools_used||[]).length?`<div class="task-tools">${t.tools_used.map(x=>`<code>${esc(x)}</code>`).join("")}</div>`:""}${(t.discoveries||[]).length?`<ul>${t.discoveries.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>`:""}</article>`).join("")}</div>`:`<div class="tasks-empty"><div class="checkpoint-orbit"><span>✓</span></div><strong>No scheduled playbooks</strong><p>Add a schedule by asking Mino to run a playbook on a recurring basis.</p><a href="#memory/playbooks">Browse playbooks →</a></div>`}
+    <section class="checkpoint-flow"><div><span>1</span><strong>Schedule</strong><small>time & playbook</small></div><b>→</b><div><span>2</span><strong>Fire</strong><small>at scheduled time</small></div><b>→</b><div><span>3</span><strong>Deliver</strong><small>result to Telegram</small></div></section>`;
 }
 
 function onboardingView(){
@@ -958,6 +959,22 @@ const VIEWS = {
     }, 50);
     return h;
   },
+
+  graph(d){
+    const raw = d.graph;
+    if (!raw || !raw.facts) return `<section class="graph-hero"><div><span class="section-kicker">KNOWLEDGE GRAPH</span><h2>Memory Graph</h2><p>No graph data yet. Memories are built during conversations.</p></div></section>`;
+    setTimeout(() => initGraph(raw), 50);
+    return `<section class="graph-hero"><div><span class="section-kicker">KNOWLEDGE GRAPH</span><h2>Memory Graph</h2><p>${Object.keys(raw.facts).length} facts · ${countEdges(raw.facts)} relationships</p></div>
+      <div class="graph-controls">
+        <div class="graph-query"><input id="graph-search" type="search" placeholder="Query Mino's memories..." oninput="filterGraph()"><button onclick="clearGraphQuery()" title="Clear query">Clear</button></div>
+        <label class="graph-toggle"><input type="checkbox" checked onchange="filterGraph()" data-type="semantic"> Semantic</label>
+        <label class="graph-toggle"><input type="checkbox" checked onchange="filterGraph()" data-type="episodic"> Episodic</label>
+        <span id="graph-query-status" class="graph-query-status">All memories visible</span>
+        <span class="graph-hint"><i style="background:#4F8BC9"></i><i style="background:#7C6FD0"></i><i style="background:#39A98A"></i> hover an edge · select a memory</span>
+      </div></section>
+      <div class="graph-viewport"><canvas id="graph-canvas"></canvas></div>
+      <aside id="graph-detail" class="graph-detail"></aside>`;
+  },
 };
 
 // ---- Live Runtime Spine animation: illuminate only the active trace stage,
@@ -1009,8 +1026,9 @@ async function pollEvents(){
 
 let activeView = null, activeSub = null;
 const TITLES = {chat:"Chat & watch", ops:"LLM Ops",
-                database:"Database — everything Mino stores (state.db)", activetasks:"Active Tasks — surviving restarts",
+                database:"Database — everything Mino stores (state.db)", activetasks:"Active Schedules — playbook runs",
                 files:"Files — VPS artifacts and outputs",
+                graph:"Memory Graph — interactive visualization",
                 onboarding:"Welcome — set up your Mino"};
 function render(){
   if (!D) return;
@@ -1033,6 +1051,8 @@ function render(){
     if (activeView !== "overview" || !animating){ document.getElementById("view").innerHTML = VIEWS.overview(D); }
   } else if ((view === "memory" || view === "settings" || view === "database" || view === "onboarding") && editing && !subChanged){
     // don't wipe an in-progress edit on the 5s refresh — but DO switch sub-tabs
+  } else if (view === "graph" && activeView === "graph" && !subChanged) {
+    // don't rebuild graph on 5s refresh — force sim keeps running
   } else {
     editing = false;
     document.getElementById("view").innerHTML = VIEWS[view](D, sub);
@@ -1175,6 +1195,497 @@ function renderFileTree(tree, parent){
   return tree.map(n => item(n, 0)).join("");
 }
 function formatSize(b){ if (!b) return ""; if (b < 1024) return b + " B"; if (b < 1048576) return (b/1024).toFixed(1) + " KB"; return (b/1048576).toFixed(1) + " MB"; }
+
+// --- Memory Graph: Canvas force-directed graph ---
+
+function countEdges(facts) {
+  let n = 0;
+  for (const id in facts) {
+    const f = facts[id];
+    n += (f.edges || f.Edges || []).length;
+  }
+  return n;
+}
+
+let graphState = null;
+
+const graphNodePalette = ["#4F8BC9", "#7C6FD0", "#39A98A", "#D97757", "#C05B89", "#2F9FB3", "#8A9A4A"];
+const graphEpisodePalette = ["#D4A855", "#E18A5B", "#C97A9B"];
+
+function stableGraphColor(id, type) {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = ((hash << 5) - hash + id.charCodeAt(i)) | 0;
+  const palette = type === "episodic" ? graphEpisodePalette : graphNodePalette;
+  return palette[Math.abs(hash) % palette.length];
+}
+
+function graphRelationColor(rel) {
+  const name = (rel || "").toLowerCase();
+  if (name === "supersedes") return "#E26464";
+  if (name === "requires" || name === "depends_on") return "#8B78D2";
+  if (name === "prefers") return "#D76E9E";
+  if (name === "maintains" || name === "calls") return "#4F8BC9";
+  if (name === "deployed_on" || name === "located_at") return "#39A98A";
+  if (name === "attributed_to") return "#D98A45";
+  if (name === "scheduled_at") return "#C49A35";
+  if (name === "used_in") return "#77A64A";
+  return "#7E8794";
+}
+
+function initGraph(raw) {
+  const canvas = document.getElementById("graph-canvas");
+  if (!canvas) return;
+  const viewport = canvas.parentElement;
+  const detail = document.getElementById("graph-detail");
+
+  // Parse nodes from index.json facts map
+  const factMap = raw.facts || {};
+  const nodes = [];
+  const nodeMap = {};
+  for (const id in factMap) {
+    const f = factMap[id];
+    const node = {
+      id: f.id || id,
+      type: f.type || "semantic",
+      subject: f.subject || id,
+      edges: f.edges || f.Edges || [],
+      x: (Math.random() - 0.5) * 200,
+      y: (Math.random() - 0.5) * 200,
+      vx: 0, vy: 0,
+      visible: true,
+      color: stableGraphColor(f.id || id, f.type || "semantic"),
+    };
+    nodes.push(node);
+    nodeMap[node.id] = node;
+  }
+
+  // Build edge list
+  const edges = [];
+  const neighbors = {};
+  for (const node of nodes) neighbors[node.id] = new Set();
+  for (const node of nodes) {
+    for (const e of node.edges) {
+      const target = typeof e === "string" ? e : (e.target || e.Target || "");
+      const rel = typeof e === "string" ? "related_to" : (e.rel || e.Rel || "related_to");
+      if (nodeMap[target]) {
+        edges.push({ source: node.id, target, rel, color: graphRelationColor(rel), visible: true });
+        neighbors[node.id].add(target);
+        neighbors[target].add(node.id);
+      }
+    }
+  }
+
+  let hoveredNode = null;
+  let hoveredEdge = null;
+  let selectedNode = null;
+  let dragNode = null;
+  let panX = 0, panY = 0, zoom = 1;
+  let panning = false, panStart = null;
+  let queryActive = false, lastQuery = "";
+
+  // Force simulation params
+  const repel = 5000;
+  const springLen = 120;
+  const springK = 0.02;
+  const damp = 0.85;
+  const centerGrav = 0.02;
+
+  function resize() {
+    canvas.width = viewport.clientWidth || 800;
+    canvas.height = viewport.clientHeight || 600;
+  }
+  resize();
+  window.addEventListener("resize", () => { resize(); draw(); });
+
+  const ctx = canvas.getContext("2d");
+
+  function nodeRadius(node) {
+    if (node === selectedNode) return 14;
+    if (node === hoveredNode) return 10;
+    const ec = neighbors[node.id].size;
+    return Math.max(3, Math.min(8, 3 + ec * 1.5));
+  }
+
+  function nodeOpacity(node) {
+    if (selectedNode && node !== selectedNode && !neighbors[selectedNode.id].has(node.id)) return 0.13;
+    if (queryActive && !node._highlight && !node._queryNeighbor) return 0.13;
+    return 1;
+  }
+
+  function draw() {
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    ctx.save();
+    ctx.translate(w / 2 + panX, h / 2 + panY);
+    ctx.scale(zoom, zoom);
+
+    // Draw edges
+    for (const e of edges) {
+      const src = nodeMap[e.source], tgt = nodeMap[e.target];
+      if (!src || !tgt || !src.visible || !tgt.visible) continue;
+      const selectedEdge = selectedNode && (e.source === selectedNode.id || e.target === selectedNode.id);
+      const queryEdge = queryActive && (src._highlight || tgt._highlight) && (src._queryNeighbor || tgt._queryNeighbor || src._highlight || tgt._highlight);
+      const edgeActive = e === hoveredEdge || selectedEdge || queryEdge;
+      ctx.beginPath();
+      ctx.moveTo(src.x, src.y);
+      ctx.lineTo(tgt.x, tgt.y);
+      ctx.globalAlpha = selectedNode ? (selectedEdge ? 0.9 : 0.05) : queryActive ? (queryEdge ? 0.78 : 0.05) : (e === hoveredEdge ? 1 : 0.34);
+      ctx.strokeStyle = e.color;
+      ctx.lineWidth = (edgeActive ? 2 : 0.85) / zoom;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+
+      // Relationship text appears only when it is useful.
+      if (zoom > 0.35 && (e === hoveredEdge || selectedEdge)) {
+        const mx = (src.x + tgt.x) / 2, my = (src.y + tgt.y) / 2;
+        const fontSize = Math.max(8, 10 / zoom);
+        ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
+        const tw = ctx.measureText(e.rel).width;
+        const pad = 3 / zoom;
+        ctx.fillStyle = "rgba(19,22,28,0.88)";
+        ctx.fillRect(mx - tw / 2 - pad, my - fontSize / 2 - pad, tw + pad * 2, fontSize + pad * 2.2);
+        ctx.fillStyle = "#fff";
+        ctx.fillText(e.rel, mx - tw / 2, my + fontSize / 3);
+      }
+    }
+
+    // Draw nodes
+    for (const node of nodes) {
+      if (!node.visible) continue;
+      const r = nodeRadius(node);
+      ctx.globalAlpha = nodeOpacity(node);
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
+      const color = node.color;
+      ctx.fillStyle = node === selectedNode ? "#fff" : color;
+      ctx.fill();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = (node === selectedNode || node === hoveredNode) ? 2.5 / zoom : 1.2 / zoom;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+
+      // Highlight ring for search matches
+      if (node._highlight) {
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, r + 4 / zoom, 0, Math.PI * 2);
+        ctx.strokeStyle = "#FFD700";
+        ctx.lineWidth = 2 / zoom;
+        ctx.stroke();
+      }
+    }
+
+    // Draw subject on hovered/selected node
+    if (zoom > 0.4) {
+      for (const node of [hoveredNode, selectedNode]) {
+        if (!node || !node.visible) continue;
+        const fontSize = Math.max(7, 10 / zoom);
+        ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
+        const label = node.subject.length > 40 ? node.subject.slice(0, 38) + "…" : node.subject;
+        const tw = ctx.measureText(label).width;
+        const r = nodeRadius(node);
+        const pad = 3 / zoom;
+        ctx.fillStyle = "rgba(0,0,0,0.85)";
+        ctx.fillRect(node.x - tw / 2 - pad, node.y + r + 4 / zoom, tw + pad * 2, fontSize + pad * 2);
+        ctx.fillStyle = "#fff";
+        ctx.fillText(label, node.x - tw / 2, node.y + r + fontSize + 2 / zoom);
+      }
+    }
+
+    ctx.restore();
+  }
+
+  function simulate() {
+    const w = canvas.width, h = canvas.height;
+
+    for (const node of nodes) {
+      if (!node.visible || node === dragNode) continue;
+      let fx = 0, fy = 0;
+
+      // Repel all-to-all
+      for (const other of nodes) {
+        if (other === node || !other.visible) continue;
+        let dx = node.x - other.x, dy = node.y - other.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) + 1;
+        const force = repel / (dist * dist);
+        fx += (dx / dist) * force;
+        fy += (dy / dist) * force;
+      }
+
+      // Spring attraction along edges
+      for (const e of edges) {
+        const other = e.source === node.id ? nodeMap[e.target] : (e.target === node.id ? nodeMap[e.source] : null);
+        if (!other || !other.visible) continue;
+        let dx = other.x - node.x, dy = other.y - node.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) + 1;
+        const force = (dist - springLen) * springK;
+        fx += (dx / dist) * force;
+        fy += (dy / dist) * force;
+      }
+
+      // Center gravity — pulls toward world origin (0,0),
+      // which draw() translates to canvas center
+      fx += -node.x * centerGrav;
+      fy += -node.y * centerGrav;
+
+      node.vx = (node.vx + fx) * damp;
+      node.vy = (node.vy + fy) * damp;
+      node.x += node.vx;
+      node.y += node.vy;
+    }
+  }
+
+  function tick() {
+    for (let i = 0; i < 3; i++) simulate(); // run multiple sim steps per frame
+    draw();
+    if (graphState) requestAnimationFrame(tick);
+  }
+
+  // Interaction: screen-to-world helper
+  function screenToWorld(ex, ey) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (ex - rect.left - canvas.width / 2 - panX) / zoom,
+      y: (ey - rect.top - canvas.height / 2 - panY) / zoom,
+    };
+  }
+
+  // Find node at world point
+  function nodeAt(wx, wy) {
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      const n = nodes[i];
+      if (!n.visible) continue;
+      const dx = wx - n.x, dy = wy - n.y;
+      if (dx * dx + dy * dy < (nodeRadius(n) + 5) ** 2) return n;
+    }
+    return null;
+  }
+
+  function edgeAt(wx, wy) {
+    let closest = null, best = 7 / zoom;
+    for (const e of edges) {
+      const a = nodeMap[e.source], b = nodeMap[e.target];
+      if (!a || !b || !a.visible || !b.visible) continue;
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const length2 = dx * dx + dy * dy;
+      const t = length2 ? Math.max(0, Math.min(1, ((wx - a.x) * dx + (wy - a.y) * dy) / length2)) : 0;
+      const px = a.x + t * dx, py = a.y + t * dy;
+      const distance = Math.hypot(wx - px, wy - py);
+      if (distance < best) { best = distance; closest = e; }
+    }
+    return closest;
+  }
+
+  canvas.onmousedown = (ev) => {
+    const p = screenToWorld(ev.clientX, ev.clientY);
+    const hit = nodeAt(p.x, p.y);
+    if (hit) {
+      dragNode = hit;
+      selectedNode = hit;
+      showDetail(hit);
+    } else {
+      panning = true;
+      panStart = { x: ev.clientX - panX, y: ev.clientY - panY };
+    }
+    draw();
+  };
+
+  canvas.onmousemove = (ev) => {
+    if (dragNode) {
+      const p = screenToWorld(ev.clientX, ev.clientY);
+      dragNode.x = p.x;
+      dragNode.y = p.y;
+      dragNode.vx = 0;
+      dragNode.vy = 0;
+      draw();
+      return;
+    }
+    if (panning && panStart) {
+      panX = ev.clientX - panStart.x;
+      panY = ev.clientY - panStart.y;
+      draw();
+      return;
+    }
+    const p = screenToWorld(ev.clientX, ev.clientY);
+    const prev = hoveredNode;
+    const previousEdge = hoveredEdge;
+    hoveredNode = nodeAt(p.x, p.y);
+    hoveredEdge = hoveredNode ? null : edgeAt(p.x, p.y);
+    canvas.style.cursor = hoveredNode || hoveredEdge ? "pointer" : "grab";
+    if (hoveredNode !== prev || hoveredEdge !== previousEdge) draw();
+  };
+
+  canvas.onmouseup = () => {
+    dragNode = null;
+    panning = false;
+    panStart = null;
+  };
+  canvas.onmouseleave = () => {
+    hoveredNode = null;
+    hoveredEdge = null;
+    dragNode = null;
+    panning = false;
+    canvas.style.cursor = "grab";
+    draw();
+  };
+
+  canvas.onwheel = (ev) => {
+    ev.preventDefault();
+    const delta = ev.deltaY > 0 ? 0.9 : 1.1;
+    zoom = Math.max(0.1, Math.min(3, zoom * delta));
+    draw();
+  };
+
+  canvas.ondblclick = (ev) => {
+    const p = screenToWorld(ev.clientX, ev.clientY);
+    const hit = nodeAt(p.x, p.y);
+    if (hit && hit.edges.length > 0) {
+      ev.preventDefault();
+      // Expand: traverse one hop, show related nodes
+      const related = new Set();
+      for (const e of hit.edges) {
+        const tid = typeof e === "string" ? e : (e.target || e.Target);
+        if (nodeMap[tid] && !nodeMap[tid].visible) {
+          nodeMap[tid].visible = true;
+          related.add(tid);
+        }
+      }
+      if (related.size > 0) {
+        filterGraph(); // re-sync visibility
+      }
+      draw();
+    }
+  };
+
+  // Detail panel
+  async function showDetail(node) {
+    const relationships = edges.filter(e => e.source === node.id || e.target === node.id);
+    const edgeList = relationships.map(e => {
+      const incoming = e.target === node.id;
+      const tid = incoming ? e.source : e.target;
+      const rel = e.rel;
+      const tgt = nodeMap[tid];
+      const label = tgt ? tgt.subject : tid;
+      return `<div class="graph-edge-row" onclick="graphState.selectNode('${esc(tid)}')"><i style="background:${esc(e.color)}"></i><span class="edge-rel">${esc(rel)}</span><b>${incoming ? "←" : "→"}</b>${esc(label)}</div>`;
+    }).join("");
+
+    detail.innerHTML = `
+      <button class="graph-detail-close" onclick="graphState.clearSelection()">×</button>
+      <div class="graph-detail-type ${esc(node.type)}"><i style="background:${esc(node.color)}"></i>${esc(node.type)}</div>
+      <h3 class="graph-detail-subject">${esc(node.subject)}</h3>
+      <div class="graph-detail-body" id="graph-detail-body">Loading…</div>
+      <div class="graph-detail-edges"><strong>${relationships.length} relationship${relationships.length!==1?"s":""}</strong>${edgeList || `<span class="graph-no-edges">No relationships yet</span>`}</div>
+      <div class="graph-detail-actions">
+        <button onclick="graphState.editFact('${esc(node.id)}')">Edit</button>
+        <span class="graph-detail-id">${esc(node.id)}</span>
+      </div>`;
+    detail.classList.add("open");
+
+    // Lazy-fetch body from .md file
+    try {
+      const r = await fetch(`/memories/${encodeURIComponent(node.id)}.md`);
+      const md = await r.text();
+      const body = parseFrontMatter(md);
+      document.getElementById("graph-detail-body").textContent = body || "(no body)";
+    } catch(e) {
+      document.getElementById("graph-detail-body").textContent = "(could not load body)";
+    }
+  }
+
+  function parseFrontMatter(md) {
+    if (!md.startsWith("---\n")) return md;
+    const end = md.indexOf("\n---", 4);
+    if (end < 0) return md;
+    return md.slice(end + 5).trim();
+  }
+
+  graphState = {
+    nodes, nodeMap, edges, neighbors,
+    selectNode(id) {
+      const n = nodeMap[id];
+      if (n) { selectedNode = n; showDetail(n); draw(); }
+    },
+    clearSelection() {
+      selectedNode = null;
+      detail.classList.remove("open");
+      draw();
+    },
+    setQuery(q, matches) {
+      queryActive = Boolean(q);
+      if (q && matches.length && q !== lastQuery) {
+        const n = nodeMap[matches[0]];
+        panX = -n.x * zoom;
+        panY = -n.y * zoom;
+      }
+      lastQuery = q;
+      draw();
+    },
+    editFact(id) {
+      const n = nodeMap[id];
+      if (!n) return;
+      const bodyEl = document.getElementById("graph-detail-body");
+      if (!bodyEl) return;
+      const current = bodyEl.textContent;
+      bodyEl.innerHTML = `<textarea id="graph-edit-ta" style="width:100%;min-height:80px;font:inherit;padding:6px">${esc(current)}</textarea>
+        <button onclick="graphState.saveFact('${esc(id)}')" style="margin-top:4px">Save</button>`;
+    },
+    async saveFact(id) {
+      const ta = document.getElementById("graph-edit-ta");
+      if (!ta) return;
+      await postJSON("/api/memory", { action: "update_fact", id, content: ta.value });
+      document.getElementById("graph-detail-body").textContent = ta.value;
+      refresh();
+    },
+    draw,
+  };
+
+  // Start simulation
+  requestAnimationFrame(tick);
+}
+
+function filterGraph() {
+  if (!graphState) return;
+  const q = (document.getElementById("graph-search")?.value || "").trim().toLowerCase();
+  const terms = q.split(/\s+/).filter(Boolean);
+  const sem = document.querySelector(".graph-toggle input[data-type=semantic]")?.checked ?? true;
+  const epi = document.querySelector(".graph-toggle input[data-type=episodic]")?.checked ?? true;
+  const matches = [];
+
+  for (const n of graphState.nodes) {
+    n.visible = !((!sem && n.type === "semantic") || (!epi && n.type === "episodic"));
+    n._highlight = false;
+    n._queryNeighbor = false;
+    const haystack = `${n.subject} ${n.id}`.toLowerCase();
+    if (q && n.visible && terms.every(term => haystack.includes(term))) {
+      n._highlight = true;
+      matches.push(n.id);
+    }
+  }
+
+  if (q) {
+    for (const id of matches) {
+      for (const neighborID of graphState.neighbors[id] || []) {
+        const neighbor = graphState.nodeMap[neighborID];
+        if (neighbor?.visible) neighbor._queryNeighbor = true;
+      }
+    }
+  }
+
+  for (const e of graphState.edges) {
+    const src = graphState.nodeMap[e.source], tgt = graphState.nodeMap[e.target];
+    e.visible = src && tgt && src.visible && tgt.visible;
+  }
+  const status = document.getElementById("graph-query-status");
+  if (status) status.textContent = q ? `${matches.length} matching memor${matches.length===1?"y":"ies"} · full graph preserved` : "All memories visible";
+  graphState.setQuery(q, matches);
+}
+
+function clearGraphQuery() {
+  const input = document.getElementById("graph-search");
+  if (!input) return;
+  input.value = "";
+  filterGraph();
+  input.focus();
+}
 
 window.addEventListener("hashchange", render);
 let orbitNarrow = window.innerWidth < 720;

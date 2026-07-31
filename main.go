@@ -23,6 +23,26 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "migrate-memories", "--migrate-memories":
+			s := LoadSettings()
+			MigrateMemories(s.Home, s.MemoriesDir)
+			return
+		case "rebuild-memory-edges", "--rebuild-memory-edges":
+			s := LoadSettings()
+			RebuildMemoryEdges(s)
+			return
+		case "clean-memory-edges", "--clean-memory-edges":
+			s := LoadSettings()
+			CleanMemoryEdges(s)
+			return
+		case "dedup-memory", "--dedup-memory":
+			s := LoadSettings()
+			DeduplicateMemory(s)
+			return
+		case "consolidate-memory", "--consolidate-memory":
+			s := LoadSettings()
+			ConsolidateMemory(s)
+			return
 		case "eval":
 			s := LoadSettings()
 			os.Exit(RunEval(s.Home))

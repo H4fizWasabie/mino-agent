@@ -44,6 +44,13 @@ func TestSettingsLocationFallsBackForInvalidTimezone(t *testing.T) {
 	}
 }
 
+func TestAuthoritativeClockUsesConfiguredLocation(t *testing.T) {
+	got := authoritativeClock(time.Date(2026, 7, 28, 23, 57, 0, 0, time.UTC), time.FixedZone("MYT", 8*60*60))
+	if !strings.Contains(got, "Wednesday, 2026-07-29 07:57:00 MYT (UTC+08:00)") || !strings.Contains(got, "Today is 2026-07-29") {
+		t.Fatalf("clock = %q", got)
+	}
+}
+
 func TestSettingsDefaultToUniversalWorkspaceAnd16KOutput(t *testing.T) {
 	t.Setenv("MINO_HOME", t.TempDir())
 	t.Setenv("MINO_WORKSPACE", "/srv/mino-work")

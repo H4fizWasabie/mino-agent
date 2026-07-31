@@ -26,7 +26,7 @@ type alertState struct {
 
 var alerts = alertState{stopCh: make(chan struct{})}
 
-func checkAlerts(db *sql.DB, notifyFn func(string), checkInterval time.Duration) {
+func checkAlerts(db *sql.DB, notifyFn func(string), checkInterval time.Duration, loc *time.Location) {
 	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
 
@@ -34,7 +34,7 @@ func checkAlerts(db *sql.DB, notifyFn func(string), checkInterval time.Duration)
 		select {
 		case <-ticker.C:
 			checkErrorRate(db, notifyFn)
-			checkSilence(db, notifyFn)
+			checkSilence(db, notifyFn, loc)
 			checkExtensionRetryLoops(db, notifyFn)
 		case <-alerts.stopCh:
 			return
@@ -88,9 +88,15 @@ func checkErrorRate(db *sql.DB, notifyFn func(string)) {
 	}
 }
 
-func checkSilence(db *sql.DB, notifyFn func(string)) {
+func checkSilence(db *sql.DB, notifyFn func(string), loc *time.Location) {
 	hours := envInt("MINO_ALERT_SILENCE_HOURS", 6)
 	if hours <= 0 {
+		return
+	}
+
+	// Night gate: suppress alerts between 10 PM and 7 AM in the configured timezone
+	now := time.Now().In(loc)
+	if now.Hour() >= 22 || now.Hour() < 7 {
 		return
 	}
 	cutoff := time.Now().Add(-time.Duration(hours) * time.Hour).UTC().Format("2006-01-02 15:04:05")

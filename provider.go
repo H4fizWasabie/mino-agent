@@ -70,14 +70,18 @@ func NewClient(apiKey, baseURL string) *Client {
 }
 
 func (c *Client) Create(model string, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
-	return c.create(context.Background(), model, "", messages, maxTokens, system, tools, false, nil)
+	return c.create(context.Background(), model, "", messages, maxTokens, system, tools, false, false, nil)
+}
+
+func (c *Client) CreateJSON(model string, messages []Message, maxTokens int, system string) (*LLMResponse, error) {
+	return c.create(context.Background(), model, "", messages, maxTokens, system, nil, false, true, nil)
 }
 
 func (c *Client) Stream(model string, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
-	return c.create(context.Background(), model, "", messages, maxTokens, system, tools, true, onText)
+	return c.create(context.Background(), model, "", messages, maxTokens, system, tools, true, false, onText)
 }
 
-func (c *Client) create(ctx context.Context, model, reasoning string, messages []Message, maxTokens int, system string, tools []ToolDef, stream bool, onText func(string)) (*LLMResponse, error) {
+func (c *Client) create(ctx context.Context, model, reasoning string, messages []Message, maxTokens int, system string, tools []ToolDef, stream, jsonOutput bool, onText func(string)) (*LLMResponse, error) {
 	if c.isCodex() {
 		return c.createCodex(ctx, model, reasoning, messages, system, tools, onText)
 	}
@@ -117,6 +121,9 @@ func (c *Client) create(ctx context.Context, model, reasoning string, messages [
 	}
 	if reasoning != "" {
 		payload["reasoning_effort"] = reasoning
+	}
+	if jsonOutput {
+		payload["response_format"] = map[string]string{"type": "json_object"}
 	}
 	if tools != nil {
 		funcs := make([]map[string]any, 0)

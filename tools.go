@@ -170,10 +170,9 @@ func (r *Registry) Schemas() []ToolDef {
 }
 
 var essentialToolNames = map[string]bool{
-	"recall": true, "read_file": true, "write_file": true, "edit_file": true,
-	"save_note": true, "search_web": true, "create_event": true, "list_events": true,
+	"remember": true, "read_file": true, "write_file": true,
+	"save_note": true, "search_web": true, "bash": true,
 	"list_playbooks": true, "run_playbook": true,
-	"create_reminder": true, "list_reminders": true, "cancel_reminder": true,
 	"list_schedules": true, "cancel_schedule": true,
 }
 
@@ -190,7 +189,11 @@ var toolFamilies = [][]string{
 // schemas from the full assembled context, including skills, playbooks, history,
 // and prior observations. A registry without an index is static (used by tests
 // and explicit playbook stage registries).
-func (r *Registry) SchemasForContext(contextText string, es *EmbeddingStore) []ToolDef {
+//
+// oneTurnText is the last user message + last assistant reply — used for semantic
+// embedding and MCP keyword gating so the signal is task-specific, not diluted by
+// full history and system prompt noise.
+func (r *Registry) SchemasForContext(fullCtx string, oneTurnText string, es *EmbeddingStore) []ToolDef {
 	if r.searchDB == nil {
 		return r.Schemas()
 	}
@@ -200,12 +203,36 @@ func (r *Registry) SchemasForContext(contextText string, es *EmbeddingStore) []T
 			selected[name] = true
 		}
 	}
-	for _, name := range r.searchToolNames(contextText) {
+
+	// Built-in tools: keyword FTS5 on full context + semantic on one-turn window
+	for _, name := range r.searchToolNames(fullCtx) {
+		if !strings.HasPrefix(name, "MCP_") {
+			selected[name] = true
+		}
+	}
+	for _, name := range r.semanticToolNames(oneTurnText, es) {
+		if !strings.HasPrefix(name, "MCP_") {
+			selected[name] = true
+		}
+	}
+
+	// MCP tools: keyword FTS5 only on one-turn window (keyword-gate)
+	mcpSelected := make(map[string]bool)
+	for _, name := range r.searchToolNames(oneTurnText) {
+		if strings.HasPrefix(name, "MCP_") {
+			mcpSelected[name] = true
+		}
+	}
+	// Cap MCP tools at 3 to prevent bloat, in stable order.
+	mcpNames := make([]string, 0, len(mcpSelected))
+	for name := range mcpSelected {
+		mcpNames = append(mcpNames, name)
+	}
+	sort.Strings(mcpNames)
+	for _, name := range mcpNames[:min(3, len(mcpNames))] {
 		selected[name] = true
 	}
-	for _, name := range r.semanticToolNames(contextText, es) {
-		selected[name] = true
-	}
+
 	for _, family := range toolFamilies {
 		matched := false
 		for _, name := range family {
@@ -278,6 +305,9 @@ func (r *Registry) semanticToolNames(contextText string, es *EmbeddingStore) []s
 	r.searchMu.Lock()
 	pending := make([]string, 0)
 	for name, tool := range r.tools {
+		if strings.HasPrefix(name, "MCP_") {
+			continue
+		}
 		if len(r.toolEmbeddings[name]) == 0 {
 			pending = append(pending, name+" — "+tool.Description)
 		}
@@ -306,14 +336,14 @@ func (r *Registry) semanticToolNames(contextText string, es *EmbeddingStore) []s
 	var candidates []candidate
 	r.searchMu.Lock()
 	for name, embedding := range r.toolEmbeddings {
-		if score := cosineSimilarity(query, embedding); score >= 0.25 {
+		if score := cosineSimilarity(query, embedding); score >= 0.40 {
 			candidates = append(candidates, candidate{name, score})
 		}
 	}
 	r.searchMu.Unlock()
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
-	if len(candidates) > 12 {
-		candidates = candidates[:12]
+	if len(candidates) > 8 {
+		candidates = candidates[:8]
 	}
 	names := make([]string, len(candidates))
 	for i, candidate := range candidates {
@@ -610,10 +640,10 @@ func BuildRegistry(db *sql.DB, home, workspace string, mem *Memory, location ...
 	r.Register(behaves(makeSearchTool(), BehaviorObserve))
 	r.Register(behaves(makeFetchURLTool(), BehaviorObserve))
 
-	// recall — original pull-based memory retrieval
+	// remember — graph-aware memory traversal
 	r.Register(behaves(&Tool{
-		Name:        "recall",
-		Description: "Search your memory for facts about the user. Call before answering personal questions.",
+		Name:        "remember",
+		Description: "Recall facts as a connected graph. Returns ALL matching facts and their relationships in a single call — one well-chosen query is sufficient, do not call repeatedly with variations. Use for personal questions, context about people/projects/preferences, or understanding how things relate.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -623,15 +653,7 @@ func BuildRegistry(db *sql.DB, home, workspace string, mem *Memory, location ...
 		},
 		Fn: func(args map[string]any) string {
 			query, _ := args["query"].(string)
-			mem.recallCtx = query // §19: conversation context for context_boost scoring
-			if mem.embedder != nil {
-				return mem.SemanticSearch(query, mem.embedder)
-			}
-			results := mem.Search(query)
-			if results == "" {
-				return fmt.Sprintf("No memories found for: %s", query)
-			}
-			return results
+			return mem.graph.Remember(query)
 		},
 	}, BehaviorObserve))
 
@@ -986,7 +1008,7 @@ func makeBashToolFor(home string, timeout time.Duration) *Tool {
 			out = out[:1<<20] + fmt.Sprintf("\n... (truncated at 1 MiB, %d bytes total)", len(out))
 		}
 		if out == "" {
-			return "(no output)"
+			return "(no output — state may have changed; verify with ls, cat, grep, or appropriate check before declaring done)"
 		}
 		return out
 	}
@@ -1218,27 +1240,51 @@ func makeListCalendarTool(db *sql.DB, location *time.Location) *Tool {
 func makeNotesTool(db *sql.DB, mem *Memory) *Tool {
 	return &Tool{
 		Name:        "save_note",
-		Description: "Save a durable fact to memory. Use when user shares something about people, projects, or preferences worth remembering.",
+		Description: "Save a durable fact to memory as a .md file with YAML front matter. Only for facts worth remembering in a month — skip one-off tasks and transient intent. Use when user shares something about people, projects, or preferences.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"subject":    map[string]any{"type": "string", "description": "Who or what this is about"},
-				"content":    map[string]any{"type": "string", "description": "The fact to remember"},
-				"importance": map[string]any{"type": "integer", "description": "Optional importance from 1 (low) to 5 (critical); default 3 for a direct user fact"},
+				"id":      map[string]any{"type": "string", "description": "snake_case unique identifier"},
+				"subject": map[string]any{"type": "string", "description": "Who or what this is about, one sentence"},
+				"content": map[string]any{"type": "string", "description": "Optional body text, 1-3 sentences"},
+				"edge":    map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"target": map[string]any{"type": "string"}, "rel": map[string]any{"type": "string"}}}, "description": "Related facts: [{target: id, rel: relation}]"},
 			},
-			"required": []string{"subject", "content"},
+			"required": []string{"id", "subject"},
 		},
 		Fn: func(args map[string]any) string {
+			id, _ := args["id"].(string)
 			subject, _ := args["subject"].(string)
 			content, _ := args["content"].(string)
-			importance := 3
-			if value, ok := args["importance"].(float64); ok {
-				importance = int(value)
+
+			var edges []Edge
+			if raw, ok := args["edge"]; ok {
+				if arr, ok := raw.([]any); ok {
+					for _, e := range arr {
+						em, _ := e.(map[string]any)
+						target, _ := em["target"].(string)
+						rel, _ := em["rel"].(string)
+						if target != "" && rel != "" {
+							edges = append(edges, Edge{Target: target, Rel: rel})
+						}
+					}
+				}
 			}
-			importance = min(5, max(1, importance))
-			db.Exec("INSERT INTO facts (subject, content, source, importance) VALUES (?,?,?,?)", subject, content, "user", importance)
+
+			fact := Fact{
+				ID:      id,
+				Type:    "semantic",
+				Subject: subject,
+				At:      time.Now(),
+				Edges:   edges,
+				Body:    content,
+			}
+			if err := mem.graph.RecordFact(fact); err != nil {
+				return fmt.Sprintf("Error saving: %v", err)
+			}
+
+			// Also index for embedding similarity
 			if mem.embedder != nil {
-				mem.embedder.Index("fact", subject+": "+content)
+				mem.embedder.IndexFact(id, fact)
 			}
 			return fmt.Sprintf("Saved: %s — %s", subject, content)
 		},
@@ -1436,42 +1482,27 @@ func makeManageMemoryTool(mem *Memory) *Tool {
 			action, _ := args["action"].(string)
 			subject, _ := args["subject"].(string)
 			content, _ := args["content"].(string)
+			fact, ok := mem.graph.FindFact(subject)
+			if !ok {
+				return fmt.Sprintf("Memory fact not found: %s", subject)
+			}
 			if action == "forget" {
-				rows, _ := mem.db.Query("SELECT content FROM facts WHERE subject = ?", subject)
-				var contents []string
-				if rows != nil {
-					for rows.Next() {
-						var old string
-						rows.Scan(&old)
-						contents = append(contents, old)
-					}
-					rows.Close()
+				if _, err := mem.graph.DeleteFact(fact.ID); err != nil {
+					return fmt.Sprintf("Error forgetting: %v", err)
 				}
-				mem.db.Exec("DELETE FROM facts WHERE subject = ?", subject)
 				if mem.embedder != nil {
-					for _, old := range contents {
-						mem.embedder.Remove("fact", subject+": "+old)
-					}
+					mem.embedder.RemoveFact(fact.ID)
 				}
-				return fmt.Sprintf("Forgot all facts about: %s", subject)
+				return fmt.Sprintf("Forgot: %s", fact.Subject)
 			}
 			if action == "correct" {
-				rows, _ := mem.db.Query("SELECT content FROM facts WHERE subject = ?", subject)
-				var oldContents []string
-				if rows != nil {
-					for rows.Next() {
-						var old string
-						rows.Scan(&old)
-						oldContents = append(oldContents, old)
-					}
-					rows.Close()
+				fact.Body = content
+				fact.Feedback = 0
+				if err := mem.graph.ReplaceFact(*fact); err != nil {
+					return fmt.Sprintf("Error correcting: %v", err)
 				}
-				mem.db.Exec("UPDATE facts SET content = ?, feedback = 0 WHERE subject = ?", content, subject)
 				if mem.embedder != nil {
-					for _, old := range oldContents {
-						mem.embedder.Remove("fact", subject+": "+old)
-					}
-					mem.embedder.Index("fact", subject+": "+content)
+					mem.embedder.IndexFact(fact.ID, *fact)
 				}
 				return fmt.Sprintf("Corrected fact about %s", subject)
 			}
@@ -1480,7 +1511,9 @@ func makeManageMemoryTool(mem *Memory) *Tool {
 				if action == "reject" {
 					delta = -1
 				}
-				mem.db.Exec("UPDATE facts SET feedback = MIN(5, MAX(-5, feedback + ?)) WHERE subject = ?", delta, subject)
+				if _, err := mem.graph.Feedback(fact.ID, delta); err != nil {
+					return fmt.Sprintf("Error recording feedback: %v", err)
+				}
 				return fmt.Sprintf("Recorded %s feedback for %s", action, subject)
 			}
 			return "Unknown memory action."

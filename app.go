@@ -29,6 +29,7 @@ type Core struct {
 	Memory         *Memory
 	Tools          *Registry
 	Sessions       *SessionManager
+	snapshots      sync.Map // sessionID → *LoopSnapshot (ephemeral, per-loop state)
 }
 
 func NewCore() *Core {
@@ -47,6 +48,7 @@ func NewCore() *Core {
 	}
 
 	mem := NewMemory(db, client, s)
+	mem.graph.StartReconciler(5 * time.Second)
 	mem.CleanupArtifacts()
 
 	// embedding store (OpenRouter, Phase 3)
@@ -54,10 +56,10 @@ func NewCore() *Core {
 	embModel := envOr("MINO_EMBED_MODEL", "openai/text-embedding-3-large")
 	if embKey != "" {
 		mem.embedder = NewEmbeddingStore(db, embKey, embModel)
+		mem.graph.SetEmbedder(mem.embedder)
 		for _, entry := range PruneRecentFixes(s.Home, 7*24*time.Hour) {
 			mem.embedder.Remove("working_memory", entry)
 		}
-		go mem.BackfillEmbeddings()
 	} else {
 		PruneRecentFixes(s.Home, 7*24*time.Hour)
 	}
@@ -73,6 +75,15 @@ func NewCore() *Core {
 				time.Sleep(6 * time.Hour)
 				if n := mem.ConsolidateDue(); n > 0 {
 					slog.Info("consolidation", "new_facts", n)
+				}
+			}
+		}()
+		go func() { // dedup — 6-hour, offset +30min from consolidation
+			time.Sleep(30 * time.Minute)
+			for {
+				time.Sleep(6 * time.Hour)
+				if n := mem.DedupDue(); n > 0 {
+					slog.Info("dedup", "merged_clusters", n)
 				}
 			}
 		}()
@@ -115,6 +126,8 @@ func NewCore() *Core {
 	// Tool filter: use embeddings to send only relevant tools per turn
 
 	// Playbook tools — LLM can discover and run playbooks
+	tools.Register(behaves(makeQueryAuditTool(db), BehaviorObserve))
+	tools.Register(behaves(makeSystemCheckTool(db, s.Home), BehaviorObserve))
 	tools.Register(behaves(makeListPlaybooksTool(s.Home), BehaviorObserve))
 	tools.Register(behaves(makeRunPlaybookTool(w), BehaviorMutate))
 	tools.Register(behaves(makeSchedulePlaybookTool(s.Home, s.Timezone), BehaviorMutate))
@@ -129,7 +142,15 @@ func NewCore() *Core {
 	go runScheduleDispatcher(w)
 
 	// Alert checker (§18.1): error rate + dead man's switch, every 5 minutes
-	go checkAlerts(db, w.sendAlertMessage, 5*time.Minute)
+	go checkAlerts(db, w.sendAlertMessage, 5*time.Minute, w.Settings.Location())
+
+	// Audit pruning: remove events older than 30 days, runs daily
+	go func() {
+		for {
+			time.Sleep(24 * time.Hour)
+			w.pruneOldAuditEvents()
+		}
+	}()
 
 	return w
 }
@@ -223,17 +244,31 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 	conversation.mu.Lock()
 	defer conversation.mu.Unlock()
 
+	w.startLoop(sessionID)
+	defer w.endLoop(sessionID)
+
 	ctx, finish := conversation.beginTurn(parent)
 	defer finish()
+	// Wire snapshot updates through context
+	ctx = context.WithValue(ctx, snapshotKey{}, w.snapshotUpdater(sessionID))
+	// Wire audit logging through context
+	ctx = context.WithValue(ctx, auditKey{}, func(eventType, message string, iteration int) {
+		w.auditLog(sessionID, eventType, message, iteration)
+	})
 	system := conversation.Session.BuildSystem(userMessage, source)
-	// time context: injected as system message so it doesn't clutter the chat display
-	local := time.Now().In(w.Settings.Location())
-	zone, offset := local.Zone()
-	system += fmt.Sprintf("\n[System time: %s %s (UTC%+03d:%02d). Today is %s.]",
-		local.Format("Monday, 2006-01-02 15:04:05"), zone, offset/3600, (abs(offset)%3600)/60,
-		local.Format("2006-01-02"))
-	logTrace(w.Settings.Home, "turn_start", map[string]any{"user_message": userMessage})
+	// Keep the clock in the system prompt and the fresh user turn so stale
+	// schedule/history text cannot override the configured local time.
+	clock := authoritativeClock(time.Now(), w.Settings.Location())
+	system += "\n" + clock
 	messages, userContext := conversation.Session.ContextFor(system, userMessage)
+	if len(messages) > 0 {
+		messages[len(messages)-1].Content += "\n\n" + clock + "\nUse this clock; do not infer the current time from conversation history."
+	}
+	msgLen := 0
+	for _, m := range messages {
+		msgLen += len(m.Content)
+	}
+	logTrace(w.Settings.Home, "turn_start", map[string]any{"user_message": userMessage, "system_chars": len(system), "msg_count": len(messages), "msg_chars": msgLen})
 	if len(images) > 0 {
 		messages[len(messages)-1].Images = images
 	}
@@ -252,6 +287,14 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 
 	conversation.Session.AddExchange(userMessage, userContext, result.Reply, result.ToolCalls, source)
 	return result
+}
+
+func authoritativeClock(now time.Time, loc *time.Location) string {
+	local := now.In(loc)
+	zone, offset := local.Zone()
+	return fmt.Sprintf("[AUTHORITATIVE LOCAL CLOCK: %s %s (UTC%+03d:%02d). Today is %s.]",
+		local.Format("Monday, 2006-01-02 15:04:05"), zone, offset/3600, (abs(offset)%3600)/60,
+		local.Format("2006-01-02"))
 }
 
 func (w *Core) CancelTurn(sessionID string) bool {

@@ -65,6 +65,15 @@ func handleTelegramMessage(w *Core, bot *tgbotapi.BotAPI, message *tgbotapi.Mess
 	if text == "" && len(images) == 0 {
 		return
 	}
+
+	// Interrupt routing: mid-loop queries don't wait for loop to finish
+	if query, ok := isInterrupt(text); ok && w.snapshot(sid) != nil {
+		go w.handleInterrupt(sid, query, func(reply string) {
+			sendTelegramReply(bot, chatID, "⚡ "+reply, nil)
+		})
+		return
+	}
+
 	if isStopMessage(text) {
 		reply := "No active task."
 		if w.CancelTurn(sid) {
@@ -99,6 +108,12 @@ func handleTelegramMessage(w *Core, bot *tgbotapi.BotAPI, message *tgbotapi.Mess
 		case "progress":
 			progress, _ := data["text"].(string)
 			showProgress(progress)
+		case "loop":
+			// Proactive notification: Mino notices it's looping and tells Abah
+			msg, _ := data["message"].(string)
+			if msg != "" {
+				bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("🔄 %s — continuing but trying to self-correct.", msg)))
+			}
 		}
 	}
 

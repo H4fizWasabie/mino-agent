@@ -85,10 +85,10 @@ func RunLoopContext(
 	result := &LoopResult{}
 
 	defer func() {
-		decision, reason := "skip", "recall tool not invoked"
+		decision, reason := "skip", "memory tool not invoked"
 		for _, call := range result.ToolCalls {
-			if call.Name == "recall" {
-				decision, reason = "retrieve", "recall tool invoked"
+			if call.Name == "remember" {
+				decision, reason = "retrieve", "memory tool invoked"
 				break
 			}
 		}
@@ -97,6 +97,8 @@ func RunLoopContext(
 		logTrace(traceHome, "turn_end", map[string]any{"reply": result.Reply, "status": result.Status, "iterations": result.Iterations})
 	}()
 
+	var lastLoopDetected string
+
 	for i := 1; i <= maxIter; i++ {
 		if ctx.Err() != nil {
 			result.Status = "cancelled"
@@ -104,7 +106,21 @@ func RunLoopContext(
 			return result
 		}
 		result.Iterations = i
-		schemas := tools.SchemasForContext(toolSelectionContext(system, messages), es)
+
+		// Update nervous system snapshot
+		if update, ok := ctx.Value(snapshotKey{}).(func(LoopSnapshot)); ok {
+			update(LoopSnapshot{Iteration: i, Status: "thinking"})
+		}
+
+		oneTurnText := lastTurnContext(messages)
+		schemas := tools.SchemasForContext(toolSelectionContext(system, messages), oneTurnText, es)
+		if i == 1 {
+			schemaChars := 0
+			for _, s := range schemas {
+				schemaChars += len(s.Name) + len(s.Description) + 200 // ~params JSON
+			}
+			logTrace(traceHome, "context_diag", map[string]any{"system_chars": len(system), "msg_count": len(messages), "schema_count": len(schemas), "schema_est_chars": schemaChars, "one_turn_chars": len(oneTurnText)})
+		}
 
 		_, llmCancel := context.WithTimeout(ctx, 90*time.Second)
 		resp, err := client.Create(sessionID, MainModel, messages, maxTokens, system, schemas)
@@ -114,6 +130,9 @@ func RunLoopContext(
 				result.Status = "cancelled"
 				result.Reply = "Stopped."
 				return result
+			}
+			if audit, ok := ctx.Value(auditKey{}).(func(string, string, int)); ok {
+				audit("error", fmt.Sprintf("LLM call failed: %v", err), i)
 			}
 			result.Status = "error"
 			result.Reply = fmt.Sprintf("(error: %v)", err)
@@ -128,6 +147,7 @@ func RunLoopContext(
 			"stopReason": resp.StopReason,
 			"usage":      map[string]int{"in": resp.Usage.InputTokens, "out": resp.Usage.OutputTokens},
 		})
+		logTrace(traceHome, "llm", map[string]any{"iteration": i, "in": resp.Usage.InputTokens, "out": resp.Usage.OutputTokens})
 
 		messages = append(messages, Message{Role: "assistant", Content: assembleAssistantContent(resp.Content)})
 
@@ -148,6 +168,12 @@ func RunLoopContext(
 		var turnImages []string
 		for _, tc := range toolUses {
 			args, _ := tc.Input.(map[string]any)
+
+			// Update snapshot before running tool
+			if update, ok := ctx.Value(snapshotKey{}).(func(LoopSnapshot)); ok {
+				update(LoopSnapshot{Iteration: i, Status: "running_tool", CurrentTool: fmt.Sprintf("%s(%v)", tc.Name, args)})
+			}
+
 			raw := tools.ExecuteContext(ctx, tc.Name, args)
 			if ctx.Err() != nil {
 				result.Status = "cancelled"
@@ -161,6 +187,15 @@ func RunLoopContext(
 			output := prepareToolOutput(traceHome, sessionID, i, tc.Name, raw)
 			result.ToolCalls = append(result.ToolCalls, ToolCall{Name: tc.Name, Args: args, Output: output})
 
+			// Update snapshot with tool result
+			if update, ok := ctx.Value(snapshotKey{}).(func(LoopSnapshot)); ok {
+				history := make([]string, 0)
+				for _, tc := range result.ToolCalls {
+					history = append(history, fmt.Sprintf("%s(%v) -> %s", tc.Name, tc.Args, toolOutputStatus(tc.Output)))
+				}
+				update(LoopSnapshot{Iteration: i, Status: "thinking", LastOutput: output, ToolHistory: history})
+			}
+
 			notify(obs, "tool", map[string]any{"tool": tc.Name, "args": args, "status": toolOutputStatus(raw)})
 			logTrace(traceHome, "tool", map[string]any{"tool": tc.Name, "args": args, "status": toolOutputStatus(raw)})
 
@@ -172,6 +207,30 @@ func RunLoopContext(
 			})
 		}
 		messages = append(messages, Message{Role: "user", Content: formatToolResults(toolResults), Images: turnImages})
+
+		// Loop detection: check for repeated identical tool calls
+		history := make([]string, 0, len(result.ToolCalls))
+		for _, tc := range result.ToolCalls {
+			history = append(history, fmt.Sprintf("%s(%v)", tc.Name, tc.Args))
+		}
+		if loop, msg := detectLoop(history); loop && msg != lastLoopDetected {
+			lastLoopDetected = msg
+			// Push to dashboard event stream
+			pushDashEvent(map[string]any{
+				"type": "loop_detected", "session_id": sessionID,
+				"message": msg, "iteration": i,
+			})
+			// Audit trail
+			if audit, ok := ctx.Value(auditKey{}).(func(string, string, int)); ok {
+				audit("loop_detected", msg, i)
+			}
+			logTrace(traceHome, "loop_detected", map[string]any{"message": msg, "iteration": i})
+			messages = append(messages, Message{
+				Role:    "user",
+				Content: fmt.Sprintf("[System: loop detected — %s. Try a different approach or ask the user for guidance.]", msg),
+			})
+			notify(obs, "loop", map[string]any{"message": msg})
+		}
 	}
 
 	result.Status = "iteration_limit"
@@ -191,6 +250,24 @@ func toolSelectionContext(system string, messages []Message) string {
 		text = text[len(text)-24000:]
 	}
 	return text
+}
+
+// lastTurnContext returns the last user message + last assistant reply for
+// targeted tool matching (semantic embedding and MCP keyword gating).
+func lastTurnContext(messages []Message) string {
+	var user, assistant string
+	for i := len(messages) - 1; i >= 0; i-- {
+		m := messages[i]
+		if m.Role == "user" && user == "" {
+			user = m.Content
+		} else if m.Role == "assistant" && assistant == "" {
+			assistant = m.Content
+		}
+		if user != "" && assistant != "" {
+			break
+		}
+	}
+	return user + "\n" + assistant
 }
 
 func toolOutputStatus(output string) string {

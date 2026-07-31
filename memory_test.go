@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,6 +12,16 @@ import (
 	"testing"
 	"time"
 )
+
+func TestAwaitInterruptWaitsForReplyBeforeReturning(t *testing.T) {
+	got, ok := awaitInterrupt(context.Background(), func(reply func(string)) {
+		time.Sleep(time.Millisecond)
+		reply("status ready")
+	})
+	if !ok || got != "status ready" {
+		t.Fatalf("awaitInterrupt() = %q, %v", got, ok)
+	}
+}
 
 func TestDashboardDataIncludesSoul(t *testing.T) {
 	home := t.TempDir()
@@ -79,6 +90,104 @@ func TestDashboardDataIncludesSoul(t *testing.T) {
 	}
 	if response.Tools.MCP.Servers == nil {
 		t.Fatal("MCP servers must be an empty array, not null")
+	}
+}
+
+func TestConsolidationEdgesRequireCandidatesConfidenceAndSpecificRelations(t *testing.T) {
+	m := &Memory{}
+	edges := m.validInferredEdges([]Edge{
+		{Target: "keep", Rel: "depends_on", Confidence: 0.9},
+		{Target: "weak", Rel: "depends_on", Confidence: 0.84},
+		{Target: "generic", Rel: "related_to", Confidence: 0.99},
+		{Target: "missing", Rel: "requires", Confidence: 0.99},
+		{Target: "keep", Rel: "depends_on", Confidence: 0.95},
+		{Target: "conflict", Rel: "depends_on", Confidence: 0.9},
+		{Target: "conflict", Rel: "supersedes", Confidence: 0.9},
+	}, map[string]bool{"keep": true, "conflict": true})
+	if len(edges) != 1 || edges[0].Target != "keep" || edges[0].Kind != "inferred" || edges[0].Source != "consolidation" {
+		t.Fatalf("validated edges = %+v", edges)
+	}
+}
+
+func TestConsolidationResponseRejectsMalformedOutput(t *testing.T) {
+	if _, err := parseConsolidationResponse("not json"); err == nil {
+		t.Fatal("malformed response was accepted")
+	}
+	got, err := parseConsolidationResponse(`{"facts":[{"id":"claim","subject":"A claim","edges":[]}],"episode":"An episode"}`)
+	if err != nil || len(got.Facts) != 1 || got.Episode != "An episode" {
+		t.Fatalf("parsed response = %+v, err=%v", got, err)
+	}
+	for _, response := range []string{
+		"Here is the result:\n```json\n{\"facts\":[],\"episode\":\"An episode\"}\n```",
+		"reasoning {not JSON} final: {\"facts\":[],\"episode\":\"An episode\"}",
+	} {
+		if _, err := parseConsolidationResponse(response); err != nil {
+			t.Fatalf("wrapped response rejected: %q: %v", response, err)
+		}
+	}
+}
+
+func TestConsolidationUsesFakeProviderResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"facts\":[{\"id\":\"fake_claim\",\"subject\":\"A fake-provider claim\",\"content\":\"Tested\",\"edges\":[]}],\"episode\":\"A fake-provider episode\"}"}}]}`)
+	}))
+	defer server.Close()
+	home := t.TempDir()
+	db := Connect(home)
+	defer db.Close()
+	if _, err := db.Exec("INSERT INTO chat_log (role, content, session_id) VALUES ('user', 'remember this', 'fake-session'), ('assistant', 'okay', 'fake-session')"); err != nil {
+		t.Fatal(err)
+	}
+	pm := &ProviderManager{
+		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
+		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
+		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
+		sleep: func(time.Duration) {}, now: time.Now,
+	}
+	mem := &Memory{db: db, client: pm, cfg: &Settings{Home: home, MemoriesDir: filepath.Join(home, "memories"), ConsolidateEvery: 1}, graph: NewGraphMemory(filepath.Join(home, "memories"), nil)}
+	if got := mem.ConsolidateDue(); got != 1 {
+		t.Fatalf("consolidated facts = %d", got)
+	}
+	if fact, ok := mem.graph.FindFact("fake_claim"); !ok || fact.Body != "Tested" {
+		t.Fatalf("fake-provider fact = %+v, found=%v", fact, ok)
+	}
+}
+
+func TestGraphRebuildDoesNotEraseEdgesOnEmptyResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"edges\":[]}"}}]}`)
+	}))
+	defer server.Close()
+	pm := &ProviderManager{
+		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
+		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
+		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
+		sleep: func(time.Duration) {}, now: time.Now,
+	}
+	dir := t.TempDir()
+	gm := NewGraphMemory(filepath.Join(dir, "memories"), nil)
+	if err := gm.RecordFact(Fact{ID: "target", Type: "semantic", Subject: "Target"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gm.RecordFact(Fact{ID: "source", Type: "semantic", Subject: "Source", Body: "Source", Edges: []Edge{{Target: "target", Rel: "depends_on", Kind: "inferred", Confidence: 0.95, Source: "consolidation"}}}); err != nil {
+		t.Fatal(err)
+	}
+	m := &Memory{
+		client: pm,
+		graph:  gm,
+		embedder: &EmbeddingStore{docs: []embeddedDoc{
+			{Source: "fact:source", Embedding: []float32{1, 0}},
+			{Source: "fact:target", Embedding: []float32{0.9, 0.1}},
+		}},
+	}
+	if _, err := m.RebuildGraphEdges(); err == nil {
+		t.Fatal("empty rebuild response was accepted")
+	}
+	fact, ok := gm.FindFact("source")
+	if !ok || len(fact.Edges) != 1 || fact.Edges[0].Target != "target" {
+		t.Fatalf("existing edge was erased: %+v", fact)
 	}
 }
 
@@ -152,13 +261,13 @@ func TestTraceTelemetryUsesRecordedDecisionsAndStatuses(t *testing.T) {
 	}
 	trace := strings.Join([]string{
 		`{"type":"turn_start","ts":"2026-07-18T01:00:00Z","user_message":"remember me"}`,
-		`{"type":"tool","ts":"2026-07-18T01:00:01Z","tool":"recall","status":"ok"}`,
-		`{"type":"gate","ts":"2026-07-18T01:00:02Z","decision":"retrieve","reason":"recall tool invoked"}`,
+		`{"type":"tool","ts":"2026-07-18T01:00:01Z","tool":"remember","status":"ok"}`,
+		`{"type":"gate","ts":"2026-07-18T01:00:02Z","decision":"retrieve","reason":"memory tool invoked"}`,
 		`{"type":"turn_end","ts":"2026-07-18T01:00:03Z","reply":"done","status":"complete","iterations":2}`,
 		`{"type":"turn_start","ts":"2026-07-18T02:00:00Z","user_message":"search"}`,
 		`{"type":"llm","ts":"2026-07-18T02:00:01Z","iteration":1,"in":120,"out":30,"selected_tools":8}`,
 		`{"type":"tool","ts":"2026-07-18T02:00:01Z","tool":"web_search","status":"error","output":"Extension error: timeout"}`,
-		`{"type":"gate","ts":"2026-07-18T02:00:02Z","decision":"skip","reason":"recall tool not invoked"}`,
+		`{"type":"gate","ts":"2026-07-18T02:00:02Z","decision":"skip","reason":"memory tool not invoked"}`,
 		`{"type":"turn_end","ts":"2026-07-18T02:00:03Z","reply":"failed","status":"blocked","iterations":1}`,
 	}, "\n") + "\n"
 	path := filepath.Join(home, "traces", time.Now().Format("2006-01-02")+".jsonl")
@@ -309,21 +418,6 @@ func TestToolCatalogIsStable(t *testing.T) {
 	}
 }
 
-func TestFTSTermsDropsConversationalStopWords(t *testing.T) {
-	if got := ftsTerms("how should you speak to me"); got != "speak" {
-		t.Fatalf("unexpected FTS terms: %q", got)
-	}
-}
-
-func TestOpaqueIdentifierQueriesSkipSemanticFallback(t *testing.T) {
-	if !opaqueIdentifierQuery("RANKSYNC-20260717") {
-		t.Fatal("identifier query was not recognized")
-	}
-	if opaqueIdentifierQuery("how should you speak to me") {
-		t.Fatal("natural-language query was mistaken for an identifier")
-	}
-}
-
 func TestWorkingMemoryPrunesRecentFixesAndPatternsDeduplicate(t *testing.T) {
 	home := t.TempDir()
 	old := time.Now().UTC().Add(-8 * 24 * time.Hour).Format("2006-01-02 15:04")
@@ -347,15 +441,6 @@ func TestWorkingMemoryPrunesRecentFixesAndPatternsDeduplicate(t *testing.T) {
 	}
 }
 
-func TestScoreFactUsesImportanceAndExplicitFeedback(t *testing.T) {
-	now := "2026-07-17 00:00:00"
-	low := scoreFact(factHit{keyword: 1, importance: 1, feedback: -5, createdAt: now})
-	high := scoreFact(factHit{keyword: 1, importance: 5, feedback: 5, createdAt: now})
-	if high <= low {
-		t.Fatalf("importance and feedback did not affect ranking: high=%f low=%f", high, low)
-	}
-}
-
 func TestConnectBuildsFTSIndices(t *testing.T) {
 	db := Connect(t.TempDir())
 	defer db.Close()
@@ -368,80 +453,6 @@ func TestConnectBuildsFTSIndices(t *testing.T) {
 	}
 	if matches != 1 {
 		t.Fatalf("FTS5 did not index fact: %d matches", matches)
-	}
-}
-
-func TestHybridRecallDeduplicatesFactCandidates(t *testing.T) {
-	db := Connect(t.TempDir())
-	defer db.Close()
-	if _, err := db.Exec("INSERT INTO facts (subject, content, importance) VALUES (?, ?, ?)", "Language", "Hafiz prefers English", 5); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec("INSERT INTO facts (subject, content, importance) VALUES (?, ?, ?)", "Preferences", "Hafiz prefers English", 2); err != nil {
-		t.Fatal(err)
-	}
-	mem := NewMemory(db, nil, &Settings{TopK: 4})
-	got := mem.SemanticSearch("English", nil)
-	if strings.Count(got, "Hafiz prefers English") != 1 {
-		t.Fatalf("unexpected hybrid recall: %q", got)
-	}
-}
-
-type rewriteTransport struct{ host string }
-
-func (t rewriteTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	r.URL.Scheme, r.URL.Host = "http", t.host
-	return http.DefaultTransport.RoundTrip(r)
-}
-
-func TestRecallFillerFiltersLowSimilarity(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"data":[{"embedding":[1,0]}]}`) // every query embeds to [1,0]
-	}))
-	defer ts.Close()
-	old := httpClient
-	httpClient = &http.Client{Transport: rewriteTransport{strings.TrimPrefix(ts.URL, "http://")}}
-	defer func() { httpClient = old }()
-
-	db := Connect(t.TempDir())
-	defer db.Close()
-	mem := NewMemory(db, nil, &Settings{TopK: 4, MinSimilarity: 0.45})
-	es := &EmbeddingStore{apiKey: "test", docs: []embeddedDoc{
-		{Source: "episode", Content: "relevant episode", Embedding: []float32{1, 0}},      // cos=1.0
-		{Source: "working_memory", Content: "unrelated note", Embedding: []float32{0, 1}}, // cos=0.0
-	}}
-	got := mem.SemanticSearch("favorite color", es)
-	if !strings.Contains(got, "relevant episode") || strings.Contains(got, "unrelated note") {
-		t.Fatalf("similarity floor not applied: %q", got)
-	}
-	es.docs = es.docs[1:] // fact forgotten, only junk neighbors remain
-	if got := mem.SemanticSearch("favorite color", es); got != "No matches found." {
-		t.Fatalf("post-forget recall should admit no matches, got %q", got)
-	}
-}
-
-func TestBackfillPrunesOrphanedEmbeddings(t *testing.T) {
-	home := t.TempDir()
-	db := Connect(home)
-	defer db.Close()
-	if _, err := db.Exec("INSERT INTO facts (subject, content) VALUES ('Keep', 'current fact')"); err != nil {
-		t.Fatal(err)
-	}
-	mem := NewMemory(db, nil, &Settings{Home: home, TopK: 4})
-	mem.embedder = &EmbeddingStore{db: db, docs: []embeddedDoc{
-		{Source: "fact", Content: "Keep: current fact", Embedding: []float32{1}},
-		{Source: "fact", Content: "Orphan: deleted fact", Embedding: []float32{1}},
-		{Source: "episode", Content: "orphan episode", Embedding: []float32{1}},
-	}}
-	mem.embedder.saveCache()
-	mem.BackfillEmbeddings() // no HTTP: the only valid doc is already embedded
-	if len(mem.embedder.docs) != 1 || mem.embedder.docs[0].Content != "Keep: current fact" {
-		t.Fatalf("RAM cache not reconciled: %#v", mem.embedder.docs)
-	}
-	var n int
-	db.QueryRow("SELECT COUNT(*) FROM memory_embeddings").Scan(&n)
-	if n != 1 {
-		t.Fatalf("DB cache not reconciled: %d rows", n)
 	}
 }
 
@@ -482,17 +493,17 @@ func TestConsolidateDue(t *testing.T) {
 		t.Fatalf("failure must leave rows unconsolidated: pending = %d", pending)
 	}
 
-	// 2. Success: fact + episode for session a only; b untouched.
-	response = `{"facts":[{"subject":"Hafiz","content":"Works at a veterinary hospital"},{"subject":"","content":"dropped"}],"episode":"Chatted about work"}`
+	// 2. Success: fact + episode saved to .md files; session a only; b untouched.
+	response = `{"facts":[{"id":"hafiz_works_vet","subject":"Hafiz works at a veterinary hospital","content":"Works at a veterinary hospital","edges":[]},{"id":"","subject":"","content":"dropped"}],"episode":"Chatted about work"}`
 	if got := mem.ConsolidateDue(); got != 1 {
 		t.Fatalf("written = %d, want 1", got)
 	}
-	var facts, episodes int
-	db.QueryRow("SELECT COUNT(*) FROM facts WHERE source = 'consolidation'").Scan(&facts)
-	db.QueryRow("SELECT COUNT(*) FROM episodes WHERE session_id = 'a'").Scan(&episodes)
+	if mem.graph.Stat() == 0 {
+		t.Fatalf("no facts written to graph memory")
+	}
 	db.QueryRow("SELECT COUNT(*) FROM chat_log WHERE consolidated = 0").Scan(&pending)
-	if facts != 1 || episodes != 1 || pending != 2 {
-		t.Fatalf("facts=%d episodes=%d pending=%d, want 1/1/2", facts, episodes, pending)
+	if pending != 2 {
+		t.Fatalf("pending=%d, want 2 (session b untouched)", pending)
 	}
 
 	// 3. Nothing due: no LLM call at all.
@@ -502,26 +513,24 @@ func TestConsolidateDue(t *testing.T) {
 		t.Fatal("consolidation called the LLM with nothing due")
 	}
 
-	// 4. Echoed template placeholders: rejected, not saved as facts.
-	response = `{"facts":[{"subject":"<who/what>","content":"<one sentence>"}],"episode":"<one sentence>"}`
+	// 4. Echoed template placeholders: rejected, not saved.
+	response = `{"facts":[{"id":"<snake_case_id>","subject":"<one sentence>","content":"<optional body>","edges":[]}],"episode":"<one sentence>"}`
 	seed("c", 2)
+	before = mem.graph.Stat()
 	if got := mem.ConsolidateDue(); got != 0 {
 		t.Fatalf("placeholder echo was written: %d", got)
 	}
-	db.QueryRow("SELECT COUNT(*) FROM episodes WHERE session_id = 'c'").Scan(&episodes)
-	if episodes != 0 {
+	if mem.graph.Stat() != before {
 		t.Fatal("placeholder episode was written")
 	}
 
-	response = `{"facts":[{"subject":"Hafiz","content":"Works at a veterinary hospital"},{"subject":"","content":"dropped"}],"episode":"Chatted about work"}`
-	// 5. Same fact distilled again: dup-skipped.
+	response = `{"facts":[{"id":"hafiz_works_vet","subject":"Hafiz works at a veterinary hospital","content":"Works at a veterinary hospital","edges":[]}],"episode":"Chatted about work"}`
+	// 5. Same fact distilled again: merge (no new file, just edge merge).
 	seed("a", 2)
-	if got := mem.ConsolidateDue(); got != 0 {
-		t.Fatalf("duplicate fact was written: %d", got)
-	}
-	db.QueryRow("SELECT COUNT(*) FROM facts").Scan(&facts)
-	if facts != 1 {
-		t.Fatalf("facts = %d after dup pass, want 1", facts)
+	before = mem.graph.Stat()
+	mem.ConsolidateDue() // returns 0 because merge skips, but that's fine
+	if mem.graph.Stat() != before {
+		t.Fatalf("duplicate fact created new file: %d -> %d", before, mem.graph.Stat())
 	}
 }
 
@@ -529,7 +538,7 @@ func TestConsolidateDueLimitsLLMCallsPerPass(t *testing.T) {
 	calls := 0
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"facts\":[{\"subject\":\"User\",\"content\":\"Has a durable preference\"}],\"episode\":\"A useful conversation\"}"},"finish_reason":"stop"}],"usage":{}}`)
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"facts\":[{\"id\":\"user_preference\",\"subject\":\"User has a durable preference\",\"content\":\"Has a durable preference\",\"edges\":[]}],\"episode\":\"A useful conversation\"}"},"finish_reason":"stop"}],"usage":{}}`)
 	}))
 	defer ts.Close()
 

@@ -122,6 +122,11 @@ type embeddedDoc struct {
 	Embedding []float32 `json:"embedding,omitempty"`
 }
 
+type graphCandidate struct {
+	ID    string
+	Score float64
+}
+
 type scoredDoc struct {
 	doc   embeddedDoc
 	score float64
@@ -189,6 +194,18 @@ func (es *EmbeddingStore) Prune(valid map[string]bool) {
 	}
 }
 
+// DocsBySource returns all cached embeddings for the given source.
+func (es *EmbeddingStore) DocsBySource(source string) []embeddedDoc {
+	var out []embeddedDoc
+	for _, d := range es.docs {
+		isFact := source == "fact" && (d.Source == "fact" || strings.HasPrefix(d.Source, "fact:"))
+		if (d.Source == source || isFact) && len(d.Embedding) > 0 {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 func (es *EmbeddingStore) Remove(source, content string) {
 	filtered := es.docs[:0]
 	for _, doc := range es.docs {
@@ -198,6 +215,92 @@ func (es *EmbeddingStore) Remove(source, content string) {
 	}
 	es.docs = filtered
 	es.saveCache()
+}
+
+// IndexFact gives a graph claim a stable embedding identity independent of
+// wording changes. The content remains derived from the current claim.
+func (es *EmbeddingStore) IndexFact(id string, fact Fact) {
+	source := "fact:" + id
+	es.RemoveSource(source)
+	es.Index(source, fact.Subject+": "+fact.Body)
+}
+
+func (es *EmbeddingStore) RemoveFact(id string) {
+	es.RemoveSource("fact:" + id)
+}
+
+func (es *EmbeddingStore) RemoveSource(source string) {
+	filtered := es.docs[:0]
+	for _, doc := range es.docs {
+		if doc.Source != source {
+			filtered = append(filtered, doc)
+		}
+	}
+	es.docs = filtered
+	es.saveCache()
+}
+
+// RekeyFacts upgrades pre-cutover fact embeddings to stable graph identities
+// without making new API calls. Content remains the matching key.
+func (es *EmbeddingStore) RekeyFacts(facts []Fact) int {
+	byContent := make(map[string][]string)
+	for _, fact := range facts {
+		byContent[fact.Subject+": "+fact.Body] = append(byContent[fact.Subject+": "+fact.Body], fact.ID)
+	}
+	used := make(map[string]bool)
+	changed := 0
+	for i := range es.docs {
+		if es.docs[i].Source != "fact" {
+			continue
+		}
+		ids := byContent[es.docs[i].Content]
+		for _, id := range ids {
+			if !used[id] {
+				es.docs[i].Source = "fact:" + id
+				used[id] = true
+				changed++
+				break
+			}
+		}
+	}
+	if changed > 0 {
+		es.saveCache()
+	}
+	return changed
+}
+
+func (es *EmbeddingStore) GraphCandidates(facts []Fact, limit int) map[string][]graphCandidate {
+	if limit <= 0 {
+		limit = 6
+	}
+	vectors := make(map[string]embeddedDoc)
+	for _, doc := range es.docs {
+		if strings.HasPrefix(doc.Source, "fact:") && len(doc.Embedding) > 0 {
+			vectors[strings.TrimPrefix(doc.Source, "fact:")] = doc
+		}
+	}
+	out := make(map[string][]graphCandidate)
+	for _, fact := range facts {
+		self, ok := vectors[fact.ID]
+		if !ok {
+			continue
+		}
+		var candidates []graphCandidate
+		for _, other := range facts {
+			if other.ID == fact.ID {
+				continue
+			}
+			if doc, ok := vectors[other.ID]; ok {
+				candidates = append(candidates, graphCandidate{ID: other.ID, Score: cosineSimilarity(self.Embedding, doc.Embedding)})
+			}
+		}
+		sort.Slice(candidates, func(i, j int) bool { return candidates[i].Score > candidates[j].Score })
+		if len(candidates) > limit {
+			candidates = candidates[:limit]
+		}
+		out[fact.ID] = candidates
+	}
+	return out
 }
 
 func (es *EmbeddingStore) SearchScored(query string, topK int) []scoredDoc {
@@ -221,54 +324,6 @@ func (es *EmbeddingStore) SearchScored(query string, topK int) []scoredDoc {
 		scores = scores[:topK]
 	}
 	return scores
-}
-
-// BackfillEmbeddings indexes durable records created before embeddings were
-// configured and prunes embeddings for records that no longer exist.
-// Index is idempotent, so normal restarts make no duplicate calls.
-func (m *Memory) BackfillEmbeddings() {
-	if m.embedder == nil {
-		return
-	}
-	var docs []embeddedDoc
-	rows, err := m.db.Query("SELECT subject, content FROM facts")
-	if err == nil {
-		for rows.Next() {
-			var subject, content string
-			if rows.Scan(&subject, &content) == nil {
-				docs = append(docs, embeddedDoc{Source: "fact", Content: subject + ": " + content})
-			}
-		}
-		rows.Close()
-	}
-	rows, err = m.db.Query("SELECT summary FROM episodes")
-	if err == nil {
-		for rows.Next() {
-			var summary string
-			if rows.Scan(&summary) == nil {
-				docs = append(docs, embeddedDoc{Source: "episode", Content: summary})
-			}
-		}
-		rows.Close()
-	}
-	for _, line := range strings.Split(LoadWorkingMemory(m.cfg.Home), "\n") {
-		if content := memoryFileEntry(line); content != "" {
-			docs = append(docs, embeddedDoc{Source: "working_memory", Content: content})
-		}
-	}
-	for _, line := range strings.Split(LoadPatterns(m.cfg.Home), "\n") {
-		if content := memoryFileEntry(line); content != "" {
-			docs = append(docs, embeddedDoc{Source: "patterns", Content: content})
-		}
-	}
-	valid := make(map[string]bool, len(docs))
-	for _, doc := range docs {
-		valid[doc.Source+"\x00"+doc.Content] = true
-	}
-	m.embedder.Prune(valid)
-	for _, doc := range docs {
-		m.embedder.Index(doc.Source, doc.Content)
-	}
 }
 
 func memoryFileEntry(line string) string {
@@ -387,190 +442,4 @@ func cosineSimilarity(a, b []float32) float64 {
 		return 0
 	}
 	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
-}
-
-// --- Hybrid fact retrieval: FTS5 candidates + embeddings, ranked once ---
-
-func (m *Memory) SemanticSearch(query string, es *EmbeddingStore) string {
-	if opaqueIdentifierQuery(query) {
-		es = nil // IDs belong to FTS; vector similarity would only add noise.
-	}
-	hits := m.hybridFactCandidates(query, es)
-	if len(hits) > m.cfg.TopK {
-		hits = hits[:m.cfg.TopK]
-	}
-	ids := make([]string, 0, len(hits))
-	var out strings.Builder
-	for _, hit := range hits {
-		ids = append(ids, fmt.Sprint(hit.id))
-		out.WriteString(fmt.Sprintf("- **%s**: %s\n", hit.subject, hit.content))
-	}
-	if len(ids) > 0 {
-		m.db.Exec("UPDATE facts SET last_accessed = datetime('now') WHERE id IN (" + strings.Join(ids, ",") + ")")
-	}
-	// Facts receive the durable four-signal ranking. Other recall sources are
-	// still useful, but only fill unused slots until they have equivalent metadata.
-	shown := len(hits)
-	// episodes: dated timeline recall via FTS5
-	if shown < m.cfg.TopK {
-		for _, line := range strings.Split(m.SearchEpisodes(query), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			out.WriteString(fmt.Sprintf("- [episode] %s\n", strings.TrimPrefix(line, "- ")))
-			shown++
-			if shown >= m.cfg.TopK {
-				break
-			}
-		}
-	}
-	if es != nil && shown < m.cfg.TopK {
-		for _, doc := range es.SearchScored(query, m.cfg.TopK*2) {
-			// ponytail: cosine floor is embedding-model-dependent; retune MINO_MIN_SIMILARITY after any model swap + reindex
-			if doc.doc.Source == "fact" || doc.score < m.cfg.MinSimilarity {
-				continue
-			}
-			out.WriteString(fmt.Sprintf("- [%s] %s\n", doc.doc.Source, doc.doc.Content))
-			shown++
-			if shown >= m.cfg.TopK {
-				break
-			}
-		}
-	}
-	if out.Len() == 0 {
-		return "No matches found."
-	}
-	return out.String()
-}
-
-type factHit struct {
-	id                            int
-	subject, content, createdAt   string
-	importance, feedback          int
-	keyword, semantic, finalScore float64
-	contextBoost                  float64
-}
-
-func (m *Memory) hybridFactCandidates(query string, es *EmbeddingStore) []factHit {
-	hits := make(map[int]factHit)
-	terms := ftsTerms(query)
-	if terms != "" {
-		rows, err := m.db.Query(`SELECT f.id, f.subject, f.content, f.created_at, f.importance, f.feedback
-			FROM facts_fts JOIN facts f ON f.id = facts_fts.rowid
-			WHERE facts_fts MATCH ? ORDER BY bm25(facts_fts) LIMIT ?`, terms, m.cfg.TopK*2)
-		if err == nil {
-			rank := 0
-			for rows.Next() {
-				var hit factHit
-				if rows.Scan(&hit.id, &hit.subject, &hit.content, &hit.createdAt, &hit.importance, &hit.feedback) == nil {
-					rank++
-					hit.keyword = 1 - float64(rank-1)/float64(max(1, m.cfg.TopK*2))
-					hits[hit.id] = hit
-				}
-			}
-			rows.Close()
-		}
-	}
-	if es != nil {
-		for _, doc := range es.SearchScored(query, m.cfg.TopK*2) {
-			if doc.doc.Source != "fact" {
-				continue
-			}
-			var hit factHit
-			err := m.db.QueryRow(`SELECT id, subject, content, created_at, importance, feedback FROM facts
-				WHERE subject || ': ' || content = ?`, doc.doc.Content).Scan(&hit.id, &hit.subject, &hit.content, &hit.createdAt, &hit.importance, &hit.feedback)
-			if err != nil {
-				continue
-			}
-			hit.semantic = min(1, max(0, (doc.score+1)/2))
-			if existing, ok := hits[hit.id]; ok {
-				hit.keyword = existing.keyword
-			}
-			hits[hit.id] = hit
-		}
-	}
-	// context_boost (§19): term overlap between conversation context and fact subject+content
-	ctxTerms := make(map[string]struct{})
-	for _, t := range strings.FieldsFunc(m.recallCtx, func(r rune) bool {
-		return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_')
-	}) {
-		ctxTerms[strings.ToLower(t)] = struct{}{}
-	}
-	result := make([]factHit, 0, len(hits))
-	for _, hit := range hits {
-		if len(ctxTerms) > 0 {
-			overlap := 0
-			for _, t := range strings.FieldsFunc(hit.subject+" "+hit.content, func(r rune) bool {
-				return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_')
-			}) {
-				if _, ok := ctxTerms[strings.ToLower(t)]; ok {
-					overlap++
-				}
-			}
-			hit.contextBoost = min(1.0, float64(overlap)/float64(len(ctxTerms)))
-		}
-		hit.finalScore = scoreFact(hit)
-		result = append(result, hit)
-	}
-	unique := make(map[string]factHit)
-	for _, hit := range result {
-		key := strings.ToLower(strings.Join(strings.Fields(hit.content), " "))
-		if existing, ok := unique[key]; !ok || hit.finalScore > existing.finalScore {
-			unique[key] = hit
-		}
-	}
-	result = result[:0]
-	for _, hit := range unique {
-		result = append(result, hit)
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i].finalScore > result[j].finalScore })
-	return result
-}
-
-func scoreFact(hit factHit) float64 {
-	similarity := max(hit.keyword, hit.semantic)
-	importance := float64(min(5, max(1, hit.importance))) / 5
-	feedback := float64(min(5, max(-5, hit.feedback))+5) / 10
-	created, err := time.Parse("2006-01-02 15:04:05", hit.createdAt)
-	if err != nil {
-		created = time.Now()
-	}
-	recency := math.Exp(-max(0, time.Since(created).Hours()) / (24 * 180))
-	// §19: five-signal ranking with context_boost
-	return 0.45*similarity + 0.20*importance + 0.15*recency + 0.10*feedback + 0.10*hit.contextBoost
-}
-
-func ftsTerms(query string) string {
-	terms := strings.FieldsFunc(query, func(r rune) bool {
-		return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_')
-	})
-	stop := map[string]bool{
-		"a": true, "an": true, "and": true, "are": true, "be": true, "for": true,
-		"how": true, "i": true, "in": true, "is": true, "me": true, "my": true,
-		"of": true, "on": true, "should": true, "the": true, "to": true, "we": true,
-		"what": true, "with": true, "you": true, "your": true,
-	}
-	filtered := make([]string, 0, len(terms))
-	for _, term := range terms {
-		if !stop[strings.ToLower(term)] {
-			filtered = append(filtered, term)
-		}
-	}
-	return strings.Join(filtered, " OR ")
-}
-
-func opaqueIdentifierQuery(query string) bool {
-	hasLetter, hasDigit, hasSeparator := false, false, false
-	for _, r := range query {
-		switch {
-		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z'):
-			hasLetter = true
-		case r >= '0' && r <= '9':
-			hasDigit = true
-		case r == '-' || r == '_' || r == '/':
-			hasSeparator = true
-		}
-	}
-	return hasLetter && hasDigit && hasSeparator
 }
