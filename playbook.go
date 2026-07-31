@@ -95,11 +95,22 @@ func LoadPlaybook(playbooksDir, name string) (*Playbook, error) {
 	}
 	sort.Strings(stageFiles)
 
+	// absolute output paths may only point under the home dir that owns the
+	// playbooks dir (<home>/.mino/playbooks); anything else fails fast at load
+	// instead of failing verification after 3 LLM attempts.
+	home := filepath.Dir(filepath.Dir(playbooksDir))
+
 	for _, fname := range stageFiles {
 		stage, err := parseStage(dir, fname)
 		if err != nil {
 			slog.Warn("playbook stage parse error", "file", fname, "error", err)
 			continue
+		}
+		if filepath.IsAbs(stage.Write) {
+			rel, relErr := filepath.Rel(home, stage.Write)
+			if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return nil, fmt.Errorf("playbook %s: stage %s output path %q is outside the allowed root %q", name, stage.Name, stage.Write, home)
+			}
 		}
 		pb.Stages = append(pb.Stages, stage)
 	}
@@ -214,14 +225,17 @@ func parseStage(dir, fname string) (StageFile, error) {
 	}
 
 	if writeSection != "" {
-		// extract path from backticks or raw
+		// extract path from backticks or raw. Only the FIRST backtick pair is
+		// authoritative: later bullets are commentary and must not change the
+		// verified output path (the scheduler incident showed an LLM appending
+		// a second Write bullet mid-run to move the verification goalpost).
 		writeSection = strings.TrimSpace(writeSection)
 		// handle `output/filename.md` format
 		if strings.Contains(writeSection, "`") {
 			start := strings.Index(writeSection, "`")
-			end := strings.LastIndex(writeSection, "`")
-			if start >= 0 && end > start {
-				stage.Write = writeSection[start+1 : end]
+			rest := writeSection[start+1:]
+			if end := strings.Index(rest, "`"); end > 0 {
+				stage.Write = rest[:end]
 			}
 		} else {
 			stage.Write = strings.SplitN(writeSection, "\n", 2)[0]
@@ -262,7 +276,8 @@ func extractSection(raw, heading string) string {
 // --- Builder ---
 
 // buildStagePrompt creates the user message for executing a stage.
-func buildStagePrompt(pb *Playbook, stage StageFile, userMessage string) string {
+// loc expands date templates (YYYY-MM-DD) in the same zone the verifier uses.
+func buildStagePrompt(pb *Playbook, stage StageFile, userMessage string, loc ...*time.Location) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("You are executing the **%s** playbook, stage %d: **%s**.\n\n", pb.Name, stage.Number, stage.Name))
 	if userMessage != "" {
@@ -277,7 +292,7 @@ func buildStagePrompt(pb *Playbook, stage StageFile, userMessage string) string 
 		b.WriteString("\n\n")
 	}
 
-	outPath := outputPath(pb, stage)
+	outPath := outputPath(pb, stage, loc...)
 	b.WriteString("## Output File\n\n")
 	b.WriteString(fmt.Sprintf("Write your final output to this exact path: `%s`\n", outPath))
 	b.WriteString(fmt.Sprintf("The output directory already exists: `%s`\n\n", filepath.Dir(outPath)))
@@ -298,12 +313,24 @@ func buildStagePrompt(pb *Playbook, stage StageFile, userMessage string) string 
 }
 
 // outputPath returns the absolute path for a stage's output file.
-func outputPath(pb *Playbook, stage StageFile) string {
-	outputDir := filepath.Join(pb.Dir, "output")
-	os.MkdirAll(outputDir, 0700)
-	if stage.Write != "" {
-		return filepath.Join(outputDir, filepath.Base(stage.Write))
+// Absolute declared paths are honored as-is (validated at load time); relative
+// ones are rebased into the playbook output/ dir. Date templates (YYYY-MM-DD)
+// expand in loc (nil → local time).
+func outputPath(pb *Playbook, stage StageFile, loc ...*time.Location) string {
+	zone := time.Local
+	if len(loc) > 0 && loc[0] != nil {
+		zone = loc[0]
 	}
+	outputDir := filepath.Join(pb.Dir, "output")
+	if stage.Write != "" {
+		expanded := strings.ReplaceAll(stage.Write, "YYYY-MM-DD", time.Now().In(zone).Format("2006-01-02"))
+		if filepath.IsAbs(expanded) {
+			return expanded
+		}
+		os.MkdirAll(outputDir, 0700)
+		return filepath.Join(outputDir, filepath.Base(expanded))
+	}
+	os.MkdirAll(outputDir, 0700)
 	return filepath.Join(outputDir, fmt.Sprintf("%02d-%s.md", stage.Number, stage.Name))
 }
 
@@ -343,13 +370,14 @@ func executeStage(
 	maxTokens int,
 	obs Observer,
 	traceHome string,
+	loc ...*time.Location,
 ) (string, []ToolCall, int, int, error) {
-	userMsg := buildStagePrompt(pb, stage, userMessage)
+	userMsg := buildStagePrompt(pb, stage, userMessage, loc...)
 	tokensIn, tokensOut := 0, 0
 	var allCalls []ToolCall
 
 	for attempt := 1; attempt <= maxStageRetries; attempt++ {
-		outPath := outputPath(pb, stage)
+		outPath := outputPath(pb, stage, loc...)
 		before := inspectOutput(outPath)
 		messages := append([]Message(nil), baseMessages...)
 		messages = append(messages, Message{Role: "user", Content: userMsg})
@@ -391,7 +419,7 @@ func executeStage(
 		// A completed model turn without a fresh output does not satisfy the stage.
 		slog.Warn("playbook stage output unchanged", "playbook", pb.Name, "stage", stage.Number, "attempt", attempt, "expected", outPath)
 		if attempt < maxStageRetries {
-			userMsg = buildStagePrompt(pb, stage, userMessage) + fmt.Sprintf("\n## Retry\n\nThe output file `%s` was not created or updated by the previous attempt. Complete the remaining steps and write the output file. Do NOT repeat steps that already succeeded.\n", outPath)
+			userMsg = buildStagePrompt(pb, stage, userMessage, loc...) + fmt.Sprintf("\n## Retry\n\nThe output file `%s` was not created or updated by the previous attempt. Complete the remaining steps and write the output file. Do NOT repeat steps that already succeeded.\n", outPath)
 		}
 	}
 
@@ -431,7 +459,7 @@ func RunPlaybook(
 		reply, calls, ti, to, err := executeStage(
 			ctx, core.Client, sessionID, system,
 			pb, stage, userMessage, baseMessages, core.Tools, core.Settings.MaxTokens,
-			obs, core.Settings.Home,
+			obs, core.Settings.Home, core.Settings.Location(),
 		)
 		result.TokensIn += ti
 		result.TokensOut += to
@@ -447,7 +475,7 @@ func RunPlaybook(
 			return result, nil // not an error — playbook result carries the failure
 		}
 
-		outPath := outputPath(pb, stage)
+		outPath := outputPath(pb, stage, core.Settings.Location())
 		result.Outputs = append(result.Outputs, outPath)
 		if core.Memory != nil {
 			if info, err := os.Stat(outPath); err == nil {
@@ -730,10 +758,11 @@ func makeListPlaybooksTool(home string) *Tool {
 
 // PlaybookSchedule is one scheduled playbook entry in ~/.mino/schedules.json.
 type PlaybookSchedule struct {
-	Name     string `json:"name"`
-	Time     string `json:"time"`     // HH:MM local time
-	Timezone string `json:"timezone"` // IANA timezone
-	LastRun  string `json:"last_run"` // RFC3339 of last execution, empty if never
+	Name      string `json:"name"`
+	Time      string `json:"time"`                 // HH:MM local time
+	Timezone  string `json:"timezone"`             // IANA timezone
+	LastRun   string `json:"last_run"`             // RFC3339 of last execution, empty if never
+	LastError string `json:"last_error,omitempty"` // last fire failure, empty when healthy
 }
 
 func scheduleFilePath(home string) string { return filepath.Join(home, "schedules.json") }
@@ -844,7 +873,11 @@ func makeListSchedulesTool(home string) *Tool {
 				if s.LastRun != "" {
 					last = s.LastRun
 				}
-				b.WriteString(fmt.Sprintf("- %s: daily at %s %s (last run: %s)\n", s.Name, s.Time, s.Timezone, last))
+				if s.LastError != "" {
+					b.WriteString(fmt.Sprintf("- %s: daily at %s %s (last run: %s) ⚠ last fire FAILED: %s\n", s.Name, s.Time, s.Timezone, last, s.LastError))
+				} else {
+					b.WriteString(fmt.Sprintf("- %s: daily at %s %s (last run: %s)\n", s.Name, s.Time, s.Timezone, last))
+				}
 			}
 			return b.String()
 		},
@@ -915,6 +948,25 @@ func makeSystemCheckTool(db *sql.DB, home string) *Tool {
 				fmt.Fprintf(&b, "schedules: error (%v)\n", scheduleErr)
 			} else {
 				fmt.Fprintf(&b, "schedules: %d\n", len(schedules))
+				for _, s := range schedules {
+					if s.LastError != "" {
+						fmt.Fprintf(&b, "  - %s: last fire FAILED — %s\n", s.Name, s.LastError)
+					}
+				}
+			}
+			// runtime truth: systemd service state and recent errors from the real
+			// log. journald held the exact error that broke every schedule; the LLM
+			// never looked there because nothing told it journald is its log.
+			out, err := exec.Command("systemctl", "is-active", "mino").Output()
+			svc := strings.TrimSpace(string(out))
+			if err != nil && svc == "" {
+				svc = "not-a-systemd-service"
+			}
+			fmt.Fprintf(&b, "service: mino=%s\n", svc)
+			if out, err := exec.Command("journalctl", "-u", "mino", "-p", "err", "--since", "1 hour ago", "-n", "10", "--no-pager").Output(); err == nil && len(out) > 0 {
+				fmt.Fprintf(&b, "recent_errors:\n%s", out)
+			} else {
+				b.WriteString("recent_errors: none\n")
 			}
 			fmt.Fprintf(&b, "pending_reminders: %d\nplaybooks: %d\ncrontab: %s", pending, len(playbooks), cron)
 			return b.String()
@@ -1018,8 +1070,17 @@ func dispatchDueSchedulesAt(core *Core, now time.Time, run scheduledPlaybookRunn
 		sessionID := "scheduled-" + s.Name
 		if err := core.Responsibilities.startRoutine(s, now); err != nil {
 			slog.Error("schedule responsibility start failed", "name", s.Name, "error", err)
+			// Never fail silently: the incident that broke every schedule was
+			// exactly this error landing only in journald. Surface it in the
+			// trace, the audit log, and schedules.json so the LLM and the user
+			// can both see it.
+			logTrace(core.Settings.Home, "schedule_fire_failed", map[string]any{"name": s.Name, "time": s.Time, "error": err.Error()})
+			core.auditLog(sessionID, "schedule_fire_failed", err.Error(), 0)
+			scheds[i].LastError = err.Error()
+			updated = true
 			continue
 		}
+		scheds[i].LastError = ""
 		result, err := run(context.Background(), core, s.Name, "Scheduled run", sessionID, nil)
 		if err != nil {
 			slog.Error("schedule playbook failed", "name", s.Name, "error", err)

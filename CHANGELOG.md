@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+- Scheduled playbooks never ran: `startRoutine` created the responsibility record without kind/title/owner, so every fire failed with a validation error that landed only in journald. `startRoutine` now carries the required fields (mirrors `startOneOff`), and fire failures are surfaced in the trace, audit log, and a new `last_error` field in `schedules.json` (visible via `list_schedules` and `system_check`) instead of failing silently.
+- Playbook stage output verification could never pass for absolute output paths: `outputPath` rebased every declared path into the playbook `output/` dir via basename and never expanded `YYYY-MM-DD` templates. It now honors absolute paths (validated at load time to stay under the home dir) and expands date templates in the configured location.
+- Stage output parsing trusted first-to-last backticks in `## Write`, so an appended second bullet changed the verified output path (an LLM moved the verification goalpost mid-incident). Only the first backtick pair is now authoritative.
+- `system_check` now reports the mino systemd service state, recent journald errors (the real log the LLM never knew about), and per-schedule fire failures.
+
+### Added
+- Table-driven tests for output-path resolution (absolute/relative/date templates), first-backtick parsing, load-time path validation, fresh-schedule `startRoutine`, and dispatch failure visibility.
+
 ## [v1.5.0] — The Owner Cockpit Release
 
 Mino grows from a capable agent into a more truthful personal operating system:

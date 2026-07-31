@@ -800,3 +800,163 @@ func TestSystemCheckReportsState(t *testing.T) {
 		t.Fatalf("system check = %q", got)
 	}
 }
+
+func TestParseStageTakesFirstBacktickPair(t *testing.T) {
+	// A second Write bullet is commentary: it must never change the verified
+	// output path (the 2026-07-31 incident: an LLM appended a bullet mid-run
+	// to move the verification goalpost).
+	tmp := t.TempDir()
+	f := filepath.Join(tmp, "03-save.md")
+	os.WriteFile(f, []byte("# Save\n\n## Do\n\n1. Save the file.\n\n## Write\n\n- `/home/mino/knowledge/YYYY-MM-DD.md`\n- `output/03-save.md` — confirmation that knowledge was saved\n"), 0644)
+
+	stage, err := parseStage(tmp, "03-save.md")
+	if err != nil {
+		t.Fatalf("parseStage: %v", err)
+	}
+	if stage.Write != "/home/mino/knowledge/YYYY-MM-DD.md" {
+		t.Fatalf("stage.Write = %q, want first bullet only", stage.Write)
+	}
+}
+
+func TestOutputPathHonorsAbsoluteAndExpandsDates(t *testing.T) {
+	loc, err := time.LoadLocation("Asia/Kuala_Lumpur")
+	if err != nil {
+		t.Fatal(err)
+	}
+	today := time.Now().In(loc).Format("2006-01-02")
+
+	tests := []struct {
+		name  string
+		write string
+		loc   *time.Location
+		want  string
+	}{
+		{
+			name:  "relative rebased into output dir",
+			write: "output/01-data.md",
+			want:  filepath.Join("pbdir", "output", "01-data.md"),
+		},
+		{
+			name:  "absolute path kept as-is",
+			write: "/home/mino/knowledge/ai-daily/2026-07-31.md",
+			want:  "/home/mino/knowledge/ai-daily/2026-07-31.md",
+		},
+		{
+			name:  "date template expanded in loc",
+			write: "/home/mino/knowledge/ai-daily/YYYY-MM-DD.md",
+			loc:   loc,
+			want:  "/home/mino/knowledge/ai-daily/" + today + ".md",
+		},
+		{
+			name:  "relative date template",
+			write: "output/YYYY-MM-DD.md",
+			loc:   loc,
+			want:  filepath.Join("pbdir", "output", today+".md"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pb := &Playbook{Name: "x", Dir: "pbdir"}
+			stage := StageFile{Number: 1, Name: "data", Write: tt.write}
+			got := outputPath(pb, stage, tt.loc)
+			if got != tt.want {
+				t.Fatalf("outputPath = %q, want %q", got, tt.want)
+			}
+		})
+	}
+
+	// nil loc must not panic (variadic default)
+	pb := &Playbook{Name: "x", Dir: "pbdir"}
+	got := outputPath(pb, StageFile{Number: 2, Name: "n", Write: "output/YYYY-MM-DD.md"})
+	if got != filepath.Join("pbdir", "output", time.Now().Format("2006-01-02")+".md") {
+		t.Fatalf("nil-loc outputPath = %q", got)
+	}
+}
+
+func TestLoadPlaybookRejectsOutputOutsideHome(t *testing.T) {
+	home := t.TempDir()
+	playbooksDir := filepath.Join(home, "playbooks")
+	dir := filepath.Join(playbooksDir, "evil")
+	os.MkdirAll(dir, 0700)
+	os.WriteFile(filepath.Join(dir, "01-steal.md"), []byte("# Steal\n\n## Write\n\n- `"+`/etc/passwd`+"`\n"), 0644)
+
+	if _, err := LoadPlaybook(playbooksDir, "evil"); err == nil || !strings.Contains(err.Error(), "outside the allowed root") {
+		t.Fatalf("LoadPlaybook error = %v, want outside-the-root rejection", err)
+	}
+
+	// absolute path under home stays valid
+	os.WriteFile(filepath.Join(dir, "01-steal.md"), []byte("# Ok\n\n## Write\n\n- `"+filepath.Join(home, "knowledge", "x.md")+"`\n"), 0644)
+	if _, err := LoadPlaybook(playbooksDir, "evil"); err != nil {
+		t.Fatalf("LoadPlaybook with in-home absolute path: %v", err)
+	}
+}
+
+func TestStartRoutineCreatesFreshResponsibility(t *testing.T) {
+	home := t.TempDir()
+	db := Connect(home)
+	defer db.Close()
+	store := NewResponsibilityStore(db)
+
+	now := time.Now().UTC()
+	if err := store.startRoutine(PlaybookSchedule{Name: "ai-daily-learn"}, now); err != nil {
+		t.Fatalf("startRoutine on a fresh schedule: %v", err)
+	}
+	items, err := store.List(ResponsibilityFilter{Kind: "routine"})
+	if err != nil || len(items) != 1 {
+		t.Fatalf("routine projection: items=%+v err=%v", items, err)
+	}
+	if items[0].ID != "routine:ai-daily-learn" || items[0].Status != "working" || items[0].Kind != "routine" {
+		t.Fatalf("routine = %+v", items[0])
+	}
+}
+
+func TestDispatchDueSchedulesRecordsFireFailure(t *testing.T) {
+	home := t.TempDir()
+	now := time.Now().UTC()
+	location, err := time.LoadLocation("Asia/Kuala_Lumpur")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedule := PlaybookSchedule{
+		Name: "ai-daily-learn", Time: now.In(location).Format("15:04"), Timezone: location.String(),
+	}
+	if err := saveSchedules(home, []PlaybookSchedule{schedule}); err != nil {
+		t.Fatal(err)
+	}
+
+	// closed DB forces startRoutine's Record to fail, as it did for every
+	// schedule before kind/title/owner were provided.
+	db := Connect(home)
+	store := NewResponsibilityStore(db)
+	db.Close()
+	core := &Core{
+		Settings:         &Settings{Home: home, Timezone: "Asia/Kuala_Lumpur"},
+		Responsibilities: store,
+	}
+	ran := false
+	run := func(context.Context, *Core, string, string, string, Observer) (*PlaybookResult, error) {
+		ran = true
+		return &PlaybookResult{Name: schedule.Name, Status: "complete"}, nil
+	}
+
+	dispatchDueSchedulesAt(core, now, run)
+
+	if ran {
+		t.Fatal("runner called despite startRoutine failure")
+	}
+	scheds, err := loadSchedules(home)
+	if err != nil || len(scheds) != 1 {
+		t.Fatalf("schedules = %+v, err=%v", scheds, err)
+	}
+	if scheds[0].LastError == "" {
+		t.Fatalf("last_error not recorded: %+v", scheds[0])
+	}
+	if scheds[0].LastRun != "" {
+		t.Fatalf("last_run set despite failed fire: %+v", scheds[0])
+	}
+	// the failure must be visible in the trace, not just journald
+	trace, err := os.ReadFile(filepath.Join(home, "traces", time.Now().Format("2006-01-02")+".jsonl"))
+	if err != nil || !strings.Contains(string(trace), "schedule_fire_failed") {
+		t.Fatalf("trace missing schedule_fire_failed entry (err=%v)", err)
+	}
+}

@@ -13,12 +13,19 @@ func (s *ResponsibilityStore) startRoutine(schedule PlaybookSchedule, at time.Ti
 	_, err := s.Record(ResponsibilityEvent{
 		ResponsibilityID: "routine:" + schedule.Name,
 		Type:             "started",
-		Status:           "working",
-		Summary:          "Scheduled run started.",
-		NextAction:       "Complete scheduled playbook",
-		NextOwner:        "mino",
-		Verification:     "Declared playbook outputs must exist before verification.",
-		At:               at,
+		// Kind/Title/Owner are required by Record for a new responsibility row;
+		// their absence made every scheduled fire fail silently (2026-07-31).
+		Kind:         "routine",
+		Title:        "Scheduled run: " + schedule.Name,
+		Owner:        "mino",
+		SourceKind:   "schedule",
+		SourceRef:    schedule.Name,
+		Status:       "working",
+		Summary:      "Scheduled run started.",
+		NextAction:   "Complete scheduled playbook",
+		NextOwner:    "mino",
+		Verification: "Declared playbook outputs must exist before verification.",
+		At:           at,
 	})
 	return err
 }
