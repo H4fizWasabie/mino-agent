@@ -298,6 +298,16 @@ func (m *Memory) consolidateSession(sid string) int {
 	// Embeddings select a bounded candidate set; they never create edges.
 	availableIDs := m.graphCandidates(log.String())
 
+	// ponytail: cap the prompt — DeepSeek v4 flash enters an endless reasoning
+	// spiral (content:null, finish:length at any token budget) on very large
+	// consolidation prompts. Keep the recent tail; older exchanges drain over
+	// later passes. Rows are only marked consolidated when facts are written.
+	if log.Len() > 100000 {
+		s := log.String()
+		log.Reset()
+		log.WriteString(s[len(s)-100000:])
+	}
+
 	resp, err := m.client.CreateJSON("consolidation", SmallModel,
 		[]Message{{Role: "user", Content: fmt.Sprintf(summarizerPrompt, availableIDs.prompt, log.String())}}, 600, "")
 	if err != nil {

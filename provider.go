@@ -259,6 +259,7 @@ func parseResponse(r io.Reader) (*LLMResponse, error) {
 		})
 	}
 	if len(blocks) == 0 {
+		slog.Warn("llm response empty content", "body", string(data[:min(400, len(data))]))
 		return nil, fmt.Errorf("empty model response")
 	}
 
