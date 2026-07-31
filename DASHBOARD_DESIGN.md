@@ -193,9 +193,30 @@ Buttons initiate understandable instructions; they never silently establish
 success. The runtime performs the action, reads back the resulting state, and
 records the receipt.
 
+## Mobile behavior
+
+Mobile preserves the same Responsibility and journal model through
+phone-specific navigation rather than shrinking the desktop layout.
+
+The bottom navigation is **Today**, **Work**, **Inbox**, **Ask**, and **More**.
+Inbox is the mobile label for Conversations; More contains Memory and System.
+Only Needs-you items receive a navigation count badge.
+
+Today is a single-column adaptive journal. Selecting an entry opens a
+full-screen detail surface, not a side panel. Needs-you and Blocked details may
+keep their primary action near the bottom while Responsibility History and
+Evidence remain expandable.
+
+Ask opens a full-screen composer rather than a persistent chat dock. From a
+Responsibility detail it carries that Responsibility as visible context; from
+global navigation it starts without a Work scope. Returning from conversation
+restores the previous journal date and scroll position.
+
+Mobile uses explicit controls. It does not use hidden swipe actions for state
+changes.
+
 ## Still to decide
 
-- Mobile behavior for entry detail and conversation
 - Migration from existing dashboard data to Responsibility and journal state
 - Which existing runtime records can support the design without duplicating
   state
