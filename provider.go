@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,10 +31,10 @@ type ContentBlock struct {
 }
 
 type UsageInfo struct {
-	InputTokens          int `json:"input_tokens"`
-	OutputTokens         int `json:"output_tokens"`
-	CacheReadTokens      int `json:"cache_read_input_tokens,omitempty"`
-	CacheCreationTokens  int `json:"cache_creation_input_tokens,omitempty"`
+	InputTokens         int `json:"input_tokens"`
+	OutputTokens        int `json:"output_tokens"`
+	CacheReadTokens     int `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationTokens int `json:"cache_creation_input_tokens,omitempty"`
 }
 
 type LLMResponse struct {
@@ -84,10 +85,10 @@ func (c *Client) Stream(model string, messages []Message, maxTokens int, system 
 }
 
 func (c *Client) create(ctx context.Context, model, reasoning string, messages []Message, maxTokens int, system string, tools []ToolDef, stream, jsonOutput bool, onText func(string)) (*LLMResponse, error) {
-	return c.createWithRouting(ctx, model, reasoning, messages, maxTokens, system, tools, stream, jsonOutput, onText, c.providerRouting)
+	return c.createWithRouting(ctx, model, reasoning, messages, maxTokens, system, tools, stream, jsonOutput, onText, c.providerRouting, "")
 }
 
-func (c *Client) createWithRouting(ctx context.Context, model, reasoning string, messages []Message, maxTokens int, system string, tools []ToolDef, stream, jsonOutput bool, onText func(string), routing []string) (*LLMResponse, error) {
+func (c *Client) createWithRouting(ctx context.Context, model, reasoning string, messages []Message, maxTokens int, system string, tools []ToolDef, stream, jsonOutput bool, onText func(string), routing []string, sessionID string) (*LLMResponse, error) {
 	if c.isCodex() {
 		return c.createCodex(ctx, model, reasoning, messages, system, tools, onText)
 	}
@@ -124,6 +125,9 @@ func (c *Client) createWithRouting(ctx context.Context, model, reasoning string,
 			"order":           routing,
 			"allow_fallbacks": true,
 		}
+	}
+	if sessionID != "" {
+		payload["session_id"] = sessionID
 	}
 	if reasoning != "" {
 		payload["reasoning_effort"] = reasoning
@@ -169,6 +173,14 @@ func (c *Client) createWithRouting(ctx context.Context, model, reasoning string,
 	return resp2, err
 }
 
+func openRouterSessionID(baseURL string, session string, role ModelRole, model string) string {
+	if session == "" || !strings.Contains(strings.ToLower(baseURL), "openrouter.ai") {
+		return ""
+	}
+	hash := sha256.Sum256([]byte(string(role) + "\x00" + model + "\x00" + session))
+	return "mino-" + fmt.Sprintf("%x", hash[:16])
+}
+
 func parseResponse(r io.Reader) (*LLMResponse, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
@@ -190,8 +202,12 @@ func parseResponse(r io.Reader) (*LLMResponse, error) {
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 		Usage struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
+			PromptTokens       int `json:"prompt_tokens"`
+			CompletionTokens   int `json:"completion_tokens"`
+			PromptTokenDetails struct {
+				CachedTokens     int `json:"cached_tokens"`
+				CacheWriteTokens int `json:"cache_write_tokens"`
+			} `json:"prompt_tokens_details"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(data, &result); err != nil {
@@ -234,8 +250,10 @@ func parseResponse(r io.Reader) (*LLMResponse, error) {
 	return &LLMResponse{
 		StopReason: stopReason,
 		Usage: UsageInfo{
-			InputTokens:  result.Usage.PromptTokens,
-			OutputTokens: result.Usage.CompletionTokens,
+			InputTokens:         result.Usage.PromptTokens,
+			OutputTokens:        result.Usage.CompletionTokens,
+			CacheReadTokens:     result.Usage.PromptTokenDetails.CachedTokens,
+			CacheCreationTokens: result.Usage.PromptTokenDetails.CacheWriteTokens,
 		},
 		Content:   blocks,
 		FinalText: choice.Message.Content,
@@ -276,8 +294,12 @@ func parseSSEStream(r io.Reader, onText func(string)) (*LLMResponse, error) {
 				} `json:"delta"`
 			} `json:"choices"`
 			Usage *struct {
-				PromptTokens     int `json:"prompt_tokens"`
-				CompletionTokens int `json:"completion_tokens"`
+				PromptTokens       int `json:"prompt_tokens"`
+				CompletionTokens   int `json:"completion_tokens"`
+				PromptTokenDetails struct {
+					CachedTokens     int `json:"cached_tokens"`
+					CacheWriteTokens int `json:"cache_write_tokens"`
+				} `json:"prompt_tokens_details"`
 			} `json:"usage"`
 		}
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
@@ -287,6 +309,8 @@ func parseSSEStream(r io.Reader, onText func(string)) (*LLMResponse, error) {
 		if chunk.Usage != nil {
 			usage.InputTokens = chunk.Usage.PromptTokens
 			usage.OutputTokens = chunk.Usage.CompletionTokens
+			usage.CacheReadTokens = chunk.Usage.PromptTokenDetails.CachedTokens
+			usage.CacheCreationTokens = chunk.Usage.PromptTokenDetails.CacheWriteTokens
 		}
 
 		for _, choice := range chunk.Choices {
@@ -661,13 +685,15 @@ func (c *Client) logUsage(ctx context.Context, model string, resp *LLMResponse, 
 		sid, _ = v.(string)
 	}
 	record := map[string]any{
-		"ts":         time.Now().UTC().Format(time.RFC3339),
-		"provider":   "openai",
-		"model":      model,
-		"session_id": sid,
-		"in":         resp.Usage.InputTokens,
-		"out":        resp.Usage.OutputTokens,
-		"latency_ms": time.Since(startTime).Milliseconds(),
+		"ts":          time.Now().UTC().Format(time.RFC3339),
+		"provider":    "openai",
+		"model":       model,
+		"session_id":  sid,
+		"in":          resp.Usage.InputTokens,
+		"out":         resp.Usage.OutputTokens,
+		"cache_read":  resp.Usage.CacheReadTokens,
+		"cache_write": resp.Usage.CacheCreationTokens,
+		"latency_ms":  time.Since(startTime).Milliseconds(),
 	}
 	data, _ := json.Marshal(record)
 	f, err := os.OpenFile(c.usageLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)

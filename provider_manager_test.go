@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -255,3 +258,48 @@ func TestReasoningForRoleKeepsSmallModelIndependent(t *testing.T) {
 		t.Fatalf("small reasoning = %q, want omitted", got)
 	}
 }
+
+func TestOpenRouterSessionIDIsOpaqueAndScoped(t *testing.T) {
+	got := openRouterSessionID("https://openrouter.ai/api/v1", "telegram:123", MainModel, "model-a")
+	if got == "" || len(got) != len("mino-")+32 {
+		t.Fatalf("session id = %q, want opaque 16-byte hash", got)
+	}
+	if got == openRouterSessionID("https://openrouter.ai/api/v1", "telegram:123", MainModel, "model-b") {
+		t.Fatal("model change reused the same session id")
+	}
+	if openRouterSessionID("https://api.openai.com/v1", "telegram:123", MainModel, "model-a") != "" {
+		t.Fatal("non-OpenRouter provider received a session id")
+	}
+}
+
+func TestOpenRouterSessionIDIsSentInRequest(t *testing.T) {
+	var payload map[string]any
+	c := NewClient("key", "https://openrouter.ai/api/v1")
+	c.client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			return nil, err
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{}}`)), Header: make(http.Header)}, nil
+	})}
+	sessionID := openRouterSessionID(c.baseURL, "telegram:123", MainModel, "model-a")
+	if _, err := c.createWithRouting(context.Background(), "model-a", "", nil, 10, "system", nil, false, false, nil, nil, sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if payload["session_id"] != sessionID {
+		t.Fatalf("session_id = %#v, want %q", payload["session_id"], sessionID)
+	}
+}
+
+func TestParseResponseReadsOpenAICompatibleCacheUsage(t *testing.T) {
+	resp, err := parseResponse(strings.NewReader(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":80,"cache_write_tokens":20}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Usage.CacheReadTokens != 80 || resp.Usage.CacheCreationTokens != 20 {
+		t.Fatalf("cache usage = %+v", resp.Usage)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }

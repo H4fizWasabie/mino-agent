@@ -145,31 +145,31 @@ func loadProviders(home string, legacy *Settings) ([]ProviderConfig, error) {
 
 func (m *ProviderManager) Create(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
 	return m.callWithConfig(session, routeRole(role, messages), func(c *Client, model, reasoning string, p ProviderConfig) (*LLMResponse, error) {
-		return c.createWithRouting(context.Background(), model, reasoningForRole(p, role), messages, maxTokens, system, tools, false, false, nil, routingForRole(p, role))
+		return c.createWithRouting(context.Background(), model, reasoningForRole(p, role), messages, maxTokens, system, tools, false, false, nil, routingForRole(p, role), openRouterSessionID(c.baseURL, session, role, model))
 	})
 }
 
 func (m *ProviderManager) CreateJSON(session string, role ModelRole, messages []Message, maxTokens int, system string) (*LLMResponse, error) {
 	return m.callWithConfig(session, routeRole(role, messages), func(c *Client, model, reasoning string, p ProviderConfig) (*LLMResponse, error) {
-		return c.createWithRouting(context.Background(), model, reasoningForRole(p, role), messages, maxTokens, system, nil, false, true, nil, routingForRole(p, role))
+		return c.createWithRouting(context.Background(), model, reasoningForRole(p, role), messages, maxTokens, system, nil, false, true, nil, routingForRole(p, role), openRouterSessionID(c.baseURL, session, role, model))
 	})
 }
 
 func (m *ProviderManager) CreateContext(ctx context.Context, session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
 	return m.callContextWithConfig(ctx, session, routeRole(role, messages), func(c *Client, model, reasoning string, p ProviderConfig) (*LLMResponse, error) {
-		return c.createWithRouting(ctx, model, reasoningForRole(p, role), messages, maxTokens, system, tools, false, false, nil, routingForRole(p, role))
+		return c.createWithRouting(ctx, model, reasoningForRole(p, role), messages, maxTokens, system, tools, false, false, nil, routingForRole(p, role), openRouterSessionID(c.baseURL, session, role, model))
 	})
 }
 
 func (m *ProviderManager) Stream(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
 	return m.callWithConfig(session, routeRole(role, messages), func(c *Client, model, reasoning string, p ProviderConfig) (*LLMResponse, error) {
-		return c.createWithRouting(context.Background(), model, reasoningForRole(p, role), messages, maxTokens, system, tools, true, false, onText, routingForRole(p, role))
+		return c.createWithRouting(context.Background(), model, reasoningForRole(p, role), messages, maxTokens, system, tools, true, false, onText, routingForRole(p, role), openRouterSessionID(c.baseURL, session, role, model))
 	})
 }
 
 func (m *ProviderManager) StreamContext(ctx context.Context, session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
 	return m.callContextWithConfig(ctx, session, routeRole(role, messages), func(c *Client, model, reasoning string, p ProviderConfig) (*LLMResponse, error) {
-		return c.createWithRouting(ctx, model, reasoningForRole(p, role), messages, maxTokens, system, tools, true, false, onText, routingForRole(p, role))
+		return c.createWithRouting(ctx, model, reasoningForRole(p, role), messages, maxTokens, system, tools, true, false, onText, routingForRole(p, role), openRouterSessionID(c.baseURL, session, role, model))
 	})
 }
 
