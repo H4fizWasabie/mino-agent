@@ -368,3 +368,29 @@ This deliberately avoids fabricated history. The journal becomes authoritative
 from the migration point forward.
 
 See [ADR 0001](docs/adr/0001-authoritative-responsibility-journal.md).
+
+## Delivery sequence
+
+Implementation proceeds through ordered, separately reviewable milestones:
+
+1. **Responsibility foundation** adds the SQLite migration, authoritative
+   module, append-only Responsibility Events, current projections, Routine and
+   reminder import, migration baseline, and behavioral tests without removing
+   existing dashboard behavior.
+2. **Truthful Routine slice** proves one scheduled playbook from imported
+   Routine through Working, completion or block, linked Evidence, Today, Work,
+   and dedicated detail history.
+3. **One-off Responsibility** adds the conversational acceptance boundary,
+   owner-oriented transitions, carry-forward, controls, and contextual
+   Conversation.
+4. **Complete B information architecture** installs the compact frame,
+   Conversations library, Memory and System regrouping, truthful health, and
+   retires the obsolete Overview, Gateway, Loop, and Active Tasks
+   destinations.
+5. **Mobile and refinement** completes phone-specific navigation and detail,
+   date navigation, journal search, accessibility, keyboard behavior, loading,
+   stale-data handling, and empty-state polish.
+
+The truthful Routine slice is the first user-visible proof. The redesign is
+not considered working until a real scheduled Routine produces a living
+Journal Entry with linked Evidence.
