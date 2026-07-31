@@ -203,6 +203,11 @@ func (r *Registry) SchemasForContext(fullCtx string, oneTurnText string, es *Emb
 			selected[name] = true
 		}
 	}
+	// Explicit capability names in the current turn are authoritative. This
+	// keeps channel-specific context from hiding a named registered tool.
+	for _, name := range r.explicitToolNames(oneTurnText) {
+		selected[name] = true
+	}
 
 	// Built-in tools: keyword FTS5 on full context + semantic on one-turn window
 	for _, name := range r.searchToolNames(fullCtx) {
@@ -257,6 +262,39 @@ func (r *Registry) SchemasForContext(fullCtx string, oneTurnText string, es *Emb
 	}
 	sort.Slice(schemas, func(i, j int) bool { return schemas[i].Name < schemas[j].Name })
 	return schemas
+}
+
+func (r *Registry) explicitToolNames(contextText string) []string {
+	words := make(map[string]bool)
+	for _, raw := range strings.FieldsFunc(strings.ToLower(contextText), func(ch rune) bool {
+		return (ch < 'a' || ch > 'z') && (ch < '0' || ch > '9')
+	}) {
+		if len(raw) >= 3 {
+			words[raw] = true
+		}
+	}
+	var names []string
+	for name := range r.tools {
+		if strings.HasPrefix(name, "MCP_") {
+			continue
+		}
+		parts := strings.Split(strings.ToLower(name), "_")
+		if len(parts) < 2 {
+			continue
+		}
+		matched := true
+		for _, part := range parts {
+			if len(part) < 3 || !words[part] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 func (r *Registry) syncToolCatalog() {

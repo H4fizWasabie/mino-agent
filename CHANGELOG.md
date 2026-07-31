@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Channel-neutral explicit capability selection and trace-visible tool schema names for registered extension tools
 - Compact Option B desktop top navigation with the chat surface kept secondary
 - Responsibility-aware Overview command center with current attention, verified outcomes, workspace shortcuts, and a separate runtime inspection surface
 - One-off playbook Responsibility lifecycle: explicit runs now record acceptance, truthful completion or blocked outcomes, and read-back Evidence
