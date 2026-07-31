@@ -32,6 +32,19 @@ var (
 
 const maxDashEvents = 500 // ring buffer cap to prevent unbounded growth
 
+type dashboardCatalogEntry struct {
+	expires time.Time
+	value   []map[string]any
+}
+
+var dashboardCatalogCache = struct {
+	sync.Mutex
+	skills    map[string]dashboardCatalogEntry
+	playbooks map[string]dashboardCatalogEntry
+}{skills: make(map[string]dashboardCatalogEntry), playbooks: make(map[string]dashboardCatalogEntry)}
+
+const dashboardCatalogCacheTTL = 5 * time.Second
+
 func pushDashEvent(e map[string]any) {
 	dashEventMu.Lock()
 	dashEventQ = append(dashEventQ, e)
@@ -68,6 +81,8 @@ func RunDashboard(w *Core) {
 	http.HandleFunc("/api/events", handleEventsAPI)
 	http.HandleFunc("/api/nerves", handleNervesAPI)
 	http.HandleFunc("/api/data", handleDataAPI)
+	http.HandleFunc("/api/responsibilities", handleResponsibilitiesAPI)
+	http.HandleFunc("/api/responsibility-evidence", handleResponsibilityEvidence)
 	http.HandleFunc("/api/reveal", handleRevealAPI)
 	http.HandleFunc("/api/files", handleFilesAPI)
 	http.HandleFunc("/api/active-tasks", handleActiveTasks)
@@ -573,6 +588,21 @@ func chatPending(db *sql.DB) int {
 }
 
 func skillCatalog(home string) []map[string]any {
+	dashboardCatalogCache.Lock()
+	if entry, ok := dashboardCatalogCache.skills[home]; ok && time.Now().Before(entry.expires) {
+		dashboardCatalogCache.Unlock()
+		return entry.value
+	}
+	dashboardCatalogCache.Unlock()
+
+	value := loadSkillCatalog(home)
+	dashboardCatalogCache.Lock()
+	dashboardCatalogCache.skills[home] = dashboardCatalogEntry{expires: time.Now().Add(dashboardCatalogCacheTTL), value: value}
+	dashboardCatalogCache.Unlock()
+	return value
+}
+
+func loadSkillCatalog(home string) []map[string]any {
 	sl := NewSkillLoader(home, nil)
 	var out []map[string]any
 	for _, sk := range sl.Catalog() {
@@ -590,6 +620,21 @@ func skillCatalog(home string) []map[string]any {
 }
 
 func playbookCatalog(home string) []map[string]any {
+	dashboardCatalogCache.Lock()
+	if entry, ok := dashboardCatalogCache.playbooks[home]; ok && time.Now().Before(entry.expires) {
+		dashboardCatalogCache.Unlock()
+		return entry.value
+	}
+	dashboardCatalogCache.Unlock()
+
+	value := loadPlaybookCatalog(home)
+	dashboardCatalogCache.Lock()
+	dashboardCatalogCache.playbooks[home] = dashboardCatalogEntry{expires: time.Now().Add(dashboardCatalogCacheTTL), value: value}
+	dashboardCatalogCache.Unlock()
+	return value
+}
+
+func loadPlaybookCatalog(home string) []map[string]any {
 	playbooksDir := filepath.Join(home, "playbooks")
 	var out []map[string]any
 	for _, name := range ListPlaybooks(home) {
@@ -680,6 +725,14 @@ func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 	outboxData := outboxList(dashCore.Settings.Home)
 	soulData, _ := os.ReadFile(filepath.Join(dashCore.Settings.Home, "SOUL.md"))
 	activeTasks := listActiveTasksPlaybook(dashCore.Settings.Home)
+	responsibilities := ResponsibilityViews{Today: []ResponsibilityEntry{}, Work: []ResponsibilityEntry{}}
+	if dashCore.Responsibilities != nil {
+		if views, err := dashCore.Responsibilities.Views(time.Now(), dashCore.Settings.Location()); err == nil {
+			responsibilities = views
+		} else {
+			responsibilities.Error = err.Error()
+		}
+	}
 	if activeTasks == nil {
 		activeTasks = []map[string]any{}
 	}
@@ -730,6 +783,7 @@ func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 		"provider":          dashCore.Settings.Provider,
 		"model":             activeModel,
 		"reasoning":         activeReasoning,
+		"timezone":          dashCore.Settings.Timezone,
 		"active_provider":   activeProvider,
 		"home":              dashCore.Settings.Home,
 		"chat_log":          chatLog,
@@ -762,10 +816,78 @@ func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 		"wake_scans":       []any{},
 		"reports":          []any{},
 		"active_tasks":     activeTasks,
+		"responsibilities": responsibilities,
 		"needs_onboarding": needsOnboarding(dashCore.Settings.Home),
 		"graph":            loadGraphIndex(dashCore.Settings.MemoriesDir),
 	}
 	json.NewEncoder(w).Encode(resp)
+}
+
+func handleResponsibilitiesAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	if dashCore == nil || dashCore.Responsibilities == nil {
+		http.Error(w, "responsibility state unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		views, err := dashCore.Responsibilities.Views(time.Now(), dashCore.Settings.Location())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(views)
+		return
+	}
+	detail, err := dashCore.Responsibilities.Detail(id)
+	if err == sql.ErrNoRows {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(detail)
+}
+
+func handleResponsibilityEvidence(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	path := filepath.FromSlash(r.URL.Query().Get("path"))
+	clean := filepath.Clean(path)
+	parts := strings.Split(clean, string(filepath.Separator))
+	if dashCore == nil || dashCore.Settings == nil || filepath.IsAbs(path) ||
+		clean != path || len(parts) < 4 || parts[0] != "playbooks" || parts[2] != "output" {
+		http.Error(w, "evidence path not allowed", http.StatusForbidden)
+		return
+	}
+	home, err := filepath.EvalSymlinks(dashCore.Settings.Home)
+	if err != nil {
+		http.Error(w, "evidence storage unavailable", http.StatusInternalServerError)
+		return
+	}
+	outputDir, outputErr := filepath.EvalSymlinks(filepath.Join(home, parts[0], parts[1], parts[2]))
+	resolved, resolveErr := filepath.EvalSymlinks(filepath.Join(home, clean))
+	if resolveErr != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if outputErr != nil || !pathWithin(home, outputDir) || !pathWithin(outputDir, resolved) {
+		http.Error(w, "evidence path not allowed", http.StatusForbidden)
+		return
+	}
+	http.ServeFile(w, r, resolved)
+}
+
+func pathWithin(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // evalReport reads a release-evidence record written by the certification gate.
@@ -1478,7 +1600,7 @@ func usageRecords(home string) []map[string]any {
 
 func usageStats(home string) map[string]any {
 	recs := usageRecords(home)
-	var tokensIn, tokensOut float64
+	var tokensIn, tokensOut, cachedIn float64
 	var latencies []float64
 	toolCalls := 0
 	_ = dashCore.DB.QueryRow("SELECT COUNT(*) FROM chat_log WHERE content LIKE '%[tools used:%'").Scan(&toolCalls)
@@ -1491,6 +1613,9 @@ func usageStats(home string) map[string]any {
 		}
 		if v, ok := r["out"].(float64); ok {
 			tokensOut += v
+		}
+		if v, ok := r["cache_read"].(float64); ok {
+			cachedIn += v
 		}
 		if v, ok := r["latency_ms"].(float64); ok {
 			latencies = append(latencies, v)
@@ -1531,6 +1656,8 @@ func usageStats(home string) map[string]any {
 		"gate_retrieves": gateRetrieves,
 		"tokens_in":      int(tokensIn),
 		"tokens_out":     int(tokensOut),
+		"cached_tokens":  int(cachedIn),
+		"cache_hit_pct":  cacheHitPercent(cachedIn, tokensIn),
 		"total_cost":     cost,
 		"latency_avg":    int(avgLatency),
 		"latency_p95":    int(p95),
@@ -1541,15 +1668,17 @@ func usageStats(home string) map[string]any {
 
 func usageSummary(home string) map[string]any {
 	recs := usageRecords(home)
-	var totalIn, totalOut float64
+	var totalIn, totalOut, totalCached float64
 	byDay := map[string]map[string]any{}
 	byProvider := map[string]map[string]any{}
 
 	for _, r := range recs {
 		in, _ := r["in"].(float64)
 		out, _ := r["out"].(float64)
+		cached, _ := r["cache_read"].(float64)
 		totalIn += in
 		totalOut += out
+		totalCached += cached
 
 		ts, _ := r["ts"].(string)
 		day := ""
@@ -1558,12 +1687,13 @@ func usageSummary(home string) map[string]any {
 		}
 		if day != "" {
 			if byDay[day] == nil {
-				byDay[day] = map[string]any{"date": day, "calls": 0, "in": 0, "out": 0, "cost": 0.0}
+				byDay[day] = map[string]any{"date": day, "calls": 0, "in": 0, "out": 0, "cached": 0, "cost": 0.0}
 			}
 			b := byDay[day]
 			b["calls"] = b["calls"].(int) + 1
 			b["in"] = b["in"].(int) + int(in)
 			b["out"] = b["out"].(int) + int(out)
+			b["cached"] = b["cached"].(int) + int(cached)
 			b["cost"] = b["cost"].(float64) + in/1e6*2.0 + out/1e6*15.0
 		}
 		provider, _ := r["provider"].(string)
@@ -1571,12 +1701,13 @@ func usageSummary(home string) map[string]any {
 			provider = "unknown"
 		}
 		if byProvider[provider] == nil {
-			byProvider[provider] = map[string]any{"provider": provider, "calls": 0, "in": 0, "out": 0, "cost": 0.0}
+			byProvider[provider] = map[string]any{"provider": provider, "calls": 0, "in": 0, "out": 0, "cached": 0, "cost": 0.0}
 		}
 		p := byProvider[provider]
 		p["calls"] = p["calls"].(int) + 1
 		p["in"] = p["in"].(int) + int(in)
 		p["out"] = p["out"].(int) + int(out)
+		p["cached"] = p["cached"].(int) + int(cached)
 		p["cost"] = p["cost"].(float64) + in/1e6*2.0 + out/1e6*15.0
 	}
 
@@ -1594,8 +1725,16 @@ func usageSummary(home string) map[string]any {
 
 	return map[string]any{
 		"calls": len(recs), "total_in": int(totalIn), "total_out": int(totalOut),
+		"cached_tokens": int(totalCached), "cache_hit_pct": cacheHitPercent(totalCached, totalIn),
 		"total_cost": totalIn/1e6*2.0 + totalOut/1e6*15.0, "by_day": days, "by_provider": providers,
 	}
+}
+
+func cacheHitPercent(cached, input float64) float64 {
+	if input <= 0 {
+		return 0
+	}
+	return cached / input * 100
 }
 
 // --- Trace helpers ---

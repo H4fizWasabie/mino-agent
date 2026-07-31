@@ -18,18 +18,19 @@ import (
 // This is the assembly diagram in code.
 
 type Core struct {
-	notifyMu       sync.RWMutex
-	notifyTelegram func(result *LoopResult)
-	notifyChatID   int64
-	Settings       *Settings
-	DB             *sql.DB
-	Client         *ProviderManager
-	AuthStore      *AuthStore
-	OAuth          *OAuthEngine
-	Memory         *Memory
-	Tools          *Registry
-	Sessions       *SessionManager
-	snapshots      sync.Map // sessionID → *LoopSnapshot (ephemeral, per-loop state)
+	notifyMu         sync.RWMutex
+	notifyTelegram   func(result *LoopResult)
+	notifyChatID     int64
+	Settings         *Settings
+	DB               *sql.DB
+	Client           *ProviderManager
+	AuthStore        *AuthStore
+	OAuth            *OAuthEngine
+	Memory           *Memory
+	Responsibilities *ResponsibilityStore
+	Tools            *Registry
+	Sessions         *SessionManager
+	snapshots        sync.Map // sessionID → *LoopSnapshot (ephemeral, per-loop state)
 }
 
 func NewCore() *Core {
@@ -38,6 +39,10 @@ func NewCore() *Core {
 	seedBuiltinSkills(s.Home)
 
 	db := Connect(s.Home)
+	responsibilities := NewResponsibilityStore(db)
+	if _, err := responsibilities.Bootstrap(s.Home, s.Location(), time.Now()); err != nil {
+		panic(fmt.Sprintf("initialize responsibilities: %v", err))
+	}
 	authStore := LoadAuthStore(s.Home)
 	client, err := NewProviderManager(s.Home, s, authStore)
 	if err != nil {
@@ -109,14 +114,15 @@ func NewCore() *Core {
 	oauthEngine := LoadOAuthEngine(s.Home, authStore, redirectBase)
 
 	w := &Core{
-		Settings:  s,
-		DB:        db,
-		Client:    client,
-		AuthStore: authStore,
-		OAuth:     oauthEngine,
-		Memory:    mem,
-		Tools:     tools,
-		Sessions:  NewSessionManager(s, mem),
+		Settings:         s,
+		DB:               db,
+		Client:           client,
+		AuthStore:        authStore,
+		OAuth:            oauthEngine,
+		Memory:           mem,
+		Responsibilities: responsibilities,
+		Tools:            tools,
+		Sessions:         NewSessionManager(s, mem),
 	}
 	// MCP bridge: connect configured servers and register their tools
 	mcpBridge := NewMCPBridge(s.Home, tools)

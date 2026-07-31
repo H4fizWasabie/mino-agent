@@ -837,7 +837,96 @@ function onboardingView(){
     <section class="onboarding-form"><div><span class="section-kicker">PROVIDER SETUP</span><h3>Connect the first model</h3><p>Keys are written to the server environment file and never returned by the dashboard API.</p></div><div class="onb-provider-buttons"><button class="onb-btn" onclick="startOAuth('codex')"><span class="onb-btn-icon">⬡</span>ChatGPT<span>Codex device flow</span></button><button class="onb-btn" onclick="startOAuth('claude')"><span class="onb-btn-icon">✤</span>Claude<span>PKCE login</span></button><button class="onb-btn onb-btn-alt" onclick="document.getElementById('onb-manual').hidden=!document.getElementById('onb-manual').hidden"><span class="onb-btn-icon">⌨</span>I have a key<span>Manual setup</span></button></div><div id="onb-manual" hidden><div class="form-grid">${field("Provider name","onb-provider","mimo","text","A short label for this connection")}${field("API key","onb-apikey","sk-...","password","Stored in mino.env")}${field("Base URL","onb-baseurl","https://api.openai.com/v1","url","OpenAI-compatible endpoint")}${field("Main model","onb-model","mimo-v2.5","text","Used for conversations and tools")}${field("Small model","onb-small","mimo-v2.5","text","Optional background work")}</div><button id="onb-save" class="onboarding-submit" onclick="saveOnboarding()">Save configuration <span>→</span></button></div><div id="onb-msg" class="onboarding-message" aria-live="polite"></div><details class="onb-telegram"><summary>Set up Telegram (optional)</summary><p>Create a bot with <a href="https://t.me/BotFather" target="_blank">@BotFather</a>, then paste the token here:</p><label class="onboarding-field"><input id="onb-tgtoken" type="password" placeholder="123456:ABC-DEF..." onfocus="markEditing()" oninput="markEditing()"><small>Optional — connect now or later in Settings</small></label></details><input id="onb-tavily" type="hidden" value=""><small class="onboarding-footnote">Mino restarts once after saving. The dashboard reconnects automatically.</small></section></div>`;
 }
 
+const RESPONSIBILITY_STATUS = {
+  needs_you:"Needs you", working:"Working", waiting:"Waiting",
+  blocked:"Blocked", verified:"Verified", stopped:"Stopped",
+};
+const responsibilityStatus = status => RESPONSIBILITY_STATUS[status] || status || "Unknown";
+function responsibilityTime(value, withDate=false){
+  if (!value) return "No time recorded";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("en-MY", {
+    timeZone:(D&&D.timezone)||"Asia/Kuala_Lumpur",
+    day:withDate?"numeric":undefined, month:withDate?"short":undefined,
+    hour:"numeric", minute:"2-digit",
+  }).format(date);
+}
+function responsibilityEvidence(value){
+  const lines=String(value||"").split("\n").filter(Boolean);
+  if(!lines.length) return "";
+  return `<details class="responsibility-evidence"><summary>Inspect evidence</summary><div>${lines.map(line=>{
+    if(line.startsWith("artifact:")){
+      const label=line.slice(9), path=label.replace(/\s+\(\d+ bytes\)$/,"");
+      return `<a href="/api/responsibility-evidence?path=${encodeURIComponent(path)}" target="_blank" rel="noopener"><span>Artifact</span>${esc(label)}</a>`;
+    }
+    const split=line.indexOf(":"), kind=split>0?line.slice(0,split):"Evidence", text=split>0?line.slice(split+1):line;
+    return `<p><span>${esc(kind)}</span>${esc(text)}</p>`;
+  }).join("")}</div></details>`;
+}
+function responsibilityEntry(entry){
+  const latest=entry.latest||{}, status=entry.status||"waiting";
+  const action=entry.next_action?`<div class="responsibility-next"><span>Next</span><strong>${esc(entry.next_action)}</strong><small>${esc(entry.next_owner||entry.owner||"mino")}</small></div>`:"";
+  return `<article class="responsibility-entry status-${esc(status)}">
+    <time>${esc(responsibilityTime(latest.at))}</time>
+    <div class="responsibility-copy"><div class="responsibility-title"><a href="#responsibility/${encodeURIComponent(entry.id)}">${esc(entry.title)}</a><span class="responsibility-status ${esc(status)}">${esc(responsibilityStatus(status))}</span></div>
+      <p>${esc(latest.summary||entry.outcome||"No meaningful update recorded.")}</p>${action}${responsibilityEvidence(latest.evidence)}</div>
+    <a class="responsibility-open" href="#responsibility/${encodeURIComponent(entry.id)}" aria-label="Open Responsibility">→</a>
+  </article>`;
+}
+function todayView(d){
+  const state=d.responsibilities||{}, entries=state.today||[];
+  if(state.error) return `<div class="responsibility-empty"><span>!</span><strong>Responsibility state is unavailable.</strong><p>${esc(state.error)}</p></div>`;
+  const needs=entries.filter(x=>x.status==="needs_you"||x.status==="blocked").length;
+  const date=new Intl.DateTimeFormat("en-MY",{timeZone:d.timezone||"Asia/Kuala_Lumpur",weekday:"long",day:"numeric",month:"long"}).format(new Date());
+  return `<section class="responsibility-hero"><div><span class="section-kicker">OWNER JOURNAL</span><h2>${esc(date)}</h2><p>Meaningful changes in work Mino has accepted—not raw runtime activity.</p></div><div class="responsibility-tally ${needs?"attention":""}"><strong>${needs}</strong><span>need${needs===1?"s":""} your attention</span><small>${entries.length} meaningful update${entries.length===1?"":"s"} today</small></div></section>
+    ${entries.length?`<div class="today-journal">${entries.map(responsibilityEntry).join("")}</div>`:`<div class="responsibility-empty"><span>◉</span><strong>Nothing needs attention today.</strong><p>Mino has not recorded a meaningful Responsibility change yet.</p><a href="#work">Review current Work →</a></div>`}`;
+}
+function workView(d){
+  const state=d.responsibilities||{}, entries=state.work||[];
+  if(state.error) return `<div class="responsibility-empty"><span>!</span><strong>Responsibility state is unavailable.</strong><p>${esc(state.error)}</p></div>`;
+  const groups=["needs_you","blocked","working","waiting","verified","stopped"];
+  return `<section class="responsibility-hero"><div><span class="section-kicker">RESPONSIBILITY PORTFOLIO</span><h2>Work Mino owns.</h2><p>Standing Routines and durable outcomes, grouped by their truthful current state.</p></div><div class="responsibility-tally"><strong>${entries.length}</strong><span>Responsibilities</span><small>${entries.filter(x=>!["verified","stopped"].includes(x.status)).length} currently open</small></div></section>
+    ${entries.length?groups.map(status=>{const items=entries.filter(x=>x.status===status);return items.length?`<section class="work-group"><header><h3>${esc(responsibilityStatus(status))}</h3><span>${items.length}</span></header><div>${items.map(responsibilityEntry).join("")}</div></section>`:""}).join(""):`<div class="responsibility-empty"><span>□</span><strong>Mino owns no Work yet.</strong><p>A request appears here when it must survive a turn, dependency, deadline, or future verification.</p></div>`}`;
+}
+function overviewResponsibility(d){
+  const state=d.responsibilities||{}, entries=state.work||[];
+  if(state.error) return `<div class="responsibility-empty"><span>!</span><strong>Responsibility state is unavailable.</strong><p>${esc(state.error)}</p><a href="#ops">Inspect runtime health →</a></div>`;
+  const attention=entries.filter(x=>["needs_you","blocked","working"].includes(x.status)).slice(0,3);
+  const verified=(state.today||[]).filter(x=>x.status==="verified").slice(0,3);
+  const open=entries.filter(x=>!['verified','stopped'].includes(x.status)).length;
+  return `<section class="overview-responsibility"><div class="overview-responsibility-head"><div><span class="section-kicker">OWNER WORKSPACE</span><h2>What matters now.</h2><p>Accepted responsibilities, current truth, and verified outcomes in one place.</p></div><div class="overview-work-count"><strong>${open}</strong><span>open Responsibilit${open===1?"y":"ies"}</span><small>${entries.length} total in Work</small></div></div>
+    <div class="overview-responsibility-grid"><section><header><div><span class="section-kicker">CURRENT</span><h3>Needs attention</h3></div><a href="#work">Open Work →</a></header>${attention.length?`<div class="overview-entry-list">${attention.map(responsibilityEntry).join("")}</div>`:`<div class="overview-clear"><span>✓</span><strong>Nothing is waiting on you.</strong><p>Mino has no active blocked or owner-dependent Responsibility.</p></div>`}</section>
+      <section><header><div><span class="section-kicker">TODAY</span><h3>Verified outcomes</h3></div><a href="#today">Open journal →</a></header>${verified.length?`<div class="overview-entry-list">${verified.map(responsibilityEntry).join("")}</div>`:`<div class="overview-clear"><span>◉</span><strong>No verified outcome yet.</strong><p>Meaningful completed work will appear here as Mino proves it.</p></div>`}</section></div>
+    <nav class="overview-links" aria-label="Workspace shortcuts"><a href="#today"><span>◉</span><strong>Today</strong><small>Journal of meaningful changes</small></a><a href="#work"><span>□</span><strong>Work</strong><small>Everything Mino owns</small></a><a href="#gateway"><span>↔</span><strong>Conversations</strong><small>Every channel, one thread</small></a><a href="#ops"><span>⌁</span><strong>Runtime health</strong><small>Inspect the operating system</small></a></nav></section>`;
+}
+function responsibilityDetailView(detail){
+  const history=detail.history||[];
+  return `<div class="responsibility-detail-head"><a href="#work">← Work</a><span class="responsibility-status ${esc(detail.status)}">${esc(responsibilityStatus(detail.status))}</span><h2>${esc(detail.title)}</h2><p>${esc(detail.outcome)}</p></div>
+    <div class="responsibility-detail-grid"><div><section class="responsibility-current"><span class="section-kicker">CURRENT STATE</span><div><span>Owner</span><strong>${esc(detail.owner||"—")}</strong></div><div><span>Next action</span><strong>${esc(detail.next_action||"No next action recorded")}</strong><small>${esc(detail.next_owner||detail.owner||"")}</small></div></section>
+      <section class="responsibility-history"><header><span class="section-kicker">IMMUTABLE HISTORY</span><strong>${history.length} event${history.length===1?"":"s"}</strong></header>${history.map(event=>`<article><time>${esc(responsibilityTime(event.at,true))}</time><i class="${esc(event.status)}"></i><div><div><strong>${esc(responsibilityStatus(event.status))}</strong><span>${esc(event.type)}</span></div><p>${esc(event.summary)}</p>${responsibilityEvidence(event.evidence)}</div></article>`).join("")}</section></div>
+      <aside class="responsibility-policy"><span class="section-kicker">POLICY &amp; EVIDENCE</span><div><span>Kind</span><strong>${esc(detail.kind)}</strong></div><div><span>Schedule</span><strong>${esc(detail.schedule||"Not scheduled")}</strong></div><div><span>Due</span><strong>${esc(detail.due_at?responsibilityTime(detail.due_at,true):"No deadline")}</strong></div><div><span>Last run</span><strong>${esc(detail.last_run_at?responsibilityTime(detail.last_run_at,true):"Never")}</strong></div><div><span>Verification</span><strong>${esc(detail.verification||"No condition recorded")}</strong></div></aside></div>`;
+}
+async function loadResponsibilityDetail(id){
+  const target=document.getElementById("responsibility-detail");
+  if(!target) return;
+  try{
+    const response=await fetch("/api/responsibilities?id="+encodeURIComponent(id));
+    if(!response.ok) throw new Error(response.status===404?"Responsibility not found":"Could not load Responsibility");
+    target.innerHTML=responsibilityDetailView(await response.json());
+  }catch(error){
+    target.innerHTML=`<div class="responsibility-empty"><span>!</span><strong>${esc(error.message)}</strong><p>Return to Work and try again.</p></div>`;
+  }
+}
+
 const VIEWS = {
+  today(d){ return todayView(d); },
+  work(d){ return workView(d); },
+  responsibility(d, id){
+    id=decodeURIComponent(id||"");
+    setTimeout(()=>loadResponsibilityDetail(id),0);
+    return `<div id="responsibility-detail">${spinner()}</div>`;
+  },
   // Gateway: ONE unified conversation across every channel (dashboard, telegram,
   // voice, cli) — the same loop + memory answer all of them. Each message is
   // tagged with where it came in, Hermes-style. You type in the dock on the right.
@@ -868,8 +957,8 @@ const VIEWS = {
     return h;
   },
   overview(d){
-    return `<section class="cover-intro"><div><span class="section-kicker">MINO RUNTIME SPINE</span><h2>The entire process, live.</h2><p>Follow every turn from gateway to verified completion, with state, tools, sidecars, and telemetry in one map.</p></div><div class="cover-status"><span><i></i> Operational</span><span class="arch-status"></span><a href="#settings">Runtime settings →</a></div></section>
-      <section class="overview-cover">${archSVG(d)}</section>`;
+    return `${overviewResponsibility(d)}<section class="overview-runtime"><div class="cover-intro"><div><span class="section-kicker">RUNTIME INSPECTION</span><h2>Follow the process, live.</h2><p>Inspect every turn from gateway to verified completion, with state, tools, sidecars, and telemetry in one map.</p></div><div class="cover-status"><span><i></i> Operational</span><span class="arch-status"></span><a href="#settings">Runtime settings →</a></div></div>
+      <section class="overview-cover">${archSVG(d)}</section></section>`;
   },
   loop(d){
     const turns=d.turns||[], calls=turns.reduce((n,t)=>n+(t.llm_calls||[]).length,0), tools=turns.reduce((n,t)=>n+(t.tools||[]).length,0);
@@ -1026,6 +1115,7 @@ async function pollEvents(){
 
 let activeView = null, activeSub = null;
 const TITLES = {chat:"Chat & watch", ops:"LLM Ops",
+                today:"Today — owner journal", work:"Work — responsibilities", responsibility:"Responsibility",
                 database:"Database — everything Mino stores (state.db)", activetasks:"Active Schedules — playbook runs",
                 files:"Files — VPS artifacts and outputs",
                 graph:"Memory Graph — interactive visualization",
@@ -1060,6 +1150,9 @@ function render(){
   activeView = view; activeSub = sub;
   document.getElementById("model").textContent = `${D.provider} · ${D.model}`;
   document.getElementById("n-gw").textContent = (D.chat_log||[]).length;
+  const responsibilityViews=D.responsibilities||{today:[],work:[]};
+  document.getElementById("n-today").textContent = responsibilityViews.today.filter(x=>x.status==="needs_you"||x.status==="blocked").length||"";
+  document.getElementById("n-work").textContent = responsibilityViews.work.filter(x=>!["verified","stopped"].includes(x.status)).length||"";
   document.getElementById("n-loop").textContent = D.stats.turns;
   document.getElementById("n-mem").textContent = (D.facts||[]).length + (D.episodes||[]).length;
   document.getElementById("n-tools").textContent = (D.tools&&D.tools.catalog||[]).length;
@@ -1688,6 +1781,20 @@ function clearGraphQuery() {
 }
 
 window.addEventListener("hashchange", render);
+const THEME_KEY = "mino-theme";
+function applyTheme(mode) {
+  const value = ["system", "light", "dark"].includes(mode) ? mode : "system";
+  document.documentElement.toggleAttribute("data-theme", value !== "system");
+  if (value !== "system") document.documentElement.dataset.theme = value;
+  localStorage.setItem(THEME_KEY, value);
+  const select = document.getElementById("theme-mode");
+  if (select) select.value = value;
+}
+function initTheme() {
+  applyTheme(localStorage.getItem(THEME_KEY) || "system");
+  document.getElementById("theme-mode")?.addEventListener("change", event => applyTheme(event.target.value));
+}
+initTheme();
 let orbitNarrow = window.innerWidth < 720;
 window.addEventListener("resize", () => {
   const narrow = window.innerWidth < 720;

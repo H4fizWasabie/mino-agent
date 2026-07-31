@@ -348,6 +348,7 @@ func (m *Memory) consolidateSession(sid string) int {
 			m.embedder.IndexFact(f.ID, fact)
 		}
 	}
+	episodeWritten := false
 	if !placeholder(distilled.Episode) {
 		epID := fmt.Sprintf("ep_%s", strings.ToLower(strings.ReplaceAll(
 			strings.ReplaceAll(distilled.Episode[:min(40, len(distilled.Episode))], " ", "_"), ",", "")))
@@ -358,10 +359,15 @@ func (m *Memory) consolidateSession(sid string) int {
 			At:      time.Now(),
 			Body:    fmt.Sprintf("Session: %s", sid),
 		}
-		m.graph.RecordFact(epFact)
-		if m.embedder != nil {
-			m.embedder.Index("episode", distilled.Episode)
+		if err := m.graph.RecordFact(epFact); err == nil {
+			episodeWritten = true
+			if m.embedder != nil {
+				m.embedder.Index("episode", distilled.Episode)
+			}
 		}
+	}
+	if written == 0 && !episodeWritten {
+		return 0
 	}
 	m.db.Exec("UPDATE chat_log SET consolidated = 1 WHERE id IN (" + strings.Join(ids, ",") + ")")
 	return written
@@ -398,7 +404,7 @@ func parseConsolidationResponse(text string) (distilledMemory, error) {
 			}
 			var distilled distilledMemory
 			if err := json.Unmarshal([]byte(text[start:end]), &distilled); err == nil &&
-				(distilled.Facts != nil || strings.TrimSpace(distilled.Episode) != "") {
+				(len(distilled.Facts) > 0 || strings.TrimSpace(distilled.Episode) != "") {
 				return distilled, nil
 			}
 		}

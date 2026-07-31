@@ -9,6 +9,8 @@
     <span class="brand-copy"><b>Mino</b><small id="model"></small></span>
     <button id="nav-toggle" title="Hide sidebar">&#10094;</button></div>
   <div class="nav-label">Workspace</div>
+  <a href="#today" data-v="today" data-icon="◉"><span class="nav-text">Today</span><span class="n" id="n-today"></span></a>
+  <a href="#work" data-v="work" data-icon="□"><span class="nav-text">Work</span><span class="n" id="n-work"></span></a>
   <a href="#overview" data-v="overview" data-icon="⌂"><span class="nav-text">Overview</span></a>
   <a href="#gateway" data-v="gateway" data-icon="↔"><span class="nav-text">Gateway</span><span class="n" id="n-gw"></span></a>
   <a href="#loop" data-v="loop" data-icon="◌"><span class="nav-text">Loop</span><span class="n" id="n-loop"></span></a>
@@ -27,7 +29,7 @@
 <main>
   <header class="pagehead">
     <div class="pagehead-top"><div><div class="eyebrow">MINO COMMAND CENTER</div><h1 id="title">Overview</h1></div>
-      <div class="shell-status"><span class="status-dot"></span><span>Operational</span><span class="status-sep">·</span><span id="shell-clock">Live</span></div></div>
+      <div class="shell-status"><span class="status-dot"></span><span>Operational</span><span class="status-sep">·</span><span id="shell-clock">Live</span><label class="theme-picker"><span>Theme</span><select id="theme-mode" aria-label="Theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div></div>
     <div class="sub" id="sub"></div>
   </header>
   <div id="view"></div>

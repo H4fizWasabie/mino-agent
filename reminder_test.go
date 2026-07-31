@@ -11,7 +11,7 @@ func TestReminderToolsCreateListAndCancel(t *testing.T) {
 	db := Connect(home)
 	defer db.Close()
 	var version string
-	if err := db.QueryRow("SELECT value FROM _meta WHERE key = 'schema_version'").Scan(&version); err != nil || version != "4" {
+	if err := db.QueryRow("SELECT value FROM _meta WHERE key = 'schema_version'").Scan(&version); err != nil || version != "5" {
 		t.Fatalf("schema version = %q, err=%v", version, err)
 	}
 	location := time.FixedZone("MYT", 8*60*60)
@@ -60,5 +60,31 @@ func TestSchemasForContextKeepsCoreAndRetrievesSpecialist(t *testing.T) {
 	}
 	if !names["remember"] || !names["run_playbook"] || !names["bash"] {
 		t.Fatalf("essential tools missing: %v", names)
+	}
+}
+
+func TestSchemasForContextIncludesExplicitExtensionCapabilityAcrossChannels(t *testing.T) {
+	db := Connect(t.TempDir())
+	defer db.Close()
+	r := NewRegistry()
+	r.SetSearchDB(db)
+	for _, name := range []string{"remember", "read_file", "write_file", "save_note", "search_web", "list_playbooks", "run_playbook", "bash"} {
+		r.Register(&Tool{Name: name, Description: name + " everyday capability", Schema: map[string]any{"type": "object"}})
+	}
+	r.Register(&Tool{Name: "threads_post", Description: "Publish a text post to Threads.", Schema: map[string]any{"type": "object"}})
+	r.Register(&Tool{Name: "threads_get_replies", Description: "Get recent replies to a Threads post.", Schema: map[string]any{"type": "object"}})
+
+	for _, prompt := range []string{
+		"Telegram request: use the Threads post extension to publish today's update.",
+		"Dashboard request: use the Threads post extension to publish today's update.",
+	} {
+		got := r.SchemasForContext("generic runtime context with unrelated history", prompt, nil)
+		names := make(map[string]bool, len(got))
+		for _, schema := range got {
+			names[schema.Name] = true
+		}
+		if !names["threads_post"] {
+			t.Fatalf("explicit Threads capability missing for %q: %v", prompt, names)
+		}
 	}
 }

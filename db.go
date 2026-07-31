@@ -11,7 +11,7 @@ import (
 
 // CurrentSchemaVersion is incremented when the schema changes in a way
 // that needs explicit migration. Add a migration function in runMigrations().
-const CurrentSchemaVersion = 4
+const CurrentSchemaVersion = 5
 
 // Simplified schema — single statements, no triggers with embedded semicolons.
 var schemaStatements = []string{
@@ -89,6 +89,45 @@ var schemaStatements = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(session_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_tool_calls_name ON tool_calls(tool_name)`,
+	`CREATE TABLE IF NOT EXISTS responsibilities (
+		id TEXT PRIMARY KEY,
+		kind TEXT NOT NULL,
+		title TEXT NOT NULL,
+		outcome TEXT NOT NULL DEFAULT '',
+		owner TEXT NOT NULL,
+		status TEXT NOT NULL CHECK (status IN ('needs_you','working','waiting','blocked','verified','stopped')),
+		next_action TEXT NOT NULL DEFAULT '',
+		next_owner TEXT NOT NULL DEFAULT '',
+		due_at TEXT,
+		last_run_at TEXT,
+		schedule TEXT NOT NULL DEFAULT '',
+		source_kind TEXT NOT NULL DEFAULT '',
+		source_ref TEXT NOT NULL DEFAULT '',
+		verification TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS responsibility_events (
+		id INTEGER PRIMARY KEY,
+		responsibility_id TEXT NOT NULL REFERENCES responsibilities(id),
+		event_type TEXT NOT NULL,
+		outcome TEXT NOT NULL DEFAULT '',
+		owner TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL CHECK (status IN ('needs_you','working','waiting','blocked','verified','stopped')),
+		next_action TEXT NOT NULL DEFAULT '',
+		next_owner TEXT NOT NULL DEFAULT '',
+		due_at TEXT,
+		last_run_at TEXT,
+		schedule TEXT NOT NULL DEFAULT '',
+		verification TEXT NOT NULL DEFAULT '',
+		summary TEXT NOT NULL,
+		evidence TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_responsibilities_status ON responsibilities(status)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_responsibilities_source ON responsibilities(source_kind, source_ref)
+		WHERE source_kind <> '' AND source_ref <> ''`,
+	`CREATE INDEX IF NOT EXISTS idx_responsibility_events_responsibility ON responsibility_events(responsibility_id, id)`,
 	`CREATE VIRTUAL TABLE IF NOT EXISTS tool_catalog_fts USING fts5(name UNINDEXED, description, keywords)`,
 	`CREATE TABLE IF NOT EXISTS _meta (
 		key TEXT PRIMARY KEY,
@@ -153,6 +192,10 @@ func runMigrations(db *sql.DB) {
 	// v4: persistent one-shot reminders
 	if current < 4 {
 		current = 4
+	}
+	// v5: authoritative Responsibility projection and append-only history
+	if current < 5 {
+		current = 5
 	}
 
 	if current != from {

@@ -3,6 +3,15 @@
 ## [Unreleased]
 
 ### Added
+- GitHub Actions CI for tests, race checks, vet, and the tagged production build
+- Explicit System, Light, and Dark dashboard themes with a calm stone/paper Light palette
+- Channel-neutral explicit capability selection and trace-visible tool schema names for registered extension tools
+- Compact Option B desktop top navigation with the chat surface kept secondary
+- Responsibility-aware Overview command center with current attention, verified outcomes, workspace shortcuts, and a separate runtime inspection surface
+- One-off playbook Responsibility lifecycle: explicit runs now record acceptance, truthful completion or blocked outcomes, and read-back Evidence
+- Truthful Routine journal slice connecting scheduled playbook results to Today, Work, dedicated history, and read-back Evidence
+- Authoritative SQLite Responsibility projections, append-only history, and idempotent schedule/reminder baseline migration
+- Dashboard redesign decision record covering the authoritative responsibility journal, editorial frame, truthful health and empty states, adaptive density, dated navigation, portfolio and detail views, channel conversations, mobile behavior, canonical product language, and state-first delivery sequence
 - Memory graph index cache (`index.json`): O(1) startup, skips re-parsing all .md files
 - Edge validation: dangling edge targets filtered on write
 - Lossless SQLite fact archive and collision-safe graph migration manifest
@@ -20,12 +29,20 @@
 - **Tool schema selection tightened:** essentials shrunk 15→8 tools (+3 family), semantic threshold 0.25→0.40, cap 12→8, MCP tools keyword-gated, embedding input narrowed to last turn. Schemas per turn: 30→21 (-30%), trivial-turn tokens: ~14.5k→~12k (-17%).
 
 ### Fixed
+- One-off Responsibility titles now stay concise while preserving the full accepted request as the outcome
+- Scheduled Routine completion history records the actual finish time instead of copying its start timestamp
 - Graph recall traverses reverse relationships and excludes ambiguous or low-confidence inferred edges from normal context
 - Default session guidance and compaction markers use the graph-backed `remember` tool
 - MCP tool selection excludes semantic embedding and applies a stable deterministic cap
 - Consolidation now requests JSON mode and tolerates wrapped model output; graph memory also reads legacy front matter with unquoted scalar colons.
 - Graph edge rebuild now uses JSON mode and never erases existing edges on empty or invalid inference output.
 - Current-time grounding now repeats the configured local clock on the fresh user turn so stale history cannot override it.
+- Small-model OpenRouter routing can use a separate provider route, keeping background consolidation independent from the main model route.
+- Small-model reasoning settings are independent from the main model, preventing consolidation output starvation on efficient models.
+- OpenRouter provider preferences now allow fallback to the next compatible host when a pinned route returns an empty response.
+- Empty consolidation results now remain pending for retry instead of marking chat rows complete.
+- OpenRouter calls now use opaque session IDs for sticky prompt-cache routing, and embedding/query cache usage is reused locally.
+- Deployment no longer copies local playbooks; VPS playbooks remain runtime-owned and Mino-edited definitions are preserved.
 
 ### Removed
 - FTS5 supplement path in graph traversal (dead code since migration to .md files)

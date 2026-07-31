@@ -60,15 +60,6 @@ else
     echo "No fileingest extension in this release; preserving the existing VPS sidecar"
 fi
 
-# Push filesystem playbooks without touching their runtime output directories.
-if [ -d playbooks ]; then
-    ssh "$VPS_USER@$VPS" 'mkdir -p /home/mino/.mino/playbooks'
-    for playbook in playbooks/*; do
-        [ -d "$playbook" ] || continue
-        scp -r "$playbook" "$VPS_USER@$VPS:/home/mino/.mino/playbooks/"
-    done
-fi
-
 # 4. Seed minowrap tools.json if not exists
 echo "--- Seeding minowrap tools ---"
 ssh "$VPS_USER@$VPS" '

@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -110,10 +111,13 @@ func PruneRecentFixes(home string, retention time.Duration) []string {
 // ponytail: single struct, no interface, stdlib HTTP only
 
 type EmbeddingStore struct {
-	db     *sql.DB
-	apiKey string
-	model  string
-	docs   []embeddedDoc
+	db         *sql.DB
+	apiKey     string
+	model      string
+	mu         sync.RWMutex
+	docs       []embeddedDoc
+	queryCache map[string][]float32
+	queryOrder []string
 }
 
 type embeddedDoc struct {
@@ -133,7 +137,7 @@ type scoredDoc struct {
 }
 
 func NewEmbeddingStore(db *sql.DB, apiKey, model string) *EmbeddingStore {
-	es := &EmbeddingStore{db: db, apiKey: apiKey, model: model}
+	es := &EmbeddingStore{db: db, apiKey: apiKey, model: model, queryCache: make(map[string][]float32)}
 	es.loadCache()
 	return es
 }
@@ -154,8 +158,11 @@ func (es *EmbeddingStore) loadCache() {
 }
 
 func (es *EmbeddingStore) saveCache() {
+	es.mu.RLock()
+	docs := append([]embeddedDoc(nil), es.docs...)
+	es.mu.RUnlock()
 	es.db.Exec("DELETE FROM memory_embeddings")
-	for _, d := range es.docs {
+	for _, d := range docs {
 		raw, _ := json.Marshal(d.Embedding)
 		es.db.Exec("INSERT INTO memory_embeddings (source, content, embedding) VALUES (?,?,?)", d.Source, d.Content, string(raw))
 	}
@@ -163,18 +170,28 @@ func (es *EmbeddingStore) saveCache() {
 
 // Index embeds a document and stores it. Skips if already indexed.
 func (es *EmbeddingStore) Index(source, content string) {
-	// dedup
+	es.mu.RLock()
 	for _, d := range es.docs {
 		if d.Source == source && d.Content == content {
+			es.mu.RUnlock()
 			return
 		}
 	}
+	es.mu.RUnlock()
 	emb, err := es.Embed(content)
 	if err != nil {
 		slog.Warn("embed failed", "source", source, "error", err)
 		return
 	}
+	es.mu.Lock()
+	for _, d := range es.docs {
+		if d.Source == source && d.Content == content {
+			es.mu.Unlock()
+			return
+		}
+	}
 	es.docs = append(es.docs, embeddedDoc{Source: source, Content: content, Embedding: emb})
+	es.mu.Unlock()
 	es.saveCache()
 }
 
@@ -182,6 +199,7 @@ func (es *EmbeddingStore) Index(source, content string) {
 // Derived data is reconciled against the source of truth at every startup,
 // so drift from old binaries, crashes, or manual DB edits self-heals.
 func (es *EmbeddingStore) Prune(valid map[string]bool) {
+	es.mu.Lock()
 	kept := es.docs[:0]
 	for _, d := range es.docs {
 		if valid[d.Source+"\x00"+d.Content] {
@@ -190,12 +208,17 @@ func (es *EmbeddingStore) Prune(valid map[string]bool) {
 	}
 	if len(kept) != len(es.docs) {
 		es.docs = kept
+		es.mu.Unlock()
 		es.saveCache()
+		return
 	}
+	es.mu.Unlock()
 }
 
 // DocsBySource returns all cached embeddings for the given source.
 func (es *EmbeddingStore) DocsBySource(source string) []embeddedDoc {
+	es.mu.RLock()
+	defer es.mu.RUnlock()
 	var out []embeddedDoc
 	for _, d := range es.docs {
 		isFact := source == "fact" && (d.Source == "fact" || strings.HasPrefix(d.Source, "fact:"))
@@ -207,6 +230,8 @@ func (es *EmbeddingStore) DocsBySource(source string) []embeddedDoc {
 }
 
 func (es *EmbeddingStore) Remove(source, content string) {
+	es.mu.Lock()
+	before := len(es.docs)
 	filtered := es.docs[:0]
 	for _, doc := range es.docs {
 		if doc.Source != source || doc.Content != content {
@@ -214,6 +239,10 @@ func (es *EmbeddingStore) Remove(source, content string) {
 		}
 	}
 	es.docs = filtered
+	es.mu.Unlock()
+	if len(filtered) == before {
+		return
+	}
 	es.saveCache()
 }
 
@@ -230,6 +259,8 @@ func (es *EmbeddingStore) RemoveFact(id string) {
 }
 
 func (es *EmbeddingStore) RemoveSource(source string) {
+	es.mu.Lock()
+	before := len(es.docs)
 	filtered := es.docs[:0]
 	for _, doc := range es.docs {
 		if doc.Source != source {
@@ -237,12 +268,17 @@ func (es *EmbeddingStore) RemoveSource(source string) {
 		}
 	}
 	es.docs = filtered
+	es.mu.Unlock()
+	if len(filtered) == before {
+		return
+	}
 	es.saveCache()
 }
 
 // RekeyFacts upgrades pre-cutover fact embeddings to stable graph identities
 // without making new API calls. Content remains the matching key.
 func (es *EmbeddingStore) RekeyFacts(facts []Fact) int {
+	es.mu.Lock()
 	byContent := make(map[string][]string)
 	for _, fact := range facts {
 		byContent[fact.Subject+": "+fact.Body] = append(byContent[fact.Subject+": "+fact.Body], fact.ID)
@@ -264,8 +300,11 @@ func (es *EmbeddingStore) RekeyFacts(facts []Fact) int {
 		}
 	}
 	if changed > 0 {
+		es.mu.Unlock()
 		es.saveCache()
+		return changed
 	}
+	es.mu.Unlock()
 	return changed
 }
 
@@ -273,8 +312,11 @@ func (es *EmbeddingStore) GraphCandidates(facts []Fact, limit int) map[string][]
 	if limit <= 0 {
 		limit = 6
 	}
+	es.mu.RLock()
+	docs := append([]embeddedDoc(nil), es.docs...)
+	es.mu.RUnlock()
 	vectors := make(map[string]embeddedDoc)
-	for _, doc := range es.docs {
+	for _, doc := range docs {
 		if strings.HasPrefix(doc.Source, "fact:") && len(doc.Embedding) > 0 {
 			vectors[strings.TrimPrefix(doc.Source, "fact:")] = doc
 		}
@@ -304,15 +346,18 @@ func (es *EmbeddingStore) GraphCandidates(facts []Fact, limit int) map[string][]
 }
 
 func (es *EmbeddingStore) SearchScored(query string, topK int) []scoredDoc {
-	if len(es.docs) == 0 {
+	es.mu.RLock()
+	docs := append([]embeddedDoc(nil), es.docs...)
+	es.mu.RUnlock()
+	if len(docs) == 0 {
 		return nil
 	}
-	qEmb, err := es.Embed(query)
+	qEmb, err := es.cachedEmbed(query)
 	if err != nil {
 		return nil
 	}
 	var scores []scoredDoc
-	for _, d := range es.docs {
+	for _, d := range docs {
 		if len(d.Embedding) == 0 {
 			continue
 		}
@@ -324,6 +369,40 @@ func (es *EmbeddingStore) SearchScored(query string, topK int) []scoredDoc {
 		scores = scores[:topK]
 	}
 	return scores
+}
+
+const maxEmbeddingQueryCache = 128
+
+func (es *EmbeddingStore) cachedEmbed(query string) ([]float32, error) {
+	query = strings.TrimSpace(query)
+	key := es.model + "\x00" + query
+	es.mu.RLock()
+	if emb, ok := es.queryCache[key]; ok {
+		es.mu.RUnlock()
+		return emb, nil
+	}
+	es.mu.RUnlock()
+	emb, err := es.Embed(query)
+	if err != nil {
+		return nil, err
+	}
+	es.mu.Lock()
+	if es.queryCache == nil {
+		es.queryCache = make(map[string][]float32)
+	}
+	if existing, ok := es.queryCache[key]; ok {
+		es.mu.Unlock()
+		return existing, nil
+	}
+	if len(es.queryOrder) >= maxEmbeddingQueryCache {
+		oldest := es.queryOrder[0]
+		es.queryOrder = es.queryOrder[1:]
+		delete(es.queryCache, oldest)
+	}
+	es.queryCache[key] = emb
+	es.queryOrder = append(es.queryOrder, key)
+	es.mu.Unlock()
+	return emb, nil
 }
 
 func memoryFileEntry(line string) string {

@@ -116,10 +116,12 @@ func RunLoopContext(
 		schemas := tools.SchemasForContext(toolSelectionContext(system, messages), oneTurnText, es)
 		if i == 1 {
 			schemaChars := 0
+			schemaNames := make([]string, 0, len(schemas))
 			for _, s := range schemas {
 				schemaChars += len(s.Name) + len(s.Description) + 200 // ~params JSON
+				schemaNames = append(schemaNames, s.Name)
 			}
-			logTrace(traceHome, "context_diag", map[string]any{"system_chars": len(system), "msg_count": len(messages), "schema_count": len(schemas), "schema_est_chars": schemaChars, "one_turn_chars": len(oneTurnText)})
+			logTrace(traceHome, "context_diag", map[string]any{"system_chars": len(system), "msg_count": len(messages), "schema_count": len(schemas), "schema_names": schemaNames, "schema_est_chars": schemaChars, "one_turn_chars": len(oneTurnText)})
 		}
 
 		_, llmCancel := context.WithTimeout(ctx, 90*time.Second)
