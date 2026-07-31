@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [master, 'feat/**', 'fix/**', 'refactor/**']
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test
+        run: go test -count=1 ./...
+
+      - name: Race test
+        run: go test -count=1 -race -tags sqlite_fts5 ./...
+
+      - name: Vet
+        run: go vet -tags sqlite_fts5 ./...
+
+      - name: Build
+        run: go build -trimpath -buildvcs=false -tags sqlite_fts5 .

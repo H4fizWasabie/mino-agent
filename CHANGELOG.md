@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- GitHub Actions CI for tests, race checks, vet, and the tagged production build
 - Explicit System, Light, and Dark dashboard themes with a calm stone/paper Light palette
 - Channel-neutral explicit capability selection and trace-visible tool schema names for registered extension tools
 - Compact Option B desktop top navigation with the chat surface kept secondary
