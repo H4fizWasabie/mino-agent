@@ -1,0 +1,192 @@
+<!doctype html>
+<!--
+  PROTOTYPE — throw away after the design decision.
+  Three owner-cockpit variants, switchable via ?variant=A|B|C.
+  This uses representative read-only production data and performs no mutations.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mino Owner Cockpit — Prototype</title>
+<style>
+:root{
+  --paper:#f5f4ef;--surface:#fffefa;--ink:#20231f;--muted:#6e746d;--line:#dedfd8;
+  --accent:#535dde;--accent-soft:#e9eaff;--green:#18865f;--green-soft:#e2f4eb;
+  --amber:#a96708;--amber-soft:#fff0cf;--red:#b34542;--red-soft:#fae8e5;
+  --shadow:0 18px 50px rgba(40,45,38,.08);--radius:18px;
+}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);background:var(--paper)}
+button,input{font:inherit}button{cursor:pointer}.proto{min-height:100vh}
+.eyebrow{font-size:10px;font-weight:800;letter-spacing:.15em;text-transform:uppercase;color:var(--muted)}
+.muted{color:var(--muted)}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.status{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:650;color:var(--muted)}
+.status:before{content:"";width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 4px var(--green-soft)}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:6px 9px;border-radius:999px;font-size:11px;font-weight:750}
+.pill.green{color:var(--green);background:var(--green-soft)}.pill.amber{color:var(--amber);background:var(--amber-soft)}
+.pill.red{color:var(--red);background:var(--red-soft)}.pill.blue{color:var(--accent);background:var(--accent-soft)}
+.primary{border:0;border-radius:12px;background:var(--accent);color:white;font-weight:750;padding:11px 16px;box-shadow:0 8px 22px rgba(83,93,222,.22)}
+.secondary{border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--ink);font-weight:700;padding:10px 14px}
+.icon{width:34px;height:34px;display:grid;place-items:center;border-radius:11px;background:var(--accent-soft);color:var(--accent);font-weight:800;flex:0 0 auto}
+.proto-switch{position:fixed;z-index:50;left:50%;bottom:18px;transform:translateX(-50%);display:flex;align-items:center;gap:4px;background:#171a18;color:white;padding:6px;border-radius:999px;box-shadow:0 14px 40px rgba(0,0,0,.25)}
+.proto-switch button{border:0;background:transparent;color:white;width:38px;height:34px;border-radius:999px;font-size:18px}
+.proto-switch button:hover{background:#323633}.proto-switch strong{min-width:210px;text-align:center;font-size:12px;letter-spacing:.02em}
+.proto-note{position:fixed;right:18px;bottom:24px;z-index:40;font-size:10px;font-weight:800;letter-spacing:.12em;color:#8c918a;text-transform:uppercase}
+.mobile-nav{display:none}
+
+/* A — calm daily brief */
+.a-shell{display:grid;grid-template-columns:220px minmax(0,1fr);min-height:100vh}
+.a-side{padding:28px 18px;border-right:1px solid var(--line);background:#efeee8;display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
+.brand{display:flex;align-items:center;gap:10px;font-weight:850;font-size:19px}.brand-mark{width:35px;height:35px;border-radius:12px;background:linear-gradient(145deg,#5662e8,#1a9b8a);color:white;display:grid;place-items:center;box-shadow:0 8px 20px rgba(83,93,222,.2)}
+.a-nav{display:grid;gap:5px;margin-top:35px}.a-nav button{border:0;background:transparent;border-radius:11px;padding:11px 12px;text-align:left;color:#686d66;font-weight:670}
+.a-nav button.active{background:var(--surface);color:var(--ink);box-shadow:0 5px 18px rgba(42,46,40,.06)}.a-nav button span{float:right;color:#979c95;font-size:11px}
+.a-side-foot{margin-top:auto;padding:13px;border:1px solid var(--line);border-radius:13px;background:rgba(255,255,255,.45)}
+.a-main{padding:34px 42px 100px;max-width:1240px;width:100%;margin:auto}
+.a-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:38px}.ask-button{display:flex;align-items:center;gap:12px;min-width:300px;border:1px solid var(--line);background:var(--surface);border-radius:14px;padding:11px 14px;color:var(--muted);box-shadow:0 6px 24px rgba(40,45,38,.05)}.ask-button kbd{margin-left:auto;border:1px solid var(--line);border-radius:6px;padding:2px 6px;background:#f5f5f1;font-size:10px}
+.greeting{display:flex;justify-content:space-between;gap:30px;align-items:end;margin-bottom:28px}.greeting h1{font-size:34px;line-height:1.1;margin:5px 0 8px;letter-spacing:-.035em}.greeting p{margin:0;color:var(--muted)}
+.date-card{text-align:right}.date-card strong{display:block;font-size:15px}.date-card span{font-size:12px;color:var(--muted)}
+.section-head{display:flex;justify-content:space-between;align-items:end;margin:27px 0 12px}.section-head h2{font-size:17px;margin:4px 0 0}.section-head a{font-size:12px;font-weight:750;color:var(--accent)}
+.attention-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.attention{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);padding:17px;min-height:160px;display:flex;flex-direction:column}
+.attention-top{display:flex;justify-content:space-between;align-items:start}.attention h3{font-size:14px;line-height:1.35;margin:15px 0 6px}.attention p{font-size:12px;line-height:1.5;margin:0;color:var(--muted)}.attention-action{margin-top:auto;padding-top:13px;color:var(--accent);font-weight:750;font-size:12px}
+.a-columns{display:grid;grid-template-columns:1.35fr .85fr;gap:16px}.panel{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);overflow:hidden}
+.work-row{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;padding:15px 17px;border-bottom:1px solid var(--line)}.work-row:last-child{border-bottom:0}.work-row strong{display:block;font-size:13px}.work-row small{display:block;color:var(--muted);margin-top:4px}.progress{width:96px;height:5px;background:#e7e8e2;border-radius:99px;overflow:hidden;margin-top:7px}.progress i{display:block;height:100%;background:var(--accent);border-radius:99px}
+.upcoming{padding:5px 16px}.event{display:grid;grid-template-columns:52px 1fr;gap:12px;padding:13px 0;border-bottom:1px solid var(--line)}.event:last-child{border:0}.event time{font-size:11px;font-weight:800;color:var(--accent)}.event strong{display:block;font-size:13px}.event small{display:block;color:var(--muted);margin-top:3px}
+.outcome{display:flex;align-items:start;gap:11px;padding:13px 17px;border-bottom:1px solid var(--line)}.outcome:last-child{border:0}.check{width:23px;height:23px;display:grid;place-items:center;border-radius:50%;background:var(--green-soft);color:var(--green);font-weight:900;font-size:12px}.outcome strong{font-size:13px}.outcome small{display:block;color:var(--muted);margin-top:3px}
+.work-detail{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(260px,.7fr);gap:17px}.hero-work{padding:24px}.hero-work h1{font-size:28px;letter-spacing:-.03em;margin:13px 0 8px}.hero-work p{color:var(--muted);line-height:1.55}.stage-list{margin-top:24px}.stage{display:grid;grid-template-columns:28px 1fr;gap:12px;padding-bottom:20px;position:relative}.stage:before{content:"";position:absolute;left:13px;top:28px;bottom:0;width:1px;background:var(--line)}.stage:last-child:before{display:none}.stage-dot{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;background:#ecece7;color:#8c918a;font-size:11px;font-weight:850}.stage.done .stage-dot{background:var(--green-soft);color:var(--green)}.stage.active .stage-dot{background:var(--accent);color:white;box-shadow:0 0 0 5px var(--accent-soft)}.stage strong{display:block;font-size:13px;margin:4px 0}.stage small{color:var(--muted)}
+.side-stack{display:grid;gap:12px}.side-box{padding:18px}.side-box h3{font-size:14px;margin:6px 0 12px}.fact{display:flex;justify-content:space-between;gap:12px;padding:8px 0;font-size:12px;border-bottom:1px solid var(--line)}.fact:last-child{border:0}.fact span{color:var(--muted)}.fact strong{text-align:right}
+
+/* B — chronological operator feed, deliberately no card grid */
+.b-shell{min-height:100vh;background:#f7f7f3}.b-top{height:68px;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 34px;position:sticky;top:0;background:rgba(247,247,243,.94);backdrop-filter:blur(12px);z-index:5}.b-top .brand{margin-right:42px}.b-links{display:flex;gap:4px}.b-links button{border:0;background:transparent;padding:9px 13px;border-radius:9px;color:var(--muted);font-weight:700}.b-links button.active{background:#eaeae4;color:var(--ink)}.b-top .status{margin-left:auto}.b-body{max-width:940px;margin:0 auto;padding:55px 28px 110px}
+.b-intro{display:grid;grid-template-columns:1fr auto;align-items:end;border-bottom:1px solid #bec2b9;padding-bottom:27px}.b-intro h1{font-family:Georgia,serif;font-size:46px;font-weight:500;letter-spacing:-.035em;margin:7px 0}.b-intro p{color:var(--muted);margin:0}.b-date{text-align:right;font-family:Georgia,serif;font-size:20px}.b-date small{display:block;font-family:inherit;font-size:12px;color:var(--muted);margin-top:5px}
+.brief-band{display:flex;align-items:center;gap:13px;padding:18px 0;border-bottom:1px solid var(--line)}.brief-band strong{font-family:Georgia,serif;font-size:17px}.brief-band span:last-child{margin-left:auto;color:var(--muted);font-size:12px}
+.feed{position:relative;margin-top:10px}.feed:before{content:"";position:absolute;left:90px;top:0;bottom:0;width:1px;background:#cfd1ca}.feed-item{display:grid;grid-template-columns:75px 24px 1fr;gap:15px;padding:21px 0}.feed-time{text-align:right;font-family:ui-monospace,monospace;font-size:11px;color:var(--muted);padding-top:4px}.feed-marker{position:relative;z-index:1;width:13px;height:13px;border-radius:50%;margin:2px auto;background:var(--surface);border:3px solid #92978f}.feed-marker.attn{border-color:var(--amber);box-shadow:0 0 0 5px var(--amber-soft)}.feed-marker.run{border-color:var(--accent);box-shadow:0 0 0 5px var(--accent-soft)}.feed-marker.done{border-color:var(--green)}
+.feed-content{padding:0 0 4px}.feed-content header{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.feed-content h2{font-family:Georgia,serif;font-weight:550;font-size:20px;margin:0}.feed-content p{margin:7px 0 12px;color:var(--muted);line-height:1.55;font-size:13px;max-width:650px}.feed-actions{display:flex;gap:8px}.feed-actions button{font-size:11px;padding:7px 10px}
+.b-ask{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);width:min(620px,calc(100% - 40px));display:flex;align-items:center;padding:8px 8px 8px 17px;border:1px solid #cfd1ca;background:rgba(255,255,251,.95);backdrop-filter:blur(12px);border-radius:17px;box-shadow:var(--shadow);z-index:10}.b-ask input{border:0;outline:0;background:transparent;flex:1;color:var(--ink)}.b-ask button{border:0;width:38px;height:38px;border-radius:11px;background:var(--ink);color:white;font-size:17px}
+.b-work-head{display:flex;justify-content:space-between;gap:20px;align-items:end;padding-bottom:24px;border-bottom:1px solid #bfc2ba}.b-work-head h1{font-family:Georgia,serif;font-size:40px;font-weight:500;margin:7px 0 0}.ledger-row{display:grid;grid-template-columns:90px 1.4fr 1fr 90px;gap:20px;align-items:center;padding:21px 0;border-bottom:1px solid var(--line)}.ledger-row>span:first-child{font-family:ui-monospace,monospace;font-size:11px;color:var(--muted)}.ledger-row strong{font-family:Georgia,serif;font-size:18px;font-weight:550}.ledger-row p{font-size:12px;color:var(--muted);margin:0}.ledger-row .pill{justify-self:end}
+
+/* C — focused workspace */
+.c-shell{min-height:100vh;background:#151817;color:#f6f5ef;padding:16px}.c-frame{min-height:calc(100vh - 32px);display:grid;grid-template-columns:78px minmax(320px,.82fr) minmax(480px,1.45fr);background:#1c201e;border:1px solid #303632;border-radius:24px;overflow:hidden}
+.c-rail{border-right:1px solid #303632;padding:18px 12px;display:flex;flex-direction:column;align-items:center;gap:12px}.c-rail .brand-mark{margin-bottom:20px}.rail-btn{border:0;width:44px;height:44px;border-radius:13px;background:transparent;color:#909891;font-size:17px}.rail-btn.active{background:#303a35;color:#fff}.c-rail .status{margin-top:auto}.c-rail .status span{display:none}
+.c-focus{padding:38px 34px;border-right:1px solid #303632;background:#181b1a}.c-focus .eyebrow{color:#89918b}.c-focus h1{font-size:38px;line-height:1.08;letter-spacing:-.045em;margin:12px 0}.c-focus>p{color:#9aa19b;line-height:1.55;max-width:440px}
+.focus-count{font-size:12px;color:#929992;margin-top:40px;padding-bottom:12px;border-bottom:1px solid #303632}.focus-item{display:grid;grid-template-columns:auto 1fr;gap:13px;padding:18px 0;border-bottom:1px solid #303632}.focus-item h3{font-size:14px;margin:0 0 5px}.focus-item p{font-size:12px;line-height:1.45;color:#929992;margin:0}.focus-item .num{font-family:ui-monospace,monospace;color:#e4bd70;font-size:11px;padding-top:2px}.focus-item.dim{opacity:.55}
+.focus-actions{display:flex;gap:9px;margin-top:24px}.c-shell .secondary{background:#252a27;border-color:#3b423e;color:#f5f5ef}.c-shell .primary{background:#747eff}
+.c-context{padding:30px 34px 100px;position:relative}.c-top{display:flex;justify-content:space-between;align-items:center;color:#a4aba5;font-size:12px}.c-top button{border:1px solid #3a403c;background:#252a27;color:#f6f5ef;border-radius:11px;padding:9px 12px}
+.context-hero{margin-top:62px}.context-hero .pill{margin-bottom:13px}.context-hero h2{font-size:27px;letter-spacing:-.035em;margin:0 0 9px}.context-hero p{color:#969e98;font-size:13px;line-height:1.55}
+.context-grid{display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-top:28px}.dark-panel{border:1px solid #343a36;background:#222725;border-radius:16px;padding:17px}.dark-panel .eyebrow{color:#7e8780}.dark-panel h3{font-size:14px;margin:8px 0 12px}.dark-panel p{font-size:12px;color:#949c96;line-height:1.5;margin:0}.dark-fact{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid #363c38;font-size:12px}.dark-fact:last-child{border:0}.dark-fact span{color:#89918b}.dark-progress{height:6px;background:#343a36;border-radius:9px;margin-top:13px;overflow:hidden}.dark-progress i{height:100%;width:60%;display:block;background:#747eff}
+.c-compose{position:absolute;left:34px;right:34px;bottom:28px;border:1px solid #3b423e;background:#272c29;border-radius:16px;padding:8px 8px 8px 15px;display:flex;align-items:center;gap:9px}.c-compose input{background:transparent;border:0;outline:0;color:white;flex:1}.c-compose button{border:0;background:#747eff;color:white;border-radius:10px;padding:9px 13px;font-weight:800}
+.c-work-list{margin-top:36px}.c-work-row{padding:18px 0;border-bottom:1px solid #343a36;display:grid;grid-template-columns:1fr auto;gap:20px}.c-work-row h3{font-size:15px;margin:0 0 7px}.c-work-row p{font-size:12px;color:#949c96;margin:0}.c-work-row .pill{align-self:start}
+
+@media(max-width:820px){
+  .proto-switch{bottom:75px}.proto-switch strong{min-width:150px}.proto-note{display:none}
+  .a-shell{display:block}.a-side{height:auto;position:static;padding:15px 16px;border-right:0;border-bottom:1px solid var(--line);flex-direction:row;align-items:center}.a-nav,.a-side-foot{display:none}.a-main{padding:22px 16px 130px}.a-top{margin-bottom:26px}.a-top .status{display:none}.ask-button{min-width:0;width:150px}.ask-button kbd{display:none}.greeting{display:block}.greeting h1{font-size:29px}.date-card{display:none}.attention-grid,.a-columns,.work-detail{grid-template-columns:1fr}.attention-grid{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;margin-right:-16px;padding-right:16px}.attention{min-width:270px;scroll-snap-align:start}.a-columns{gap:12px}.work-detail .side-stack{order:-1}
+  .b-top{padding:0 16px;height:60px}.b-links{display:none}.b-top .brand{margin-right:0}.b-body{padding:35px 16px 140px}.b-intro{display:block}.b-intro h1{font-size:36px}.b-date{display:none}.feed:before{left:10px}.feed-item{grid-template-columns:24px 1fr;gap:12px}.feed-time{display:none}.feed-marker{grid-column:1}.feed-content{grid-column:2}.brief-band span:last-child{display:none}.ledger-row{grid-template-columns:1fr auto;gap:10px}.ledger-row>span:first-child,.ledger-row p{display:none}
+  .c-shell{padding:0}.c-frame{border:0;border-radius:0;min-height:100vh;display:block}.c-rail{height:62px;padding:9px 15px;border-right:0;border-bottom:1px solid #303632;flex-direction:row}.c-rail .brand-mark{margin:0 auto 0 0}.rail-btn{display:none}.c-focus{padding:28px 20px;border-right:0}.c-focus h1{font-size:31px}.focus-item.dim{display:none}.c-context{padding:28px 20px 140px}.context-hero{margin-top:36px}.context-grid{grid-template-columns:1fr}.c-compose{position:fixed;bottom:61px;left:13px;right:13px;z-index:8}.c-context .c-top .status{display:none}
+  .mobile-nav{position:fixed;z-index:20;left:0;right:0;bottom:0;height:58px;display:flex;justify-content:space-around;align-items:center;background:rgba(255,255,251,.96);backdrop-filter:blur(12px);border-top:1px solid var(--line)}.mobile-nav.dark{background:rgba(28,32,30,.96);border-color:#343a36}.mobile-nav button{border:0;background:transparent;color:var(--muted);font-size:10px;font-weight:750;display:grid;place-items:center;gap:3px}.mobile-nav.dark button{color:#9ba39d}.mobile-nav button.active{color:var(--accent)}.mobile-nav i{font-style:normal;font-size:17px}
+}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const variants = {
+  A: {name:"Daily Brief"},
+  B: {name:"Operator Timeline"},
+  C: {name:"Focus Workspace"},
+};
+const query = new URLSearchParams(location.search);
+let variant = variants[query.get("variant")] ? query.get("variant") : "A";
+let view = query.get("view") === "work" ? "work" : "home";
+
+function setRoute(nextVariant=variant,nextView=view){
+  const q=new URLSearchParams(location.search);q.set("variant",nextVariant);q.set("view",nextView);
+  history.replaceState(null,"","?"+q);variant=nextVariant;view=nextView;render();
+}
+function cycle(dir){
+  const keys=Object.keys(variants),i=keys.indexOf(variant);
+  setRoute(keys[(i+dir+keys.length)%keys.length],view);
+}
+function navButton(label,key,count=""){
+  return `<button class="${view===key?"active":""}" onclick="setRoute('${variant}','${key}')">${label}${count?`<span>${count}</span>`:""}</button>`;
+}
+const workRows = `
+  <div class="work-row"><span class="icon">AI</span><div><strong>Daily AI company brief</strong><small>Gathering and checking six sources</small><div class="progress"><i style="width:60%"></i></div></div><span class="pill blue">Running</span></div>
+  <div class="work-row"><span class="icon">GH</span><div><strong>GitHub issue triage</strong><small>Two draft replies ready for review</small></div><span class="pill amber">Approval</span></div>
+  <div class="work-row"><span class="icon">MY</span><div><strong>Malaysia evening brief</strong><small>Scheduled for 20:00 today</small></div><span class="pill green">Ready</span></div>`;
+const outcomes = `
+  <div class="outcome"><span class="check">✓</span><div><strong>Morning AI lesson delivered</strong><small>Telegram · 08:01 · verified</small></div></div>
+  <div class="outcome"><span class="check">✓</span><div><strong>Memory graph consolidated</strong><small>6 new facts · 9 relationships</small></div></div>
+  <div class="outcome"><span class="check">✓</span><div><strong>Production health checked</strong><small>3 services healthy · backup valid</small></div></div>`;
+const mobileNav = dark => `<nav class="mobile-nav ${dark?"dark":""}">
+  <button class="${view==="home"?"active":""}" onclick="setRoute('${variant}','home')"><i>⌂</i>Home</button>
+  <button class="${view==="work"?"active":""}" onclick="setRoute('${variant}','work')"><i>◫</i>Work</button>
+  <button><i>↔</i>Inbox</button><button><i>✦</i>Ask</button><button><i>•••</i>More</button>
+</nav>`;
+
+function renderA(){
+  const content=view==="home"?`
+    <section class="greeting"><div><div class="eyebrow">Friday · your daily brief</div><h1>Good morning, Abah.</h1><p>Mino is handling three routines. Two things need your decision.</p></div><div class="date-card"><strong>31 July 2026</strong><span>Kuala Lumpur · 09:51</span></div></section>
+    <div class="section-head"><div><div class="eyebrow">Needs your attention</div><h2>Decisions, not notifications</h2></div><a>Review all 3 →</a></div>
+    <section class="attention-grid">
+      <article class="attention"><div class="attention-top"><span class="icon">↗</span><span class="pill amber">Approval</span></div><h3>Two GitHub replies are ready to post</h3><p>Mino has checked the issue context and drafted responses.</p><div class="attention-action">Review drafts →</div></article>
+      <article class="attention"><div class="attention-top"><span class="icon">!</span><span class="pill red">Blocked</span></div><h3>AI news source returned no results</h3><p>The routine continued with five sources. Choose whether to retry.</p><div class="attention-action">Inspect evidence →</div></article>
+      <article class="attention"><div class="attention-top"><span class="icon">◷</span><span class="pill blue">Follow-up</span></div><h3>One commitment is due today</h3><p>You said you would review the dashboard redesign this afternoon.</p><div class="attention-action">Open commitment →</div></article>
+    </section>
+    <div class="a-columns">
+      <div><div class="section-head"><div><div class="eyebrow">In progress</div><h2>What Mino is handling</h2></div><a onclick="setRoute('A','work')">Open work →</a></div><section class="panel">${workRows}</section>
+      <div class="section-head"><div><div class="eyebrow">Recent outcomes</div><h2>Finished and verified</h2></div></div><section class="panel">${outcomes}</section></div>
+      <div><div class="section-head"><div><div class="eyebrow">Coming up</div><h2>Next 24 hours</h2></div></div><section class="panel upcoming">
+        <div class="event"><time>20:00</time><div><strong>Malaysia evening brief</strong><small>Research, summarize, deliver</small></div></div>
+        <div class="event"><time>08:00</time><div><strong>AI learning brief</strong><small>Tomorrow · Telegram</small></div></div>
+        <div class="event"><time>09:00</time><div><strong>GitHub issue check</strong><small>Tomorrow · approval before posting</small></div></div>
+      </section></div>
+    </div>`:`
+    <section class="greeting"><div><div class="eyebrow">Work</div><h1>Daily AI company brief</h1><p>Gather current company news and deliver one concise, sourced briefing.</p></div><span class="pill blue">Running · stage 3 of 5</span></section>
+    <section class="work-detail"><article class="panel hero-work"><span class="pill green">Automatic · low risk</span><h1>Gathering and checking sources</h1><p>Mino is comparing current reports about OpenAI, Anthropic, Qwen, Moonshot, DeepSeek, and Z.ai. One source failed; the workflow continued within policy.</p>
+      <div class="stage-list"><div class="stage done"><span class="stage-dot">✓</span><div><strong>Read briefing instructions</strong><small>Completed 09:30</small></div></div><div class="stage done"><span class="stage-dot">✓</span><div><strong>Search primary sources</strong><small>Six queries · one empty result</small></div></div><div class="stage active"><span class="stage-dot">3</span><div><strong>Cross-check important claims</strong><small>Running now · 3 minutes elapsed</small></div></div><div class="stage"><span class="stage-dot">4</span><div><strong>Write concise brief</strong><small>Waiting</small></div></div><div class="stage"><span class="stage-dot">5</span><div><strong>Deliver and verify</strong><small>Telegram · scheduled</small></div></div></div>
+    </article><aside class="side-stack"><section class="panel side-box"><div class="eyebrow">Control</div><h3>Execution policy</h3><div class="fact"><span>May research</span><strong>Automatically</strong></div><div class="fact"><span>May draft</span><strong>Automatically</strong></div><div class="fact"><span>May send</span><strong>Scheduled</strong></div><div class="fact"><span>On failure</span><strong>Continue + report</strong></div></section><section class="panel side-box"><div class="eyebrow">Evidence</div><h3>Current proof</h3><div class="fact"><span>Sources</span><strong>5 available</strong></div><div class="fact"><span>Trace</span><strong>#3629</strong></div><div class="fact"><span>Next run</span><strong>Tomorrow 09:30</strong></div></section><button class="secondary">Pause this routine</button></aside></section>`;
+  return `<div class="proto a-shell"><aside class="a-side"><div class="brand"><span class="brand-mark">M</span>Mino</div><nav class="a-nav">${navButton("Home","home")}${navButton("Work","work","3")}<button>Inbox <span>2</span></button><button>Memory</button><button>System</button></nav><div class="a-side-foot"><span class="status">Mino is operational</span><div class="eyebrow" style="margin-top:9px">Next routine · 20:00</div></div></aside><main class="a-main"><header class="a-top"><span class="status">Live on VPS</span><button class="ask-button">✦ <span>Ask Mino anything…</span><kbd>⌘ K</kbd></button></header>${content}</main>${mobileNav(false)}</div>`;
+}
+
+function renderB(){
+  const content=view==="home"?`
+    <header class="b-intro"><div><div class="eyebrow">Operator journal</div><h1>Your day with Mino</h1><p>One chronological view of decisions, work, and verified outcomes.</p></div><div class="b-date">31 July<small>Friday · Kuala Lumpur</small></div></header>
+    <div class="brief-band"><span class="pill amber">2 decisions</span><strong>Everything else is proceeding normally.</strong><span>3 routines active · next event 20:00</span></div>
+    <section class="feed">
+      <article class="feed-item"><time class="feed-time">NOW</time><i class="feed-marker run"></i><div class="feed-content"><header><h2>AI company briefing is in progress</h2><span class="pill blue">Running</span></header><p>Mino is cross-checking five available sources. One provider returned no results, but the workflow remains within policy.</p><div class="feed-actions"><button class="secondary" onclick="setRoute('B','work')">Follow live</button><button class="secondary">Inspect source failure</button></div></div></article>
+      <article class="feed-item"><time class="feed-time">09:42</time><i class="feed-marker attn"></i><div class="feed-content"><header><h2>Two GitHub replies need your approval</h2><span class="pill amber">Decision</span></header><p>The drafts answer new Mino OSS issues using repository context. Nothing will be posted until you approve.</p><div class="feed-actions"><button class="primary">Review drafts</button><button class="secondary">Later today</button></div></div></article>
+      <article class="feed-item"><time class="feed-time">09:08</time><i class="feed-marker attn"></i><div class="feed-content"><header><h2>A commitment is due today</h2><span class="pill blue">Follow-up</span></header><p>Review the owner-cockpit prototype and decide which interaction model should move forward.</p></div></article>
+      <article class="feed-item"><time class="feed-time">08:01</time><i class="feed-marker done"></i><div class="feed-content"><header><h2>Morning AI lesson delivered</h2><span class="pill green">Verified</span></header><p>Telegram accepted the message. The output and delivery evidence remain available.</p><div class="feed-actions"><button class="secondary">Read outcome</button><button class="secondary">Inspect evidence</button></div></div></article>
+      <article class="feed-item"><time class="feed-time">01:38</time><i class="feed-marker done"></i><div class="feed-content"><header><h2>Mino restarted successfully</h2><span class="pill green">Healthy</span></header><p>Core, minowrap, and fileingest returned healthy status after deployment.</p></div></article>
+    </section>`:`
+    <header class="b-work-head"><div><div class="eyebrow">Work ledger</div><h1>Everything Mino owns</h1></div><span class="pill green">3 active · 11 scheduled</span></header>
+    <section>
+      <article class="ledger-row"><span>RUNNING</span><div><strong>Daily AI company brief</strong><p>Gather, verify, write, and deliver current news.</p></div><p>Cross-checking five sources · stage 3 of 5</p><span class="pill blue">60%</span></article>
+      <article class="ledger-row"><span>WAITING</span><div><strong>GitHub issue triage</strong><p>Draft helpful responses for unhandled issues.</p></div><p>Two drafts require your approval before posting</p><span class="pill amber">Review</span></article>
+      <article class="ledger-row"><span>SCHEDULED</span><div><strong>Malaysia evening brief</strong><p>Politics, economy, and important local events.</p></div><p>Next run today at 20:00</p><span class="pill green">Ready</span></article>
+      <article class="ledger-row"><span>SCHEDULED</span><div><strong>AI learning brief</strong><p>One useful concept explained clearly each morning.</p></div><p>Next run tomorrow at 08:00</p><span class="pill green">Ready</span></article>
+      <article class="ledger-row"><span>PAUSED</span><div><strong>Weekly memory review</strong><p>Review uncertain or stale retained knowledge.</p></div><p>Paused manually on 28 July</p><span class="pill">Paused</span></article>
+    </section>`;
+  return `<div class="proto b-shell"><header class="b-top"><div class="brand"><span class="brand-mark">M</span>Mino</div><nav class="b-links">${navButton("Today","home")}${navButton("Work","work")}<button>Conversations</button><button>Memory</button><button>System</button></nav><span class="status">Operational</span></header><main class="b-body">${content}</main><label class="b-ask"><input placeholder="Ask Mino or give an instruction…"><button>↑</button></label>${mobileNav(false)}</div>`;
+}
+
+function renderC(){
+  const content=view==="home"?`
+    <section class="c-focus"><div class="eyebrow">Your focus</div><h1>Two things need you.</h1><p>Mino is handling everything else. Clear these decisions and return to your day.</p><div class="focus-count">01 · APPROVAL</div><article class="focus-item"><span class="num">01</span><div><h3>Review two GitHub replies</h3><p>Drafts are ready. No external action has been taken.</p></div></article><div class="focus-count">02 · FOLLOW-UP</div><article class="focus-item"><span class="num">02</span><div><h3>Dashboard direction is due today</h3><p>Choose a prototype approach for implementation.</p></div></article><div class="focus-count">HANDLED BY MINO</div><article class="focus-item dim"><span class="num">03</span><div><h3>AI briefing running</h3><p>Cross-checking sources · no action needed.</p></div></article><div class="focus-actions"><button class="primary">Start with approval</button><button class="secondary">Ask Mino</button></div></section>
+    <section class="c-context"><header class="c-top"><span class="status">Operational · VPS</span><button onclick="setRoute('C','work')">Open all work</button></header><div class="context-hero"><span class="pill amber">Waiting for you</span><h2>GitHub issue replies</h2><p>Mino used repository context to prepare two answers. Review the proposed language and evidence before anything is posted.</p></div><div class="context-grid"><article class="dark-panel"><div class="eyebrow">Issue 142</div><h3>Memory graph edge question</h3><p>Draft explains the authoritative Markdown model and offers a focused diagnostic step.</p></article><article class="dark-panel"><div class="eyebrow">Issue 145</div><h3>Provider timeout report</h3><p>Draft requests trace evidence and points to the documented fallback behavior.</p></article><article class="dark-panel"><div class="eyebrow">Permission</div><h3>Mino cannot post yet</h3><div class="dark-fact"><span>Research</span><strong>Complete</strong></div><div class="dark-fact"><span>Draft</span><strong>Complete</strong></div><div class="dark-fact"><span>Publish</span><strong>Your approval</strong></div></article><article class="dark-panel"><div class="eyebrow">Confidence</div><h3>Evidence assembled</h3><p>Repository source, changelog, and recent production behavior were checked.</p><div class="dark-progress"><i style="width:86%"></i></div></article></div><label class="c-compose"><input placeholder="Tell Mino what to change or approve…"><button>Send</button></label></section>`:`
+    <section class="c-focus"><div class="eyebrow">Work</div><h1>Mino owns four routines.</h1><p>Choose one to inspect. Status reflects runtime evidence, not conversational claims.</p><div class="focus-count">ACTIVE</div><article class="focus-item"><span class="num">01</span><div><h3>Daily AI company brief</h3><p>Running · stage 3 of 5</p></div></article><article class="focus-item"><span class="num">02</span><div><h3>GitHub issue triage</h3><p>Blocked on approval · two drafts</p></div></article><div class="focus-count">UPCOMING</div><article class="focus-item dim"><span class="num">03</span><div><h3>Malaysia evening brief</h3><p>Today at 20:00</p></div></article></section>
+    <section class="c-context"><header class="c-top"><span class="status">Execution evidence live</span><button>Inspect trace #3629</button></header><div class="context-hero"><span class="pill blue">Running</span><h2>Daily AI company brief</h2><p>Gather current news, cross-check material claims, write a concise briefing, then deliver it through Telegram.</p></div><div class="c-work-list"><article class="c-work-row"><div><h3>1. Read instructions</h3><p>Completed at 09:30 · playbook state verified</p></div><span class="pill green">Done</span></article><article class="c-work-row"><div><h3>2. Search primary sources</h3><p>Six queries · five sources available</p></div><span class="pill green">Done</span></article><article class="c-work-row"><div><h3>3. Cross-check important claims</h3><p>Running for 3 minutes</p></div><span class="pill blue">Active</span></article><article class="c-work-row"><div><h3>4. Write concise brief</h3><p>Waiting for verified source notes</p></div><span class="pill">Waiting</span></article><article class="c-work-row"><div><h3>5. Deliver and verify</h3><p>Telegram · automatic under schedule policy</p></div><span class="pill">Waiting</span></article></div><label class="c-compose"><input placeholder="Ask about this work…"><button>Send</button></label></section>`;
+  return `<div class="proto c-shell"><div class="c-frame"><aside class="c-rail"><span class="brand-mark">M</span><button class="rail-btn ${view==="home"?"active":""}" onclick="setRoute('C','home')" title="Focus">⌂</button><button class="rail-btn ${view==="work"?"active":""}" onclick="setRoute('C','work')" title="Work">◫</button><button class="rail-btn" title="Inbox">↔</button><button class="rail-btn" title="Memory">✦</button><button class="rail-btn" title="System">⚙</button><span class="status"><span>Online</span></span></aside>${content}</div>${mobileNav(true)}</div>`;
+}
+
+function render(){
+  document.getElementById("app").innerHTML=(variant==="A"?renderA():variant==="B"?renderB():renderC())+
+    `<div class="proto-switch"><button onclick="cycle(-1)" aria-label="Previous variant">←</button><strong>${variant} — ${variants[variant].name}</strong><button onclick="cycle(1)" aria-label="Next variant">→</button></div><div class="proto-note">Prototype · ${view}</div>`;
+}
+addEventListener("keydown",e=>{
+  if(["INPUT","TEXTAREA"].includes(document.activeElement?.tagName)||document.activeElement?.isContentEditable)return;
+  if(e.key==="ArrowLeft")cycle(-1);if(e.key==="ArrowRight")cycle(1);
+});
+render();
+</script>
+</body>
+</html>
