@@ -195,6 +195,24 @@ A Responsibility records:
 - Verification condition
 - Append-only Responsibility History
 
+### Responsibility detail
+
+Selecting a Journal Entry title or Work row opens a dedicated Responsibility
+page. The dashboard does not use a modal or permanent side drawer for complete
+Responsibility inspection.
+
+The detail page uses:
+
+- A main column for current state, next action, and immutable Responsibility
+  History
+- A narrower column for policy, schedule, Evidence summary, artifacts, and
+  controls
+- A contextual composer labelled with the current Responsibility
+
+A small inline disclosure may reveal the latest Journal Entry summary, but
+complete history and Evidence remain on the dedicated page. Browser back
+navigation restores the prior journal date and scroll position.
+
 ## Acceptance boundary
 
 A conversation becomes a Responsibility when at least one of these is true:
