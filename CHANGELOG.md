@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Fixed
+- JSON-mode LLM calls (consolidation, dedup, graph edge rebuild) failed on reasoning models like DeepSeek v4 flash: forced `response_format: json_object` makes them return `content: null` (the budget goes to reasoning), which surfaced as "empty model response" and silently stalled consolidation for days. The client now retries once without `response_format`; the tolerant JSON parsers extract facts from a normal reply.
+- `parseResponse`'s reasoning fallback never reached `FinalText` (it read the original empty content instead of the fallback-applied text).
 - Consolidation silent-failure paths: DB query errors and successful parses that produced no facts/episode (e.g. a template-echoing small model) returned 0 without logging, making a stalled consolidation look healthy. Both paths now log.
 - Telegram delivery dead-end: `send_message` only drafted to the outbox and nothing drained it, so scheduled reports never reached Telegram (the 22:00 MYT run's report sat in `outbox/` undelivered). A new in-process outbox dispatcher drains drafts to Abah's Telegram every 20s, removes delivered files, retries without Markdown parsing on rejection, and logs each delivery to the trace.
 - Playbook stage chaining: stage LLMs guessed the playbook base directory when resolving sibling outputs (stage 3 tried `/home/mino/playbooks/...` instead of `/home/mino/.mino/playbooks/...`, gave up, and wrote a BLOCKED output that passed verification). `buildStagePrompt` now anchors the playbook directory explicitly.

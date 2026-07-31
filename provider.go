@@ -132,9 +132,6 @@ func (c *Client) createWithRouting(ctx context.Context, model, reasoning string,
 	if reasoning != "" {
 		payload["reasoning_effort"] = reasoning
 	}
-	if jsonOutput {
-		payload["response_format"] = map[string]string{"type": "json_object"}
-	}
 	if tools != nil {
 		funcs := make([]map[string]any, 0)
 		for _, t := range tools {
@@ -150,27 +147,50 @@ func (c *Client) createWithRouting(ctx context.Context, model, reasoning string,
 		payload["tools"] = funcs
 	}
 
-	body, _ := json.Marshal(payload)
 	url := c.baseURL + "/chat/completions"
-	req, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	send := func(withJSON bool) (*LLMResponse, error) {
+		p := payload
+		if withJSON {
+			p["response_format"] = map[string]string{"type": "json_object"}
+		} else {
+			delete(p, "response_format")
+		}
+		body, _ := json.Marshal(p)
+		req, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 
-	resp, err := c.client.Do(req)
-	if err != nil {
-		slog.Error("llm request failed", "error", err)
-		return nil, err
-	}
-	defer resp.Body.Close()
+		resp, err := c.client.Do(req)
+		if err != nil {
+			slog.Error("llm request failed", "error", err)
+			return nil, err
+		}
+		defer resp.Body.Close()
 
-	if stream {
-		resp, err := parseSSEStream(resp.Body, onText)
-		c.logUsage(ctx, model, resp, startTime)
-		return resp, err
+		if stream {
+			resp, err := parseSSEStream(resp.Body, onText)
+			c.logUsage(ctx, model, resp, startTime)
+			return resp, err
+		}
+		resp2, err := parseResponse(resp.Body)
+		c.logUsage(ctx, model, resp2, startTime)
+		return resp2, err
 	}
-	resp2, err := parseResponse(resp.Body)
-	c.logUsage(ctx, model, resp2, startTime)
-	return resp2, err
+
+	if jsonOutput {
+		// Reasoning models (DeepSeek v4 flash) return content:null when forced
+		// into json_object mode — the token budget goes to reasoning. Retry once
+		// without response_format; the tolerant parsers extract JSON from a
+		// normal reply. Without this, consolidation fails silently every pass.
+		if r, err := send(true); err == nil {
+			return r, nil
+		} else if r2, err2 := send(false); err2 == nil {
+			return r2, nil
+		} else {
+			return nil, err
+		}
+	}
+	return send(false)
 }
 
 func openRouterSessionID(baseURL string, session string, role ModelRole, model string) string {
@@ -256,7 +276,7 @@ func parseResponse(r io.Reader) (*LLMResponse, error) {
 			CacheCreationTokens: result.Usage.PromptTokenDetails.CacheWriteTokens,
 		},
 		Content:   blocks,
-		FinalText: choice.Message.Content,
+		FinalText: content,
 	}, nil
 }
 
