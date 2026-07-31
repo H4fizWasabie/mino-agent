@@ -27,6 +27,27 @@ and primary actions, amber for Needs you, red for genuine blocks or failures,
 and green for Verified outcomes. Decorative card shadows and technical
 monospace styling do not define the main interface.
 
+### Desktop frame
+
+Desktop uses a compact sticky top navigation:
+
+**Mino**, **Today**, **Work**, **Conversations**, **Memory**, **System**, and a
+truthful runtime-health indicator.
+
+There is no permanent sidebar, command-centre heading, or chat dock. The
+journal stays within one readable central column and wide-screen space remains
+intentionally quiet.
+
+System uses local tabs for Overview, Runtime, Tools, Database, Files, and
+Settings. Memory uses local tabs for Search, Knowledge, Episodes, and Graph.
+Provider and model identity belong in System rather than global chrome; a
+provider problem appears in Today only when it materially affects
+responsibility or outcome.
+
+Desktop keeps a restrained, fixed, single-line conversation composer at the
+bottom centre. It expands on focus or during conversation, replacing the
+former permanent chat dock without turning Today into a chat page.
+
 ## Information architecture
 
 - **Today** answers: What changed, what matters now, and what needs the owner?
