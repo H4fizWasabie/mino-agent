@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 ### Added
-- Dashboard redesign decision record covering the authoritative responsibility journal, editorial frame, adaptive density, dated navigation, portfolio and detail views, mobile behavior, and canonical product language
+- Dashboard redesign decision record covering the authoritative responsibility journal, editorial frame, adaptive density, dated navigation, portfolio and detail views, truthful channel conversations, mobile behavior, and canonical product language
 - Throwaway owner-cockpit UI prototype with three responsive design directions for redesign evaluation
 - Memory graph index cache (`index.json`): O(1) startup, skips re-parsing all .md files
 - Edge validation: dangling edge targets filtered on write

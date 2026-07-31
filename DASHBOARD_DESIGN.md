@@ -290,6 +290,25 @@ Responsibility module does not execute work or create another agent loop.
 The dashboard reads the authoritative projection. It does not reconstruct
 ownership from chat, traces, or tool calls.
 
+## Conversations
+
+Conversations is one owner-wide library of truthful channel-specific threads,
+not a fabricated unified transcript. Telegram and dashboard threads share
+Mino's runtime and may link to the same Responsibility, but retain their actual
+session and channel identity.
+
+Desktop may use a two-pane thread list and selected transcript within the
+Conversations page only. Dashboard threads are interactive. Telegram threads
+are initially viewable communication history with **Open related
+Responsibility** and **Continue in Telegram** actions; the dashboard does not
+claim it can deliver a Telegram reply until explicit outbound routing and
+delivery verification exist.
+
+A Responsibility composer creates or continues a dashboard Conversation
+visibly linked to that Responsibility. Global Ask starts or continues a
+dashboard Conversation without silently inheriting an unrelated Telegram
+session. Tool activity stays collapsed and final replies lead.
+
 ### Migration boundary
 
 At the first deployment of authoritative Responsibility state:

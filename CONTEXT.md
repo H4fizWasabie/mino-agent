@@ -40,6 +40,11 @@ A standing recurring Responsibility whose executions contribute journal and
 history events without creating another Responsibility.
 _Avoid_: Repeated task, cron job, schedule
 
+**Conversation**:
+One channel-specific communication thread between the owner and Mino. It may
+originate or discuss a Responsibility but does not establish its current truth.
+_Avoid_: Responsibility, unified cross-channel transcript
+
 **Evidence**:
 Runtime-recorded proof supporting a claimed state or outcome, such as a
 receipt, artifact, read-back, or external confirmation.
