@@ -178,10 +178,13 @@ func (c *Client) createWithRouting(ctx context.Context, model, reasoning string,
 	}
 
 	if jsonOutput {
-		// Reasoning models (DeepSeek v4 flash) return content:null when forced
-		// into json_object mode — the token budget goes to reasoning. Retry once
-		// without response_format; the tolerant parsers extract JSON from a
-		// normal reply. Without this, consolidation fails silently every pass.
+		// Reasoning models (DeepSeek v4 flash) spiral into endless reasoning on
+		// large prompts — content stays null, finish:length at any token budget,
+		// in json or plain mode. JSON-mode background tasks disable reasoning
+		// entirely; the tolerant parsers extract facts from a normal reply.
+		payload["reasoning"] = map[string]bool{"enabled": false}
+		// Retry once without response_format too: some models null content when
+		// forced into json_object mode.
 		if r, err := send(true); err == nil {
 			return r, nil
 		} else if r2, err2 := send(false); err2 == nil {

@@ -44,6 +44,9 @@ func TestCreateJSONRetriesWithoutResponseFormat(t *testing.T) {
 	if first["response_format"] == nil {
 		t.Fatalf("first request missing response_format: %v", first)
 	}
+	if first["reasoning"] == nil {
+		t.Fatalf("json call missing reasoning disabled: %v", first)
+	}
 	if second["response_format"] != nil {
 		t.Fatalf("retry still has response_format: %v", second)
 	}
