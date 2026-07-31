@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Compact Option B desktop top navigation with the chat surface kept secondary
 - Responsibility-aware Overview command center with current attention, verified outcomes, workspace shortcuts, and a separate runtime inspection surface
 - One-off playbook Responsibility lifecycle: explicit runs now record acceptance, truthful completion or blocked outcomes, and read-back Evidence
 - Truthful Routine journal slice connecting scheduled playbook results to Today, Work, dedicated history, and read-back Evidence
