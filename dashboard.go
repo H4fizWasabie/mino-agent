@@ -355,7 +355,6 @@ func handleMemoryAPI(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 
-		db := dashCore.DB
 		switch body.Action {
 		case "update_fact":
 			if graphID, ok := body.ID.(string); ok {
