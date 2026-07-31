@@ -3,6 +3,13 @@
 ## [Unreleased]
 
 ### Fixed
+- Telegram delivery dead-end: `send_message` only drafted to the outbox and nothing drained it, so scheduled reports never reached Telegram (the 22:00 MYT run's report sat in `outbox/` undelivered). A new in-process outbox dispatcher drains drafts to Abah's Telegram every 20s, removes delivered files, retries without Markdown parsing on rejection, and logs each delivery to the trace.
+- Playbook stage chaining: stage LLMs guessed the playbook base directory when resolving sibling outputs (stage 3 tried `/home/mino/playbooks/...` instead of `/home/mino/.mino/playbooks/...`, gave up, and wrote a BLOCKED output that passed verification). `buildStagePrompt` now anchors the playbook directory explicitly.
+
+### Added
+- Outbox delivery tests (send + drain + markdown fallback) via a fake bot API.
+
+### Fixed
 - Scheduled playbooks never ran: `startRoutine` created the responsibility record without kind/title/owner, so every fire failed with a validation error that landed only in journald. `startRoutine` now carries the required fields (mirrors `startOneOff`), and fire failures are surfaced in the trace, audit log, and a new `last_error` field in `schedules.json` (visible via `list_schedules` and `system_check`) instead of failing silently.
 - Playbook stage output verification could never pass for absolute output paths: `outputPath` rebased every declared path into the playbook `output/` dir via basename and never expanded `YYYY-MM-DD` templates. It now honors absolute paths (validated at load time to stay under the home dir) and expands date templates in the configured location.
 - Stage output parsing trusted first-to-last backticks in `## Write`, so an appended second bullet changed the verified output path (an LLM moved the verification goalpost mid-incident). Only the first backtick pair is now authoritative.

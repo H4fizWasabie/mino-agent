@@ -3,7 +3,9 @@ package main
 // Mino — gateway/telegram.py — polling-based Telegram bot.
 
 import (
+	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,6 +19,86 @@ import (
 )
 
 var telegramCore *Core
+
+// telegramAPIBase is overridable in tests to point at a fake bot API.
+var telegramAPIBase = "https://api.telegram.org"
+
+// runOutboxDispatcher drains the outbox to Abah's Telegram. send_message only
+// drafts to the outbox; without a drain, scheduled reports never arrive
+// (2026-07-31: both daily reports sat in outbox/ undelivered).
+func runOutboxDispatcher(core *Core) {
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		if n := deliverOutboxOnce(core.Settings); n > 0 {
+			slog.Info("outbox delivered", "count", n)
+		}
+	}
+}
+
+// deliverOutboxOnce sends every outbox draft to the configured Telegram chat
+// and removes the file on success. Returns the number delivered.
+func deliverOutboxOnce(s *Settings) int {
+	if s == nil || s.Telegram == "" || s.TelegramChatID <= 0 {
+		return 0
+	}
+	entries, err := os.ReadDir(filepath.Join(s.Home, "outbox"))
+	if err != nil {
+		return 0
+	}
+	delivered := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		path := filepath.Join(s.Home, "outbox", e.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if sendTelegramText(s.Telegram, s.TelegramChatID, string(data), true) {
+			os.Remove(path)
+			delivered++
+			logTrace(s.Home, "outbox_delivered", map[string]any{"file": e.Name()})
+		} else {
+			slog.Error("outbox telegram rejected", "file", e.Name())
+		}
+	}
+	return delivered
+}
+
+// sendTelegramText posts a message to the bot API. First try with Markdown
+// parsing; on rejection retry without it (unbalanced markdown is a common
+// 3am failure). Returns true when Telegram accepted the message.
+func sendTelegramText(token string, chatID int64, text string, markdown bool) bool {
+	payload := map[string]any{"chat_id": chatID, "text": text}
+	if markdown {
+		payload["parse_mode"] = "Markdown"
+	}
+	if postTelegram(token, payload) {
+		return true
+	}
+	if markdown {
+		payload2 := map[string]any{"chat_id": chatID, "text": text}
+		return postTelegram(token, payload2)
+	}
+	return false
+}
+
+func postTelegram(token string, payload map[string]any) bool {
+	body, _ := json.Marshal(payload)
+	resp, err := http.Post(fmt.Sprintf("%s/bot%s/sendMessage", telegramAPIBase, token), "application/json", bytes.NewReader(body))
+	if err != nil {
+		slog.Error("telegram send failed", "error", err)
+		return false
+	}
+	defer resp.Body.Close()
+	var r struct {
+		OK bool `json:"ok"`
+	}
+	json.NewDecoder(resp.Body).Decode(&r)
+	return r.OK
+}
 
 func RunTelegram(w *Core) {
 	telegramCore = w

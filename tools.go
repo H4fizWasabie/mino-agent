@@ -1332,7 +1332,7 @@ func makeNotesTool(db *sql.DB, mem *Memory) *Tool {
 func makeMessagesTool(home string) *Tool {
 	return &Tool{
 		Name:        "send_message",
-		Description: "Draft a message to someone. Saved to outbox.",
+		Description: "Send a message to Abah's Telegram. The message is queued in the outbox and delivered by the outbox dispatcher within seconds.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

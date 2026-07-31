@@ -297,6 +297,12 @@ func buildStagePrompt(pb *Playbook, stage StageFile, userMessage string, loc ...
 	b.WriteString(fmt.Sprintf("Write your final output to this exact path: `%s`\n", outPath))
 	b.WriteString(fmt.Sprintf("The output directory already exists: `%s`\n\n", filepath.Dir(outPath)))
 
+	// Anchor the playbook dir: relative paths like `output/02-summary.md` in
+	// ## Read/## Do sections resolve against it. Without this the stage LLM
+	// guesses the base dir and fails to find sibling stage outputs.
+	b.WriteString("## Playbook Context\n\n")
+	b.WriteString(fmt.Sprintf("The playbook directory is `%s`. Relative paths such as `output/...` are relative to it.\n\n", pb.Dir))
+
 	b.WriteString("## Rules\n\n")
 	b.WriteString("- Follow the instructions above. Work step by step.\n")
 	b.WriteString("- If you encounter an error, try to fix it. If you cannot fix it after a reasonable attempt, write the error to the output file and stop.\n")

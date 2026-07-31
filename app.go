@@ -147,6 +147,10 @@ func NewCore() *Core {
 	// In-process playbook scheduler — checks schedules.json every minute
 	go runScheduleDispatcher(w)
 
+	// Outbox delivery — send_message drafts to the outbox; this drains it
+	// to Telegram so scheduled reports actually arrive.
+	go runOutboxDispatcher(w)
+
 	// Alert checker (§18.1): error rate + dead man's switch, every 5 minutes
 	go checkAlerts(db, w.sendAlertMessage, 5*time.Minute, w.Settings.Location())
 
