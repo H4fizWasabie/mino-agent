@@ -24,16 +24,17 @@ func (s *ResponsibilityStore) startRoutine(schedule PlaybookSchedule, at time.Ti
 }
 
 func (s *ResponsibilityStore) startOneOff(id, name, request, sessionID string, at time.Time) error {
-	title := strings.TrimSpace(request)
-	if title == "" {
-		title = "Run playbook " + name
+	title := "Run " + name + " once"
+	outcome := strings.TrimSpace(request)
+	if outcome == "" {
+		outcome = title
 	}
 	_, err := s.Record(ResponsibilityEvent{
 		ResponsibilityID: id,
 		Type:             "accepted",
 		Kind:             "one_off",
 		Title:            title,
-		Outcome:          title,
+		Outcome:          outcome,
 		Owner:            "mino",
 		Status:           "working",
 		NextAction:       "Complete playbook",

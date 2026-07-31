@@ -25,6 +25,7 @@
 - **Tool schema selection tightened:** essentials shrunk 15→8 tools (+3 family), semantic threshold 0.25→0.40, cap 12→8, MCP tools keyword-gated, embedding input narrowed to last turn. Schemas per turn: 30→21 (-30%), trivial-turn tokens: ~14.5k→~12k (-17%).
 
 ### Fixed
+- One-off Responsibility titles now stay concise while preserving the full accepted request as the outcome
 - Scheduled Routine completion history records the actual finish time instead of copying its start timestamp
 - Graph recall traverses reverse relationships and excludes ambiguous or low-confidence inferred edges from normal context
 - Default session guidance and compaction markers use the graph-backed `remember` tool

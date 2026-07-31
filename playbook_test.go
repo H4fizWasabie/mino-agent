@@ -588,6 +588,9 @@ func TestOneOffPlaybookRecordsVerifiedResponsibility(t *testing.T) {
 	if item.Status != "verified" || item.SourceKind != "playbook" || !strings.HasPrefix(item.SourceRef, "one-off:audit:dashboard-1:") {
 		t.Fatalf("one-off projection = %+v", item)
 	}
+	if item.Title != "Run audit once" || item.Outcome != "Run the audit" {
+		t.Fatalf("one-off language = title %q outcome %q", item.Title, item.Outcome)
+	}
 	history, err := store.History(item.ID)
 	if err != nil || len(history) != 2 {
 		t.Fatalf("history = %+v, err=%v", history, err)
