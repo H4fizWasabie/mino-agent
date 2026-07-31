@@ -471,9 +471,13 @@ func TestSchedulePlaybook(t *testing.T) {
 
 func TestDueRoutineRecordsVerifiedResultWithEvidence(t *testing.T) {
 	home := t.TempDir()
-	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
+	location, err := time.LoadLocation("Asia/Kuala_Lumpur")
+	if err != nil {
+		t.Fatal(err)
+	}
 	schedule := PlaybookSchedule{
-		Name: "ai-news-daily", Time: "20:00", Timezone: "Asia/Kuala_Lumpur",
+		Name: "ai-news-daily", Time: now.In(location).Format("15:04"), Timezone: location.String(),
 	}
 	if err := saveSchedules(home, []PlaybookSchedule{schedule}); err != nil {
 		t.Fatal(err)
@@ -492,7 +496,7 @@ func TestDueRoutineRecordsVerifiedResultWithEvidence(t *testing.T) {
 		ResponsibilityID: "routine:" + schedule.Name, Type: "imported", Kind: "routine",
 		Title: "Daily AI news", Owner: "mino", Status: "waiting",
 		Summary: "Imported from the existing schedule.", SourceKind: "schedule",
-		SourceRef: schedule.Name, Schedule: "20:00 Asia/Kuala_Lumpur", At: now.Add(-time.Hour),
+		SourceRef: schedule.Name, Schedule: schedule.Time + " " + schedule.Timezone, At: now.Add(-time.Hour),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -520,9 +524,15 @@ func TestDueRoutineRecordsVerifiedResultWithEvidence(t *testing.T) {
 		t.Fatalf("Routine projection: items=%+v err=%v", items, err)
 	}
 	got := items[0]
+	if got.LastRunAt == nil {
+		t.Fatalf("Routine projection has no last run: %+v", got)
+	}
+	wantDue, err := nextRoutineRun(schedule, *got.LastRunAt)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !sawWorking || got.ID != "routine:ai-news-daily" || got.Status != "verified" ||
-		got.LastRunAt == nil || !got.LastRunAt.Equal(now) ||
-		got.DueAt == nil || !got.DueAt.Equal(time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)) {
+		got.DueAt == nil || !got.DueAt.Equal(wantDue) {
 		t.Fatalf("Routine projection = %+v, saw working=%v", got, sawWorking)
 	}
 	history, err := store.History(got.ID)
@@ -537,7 +547,7 @@ func TestDueRoutineRecordsVerifiedResultWithEvidence(t *testing.T) {
 		t.Fatalf("completion Evidence = %q", history[2].Evidence)
 	}
 	schedules, err := loadSchedules(home)
-	if err != nil || len(schedules) != 1 || schedules[0].LastRun != now.Format(time.RFC3339) {
+	if err != nil || len(schedules) != 1 || schedules[0].LastRun != history[2].At.Format(time.RFC3339) {
 		t.Fatalf("saved schedules = %+v, err=%v", schedules, err)
 	}
 }
@@ -659,6 +669,50 @@ func TestDueRoutineBlocksCompletionWithoutReadableEvidence(t *testing.T) {
 	if detail.Status != "blocked" || latest.Type != "blocked" ||
 		latest.Summary != "Scheduled run completed without a readable output." {
 		t.Fatalf("unverified Routine = %+v", detail)
+	}
+}
+
+func TestDueRoutineRecordsActualCompletionTime(t *testing.T) {
+	home := t.TempDir()
+	location, err := time.LoadLocation("Asia/Kuala_Lumpur")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().UTC().Add(-time.Second)
+	schedule := PlaybookSchedule{
+		Name: "timed-run", Time: started.In(location).Format("15:04"), Timezone: location.String(),
+	}
+	if err := saveSchedules(home, []PlaybookSchedule{schedule}); err != nil {
+		t.Fatal(err)
+	}
+	db := Connect(home)
+	defer db.Close()
+	store := NewResponsibilityStore(db)
+	if _, err := store.Record(ResponsibilityEvent{
+		ResponsibilityID: "routine:" + schedule.Name, Type: "imported", Kind: "routine",
+		Title: "Timed run", Owner: "mino", Status: "waiting", Summary: "Imported.",
+		SourceKind: "schedule", SourceRef: schedule.Name, At: started.Add(-time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	core := &Core{Settings: &Settings{Home: home}, Responsibilities: store}
+	run := func(context.Context, *Core, string, string, string, Observer) (*PlaybookResult, error) {
+		time.Sleep(time.Millisecond)
+		return &PlaybookResult{Name: schedule.Name, Status: "failed", Reply: "Provider unavailable."}, nil
+	}
+
+	dispatchDueSchedulesAt(core, started, run)
+
+	history, err := store.History("routine:" + schedule.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 3 || !history[2].At.After(history[1].At) {
+		t.Fatalf("Routine History timestamps = %+v", history)
+	}
+	schedules, err := loadSchedules(home)
+	if err != nil || len(schedules) != 1 || schedules[0].LastRun != history[2].At.Format(time.RFC3339) {
+		t.Fatalf("saved schedules = %+v, err=%v", schedules, err)
 	}
 }
 

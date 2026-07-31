@@ -1027,10 +1027,11 @@ func dispatchDueSchedulesAt(core *Core, now time.Time, run scheduledPlaybookRunn
 		if result != nil {
 			slog.Info("schedule playbook result", "name", s.Name, "status", result.Status, "stages", result.StagesRun)
 		}
-		if recordErr := core.Responsibilities.finishRoutine(core.Settings.Home, sessionID, s, result, err, now); recordErr != nil {
+		finishedAt := time.Now().UTC()
+		if recordErr := core.Responsibilities.finishRoutine(core.Settings.Home, sessionID, s, result, err, finishedAt); recordErr != nil {
 			slog.Error("schedule responsibility finish failed", "name", s.Name, "error", recordErr)
 		}
-		scheds[i].LastRun = now.UTC().Format(time.RFC3339)
+		scheds[i].LastRun = finishedAt.Format(time.RFC3339)
 		updated = true
 	}
 	if updated {
