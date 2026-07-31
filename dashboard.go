@@ -395,18 +395,21 @@ func handleMemoryAPI(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 			return
 		case "delete_episode":
-			episodeID, ok := body.ID.(float64)
-			if !ok {
+			episodeID, ok := body.ID.(string)
+			if !ok || dashCore.Memory == nil || dashCore.Memory.graph == nil {
 				http.Error(w, "invalid episode id", http.StatusBadRequest)
 				return
 			}
-			var summary string
-			if db.QueryRow("SELECT summary FROM episodes WHERE id = ?", int64(episodeID)).Scan(&summary) == nil {
-				db.Exec("DELETE FROM episodes WHERE id = ?", int64(episodeID))
-				if dashCore.Memory != nil && dashCore.Memory.embedder != nil {
-					dashCore.Memory.embedder.Remove("episode", summary)
+			if fact, err := dashCore.Memory.graph.DeleteFact(episodeID); err == nil {
+				if dashCore.Memory.embedder != nil {
+					dashCore.Memory.embedder.RemoveFact(episodeID)
+					dashCore.Memory.embedder.Remove("episode", fact.Subject)
 				}
+				json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+				return
 			}
+			http.Error(w, "episode not found", http.StatusNotFound)
+			return
 		case "save_soul":
 			os.WriteFile(dashCore.Settings.Home+"/SOUL.md", []byte(body.Content), 0644)
 		case "save_skill":
@@ -718,7 +721,22 @@ func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	legacyFactsData := queryAll(db, "SELECT id, subject, content, source, created_at FROM facts ORDER BY id DESC")
-	episodesData := queryAll(db, "SELECT id, happened_at, summary FROM episodes ORDER BY happened_at DESC")
+	episodesData := []map[string]any{}
+	if dashCore.Memory != nil && dashCore.Memory.graph != nil {
+		// Episodic memory lives in the graph as ep_* facts since the graph
+		// migration; the old SQLite episodes table has no writer anymore.
+		for _, fact := range dashCore.Memory.graph.Facts() {
+			if fact.Type != "episodic" {
+				continue
+			}
+			episodesData = append(episodesData, map[string]any{
+				"id": fact.ID, "happened_at": fact.At.Format(time.RFC3339), "summary": fact.Subject,
+			})
+		}
+		sort.Slice(episodesData, func(i, j int) bool {
+			return episodesData[i]["happened_at"].(string) > episodesData[j]["happened_at"].(string)
+		})
+	}
 	calendarData := queryAll(db, "SELECT title, start, \"end\", attendees, created_at FROM calendar_events ORDER BY start")
 	skillsData := skillCatalog(dashCore.Settings.Home)
 	playbooksData := playbookCatalog(dashCore.Settings.Home)
@@ -753,7 +771,7 @@ func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 	// counts
 	factsN := len(factsData)
 	legacyFactsN, _ := countRows(db, "facts")
-	episodesN, _ := countRows(db, "episodes")
+	episodesN := len(episodesData)
 	calendarN, _ := countRows(db, "calendar_events")
 	chatN, _ := countRows(db, "chat_log")
 

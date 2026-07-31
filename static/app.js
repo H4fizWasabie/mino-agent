@@ -649,7 +649,7 @@ function memEpisodic(d){
   let h = `<section class="memory-tab-head"><div><span class="section-kicker">EPISODIC MEMORY</span><h2>Conversation highlights</h2><p>One distilled summary per consolidation. Raw messages remain available in the chat log.</p></div><strong>${episodes.length}</strong></section>
     <div class="memory-callout"><span>◷</span><p>Episodes stay intentionally small: they preserve what happened without replaying every message. <a href="#database/chat_log">Inspect the raw chat log →</a></p></div>`;
   if (!episodes.length) return h + `<div class="memory-empty"><span>◷</span><strong>No episodes yet</strong><p>Conversation highlights will appear here after a successful consolidation.</p></div>`;
-  h += `<div class="episode-timeline">${episodes.map(e => `<div class="episode-item"><span class="episode-dot"></span><div><time>${esc(e.happened_at||"Undated")}</time><p>${esc(e.summary)}</p></div><a class="reveal del" onclick="delMem('delete_episode',${e.id})">delete</a></div>`).join("")}</div>`;
+  h += `<div class="episode-timeline">${episodes.map(e => `<div class="episode-item"><span class="episode-dot"></span><div><time>${esc(e.happened_at||"Undated")}</time><p>${esc(e.summary)}</p></div><a class="reveal del" onclick="delMem('delete_episode',${jsArg(e.id)})">delete</a></div>`).join("")}</div>`;
   return h;
 }
 function memSkills(d){
