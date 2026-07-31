@@ -104,6 +104,22 @@ Today follows Mino's configured local timezone.
 This preserves a daily narrative without allowing unresolved responsibility
 to disappear at midnight.
 
+### Date navigation and journal search
+
+The Today Journal presents one local calendar day at a time. Compact previous
+and next-day controls sit around the current date; when the owner browses the
+past, a direct **Today** action returns to the current day. Clicking the date
+opens a calendar popover for distant navigation without turning Today into a
+calendar dashboard.
+
+Journal search works across days and groups results chronologically. It may
+match Responsibility titles, journal summaries, owner-oriented statuses,
+dates, Evidence labels, and channel metadata.
+
+Journal search does not search general Memory or raw Conversations. Those
+surfaces retain their own search boundaries so an audit query does not become
+an unstructured global search.
+
 ## Work owns responsibility
 
 Work is not another chronological feed. It is the canonical portfolio of open
@@ -159,7 +175,6 @@ records the receipt.
 
 ## Still to decide
 
-- Date navigation and search behavior
 - Work grouping, filtering, and recently-closed retention
 - Mobile behavior for entry detail and conversation
 - Migration from existing dashboard data to Responsibility and journal state
