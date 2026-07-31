@@ -125,7 +125,9 @@ func Connect(home string) *sql.DB {
 		}
 	}
 	runMigrations(db)
-	initAudit(db)
+	if err := initAudit(db); err != nil {
+		panic(fmt.Sprintf("initialize audit schema: %v", err))
+	}
 	_ = migrateChatLog(db)
 	_ = migrateFacts(db)
 	_ = migrateEpisodes(db)

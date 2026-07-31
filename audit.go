@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -23,10 +24,9 @@ CREATE INDEX IF NOT EXISTS idx_audit_events_type ON audit_events(event_type);
 `
 
 // initAudit ensures the audit_events table exists (called from Connect).
-func initAudit(db *sql.DB) {
-	if _, err := db.Exec(auditSchema); err != nil {
-		panic(fmt.Sprintf("audit schema: %v", err))
-	}
+func initAudit(db *sql.DB) error {
+	_, err := db.Exec(auditSchema)
+	return err
 }
 
 // --- Write ---
@@ -36,10 +36,12 @@ func (w *Core) auditLog(sessionID, eventType, message string, iteration int) {
 	if w.DB == nil {
 		return
 	}
-	w.DB.Exec(
+	if _, err := w.DB.Exec(
 		"INSERT INTO audit_events (session_id, event_type, message, iteration) VALUES (?, ?, ?, ?)",
 		sessionID, eventType, message, iteration,
-	)
+	); err != nil {
+		slog.Error("audit write failed", "error", err, "event_type", eventType)
+	}
 }
 
 // --- Query tool ---
@@ -172,5 +174,7 @@ func (w *Core) pruneOldAuditEvents() {
 		return
 	}
 	cutoff := time.Now().AddDate(0, 0, -auditRetentionDays).Format("2006-01-02")
-	w.DB.Exec("DELETE FROM audit_events WHERE created_at < ?", cutoff)
+	if _, err := w.DB.Exec("DELETE FROM audit_events WHERE created_at < ?", cutoff); err != nil {
+		slog.Error("audit prune failed", "error", err)
+	}
 }

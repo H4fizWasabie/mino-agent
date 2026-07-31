@@ -713,6 +713,7 @@ func (gm *GraphMemory) Remember(query string) string {
 		lines = append(lines, fact.Subject+"  # "+fact.ID)
 		visited[startID] = true
 		gm.bfsEdges(fact, "  ", 1, maxDepth, visited, &lines)
+		gm.bfsInbound(fact, "  ", 1, maxDepth, visited, &lines)
 	}
 
 	if len(lines) == 0 {
@@ -728,6 +729,9 @@ func (gm *GraphMemory) bfsEdges(fact *Fact, indent string, depth, maxDepth int, 
 	}
 	nextIndent := indent + "  "
 	for _, edge := range fact.Edges {
+		if !edgeTraversable(edge) {
+			continue
+		}
 		target, ok := gm.facts[edge.Target]
 		if !ok {
 			continue
@@ -741,6 +745,34 @@ func (gm *GraphMemory) bfsEdges(fact *Fact, indent string, depth, maxDepth int, 
 		*lines = append(*lines, fmt.Sprintf("%s→ [%s] %s  # %s", indent, edge.Rel, label, edge.Target))
 		gm.bfsEdges(target, nextIndent, depth+1, maxDepth, visited, lines)
 	}
+}
+
+func (gm *GraphMemory) bfsInbound(fact *Fact, indent string, depth, maxDepth int, visited map[string]bool, lines *[]string) {
+	if depth > maxDepth {
+		return
+	}
+	nextIndent := indent + "  "
+	for _, source := range gm.facts {
+		for _, edge := range source.Edges {
+			if edge.Target != fact.ID || !edgeTraversable(edge) {
+				continue
+			}
+			if visited[source.ID] {
+				continue
+			}
+			visited[source.ID] = true
+			*lines = append(*lines, fmt.Sprintf("%s← [%s] %s  # %s", indent, edge.Rel, source.Subject, source.ID))
+			gm.bfsInbound(source, nextIndent, depth+1, maxDepth, visited, lines)
+			gm.bfsEdges(source, nextIndent, depth+1, maxDepth, visited, lines)
+		}
+	}
+}
+
+func edgeTraversable(edge Edge) bool {
+	if edge.Kind == "ambiguous" {
+		return false
+	}
+	return edge.Kind != "inferred" || edge.Confidence >= 0.85
 }
 
 // fts5Entry finds matching fact IDs by substring search, with embedding fallback

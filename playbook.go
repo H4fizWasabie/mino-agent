@@ -6,11 +6,13 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -881,7 +883,41 @@ func makeCancelScheduleTool(home string) *Tool {
 			if err := saveSchedules(home, filtered); err != nil {
 				return fmt.Sprintf("Error: %v", err)
 			}
-			return fmt.Sprintf("Cancelled schedule for %s.", name)
+			return fmt.Sprintf("Cancelled schedule for %s. %d schedule(s) remain.", name, len(filtered))
+		},
+	}
+}
+
+func makeSystemCheckTool(db *sql.DB, home string) *Tool {
+	return &Tool{
+		Name:        "system_check",
+		Description: "Inspect schedules, reminders, playbooks, and the user crontab so state-changing work can be verified before replying.",
+		Schema:      map[string]any{"type": "object", "properties": map[string]any{}},
+		Behavior:    BehaviorObserve,
+		Fn: func(map[string]any) string {
+			schedules, scheduleErr := loadSchedules(home)
+			playbooks := ListPlaybooks(home)
+			pending := 0
+			if db != nil {
+				if err := db.QueryRow("SELECT COUNT(*) FROM reminders WHERE status = 'pending'").Scan(&pending); err != nil {
+					return fmt.Sprintf("Error checking reminders: %v", err)
+				}
+			}
+			cron := "unavailable"
+			if out, err := exec.Command("crontab", "-l").Output(); err == nil {
+				cron = strings.TrimSpace(string(out))
+				if cron == "" {
+					cron = "empty"
+				}
+			}
+			var b strings.Builder
+			if scheduleErr != nil {
+				fmt.Fprintf(&b, "schedules: error (%v)\n", scheduleErr)
+			} else {
+				fmt.Fprintf(&b, "schedules: %d\n", len(schedules))
+			}
+			fmt.Fprintf(&b, "pending_reminders: %d\nplaybooks: %d\ncrontab: %s", pending, len(playbooks), cron)
+			return b.String()
 		},
 	}
 }

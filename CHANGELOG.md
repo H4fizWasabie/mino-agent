@@ -10,6 +10,8 @@
 
 ### Changed
 - Markdown graph claims are now authoritative for semantic memory, dashboard views, correction, forgetting, confirmation, and search; SQLite facts remain read-only diagnostics
+- Interrupt status checks may use read-only tool schemas and dashboard SSE keeps the response handler alive until the interrupt reply is delivered
+- State-changing tools expose verification-oriented summaries; `system_check` reports schedules, reminders, playbooks, and crontab state
 - Memory graph keeps the full knowledge map visible while queries highlight matching neighborhoods, relationship labels appear on demand, and nodes use a richer deterministic color palette.
 - Graph edges carry provenance and confidence; legacy generic overlap edges are rejected
 - History split from chat_log: LLM sees clean reply, consolidation sees full tool trail
@@ -17,6 +19,9 @@
 - **Tool schema selection tightened:** essentials shrunk 15→8 tools (+3 family), semantic threshold 0.25→0.40, cap 12→8, MCP tools keyword-gated, embedding input narrowed to last turn. Schemas per turn: 30→21 (-30%), trivial-turn tokens: ~14.5k→~12k (-17%).
 
 ### Fixed
+- Graph recall traverses reverse relationships and excludes ambiguous or low-confidence inferred edges from normal context
+- Default session guidance and compaction markers use the graph-backed `remember` tool
+- MCP tool selection excludes semantic embedding and applies a stable deterministic cap
 - Consolidation now requests JSON mode and tolerates wrapped model output; graph memory also reads legacy front matter with unquoted scalar colons.
 - Graph edge rebuild now uses JSON mode and never erases existing edges on empty or invalid inference output.
 - Current-time grounding now repeats the configured local clock on the fresh user turn so stale history cannot override it.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,6 +12,16 @@ import (
 	"testing"
 	"time"
 )
+
+func TestAwaitInterruptWaitsForReplyBeforeReturning(t *testing.T) {
+	got, ok := awaitInterrupt(context.Background(), func(reply func(string)) {
+		time.Sleep(time.Millisecond)
+		reply("status ready")
+	})
+	if !ok || got != "status ready" {
+		t.Fatalf("awaitInterrupt() = %q, %v", got, ok)
+	}
+}
 
 func TestDashboardDataIncludesSoul(t *testing.T) {
 	home := t.TempDir()

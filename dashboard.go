@@ -3,6 +3,7 @@ package main
 // Dashboard — HTTP server serving static files + API endpoints.
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"encoding/json"
@@ -198,11 +199,15 @@ func handleChatStream(w http.ResponseWriter, r *http.Request) {
 
 	// Interrupt routing (SSE: push response as event)
 	if query, ok := isInterrupt(body.Message); ok && dashCore.snapshot(sid) != nil {
-		go dashCore.handleInterrupt(sid, query, func(reply string) {
-			data, _ := json.Marshal(map[string]any{"kind": "interrupt", "reply": reply})
-			fmt.Fprintf(w, "data: %s\n\n", data)
-			flusher.Flush()
+		reply, ok := awaitInterrupt(r.Context(), func(reply func(string)) {
+			dashCore.handleInterrupt(sid, query, reply)
 		})
+		if !ok {
+			return
+		}
+		data, _ := json.Marshal(map[string]any{"kind": "interrupt", "reply": reply})
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
 		return
 	}
 
@@ -246,6 +251,20 @@ func handleChatStream(w http.ResponseWriter, r *http.Request) {
 	b, _ := json.Marshal(doneEv)
 	fmt.Fprintf(w, "data: %s\n\n", b)
 	flusher.Flush()
+}
+
+// awaitInterrupt keeps the HTTP handler alive until the asynchronous
+// interrupt has a reply or the client disconnects. ResponseWriter must not be
+// used after the handler returns.
+func awaitInterrupt(ctx context.Context, run func(func(string))) (string, bool) {
+	replies := make(chan string, 1)
+	go run(func(reply string) { replies <- reply })
+	select {
+	case reply := <-replies:
+		return reply, true
+	case <-ctx.Done():
+		return "", false
+	}
 }
 
 func dashboardTools(calls []ToolCall) []map[string]any {

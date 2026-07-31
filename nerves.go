@@ -116,7 +116,11 @@ func (w *Core) handleInterrupt(sessionID, query string, replyFunc func(string)) 
 	defer cancel()
 
 	messages := []Message{{Role: "user", Content: query}}
-	resp, err := w.Client.CreateContext(ctx, sessionID+"_intr", MainModel, messages, 1024, system, nil)
+	var schemas []ToolDef
+	if w.Tools != nil {
+		schemas = w.Tools.ObserveOnly().Schemas()
+	}
+	resp, err := w.Client.CreateContext(ctx, sessionID+"_intr", MainModel, messages, 1024, system, schemas)
 	if err != nil {
 		replyFunc(fmt.Sprintf("(interrupt error: %v)", err))
 		return
@@ -153,7 +157,7 @@ func (w *Core) handleInterrupt(sessionID, query string, replyFunc func(string)) 
 func (w *Core) buildInterruptSystem(snap *LoopSnapshot, query string) string {
 	var b strings.Builder
 	b.WriteString(`You are Mino's self-awareness system. Answer the user's mid-task query concisely and factually.
-Base your answer on the CURRENT STATE below. Do NOT call tools — respond immediately from the state provided.
+Base your answer on the CURRENT STATE below. You may use only read-only tools to inspect a real file or audit record when the state below is insufficient.
 Be direct — the user is checking in on a running task.
 
 CURRENT STATE:

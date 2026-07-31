@@ -18,7 +18,7 @@ wayfinder:task
 
 ### What was built
 - **`/api/nerves?session_id=X`** endpoint — returns live snapshot JSON: `{active, iteration, status, current_tool, tool_history, elapsed}`. Returns `{active: false}` when no loop is running.
-- **Dashboard event pushes**: 
+- **Dashboard event pushes**:
   - Interrupt events pushed to `dashEventQ` (type: "interrupt", query, reply)
   - Loop detection events pushed to `dashEventQ` (type: "loop_detected", message, iteration)
 - Frontend can poll `/api/nerves` for live state or consume `/api/events` for alert stream

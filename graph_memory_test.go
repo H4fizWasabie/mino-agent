@@ -26,6 +26,26 @@ func TestGraphMemoryRecordAndRemember(t *testing.T) {
 	}
 }
 
+func TestGraphMemoryRememberTraversesReverseAndSkipsAmbiguous(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), nil)
+	if err := gm.RecordFact(Fact{ID: "target", Type: "semantic", Subject: "Apex"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gm.RecordFact(Fact{ID: "source", Type: "semantic", Subject: "Source claim", Edges: []Edge{{Target: "target", Rel: "depends_on"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gm.RecordFact(Fact{ID: "ambiguous", Type: "semantic", Subject: "Uncertain claim", Edges: []Edge{{Target: "target", Rel: "related_to", Kind: "ambiguous", Confidence: 0.4}}}); err != nil {
+		t.Fatal(err)
+	}
+	got := gm.Remember("Apex")
+	if !strings.Contains(got, "Source claim") || !strings.Contains(got, "[depends_on]") {
+		t.Fatalf("reverse relationship missing: %q", got)
+	}
+	if strings.Contains(got, "Uncertain claim") {
+		t.Fatalf("ambiguous relationship leaked into recall: %q", got)
+	}
+}
+
 func TestGraphMemoryUpdateBodyPersists(t *testing.T) {
 	dir := t.TempDir()
 	gm := NewGraphMemory(dir, nil)

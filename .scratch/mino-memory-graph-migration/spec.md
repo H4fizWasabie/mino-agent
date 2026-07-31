@@ -95,4 +95,3 @@ Pre-retirement certification must verify service health, deployed revision, grap
 ## Further Notes
 
 The live VPS configuration uses OpenRouter Xiaomi MiMo v2.5 as the main model and DeepSeek v4 Flash as the small model for consolidation. Production work must verify the deployed runtime rather than relying on local configuration or source code alone.
-

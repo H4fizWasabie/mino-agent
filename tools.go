@@ -223,14 +223,14 @@ func (r *Registry) SchemasForContext(fullCtx string, oneTurnText string, es *Emb
 			mcpSelected[name] = true
 		}
 	}
-	// Cap MCP tools at 3 to prevent bloat
-	mcpCount := 0
+	// Cap MCP tools at 3 to prevent bloat, in stable order.
+	mcpNames := make([]string, 0, len(mcpSelected))
 	for name := range mcpSelected {
-		if mcpCount >= 3 {
-			break
-		}
+		mcpNames = append(mcpNames, name)
+	}
+	sort.Strings(mcpNames)
+	for _, name := range mcpNames[:min(3, len(mcpNames))] {
 		selected[name] = true
-		mcpCount++
 	}
 
 	for _, family := range toolFamilies {
@@ -305,6 +305,9 @@ func (r *Registry) semanticToolNames(contextText string, es *EmbeddingStore) []s
 	r.searchMu.Lock()
 	pending := make([]string, 0)
 	for name, tool := range r.tools {
+		if strings.HasPrefix(name, "MCP_") {
+			continue
+		}
 		if len(r.toolEmbeddings[name]) == 0 {
 			pending = append(pending, name+" — "+tool.Description)
 		}

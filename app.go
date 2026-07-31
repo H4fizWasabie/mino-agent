@@ -127,6 +127,7 @@ func NewCore() *Core {
 
 	// Playbook tools — LLM can discover and run playbooks
 	tools.Register(behaves(makeQueryAuditTool(db), BehaviorObserve))
+	tools.Register(behaves(makeSystemCheckTool(db, s.Home), BehaviorObserve))
 	tools.Register(behaves(makeListPlaybooksTool(s.Home), BehaviorObserve))
 	tools.Register(behaves(makeRunPlaybookTool(w), BehaviorMutate))
 	tools.Register(behaves(makeSchedulePlaybookTool(s.Home, s.Timezone), BehaviorMutate))
