@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Authoritative SQLite Responsibility projections, append-only history, and idempotent schedule/reminder baseline migration
 - Dashboard redesign decision record covering the authoritative responsibility journal, editorial frame, truthful health and empty states, adaptive density, dated navigation, portfolio and detail views, channel conversations, mobile behavior, canonical product language, and state-first delivery sequence
 - Memory graph index cache (`index.json`): O(1) startup, skips re-parsing all .md files
 - Edge validation: dangling edge targets filtered on write
