@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Dashboard redesign decision record and canonical responsibility/journal product language
 - Memory graph index cache (`index.json`): O(1) startup, skips re-parsing all .md files
 - Edge validation: dangling edge targets filtered on write
 - Lossless SQLite fact archive and collision-safe graph migration manifest
