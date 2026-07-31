@@ -650,6 +650,23 @@ func (m *Memory) DedupDue() int {
 
 // mergeCluster sends duplicate facts to the small model for merging,
 // then replaces them with the merged result.
+// filterMergedEdges keeps only edges whose target still exists and is not the
+// merged fact itself — the merge deletes sibling facts, so edges pointing at
+// them (or at the survivor) would dangle or self-loop.
+func filterMergedEdges(edges []Edge, existing map[string]*Fact, keepID string) []Edge {
+	out := edges[:0]
+	for _, e := range edges {
+		if e.Target == keepID {
+			continue
+		}
+		if _, ok := existing[e.Target]; !ok {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
 func (m *Memory) mergeCluster(docs []embeddedDoc) bool {
 	m.graph.mu.Lock()
 	// Map content → fact ID
@@ -745,6 +762,7 @@ func (m *Memory) mergeCluster(docs []embeddedDoc) bool {
 		m.embedder.RemoveFact(f.ID)
 		m.embedder.Remove("fact", f.Subject+": "+f.Body)
 	}
+	allEdges = filterMergedEdges(allEdges, m.graph.facts, merged.ID)
 
 	// Write merged fact
 	mergedFact := Fact{

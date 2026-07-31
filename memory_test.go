@@ -571,3 +571,34 @@ func TestConsolidateDueLimitsLLMCallsPerPass(t *testing.T) {
 		t.Fatalf("pending rows = %d, want one session left for the next pass", pending)
 	}
 }
+
+func TestFilterMergedEdges(t *testing.T) {
+	existing := map[string]*Fact{
+		"keep":     {},
+		"survivor": {},
+	}
+	tests := []struct {
+		name  string
+		edges []Edge
+		keep  string
+		want  []string
+	}{
+		{name: "drops self-edges", edges: []Edge{{Target: "keep"}, {Target: "survivor"}}, keep: "keep", want: []string{"survivor"}},
+		{name: "drops dangling", edges: []Edge{{Target: "deleted"}, {Target: "survivor"}}, keep: "keep", want: []string{"survivor"}},
+		{name: "keeps valid cross-fact edges", edges: []Edge{{Target: "survivor"}}, keep: "keep", want: []string{"survivor"}},
+		{name: "empty stays empty", edges: nil, keep: "keep", want: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := filterMergedEdges(tt.edges, existing, tt.keep)
+			if len(got) != len(tt.want) {
+				t.Fatalf("filtered = %+v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i].Target != tt.want[i] {
+					t.Fatalf("filtered = %+v, want %v", got, tt.want)
+				}
+			}
+		})
+	}
+}
