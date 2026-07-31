@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Consolidation silent-failure paths: DB query errors and successful parses that produced no facts/episode (e.g. a template-echoing small model) returned 0 without logging, making a stalled consolidation look healthy. Both paths now log.
 - Telegram delivery dead-end: `send_message` only drafted to the outbox and nothing drained it, so scheduled reports never reached Telegram (the 22:00 MYT run's report sat in `outbox/` undelivered). A new in-process outbox dispatcher drains drafts to Abah's Telegram every 20s, removes delivered files, retries without Markdown parsing on rejection, and logs each delivery to the trace.
 - Playbook stage chaining: stage LLMs guessed the playbook base directory when resolving sibling outputs (stage 3 tried `/home/mino/playbooks/...` instead of `/home/mino/.mino/playbooks/...`, gave up, and wrote a BLOCKED output that passed verification). `buildStagePrompt` now anchors the playbook directory explicitly.
 

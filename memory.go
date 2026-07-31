@@ -218,6 +218,7 @@ func (m *Memory) ConsolidateDue() int {
 	rows, err := m.db.Query("SELECT session_id FROM chat_log WHERE consolidated = 0 GROUP BY session_id HAVING COUNT(*) >= ?",
 		m.cfg.ConsolidateEvery*2) // each exchange = user + assistant row
 	if err != nil {
+		slog.Error("consolidation scan failed", "error", err)
 		return 0
 	}
 	var sessions []string
@@ -251,6 +252,7 @@ func (m *Memory) ConsolidateIfFull(contextChars int) int {
 		FROM chat_log WHERE consolidated = 0
 		GROUP BY session_id HAVING chars >= ?`, threshold)
 	if err != nil {
+		slog.Error("consolidation threshold scan failed", "error", err)
 		return 0
 	}
 	var sessions []string
@@ -367,6 +369,10 @@ func (m *Memory) consolidateSession(sid string) int {
 		}
 	}
 	if written == 0 && !episodeWritten {
+		// Successful parse but nothing usable: the small model echoed the
+		// template or all facts were placeholders. Log it — a silent return
+		// here looks like a healthy pass while rows stay unconsolidated.
+		slog.Warn("consolidation produced no facts or episode", "session", sid)
 		return 0
 	}
 	m.db.Exec("UPDATE chat_log SET consolidated = 1 WHERE id IN (" + strings.Join(ids, ",") + ")")
