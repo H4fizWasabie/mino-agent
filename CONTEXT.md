@@ -25,6 +25,11 @@ The append-only sequence of accepted, changed, blocked, carried, and verified
 events underlying a Responsibility.
 _Avoid_: Chat history, editable timeline
 
+**Responsibility Event**:
+One immutable, timestamped change in ownership, status, next action, or
+verified outcome within a Responsibility History.
+_Avoid_: Tool call, log line, chat message
+
 **Work**:
 The owner-wide portfolio of Responsibilities Mino currently owns, including
 working, waiting, blocked, and recently closed responsibilities.

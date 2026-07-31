@@ -215,8 +215,41 @@ restores the previous journal date and scroll position.
 Mobile uses explicit controls. It does not use hidden swipe actions for state
 changes.
 
-## Still to decide
+## Authoritative responsibility state
 
-- Migration from existing dashboard data to Responsibility and journal state
-- Which existing runtime records can support the design without duplicating
-  state
+Mino needs one small authoritative module for Responsibility state. Its narrow
+interface records a Responsibility Event and reads the resulting owner view.
+The implementation owns:
+
+- Responsibility identity
+- Append-only Responsibility History
+- Current projection and valid status transitions
+- Journal inclusion and carry-forward rules
+- References to originating Conversations, Routines, traces, artifacts, and
+  Evidence
+
+Existing systems retain their current roles: playbooks execute procedures,
+schedules trigger Routines, the canonical loop reasons and uses tools, traces
+retain machinery detail, and receipts and artifacts retain Evidence. The
+Responsibility module does not execute work or create another agent loop.
+
+The dashboard reads the authoritative projection. It does not reconstruct
+ownership from chat, traces, or tool calls.
+
+### Migration boundary
+
+At the first deployment of authoritative Responsibility state:
+
+- Each current schedule becomes one Routine with its existing next-run and
+  last-run information.
+- Each pending reminder becomes a Waiting Responsibility.
+- Historical Conversations and traces remain inspectable under their existing
+  surfaces but are not inferred into past Responsibility History.
+- The obsolete `projects` table is not imported.
+- The Today Journal begins with a visible baseline event describing what was
+  imported.
+
+This deliberately avoids fabricated history. The journal becomes authoritative
+from the migration point forward.
+
+See [ADR 0001](docs/adr/0001-authoritative-responsibility-journal.md).
