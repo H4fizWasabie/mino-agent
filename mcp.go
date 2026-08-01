@@ -57,9 +57,6 @@ func NewMCPBridge(home string, registry *Registry) *MCPBridge {
 // Start loads every config in mcp.d/, connects each server, and registers its
 // tools. Servers that don't start are skipped with a warning.
 func (b *MCPBridge) Start() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	entries, err := os.ReadDir(b.dir)
 	if err != nil {
 		return
@@ -82,6 +79,9 @@ func (b *MCPBridge) Start() {
 		if cfg.Name == "" {
 			cfg.Name = strings.TrimSuffix(e.Name(), ".json")
 		}
+		// connect must run WITHOUT b.mu held: registerFlattenedTools performs
+		// live MCP calls (via direct client) and registering tools takes the
+		// registry lock. Holding b.mu here deadlocked startup.
 		b.connect(cfg)
 	}
 }
@@ -205,9 +205,12 @@ func (b *MCPBridge) registerFlattenedTools(serverName string, c *client.Client, 
 	defer cancel()
 
 	// Broad search to enumerate toolkits + their tool schemas in one call.
-	out := b.call(serverName, "COMPOSIO_SEARCH_TOOLS", map[string]any{
+	// Uses the direct client, NOT b.call: registerFlattenedTools runs during
+	// connect, and b.call takes b.mu — calling it here would deadlock startup.
+	searchArgs := map[string]any{
 		"queries": []any{map[string]any{"use_case": "list available tools and toolkits"}},
-	})
+	}
+	out := mcpCallDirect(c, "COMPOSIO_SEARCH_TOOLS", searchArgs)
 
 	var resp struct {
 		Data struct {
@@ -281,13 +284,20 @@ func (b *MCPBridge) call(server, tool string, args map[string]any) string {
 	if active == nil {
 		return fmt.Sprintf("MCP server %q is not connected", server)
 	}
+	return mcpCallDirect(active.client, tool, args)
+}
+
+// mcpCallDirect performs an MCP tool call on an already-connected client
+// without touching the bridge mutex. Used both by b.call (runtime) and by
+// registerFlattenedTools (startup, where b.mu must not be held).
+func mcpCallDirect(c *client.Client, tool string, args map[string]any) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	result, err := active.client.CallTool(ctx, mcp.CallToolRequest{
+	result, err := c.CallTool(ctx, mcp.CallToolRequest{
 		Params: mcp.CallToolParams{Name: tool, Arguments: args},
 	})
 	if err != nil {
-		return fmt.Sprintf("MCP call %s_%s failed: %v", server, tool, err)
+		return fmt.Sprintf("MCP call %s failed: %v", tool, err)
 	}
 	var out strings.Builder
 	for _, block := range result.Content {
@@ -315,9 +325,6 @@ func (b *MCPBridge) Close() {
 // Reload re-scans mcp.d/ for new server configs and connects them.
 // Already-connected servers are skipped — only new configs are picked up.
 func (b *MCPBridge) Reload() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	entries, err := os.ReadDir(b.dir)
 	if err != nil {
 		return
@@ -341,7 +348,10 @@ func (b *MCPBridge) Reload() {
 		if cfg.Name == "" {
 			cfg.Name = strings.TrimSuffix(e.Name(), ".json")
 		}
-		if _, ok := b.servers[cfg.Name]; ok {
+		b.mu.Lock()
+		_, connected := b.servers[cfg.Name]
+		b.mu.Unlock()
+		if connected {
 			continue // already connected
 		}
 		b.connect(cfg)
