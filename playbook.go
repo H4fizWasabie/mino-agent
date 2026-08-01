@@ -361,7 +361,8 @@ func createManagedPlaybook(core *Core, name string, args map[string]any) string 
 		_ = os.RemoveAll(dir)
 		return fmt.Sprintf("Error: %v", err)
 	}
-	for _, item := range stages {
+	usedNames := make(map[string]bool)
+	for index, item := range stages {
 		stage, ok := item.(map[string]any)
 		if !ok {
 			_ = os.RemoveAll(dir)
@@ -369,11 +370,20 @@ func createManagedPlaybook(core *Core, name string, args map[string]any) string 
 		}
 		stageName, _ := stage["name"].(string)
 		stageContext, _ := stage["context"].(string)
-		if !validStageName(stageName) || strings.TrimSpace(stageContext) == "" {
+		canonicalName, err := canonicalManagedStageName(stageName, index+1)
+		if err != nil || strings.TrimSpace(stageContext) == "" || usedNames[canonicalName] {
 			_ = os.RemoveAll(dir)
-			return "Error: each stage needs an NN-name and non-empty context"
+			return "Error: each stage needs a unique name and non-empty context"
 		}
-		if err := writePlaybookFile(filepath.Join(dir, "stages", stageName, "CONTEXT.md"), stageContext); err != nil {
+		usedNames[canonicalName] = true
+		stageContext = canonicalManagedStageContext(stageContext)
+		if index > 0 {
+			previous, _ := stages[index-1].(map[string]any)
+			previousName, _ := previous["name"].(string)
+			previousName, _ = canonicalManagedStageName(previousName, index)
+			stageContext = canonicalManagedStageInputs(stageContext, previousName)
+		}
+		if err := writePlaybookFile(filepath.Join(dir, "stages", canonicalName, "CONTEXT.md"), stageContext); err != nil {
 			_ = os.RemoveAll(dir)
 			return fmt.Sprintf("Error: %v", err)
 		}
@@ -383,6 +393,61 @@ func createManagedPlaybook(core *Core, name string, args map[string]any) string 
 		return fmt.Sprintf("Error: invalid playbook: %v", err)
 	}
 	return fmt.Sprintf("Created and validated playbook %s.", name)
+}
+
+func canonicalManagedStageName(raw string, position int) (string, error) {
+	raw = strings.Trim(strings.TrimSpace(raw), "`")
+	name, number := raw, position
+	parts := strings.SplitN(raw, "-", 2)
+	if len(parts) == 2 {
+		if parsed, err := strconv.Atoi(parts[0]); err == nil {
+			number, name = parsed, parts[1]
+		}
+	}
+	if number < 1 || !validPlaybookName(name) {
+		return "", fmt.Errorf("stage %q must use a name like 01-research", raw)
+	}
+	return fmt.Sprintf("%02d-%s", number, name), nil
+}
+
+func canonicalManagedStageContext(raw string) string {
+	raw = strings.ReplaceAll(raw, "## Do", "## Process")
+	if strings.Contains(raw, "## Outputs") {
+		return raw
+	}
+	section := extractSection(raw, "## Write")
+	var path string
+	for _, line := range strings.Split(section, "\n") {
+		line = strings.TrimSpace(strings.TrimLeft(line, "-* "))
+		if start := strings.Index(line, "`"); start >= 0 {
+			if end := strings.Index(line[start+1:], "`"); end >= 0 {
+				path = line[start+1 : start+1+end]
+			}
+		}
+		if path == "" && strings.HasPrefix(line, "output/") {
+			path = strings.Fields(line)[0]
+		}
+		if strings.HasPrefix(path, "output/") {
+			break
+		}
+	}
+	if path == "" {
+		return raw
+	}
+	return strings.TrimSpace(raw) + fmt.Sprintf("\n\n## Outputs\n\n| Artifact | Location | Format |\n| --- | --- | --- |\n| Stage output | `%s` | Markdown |\n", path)
+}
+
+func canonicalManagedStageInputs(raw, previous string) string {
+	if previous == "" {
+		return raw
+	}
+	section := extractSection(raw, "## Read")
+	if section == "" {
+		return raw
+	}
+	updated := strings.ReplaceAll(section, "`output/", "`../"+previous+"/output/")
+	updated = strings.ReplaceAll(updated, "- output/", "- ../"+previous+"/output/")
+	return strings.Replace(raw, section, updated, 1)
 }
 
 func updateManagedPlaybook(core *Core, name string, args map[string]any) string {

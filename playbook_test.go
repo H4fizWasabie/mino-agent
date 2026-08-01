@@ -143,6 +143,30 @@ func TestManagePlaybookRefusesUpdateWithResumableRun(t *testing.T) {
 	}
 }
 
+func TestManagePlaybookCanonicalizesGeneratedStageContracts(t *testing.T) {
+	home := t.TempDir()
+	settings := &Settings{Home: home, Workspace: home}
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	registry.Register(&Tool{Name: "search_web"})
+	core := &Core{Settings: settings, Tools: registry}
+	legacy := "## Read\n- Current date.\n\n## Do\nSearch for the news.\n\n## Tools\n- `search_web`\n- `write_file`\n\n## Write\n- `output/news.md`\n"
+	got := makeManagePlaybookTool(core).Fn(map[string]any{
+		"action": "create", "name": "generated-news", "context": "# Generated news\n",
+		"stages": []any{map[string]any{"name": "research", "context": legacy}, map[string]any{"name": "report", "context": legacy}},
+	})
+	if !strings.Contains(got, "Created and validated") {
+		t.Fatalf("create = %q", got)
+	}
+	pb, err := loadPlaybookWorkspace(home, "generated-news")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pb.Stages[0].Name != "research" || pb.Stages[1].Name != "report" || len(pb.Stages[0].Outputs) != 1 || pb.Stages[0].Tools[0] != "search_web" {
+		t.Fatalf("canonical workspace = %+v", pb.Stages)
+	}
+}
+
 func writeWorkspacePlaybook(t *testing.T, home, name string, stages []string) {
 	t.Helper()
 	root := filepath.Join(home, "playbooks", name)

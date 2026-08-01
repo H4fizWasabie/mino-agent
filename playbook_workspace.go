@@ -199,8 +199,11 @@ func parseStageTools(section string) []string {
 	var tools []string
 	for _, line := range strings.Split(section, "\n") {
 		line = strings.TrimSpace(strings.TrimPrefix(line, "-"))
-		if fields := strings.Fields(line); len(fields) > 0 && !strings.EqualFold(fields[0], "none") {
-			tools = append(tools, fields[0])
+		if fields := strings.Fields(line); len(fields) > 0 {
+			name := strings.Trim(fields[0], "` ,")
+			if !strings.EqualFold(name, "none") {
+				tools = append(tools, name)
+			}
 		}
 	}
 	return tools
