@@ -141,7 +141,7 @@ func TestGraphMemoryWritesSchemaAndLowercaseIndex(t *testing.T) {
 	if err := json.Unmarshal(data, &idx); err != nil {
 		t.Fatal(err)
 	}
-	if idx["version"] != float64(2) {
+	if idx["version"] != float64(3) {
 		t.Fatalf("index version = %v", idx["version"])
 	}
 	if _, ok := idx["files"]; !ok {
@@ -228,5 +228,55 @@ func TestGraphMemoryReadsLegacyColonScalar(t *testing.T) {
 	}
 	if fact.Subject != "AI Learning: Google's Agent2Agent (A2A) protocol for cross-platform AI agent interoperability" || fact.Body != "body" {
 		t.Fatalf("legacy fact = %+v", fact)
+	}
+}
+
+func TestGraphMemoryIndexV3JudgmentLedger(t *testing.T) {
+	dir := t.TempDir()
+	gm := NewGraphMemory(dir, nil)
+	if err := gm.RecordFact(Fact{ID: "a", Type: "semantic", Subject: "Fact A"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := gm.JudgedAt("a"); got != "" {
+		t.Fatalf("new fact must be unjudged, got %q", got)
+	}
+	gm.MarkJudged("a")
+	if got := gm.JudgedAt("a"); got == "" {
+		t.Fatal("MarkJudged did not persist")
+	}
+	// Survives restart via index.json
+	gm2 := NewGraphMemory(dir, nil)
+	if got := gm2.JudgedAt("a"); got == "" {
+		t.Fatal("judgment state lost across restart")
+	}
+	if gm2.Communities() == nil {
+		t.Fatal("Communities() must return empty map, not nil")
+	}
+	// UnjudgedFacts only returns unjudged
+	if got := gm2.UnjudgedFacts(); len(got) != 0 {
+		t.Fatalf("unjudged facts = %d, want 0", len(got))
+	}
+	if err := gm2.RecordFact(Fact{ID: "b", Type: "semantic", Subject: "Fact B"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := gm2.UnjudgedFacts(); len(got) != 1 || got[0].ID != "b" {
+		t.Fatalf("unjudged facts = %+v, want [b]", got)
+	}
+	// File change clears judgment
+	os.WriteFile(filepath.Join(dir, "a.md"), []byte("---\nid: a\ntype: semantic\nsubject: Fact A changed\nat: 2026-08-02T00:00:00Z\n---\n"), 0644)
+	gm2.Refresh()
+	if got := gm2.JudgedAt("a"); got != "" {
+		t.Fatalf("changed file must clear judgment, got %q", got)
+	}
+}
+
+func TestGraphMemoryCommunitiesPersist(t *testing.T) {
+	dir := t.TempDir()
+	gm := NewGraphMemory(dir, nil)
+	gm.RecordFact(Fact{ID: "a", Type: "semantic", Subject: "Fact A"})
+	gm.SetCommunities(map[string]int{"a": 0}, []string{"a"}, map[string]string{"0": "Test Cluster"})
+	gm2 := NewGraphMemory(dir, nil)
+	if got := gm2.Communities()["a"]; got != 0 {
+		t.Fatalf("community lost across restart: %v", got)
 	}
 }

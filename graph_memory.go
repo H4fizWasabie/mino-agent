@@ -44,12 +44,16 @@ type Edge struct {
 // --- Graph memory ---
 
 type GraphMemory struct {
-	dir      string
-	mu       sync.RWMutex
-	facts    map[string]*Fact // id → Fact
-	files    map[string]fileStamp
-	cfg      *Settings
-	embedder *EmbeddingStore
+	dir         string
+	mu          sync.RWMutex
+	facts       map[string]*Fact // id → Fact
+	files       map[string]fileStamp
+	judgedAt    map[string]string // id → RFC3339, empty = needs LLM edge judgment
+	communities map[string]int
+	gods        []string
+	labels      map[string]string
+	cfg         *Settings
+	embedder    *EmbeddingStore
 }
 
 // --- Index cache types ---
@@ -63,6 +67,7 @@ type indexEntry struct {
 	Source   string `json:"source,omitempty"`
 	Feedback int    `json:"feedback,omitempty"`
 	Edges    []Edge `json:"edges,omitempty"`
+	JudgedAt string `json:"judged_at,omitempty"`
 }
 
 type fileStamp struct {
@@ -72,9 +77,12 @@ type fileStamp struct {
 }
 
 type index struct {
-	Version int                   `json:"version"`
-	Facts   map[string]indexEntry `json:"facts"`
-	Files   map[string]fileStamp  `json:"files"`
+	Version      int                   `json:"version"`
+	Facts        map[string]indexEntry `json:"facts"`
+	Files        map[string]fileStamp  `json:"files"`
+	Communities  map[string]int        `json:"communities,omitempty"`
+	Gods         []string              `json:"gods,omitempty"`
+	Labels       map[string]string     `json:"labels,omitempty"`
 }
 
 func (gm *GraphMemory) indexPath() string {
@@ -88,7 +96,7 @@ func (gm *GraphMemory) SetEmbedder(e *EmbeddingStore) {
 
 func NewGraphMemory(dir string, cfg *Settings) *GraphMemory {
 	os.MkdirAll(dir, 0755)
-	gm := &GraphMemory{dir: dir, cfg: cfg, facts: make(map[string]*Fact), files: make(map[string]fileStamp)}
+	gm := &GraphMemory{dir: dir, cfg: cfg, facts: make(map[string]*Fact), files: make(map[string]fileStamp), judgedAt: make(map[string]string), communities: make(map[string]int), labels: make(map[string]string)}
 	if gm.loadIndex() {
 		return gm
 	}
@@ -104,7 +112,7 @@ func (gm *GraphMemory) loadIndex() bool {
 		return false
 	}
 	var idx index
-	if err := json.Unmarshal(data, &idx); err != nil || idx.Version != 2 || idx.Files == nil {
+	if err := json.Unmarshal(data, &idx); err != nil || idx.Version != 3 || idx.Files == nil {
 		return false
 	}
 	entries, err := os.ReadDir(gm.dir)
@@ -157,11 +165,15 @@ func (gm *GraphMemory) loadIndex() bool {
 			Feedback: entry.Feedback,
 			Edges:    edges,
 		}
+		gm.judgedAt[id] = entry.JudgedAt
 		if loaded, err := gm.readFile(filepath.Join(gm.dir, entry.ID+".md")); err == nil {
 			gm.facts[id].Body = loaded.Body
 		}
 	}
 	gm.files = idx.Files
+	gm.communities = idx.Communities
+	gm.gods = idx.Gods
+	gm.labels = idx.Labels
 	if cleaned {
 		for _, fact := range gm.facts {
 			if err := gm.writeFile(*fact); err != nil {
@@ -187,9 +199,10 @@ func (gm *GraphMemory) saveIndex() {
 			Source:   f.Source,
 			Feedback: f.Feedback,
 			Edges:    f.Edges,
+			JudgedAt: gm.judgedAt[id],
 		}
 	}
-	data, err := json.MarshalIndent(index{Version: 2, Facts: entries, Files: gm.files}, "", "  ")
+	data, err := json.MarshalIndent(index{Version: 3, Facts: entries, Files: gm.files, Communities: gm.communities, Gods: gm.gods, Labels: gm.labels}, "", "  ")
 	if err != nil {
 		return
 	}
@@ -207,6 +220,9 @@ func (gm *GraphMemory) saveIndex() {
 func (gm *GraphMemory) loadAll() {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
+	gm.judgedAt = make(map[string]string)
+	gm.communities = make(map[string]int)
+	gm.labels = make(map[string]string)
 	entries, err := os.ReadDir(gm.dir)
 	if err != nil {
 		return
@@ -270,7 +286,9 @@ func (gm *GraphMemory) refreshLocked() error {
 		}
 		if tracked && stamp.ID != fact.ID {
 			delete(gm.facts, stamp.ID)
+			delete(gm.judgedAt, stamp.ID)
 		}
+		gm.judgedAt[fact.ID] = ""
 		fact.Edges = cleanStoredEdges(fact.Edges)
 		gm.facts[fact.ID] = fact
 		current[entry.Name()] = fileStamp{ID: fact.ID, Size: info.Size(), ModTime: info.ModTime().UnixNano()}
@@ -290,6 +308,58 @@ func (gm *GraphMemory) refreshLocked() error {
 		slog.Warn("graph memory reconciliation", "error", firstErr)
 	}
 	return firstErr
+}
+
+// JudgedAt returns the RFC3339 timestamp of the last LLM edge judgment for a
+// fact, or "" if the fact still needs judging.
+func (gm *GraphMemory) JudgedAt(id string) string {
+	gm.mu.RLock()
+	defer gm.mu.RUnlock()
+	return gm.judgedAt[id]
+}
+
+// MarkJudged records that a fact's edges have been judged by the LLM.
+func (gm *GraphMemory) MarkJudged(id string) {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+	gm.judgedAt[id] = time.Now().UTC().Format(time.RFC3339)
+	gm.saveIndex()
+}
+
+// UnjudgedFacts returns facts whose edges still need LLM judgment, sorted by ID.
+func (gm *GraphMemory) UnjudgedFacts() []*Fact {
+	gm.mu.RLock()
+	defer gm.mu.RUnlock()
+	var out []*Fact
+	for _, f := range gm.facts {
+		if gm.judgedAt[f.ID] == "" {
+			out = append(out, f)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// Communities returns a copy of the id → community map.
+func (gm *GraphMemory) Communities() map[string]int {
+	gm.mu.RLock()
+	defer gm.mu.RUnlock()
+	out := make(map[string]int, len(gm.communities))
+	for k, v := range gm.communities {
+		out[k] = v
+	}
+	return out
+}
+
+// SetCommunities stores community membership, god-node IDs, and community
+// labels in the index cache.
+func (gm *GraphMemory) SetCommunities(communities map[string]int, gods []string, labels map[string]string) {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+	gm.communities = communities
+	gm.gods = gods
+	gm.labels = labels
+	gm.saveIndex()
 }
 
 // StartReconciler keeps external Markdown edits visible while Mino runs.
