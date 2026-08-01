@@ -10,6 +10,14 @@ func TestManageMemoryUsesGraphAndLeavesSQLiteFactsUntouched(t *testing.T) {
 	home := t.TempDir()
 	db := Connect(home)
 	defer db.Close()
+	// Simulate a pre-cutover install: legacy table exists with rows to migrate.
+	db.Exec(`CREATE TABLE facts (
+		id INTEGER PRIMARY KEY,
+		subject TEXT NOT NULL,
+		content TEXT NOT NULL,
+		source TEXT DEFAULT 'user',
+		created_at TEXT DEFAULT (datetime('now'))
+	)`)
 	if _, err := db.Exec("INSERT INTO facts (subject, content) VALUES (?, ?)", "User preference", "legacy body"); err != nil {
 		t.Fatal(err)
 	}

@@ -142,6 +142,11 @@ func fetchLatestRelease() (string, error) {
 	return release.TagName, nil
 }
 
+type releaseAsset struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+}
+
 func fetchLatestAsset() (string, string, error) {
 	req, _ := http.NewRequest("GET", releasesURL, nil)
 	req.Header.Set("Accept", "application/vnd.github+json")
@@ -152,11 +157,8 @@ func fetchLatestAsset() (string, string, error) {
 	}
 	defer resp.Body.Close()
 	var release struct {
-		TagName string `json:"tag_name"`
-		Assets  []struct {
-			Name               string `json:"name"`
-			BrowserDownloadURL string `json:"browser_download_url"`
-		} `json:"assets"`
+		TagName string         `json:"tag_name"`
+		Assets  []releaseAsset `json:"assets"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
 		return "", "", err
@@ -168,10 +170,7 @@ func fetchLatestAsset() (string, string, error) {
 	return release.TagName, assetURL, nil
 }
 
-func findAsset(assets []struct {
-	Name               string `json:"name"`
-	BrowserDownloadURL string `json:"browser_download_url"`
-}) string {
+func findAsset(assets []releaseAsset) string {
 	want := fmt.Sprintf("mino-%s-%s", runtime.GOOS, runtime.GOARCH)
 	for _, a := range assets {
 		if strings.Contains(a.Name, want) {

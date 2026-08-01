@@ -33,26 +33,6 @@ var schemaStatements = []string{
 		delivered_at TEXT
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(status, remind_at)`,
-	`CREATE TABLE IF NOT EXISTS facts (
-		id INTEGER PRIMARY KEY,
-		subject TEXT NOT NULL,
-		content TEXT NOT NULL,
-		source TEXT DEFAULT 'user',
-		created_at TEXT DEFAULT (datetime('now'))
-	)`,
-	`CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(subject, content, content=facts, content_rowid=id)`,
-	`CREATE TRIGGER IF NOT EXISTS facts_ai AFTER INSERT ON facts BEGIN INSERT INTO facts_fts(rowid, subject, content) VALUES (new.id, new.subject, new.content); END`,
-	`CREATE TRIGGER IF NOT EXISTS facts_ad AFTER DELETE ON facts BEGIN INSERT INTO facts_fts(facts_fts, rowid, subject, content) VALUES ('delete', old.id, old.subject, old.content); END`,
-	`CREATE TRIGGER IF NOT EXISTS facts_au AFTER UPDATE ON facts BEGIN INSERT INTO facts_fts(facts_fts, rowid, subject, content) VALUES ('delete', old.id, old.subject, old.content); INSERT INTO facts_fts(rowid, subject, content) VALUES (new.id, new.subject, new.content); END`,
-	`CREATE TABLE IF NOT EXISTS episodes (
-		id INTEGER PRIMARY KEY,
-		happened_at TEXT NOT NULL,
-		summary TEXT NOT NULL,
-		session_id TEXT DEFAULT 'default',
-		source TEXT DEFAULT 'cli',
-		created_at TEXT DEFAULT (datetime('now'))
-	)`,
-	`CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(summary, content=episodes, content_rowid=id)`,
 	`CREATE TABLE IF NOT EXISTS chat_log (
 		id INTEGER PRIMARY KEY,
 		role TEXT NOT NULL,
@@ -153,21 +133,11 @@ func Connect(home string) *sql.DB {
 			panic(fmt.Sprintf("initialize SQLite schema: %v", err))
 		}
 	}
-	// facts/episodes may predate their FTS tables. Rebuild keeps the external
-	// content indexes complete after upgrades and makes a missing FTS5 build fail
-	// at startup instead of silently degrading recall.
-	for _, table := range []string{"facts_fts", "episodes_fts"} {
-		if _, err := db.Exec(fmt.Sprintf("INSERT INTO %s(%s) VALUES ('rebuild')", table, table)); err != nil {
-			panic(fmt.Sprintf("rebuild %s: %v (verify the modernc.org/sqlite build and database)", table, err))
-		}
-	}
 	runMigrations(db)
 	if err := initAudit(db); err != nil {
 		panic(fmt.Sprintf("initialize audit schema: %v", err))
 	}
 	_ = migrateChatLog(db)
-	_ = migrateFacts(db)
-	_ = migrateEpisodes(db)
 	return db
 }
 
@@ -226,59 +196,3 @@ func migrateChatLog(db *sql.DB) error {
 	return nil
 }
 
-func migrateFacts(db *sql.DB) error {
-	rows, err := db.Query("PRAGMA table_info(facts)")
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	cols := make(map[string]bool)
-	for rows.Next() {
-		var cid int
-		var name, ctype string
-		var notnull, pk int
-		var dflt sql.NullString
-		rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk)
-		cols[name] = true
-	}
-	for name, definition := range map[string]string{
-		"importance":    "INTEGER NOT NULL DEFAULT 2",
-		"feedback":      "INTEGER NOT NULL DEFAULT 0",
-		"last_accessed": "TEXT",
-	} {
-		if !cols[name] {
-			if _, err := db.Exec("ALTER TABLE facts ADD COLUMN " + name + " " + definition); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func migrateEpisodes(db *sql.DB) error {
-	rows, err := db.Query("PRAGMA table_info(episodes)")
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	cols := make(map[string]bool)
-	for rows.Next() {
-		var cid int
-		var name, ctype string
-		var notnull, pk int
-		var dflt sql.NullString
-		rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk)
-		cols[name] = true
-	}
-	for name, definition := range map[string]string{
-		"session_id": "TEXT DEFAULT 'default'",
-		"source":     "TEXT DEFAULT 'cli'",
-	} {
-		if !cols[name] {
-			if _, err := db.Exec("ALTER TABLE episodes ADD COLUMN " + name + " " + definition); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}

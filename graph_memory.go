@@ -49,10 +49,7 @@ type GraphMemory struct {
 	facts    map[string]*Fact // id → Fact
 	files    map[string]fileStamp
 	cfg      *Settings
-	embedder interface {
-		SearchScored(query string, topK int) []scoredDoc
-		Index(source, content string)
-	}
+	embedder *EmbeddingStore
 }
 
 // --- Index cache types ---
@@ -85,10 +82,7 @@ func (gm *GraphMemory) indexPath() string {
 }
 
 // SetEmbedder wires the embedding store for semantic fallback in remember().
-func (gm *GraphMemory) SetEmbedder(e interface {
-	SearchScored(query string, topK int) []scoredDoc
-	Index(source, content string)
-}) {
+func (gm *GraphMemory) SetEmbedder(e *EmbeddingStore) {
 	gm.embedder = e
 }
 
@@ -1104,6 +1098,11 @@ func MigrateLegacyFacts(db *sql.DB, home, memoriesDir string) (MigrationReport, 
 		}
 	}
 	gm := NewGraphMemory(memoriesDir, nil)
+	// Fresh installs have no legacy SQLite facts table; nothing to migrate.
+	var hasFacts bool
+	if err := db.QueryRow("SELECT 1 FROM sqlite_master WHERE type='table' AND name='facts'").Scan(&hasFacts); err != nil || !hasFacts {
+		return report, nil
+	}
 	rows, err := db.Query("SELECT id, subject, content, source, created_at FROM facts ORDER BY id")
 	if err != nil {
 		return report, err

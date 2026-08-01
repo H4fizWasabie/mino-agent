@@ -13,6 +13,14 @@ func TestMigrateLegacyFactsArchivesRowsAndAvoidsCollisions(t *testing.T) {
 	memories := filepath.Join(home, "memories")
 	db := Connect(home)
 	defer db.Close()
+	// Simulate a pre-cutover install: legacy table exists with rows to migrate.
+	db.Exec(`CREATE TABLE facts (
+		id INTEGER PRIMARY KEY,
+		subject TEXT NOT NULL,
+		content TEXT NOT NULL,
+		source TEXT DEFAULT 'user',
+		created_at TEXT DEFAULT (datetime('now'))
+	)`)
 	if _, err := db.Exec(`INSERT INTO facts (subject, content, source, created_at) VALUES
 		('User likes tea', 'Prefers tea in the morning', 'chat', '2026-07-29 10:00:00'),
 		('User likes tea', 'Prefers green tea', 'chat', '2026-07-29 10:01:00')`); err != nil {
@@ -70,6 +78,14 @@ func TestMigrateLegacyFactsPreservesSourceAndBody(t *testing.T) {
 	home := t.TempDir()
 	db := Connect(home)
 	defer db.Close()
+	// Simulate a pre-cutover install: legacy table exists with rows to migrate.
+	db.Exec(`CREATE TABLE facts (
+		id INTEGER PRIMARY KEY,
+		subject TEXT NOT NULL,
+		content TEXT NOT NULL,
+		source TEXT DEFAULT 'user',
+		created_at TEXT DEFAULT (datetime('now'))
+	)`)
 	if _, err := db.Exec("INSERT INTO facts (subject, content, source) VALUES (?, ?, ?)", "A fact", "The why", "telegram"); err != nil {
 		t.Fatal(err)
 	}

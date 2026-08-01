@@ -578,7 +578,6 @@ func parseAnthropicResponse(r io.Reader) (*LLMResponse, error) {
 
 func parseAnthropicStream(r io.Reader, onText func(string)) (*LLMResponse, error) {
 	var fullText strings.Builder
-	var blocks []ContentBlock
 	var usage UsageInfo
 	type streamTool struct {
 		ID    string
@@ -600,9 +599,8 @@ func parseAnthropicStream(r io.Reader, onText func(string)) (*LLMResponse, error
 			Type  string `json:"type"`
 			Index int    `json:"index"`
 			Delta struct {
-				Type       string `json:"type"`
-				Text       string `json:"text"`
-				StopReason string `json:"stop_reason"`
+				Type string `json:"type"`
+				Text string `json:"text"`
 			} `json:"delta"`
 			ContentBlock struct {
 				Type  string `json:"type"`
@@ -616,8 +614,7 @@ func parseAnthropicStream(r io.Reader, onText func(string)) (*LLMResponse, error
 				OutputTokens int `json:"output_tokens"`
 			} `json:"usage"`
 			Message struct {
-				StopReason string `json:"stop_reason"`
-				Usage      struct {
+				Usage struct {
 					InputTokens  int `json:"input_tokens"`
 					OutputTokens int `json:"output_tokens"`
 				} `json:"usage"`
@@ -644,7 +641,6 @@ func parseAnthropicStream(r io.Reader, onText func(string)) (*LLMResponse, error
 				if onText != nil {
 					onText(event.Delta.Text)
 				}
-				blocks = append(blocks, ContentBlock{Type: "text", Text: event.Delta.Text})
 			} else if event.Delta.Type == "input_json_delta" {
 				if st, ok := tools[currentBlockIndex]; ok {
 					st.Input += event.Delta.Text
@@ -667,13 +663,7 @@ func parseAnthropicStream(r io.Reader, onText func(string)) (*LLMResponse, error
 
 	// collapse text blocks into one
 	var textBlocks []ContentBlock
-	var finalText string
-	for _, b := range blocks {
-		if b.Type == "text" {
-			finalText += b.Text
-		}
-	}
-	if finalText != "" {
+	if finalText := fullText.String(); finalText != "" {
 		textBlocks = append(textBlocks, ContentBlock{Type: "text", Text: finalText})
 	}
 	for _, index := range sortedIndexes(tools) {
@@ -695,7 +685,7 @@ func parseAnthropicStream(r io.Reader, onText func(string)) (*LLMResponse, error
 		StopReason: stopReason,
 		Usage:      usage,
 		Content:    textBlocks,
-		FinalText:  finalText,
+		FinalText:  fullText.String(),
 	}, nil
 }
 

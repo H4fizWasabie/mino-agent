@@ -380,9 +380,9 @@ func TestDashboardQueryAPIIsReadOnly(t *testing.T) {
 		sql  string
 		want int
 	}{
-		{"select", "SELECT subject FROM facts", http.StatusOK},
-		{"delete", "DELETE FROM facts", http.StatusBadRequest},
-		{"multiple statements", "SELECT subject FROM facts; DELETE FROM facts", http.StatusBadRequest},
+		{"select", "SELECT content FROM chat_log", http.StatusOK},
+		{"delete", "DELETE FROM chat_log", http.StatusBadRequest},
+		{"multiple statements", "SELECT content FROM chat_log; DELETE FROM chat_log", http.StatusBadRequest},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
@@ -445,15 +445,15 @@ func TestWorkingMemoryPrunesRecentFixesAndPatternsDeduplicate(t *testing.T) {
 func TestConnectBuildsFTSIndices(t *testing.T) {
 	db := Connect(t.TempDir())
 	defer db.Close()
-	if _, err := db.Exec("INSERT INTO facts (subject, content) VALUES (?, ?)", "Language", "Hafiz prefers English"); err != nil {
+	if _, err := db.Exec("INSERT INTO tool_catalog_fts (name, description, keywords) VALUES ('ls_files', 'List files in a directory', 'files list dir')"); err != nil {
 		t.Fatal(err)
 	}
 	var matches int
-	if err := db.QueryRow("SELECT COUNT(*) FROM facts_fts WHERE facts_fts MATCH 'English'").Scan(&matches); err != nil {
+	if err := db.QueryRow("SELECT COUNT(*) FROM tool_catalog_fts WHERE tool_catalog_fts MATCH 'directory'").Scan(&matches); err != nil {
 		t.Fatal(err)
 	}
 	if matches != 1 {
-		t.Fatalf("FTS5 did not index fact: %d matches", matches)
+		t.Fatalf("FTS5 did not index catalog row: %d matches", matches)
 	}
 }
 

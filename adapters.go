@@ -111,13 +111,11 @@ func PruneRecentFixes(home string, retention time.Duration) []string {
 // ponytail: single struct, no interface, stdlib HTTP only
 
 type EmbeddingStore struct {
-	db         *sql.DB
-	apiKey     string
-	model      string
-	mu         sync.RWMutex
-	docs       []embeddedDoc
-	queryCache map[string][]float32
-	queryOrder []string
+	db     *sql.DB
+	apiKey string
+	model  string
+	mu     sync.RWMutex
+	docs   []embeddedDoc
 }
 
 type embeddedDoc struct {
@@ -137,7 +135,7 @@ type scoredDoc struct {
 }
 
 func NewEmbeddingStore(db *sql.DB, apiKey, model string) *EmbeddingStore {
-	es := &EmbeddingStore{db: db, apiKey: apiKey, model: model, queryCache: make(map[string][]float32)}
+	es := &EmbeddingStore{db: db, apiKey: apiKey, model: model}
 	es.loadCache()
 	return es
 }
@@ -352,7 +350,7 @@ func (es *EmbeddingStore) SearchScored(query string, topK int) []scoredDoc {
 	if len(docs) == 0 {
 		return nil
 	}
-	qEmb, err := es.cachedEmbed(query)
+	qEmb, err := es.Embed(strings.TrimSpace(query))
 	if err != nil {
 		return nil
 	}
@@ -369,40 +367,6 @@ func (es *EmbeddingStore) SearchScored(query string, topK int) []scoredDoc {
 		scores = scores[:topK]
 	}
 	return scores
-}
-
-const maxEmbeddingQueryCache = 128
-
-func (es *EmbeddingStore) cachedEmbed(query string) ([]float32, error) {
-	query = strings.TrimSpace(query)
-	key := es.model + "\x00" + query
-	es.mu.RLock()
-	if emb, ok := es.queryCache[key]; ok {
-		es.mu.RUnlock()
-		return emb, nil
-	}
-	es.mu.RUnlock()
-	emb, err := es.Embed(query)
-	if err != nil {
-		return nil, err
-	}
-	es.mu.Lock()
-	if es.queryCache == nil {
-		es.queryCache = make(map[string][]float32)
-	}
-	if existing, ok := es.queryCache[key]; ok {
-		es.mu.Unlock()
-		return existing, nil
-	}
-	if len(es.queryOrder) >= maxEmbeddingQueryCache {
-		oldest := es.queryOrder[0]
-		es.queryOrder = es.queryOrder[1:]
-		delete(es.queryCache, oldest)
-	}
-	es.queryCache[key] = emb
-	es.queryOrder = append(es.queryOrder, key)
-	es.mu.Unlock()
-	return emb, nil
 }
 
 func memoryFileEntry(line string) string {

@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Removed
+- Ponytail audit cuts (refactor pass):
+  - Legacy SQLite `facts`/`episodes` tables, their FTS5 indexes, triggers, and column migrations dropped from the schema (the markdown graph is authoritative; fresh installs no longer create the dead archive tables). `MigrateLegacyFacts` still migrates pre-cutover installs — it now skips cleanly when the table is absent.
+  - Hand-rolled JSON-schema subset validator (~100 lines) replaced with `santhosh-tekuri/jsonschema/v6` (already in go.sum via mcp-go, now a direct dep), compiled once per tool via `sync.Once`. Tool arg validation now covers the full schema, not just type/required/enum/items.
+  - `Registry.Static()`: defensive full-registry copy was dead weight — the registry is never mutated during a run (only app boot registers tools). Playbook stages pass the registry through.
+  - Embedding query LRU cache: speculative exact-string cache, no evidence of repeated identical queries.
+  - `SetEmbedder` inline interface → concrete `*EmbeddingStore` (one implementation, one caller).
+  - `parseAnthropicStream` text-block collapse: `blocks` duplicated `fullText`; unused `stop_reason` fields removed.
+  - `safeEvalName` was an identity function — now actually sanitizes session IDs (prompt text was leaking raw into session/trace records).
+  - Duplicate anonymous asset struct in `update.go` named once.
+
 ### Added
 - Memory self-maintenance: `manage_memory` gains `status`, `consolidate`, `dedup`, `rebuild_edges`, and `clean_edges` actions, so Mino can run the same maintenance passes the CLI subcommands trigger — on its live memory, by its own judgment. SOUL.md teaches the habit.
 - Playbook Layer 3 references (ICM): stages can declare a `## References` section pointing at rule/convention files (voice, brand, domain conventions). The runner injects them into the stage prompt as constraints, resolved stage-dir-first then playbook-dir, hard-capped at 4K chars per stage. Missing references warn and are skipped — advisory by design, unlike tools/outputs which fail loud.

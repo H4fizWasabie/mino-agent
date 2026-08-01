@@ -492,7 +492,7 @@ func executeStage(
 		messages := append([]Message(nil), baseMessages...)
 		messages = append(messages, Message{Role: "user", Content: userMsg})
 
-		stageTools := tools.Static()
+		stageTools := tools
 		if len(stage.Tools) > 0 {
 			names := stage.Tools
 			hasReadFile := false

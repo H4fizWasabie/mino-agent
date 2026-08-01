@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -21,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 // Mino — tools/registry.py — Core's exact tool registry pattern.
@@ -49,6 +50,10 @@ type Tool struct {
 	ContextFn   ContextToolFunc
 	Behavior    ToolBehavior
 	Classify    func(map[string]any) ToolBehavior
+
+	schemaOnce     sync.Once
+	schemaCompiled *jsonschema.Schema
+	schemaErr      error
 }
 
 // ToAPI matches Core's to_api() — the shape for the Messages API tools=
@@ -440,8 +445,14 @@ func (r *Registry) ExecuteContext(ctx context.Context, name string, args map[str
 	if args == nil {
 		return fmt.Sprintf("Error: invalid arguments for %s: expected a JSON object", name)
 	}
-	if err := validateObject(args, t.Schema); err != nil {
-		return fmt.Sprintf("Error: invalid arguments for %s: %v", name, err)
+	sch, err := t.compiledSchema()
+	if err != nil {
+		return fmt.Sprintf("Error: invalid arguments for %s: schema compile failed: %v", name, err)
+	}
+	if sch != nil {
+		if err := sch.Validate(args); err != nil {
+			return fmt.Sprintf("Error: invalid arguments for %s: %v", name, err)
+		}
 	}
 	start := time.Now()
 	var output string
@@ -491,108 +502,32 @@ func (r *Registry) ExecuteContext(ctx context.Context, name string, args map[str
 	return output
 }
 
-func validateObject(value map[string]any, schema map[string]any) error {
-	for _, key := range requiredArgs(schema) {
-		if field, ok := value[key]; !ok || field == nil {
-			return fmt.Errorf("missing required field %q", key)
+// compiledSchema compiles the tool's JSON Schema once and caches it.
+func (t *Tool) compiledSchema() (*jsonschema.Schema, error) {
+	t.schemaOnce.Do(func() {
+		if t.Schema == nil {
+			return
 		}
-	}
-	properties, _ := schema["properties"].(map[string]any)
-	for key, field := range value {
-		property, ok := properties[key].(map[string]any)
-		if !ok {
-			continue
+		c := jsonschema.NewCompiler()
+		// Schemas are hand-written with Go-native types (e.g. []string enum);
+		// round-trip through JSON so the compiler sees proper JSON types.
+		raw, err := json.Marshal(t.Schema)
+		if err != nil {
+			t.schemaErr = err
+			return
 		}
-		if err := validateValue(field, property); err != nil {
-			return fmt.Errorf("field %q %v", key, err)
+		var v any
+		if err := json.Unmarshal(raw, &v); err != nil {
+			t.schemaErr = err
+			return
 		}
-	}
-	return nil
-}
-
-func validateValue(value any, schema map[string]any) error {
-	expected, _ := schema["type"].(string)
-	valid := true
-	switch expected {
-	case "string":
-		_, valid = value.(string)
-	case "boolean":
-		_, valid = value.(bool)
-	case "number":
-		valid = isJSONNumber(value, false)
-	case "integer":
-		valid = isJSONNumber(value, true)
-	case "object":
-		object, ok := value.(map[string]any)
-		valid = ok
-		if ok {
-			if err := validateObject(object, schema); err != nil {
-				return err
-			}
+		if err := c.AddResource("tool.json", v); err != nil {
+			t.schemaErr = err
+			return
 		}
-	case "array":
-		array, ok := value.([]any)
-		valid = ok
-		if ok {
-			if itemSchema, ok := schema["items"].(map[string]any); ok {
-				for i, item := range array {
-					if err := validateValue(item, itemSchema); err != nil {
-						return fmt.Errorf("item %d %v", i, err)
-					}
-				}
-			}
-		}
-	}
-	if !valid {
-		return fmt.Errorf("must be %s", expected)
-	}
-	if enum, ok := schema["enum"].([]string); ok {
-		text, _ := value.(string)
-		for _, allowed := range enum {
-			if text == allowed {
-				return nil
-			}
-		}
-		return fmt.Errorf("must be one of %q", enum)
-	}
-	if enum, ok := schema["enum"].([]any); ok {
-		for _, allowed := range enum {
-			if fmt.Sprint(value) == fmt.Sprint(allowed) {
-				return nil
-			}
-		}
-		return fmt.Errorf("must be one of %v", enum)
-	}
-	return nil
-}
-
-func isJSONNumber(value any, integer bool) bool {
-	switch number := value.(type) {
-	case float64:
-		return !integer || math.Trunc(number) == number
-	case float32:
-		return !integer || float32(math.Trunc(float64(number))) == number
-	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
-		return true
-	default:
-		return false
-	}
-}
-
-func requiredArgs(schema map[string]any) []string {
-	switch required := schema["required"].(type) {
-	case []string:
-		return required
-	case []any:
-		var keys []string
-		for _, key := range required {
-			if text, ok := key.(string); ok {
-				keys = append(keys, text)
-			}
-		}
-		return keys
-	}
-	return nil
+		t.schemaCompiled, t.schemaErr = c.Compile("tool.json")
+	})
+	return t.schemaCompiled, t.schemaErr
 }
 
 func (r *Registry) Only(names ...string) *Registry {
@@ -601,14 +536,6 @@ func (r *Registry) Only(names ...string) *Registry {
 		if t, ok := r.tools[name]; ok {
 			out.Register(t)
 		}
-	}
-	return out
-}
-
-func (r *Registry) Static() *Registry {
-	out := NewRegistry()
-	for _, tool := range r.tools {
-		out.Register(tool)
 	}
 	return out
 }

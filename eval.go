@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // EvalCase matches eval/cases.json entries.
@@ -241,4 +242,13 @@ write:
 }
 
 
-func safeEvalName(s string) string { return s }
+func safeEvalName(s string) string {
+	// Session IDs leak into trace/session records; keep them filesystem- and
+	// JSON-friendly instead of passing raw prompt text through.
+	return strings.Trim(strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' {
+			return r
+		}
+		return '_'
+	}, s), "_")
+}
