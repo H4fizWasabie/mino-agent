@@ -603,3 +603,45 @@ func TestFilterMergedEdges(t *testing.T) {
 		})
 	}
 }
+
+func TestManageMemorySelfMaintenanceActions(t *testing.T) {
+	home := t.TempDir()
+	db := Connect(home)
+	defer db.Close()
+	memories := filepath.Join(home, "memories")
+	mem := &Memory{db: db, cfg: &Settings{Home: home, MemoriesDir: memories}, graph: NewGraphMemory(memories, nil)}
+	tool := makeManageMemoryTool(mem)
+
+	// status: counts without error, no provider needed
+	got := tool.Fn(map[string]any{"action": "status"})
+	if !strings.Contains(got, "0 facts") {
+		t.Fatalf("status = %q", got)
+	}
+
+	// maintenance actions without provider/embedder report unavailability clearly
+	for _, action := range []string{"consolidate", "dedup", "rebuild_edges"} {
+		got := tool.Fn(map[string]any{"action": action})
+		if !strings.Contains(got, "unavailable") && !strings.Contains(got, "requires") {
+			t.Fatalf("%s = %q, want clear unavailability message", action, got)
+		}
+	}
+
+	// clean_edges: pure graph, no provider needed
+	a := Fact{ID: "a", Type: "semantic", Subject: "a", Edges: []Edge{{Target: "b", Kind: "inferred"}}}
+	b := Fact{ID: "b", Type: "semantic", Subject: "b", Edges: []Edge{{Target: "a", Kind: "inferred"}}}
+	if err := mem.graph.RecordFact(a); err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.graph.RecordFact(b); err != nil {
+		t.Fatal(err)
+	}
+	got = tool.Fn(map[string]any{"action": "clean_edges"})
+	if !strings.Contains(got, "removed") {
+		t.Fatalf("clean_edges = %q", got)
+	}
+
+	// fact actions still require a subject
+	if got := tool.Fn(map[string]any{"action": "forget"}); !strings.Contains(got, "requires a subject") {
+		t.Fatalf("forget without subject = %q", got)
+	}
+}

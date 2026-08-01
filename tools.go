@@ -1506,20 +1506,64 @@ func markitdownHTML(html string) string {
 func makeManageMemoryTool(mem *Memory) *Tool {
 	return &Tool{
 		Name:        "manage_memory",
-		Description: "Correct, forget, confirm, or reject a stored fact. Use only after an explicit user signal.",
+		Description: "Manage your own memory: correct, forget, confirm, or reject a stored fact — or run maintenance yourself (status, consolidate, dedup, rebuild_edges, clean_edges). Use fact actions only after an explicit user signal; maintenance actions are yours to run when memory needs it.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"action":  map[string]any{"type": "string", "description": "'correct', 'forget', 'confirm', or 'reject'"},
-				"subject": map[string]any{"type": "string", "description": "Subject to correct/forget"},
+				"action":  map[string]any{"type": "string", "description": "'correct', 'forget', 'confirm', 'reject', 'status', 'consolidate', 'dedup', 'rebuild_edges', or 'clean_edges'"},
+				"subject": map[string]any{"type": "string", "description": "Subject (fact actions only)"},
 				"content": map[string]any{"type": "string", "description": "New content (for correct)"},
 			},
-			"required": []string{"action", "subject"},
+			"required": []string{"action"},
 		},
 		Fn: func(args map[string]any) string {
 			action, _ := args["action"].(string)
 			subject, _ := args["subject"].(string)
 			content, _ := args["content"].(string)
+
+			// Self-maintenance: the same passes the CLI subcommands trigger,
+			// callable by Mino itself on the live memory.
+			switch action {
+			case "status":
+				var unconsolidated int
+				if mem.db != nil {
+					mem.db.QueryRow("SELECT COUNT(*) FROM chat_log WHERE consolidated = 0").Scan(&unconsolidated)
+				}
+				facts := 0
+				edges := 0
+				if mem.graph != nil {
+					for _, f := range mem.graph.Facts() {
+						facts++
+						edges += len(f.Edges)
+					}
+				}
+				return fmt.Sprintf("memory: %d facts, %d edges, %d unconsolidated chat rows", facts, edges, unconsolidated)
+			case "consolidate":
+				n := mem.ConsolidateDue()
+				if n == 0 && mem.client == nil {
+					return "consolidate unavailable: no model provider configured"
+				}
+				return fmt.Sprintf("consolidated %d sessions into facts", n)
+			case "dedup":
+				n := mem.DedupDue()
+				if n == 0 && mem.embedder == nil {
+					return "dedup unavailable: no embedding store configured"
+				}
+				return fmt.Sprintf("deduplicated %d fact clusters", n)
+			case "rebuild_edges":
+				n, err := mem.RebuildGraphEdges()
+				if err != nil {
+					return fmt.Sprintf("edge rebuild unavailable: %v", err)
+				}
+				return fmt.Sprintf("rebuilt %d inferred graph edges", n)
+			case "clean_edges":
+				n := mem.graph.RemoveMutualInferredEdges()
+				return fmt.Sprintf("removed %d contradictory inferred edges", n)
+			}
+
+			if subject == "" {
+				return "Memory action requires a subject"
+			}
 			fact, ok := mem.graph.FindFact(subject)
 			if !ok {
 				return fmt.Sprintf("Memory fact not found: %s", subject)
