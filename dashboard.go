@@ -670,7 +670,7 @@ func loadPlaybookCatalog(home string) []map[string]any {
 		for _, stage := range pb.Stages {
 			stages = append(stages, map[string]any{
 				"number": stage.Number, "name": stage.Name, "inputs": stage.Inputs,
-				"tools": stage.Tools, "outputs": stage.Outputs,
+				"tools": stage.Tools, "outputs": stage.Outputs, "context": stage.Context,
 			})
 		}
 		outputs := []string{}
@@ -1840,7 +1840,15 @@ func traceTail(home string) []map[string]any {
 		case "turn_end":
 			detail = fmt.Sprintf("%v", ev["reply"])
 		}
-		tail = append(tail, map[string]any{"type": ev["type"], "ts": ev["ts"], "detail": detail})
+		entry := map[string]any{"type": ev["type"], "ts": ev["ts"], "detail": detail}
+		// stage attribution: events inside a playbook stage carry its identity
+		if pb, ok := ev["playbook"]; ok {
+			entry["playbook"] = pb
+		}
+		if st, ok := ev["stage"]; ok {
+			entry["stage"] = st
+		}
+		tail = append(tail, entry)
 	}
 	return tail
 }
@@ -1881,6 +1889,15 @@ func traceTurns(home string) []map[string]any {
 				current["iterations"] = ev["iterations"]
 				current["llm_calls"] = llmCalls
 				current["tools"] = tools
+				// stage attribution for the turn's tool calls (grouping in the UI)
+				for _, tool := range tools {
+					if pb, ok := tool["playbook"]; ok {
+						current["playbook"] = pb
+					}
+					if st, ok := tool["stage"]; ok {
+						current["stage"] = st
+					}
+				}
 				current["tokens_in"] = tokensIn
 				current["tokens_out"] = tokensOut
 				current["cost"] = float64(tokensIn)/1e6*2.0 + float64(tokensOut)/1e6*15.0

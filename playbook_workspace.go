@@ -451,7 +451,13 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 		}
 		messages := append([]Message(nil), baseMessages...)
 		messages = append(messages, Message{Role: "user", Content: buildWorkspaceStagePrompt(pb, run, stage)})
-		stageResult := runPlaybookStageLoop(ctx, core.Client, sessionID, system, messages, stageTools, maxStageIterations, core.Settings.MaxTokens, obs, core.Settings.Home)
+		// Tag every trace event inside this stage with its playbook/stage identity
+		// so the dashboard can group stage work instead of flattening it.
+		stageCtx := context.WithValue(ctx, traceTagKey{}, map[string]string{
+			"playbook": pb.Name,
+			"stage":    fmt.Sprintf("%02d-%s", stage.Number, stage.Name),
+		})
+		stageResult := runPlaybookStageLoop(stageCtx, core.Client, sessionID, system, messages, stageTools, maxStageIterations, core.Settings.MaxTokens, obs, core.Settings.Home)
 		result.TokensIn += stageResult.TokensIn
 		result.TokensOut += stageResult.TokensOut
 		result.ToolCalls = append(result.ToolCalls, stageResult.ToolCalls...)

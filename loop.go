@@ -62,6 +62,15 @@ func RunLoop(
 	return RunLoopContext(context.Background(), client, sessionID, system, messages, tools, maxIter, maxTokens, obs, stream, traceHome, es)
 }
 
+type traceTagKey struct{}
+
+// traceTagsFromCtx returns the playbook/stage tag set on the context when the
+// loop is executing inside a playbook stage (see runWorkspacePlaybook).
+func traceTagsFromCtx(ctx context.Context) map[string]string {
+	tags, _ := ctx.Value(traceTagKey{}).(map[string]string)
+	return tags
+}
+
 func RunLoopContext(
 	ctx context.Context,
 	client LLMClient,
@@ -82,6 +91,17 @@ func RunLoopContext(
 	ctx = context.WithValue(ctx, sessionIDKey{}, sessionID)
 	ctx = context.WithValue(ctx, userMessageKey{}, lastUserContent(messages))
 
+	// Stage context (playbook/stage) for trace attribution: every event written
+	// while inside a playbook stage carries its stage identity so the dashboard
+	// can group them instead of showing a flat stream.
+	traceTags := traceTagsFromCtx(ctx)
+	trace := func(eventType string, data map[string]any) {
+		for k, v := range traceTags {
+			data[k] = v
+		}
+		logTrace(traceHome, eventType, data)
+	}
+
 	result := &LoopResult{}
 
 	defer func() {
@@ -93,8 +113,8 @@ func RunLoopContext(
 			}
 		}
 		notify(obs, "gate", map[string]any{"decision": decision, "reason": reason})
-		logTrace(traceHome, "gate", map[string]any{"decision": decision, "reason": reason})
-		logTrace(traceHome, "turn_end", map[string]any{"reply": result.Reply, "status": result.Status, "iterations": result.Iterations})
+		trace("gate", map[string]any{"decision": decision, "reason": reason})
+		trace("turn_end", map[string]any{"reply": result.Reply, "status": result.Status, "iterations": result.Iterations})
 	}()
 
 	var lastLoopDetected string
@@ -121,7 +141,7 @@ func RunLoopContext(
 				schemaChars += len(s.Name) + len(s.Description) + 200 // ~params JSON
 				schemaNames = append(schemaNames, s.Name)
 			}
-			logTrace(traceHome, "context_diag", map[string]any{"system_chars": len(system), "msg_count": len(messages), "schema_count": len(schemas), "schema_names": schemaNames, "schema_est_chars": schemaChars, "one_turn_chars": len(oneTurnText)})
+			trace("context_diag", map[string]any{"system_chars": len(system), "msg_count": len(messages), "schema_count": len(schemas), "schema_names": schemaNames, "schema_est_chars": schemaChars, "one_turn_chars": len(oneTurnText)})
 		}
 
 		_, llmCancel := context.WithTimeout(ctx, 90*time.Second)
@@ -149,7 +169,7 @@ func RunLoopContext(
 			"stopReason": resp.StopReason,
 			"usage":      map[string]int{"in": resp.Usage.InputTokens, "out": resp.Usage.OutputTokens},
 		})
-		logTrace(traceHome, "llm", map[string]any{"iteration": i, "in": resp.Usage.InputTokens, "out": resp.Usage.OutputTokens})
+		trace("llm", map[string]any{"iteration": i, "in": resp.Usage.InputTokens, "out": resp.Usage.OutputTokens})
 
 		messages = append(messages, Message{Role: "assistant", Content: assembleAssistantContent(resp.Content)})
 
@@ -199,7 +219,7 @@ func RunLoopContext(
 			}
 
 			notify(obs, "tool", map[string]any{"tool": tc.Name, "args": args, "status": toolOutputStatus(raw)})
-			logTrace(traceHome, "tool", map[string]any{"tool": tc.Name, "args": args, "status": toolOutputStatus(raw)})
+			trace("tool", map[string]any{"tool": tc.Name, "args": args, "status": toolOutputStatus(raw)})
 
 			toolResults = append(toolResults, map[string]any{
 				"type":        "tool_result",
@@ -210,28 +230,33 @@ func RunLoopContext(
 		}
 		messages = append(messages, Message{Role: "user", Content: formatToolResults(toolResults), Images: turnImages})
 
-		// Loop detection: check for repeated identical tool calls
-		history := make([]string, 0, len(result.ToolCalls))
-		for _, tc := range result.ToolCalls {
-			history = append(history, fmt.Sprintf("%s(%v)", tc.Name, tc.Args))
-		}
-		if loop, msg := detectLoop(history); loop && msg != lastLoopDetected {
-			lastLoopDetected = msg
-			// Push to dashboard event stream
-			pushDashEvent(map[string]any{
-				"type": "loop_detected", "session_id": sessionID,
-				"message": msg, "iteration": i,
-			})
-			// Audit trail
-			if audit, ok := ctx.Value(auditKey{}).(func(string, string, int)); ok {
-				audit("loop_detected", msg, i)
+		// Loop detection: check for repeated identical tool calls. Skipped inside
+		// playbook stages: a stage whose whitelist is only search_web + write_file
+		// legitimately calls search_web many times — that is the stage's job, and
+		// the stage has its own iteration cap. The main loop remains guarded.
+		if len(traceTags) == 0 {
+			history := make([]string, 0, len(result.ToolCalls))
+			for _, tc := range result.ToolCalls {
+				history = append(history, fmt.Sprintf("%s(%v)", tc.Name, tc.Args))
 			}
-			logTrace(traceHome, "loop_detected", map[string]any{"message": msg, "iteration": i})
-			messages = append(messages, Message{
-				Role:    "user",
-				Content: fmt.Sprintf("[System: loop detected — %s. Try a different approach or ask the user for guidance.]", msg),
-			})
-			notify(obs, "loop", map[string]any{"message": msg})
+			if loop, msg := detectLoop(history); loop && msg != lastLoopDetected {
+				lastLoopDetected = msg
+				// Push to dashboard event stream
+				pushDashEvent(map[string]any{
+					"type": "loop_detected", "session_id": sessionID,
+					"message": msg, "iteration": i,
+				})
+				// Audit trail
+				if audit, ok := ctx.Value(auditKey{}).(func(string, string, int)); ok {
+					audit("loop_detected", msg, i)
+				}
+				trace("loop_detected", map[string]any{"message": msg, "iteration": i})
+				messages = append(messages, Message{
+					Role:    "user",
+					Content: fmt.Sprintf("[System: loop detected — %s. Try a different approach or ask the user for guidance.]", msg),
+				})
+				notify(obs, "loop", map[string]any{"message": msg})
+			}
 		}
 	}
 

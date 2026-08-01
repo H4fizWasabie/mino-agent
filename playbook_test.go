@@ -123,6 +123,51 @@ func TestWorkspaceRejectsPreSeededOutput(t *testing.T) {
 	}
 }
 
+func TestWorkspaceStageEventsCarryTraceTag(t *testing.T) {
+	// Trace events emitted inside a playbook stage must carry playbook/stage tags
+	// so the dashboard can group stage work instead of showing a flat stream.
+	home := t.TempDir()
+	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect"})
+	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
+	oldLoop := runPlaybookStageLoop
+	defer func() { runPlaybookStageLoop = oldLoop }()
+	pb, err := loadPlaybookWorkspace(home, "brief")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage1, _ := workspaceStage(pb, 1)
+	path := playbookRunOutputPath(pb, &PlaybookRun{ID: "tagtest", Playbook: "brief"}, stage1, stage1.Outputs[0])
+	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
+		// The seam does not carry ctx; emulate the tagged loop by writing a
+		// tagged tool event directly (RunLoopContext does this via trace()).
+		logTrace(home, "tool", map[string]any{"tool": "search_web", "status": "ok", "playbook": "brief", "stage": "01-collect"})
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("collected"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{{Name: "write_file", Args: map[string]any{"path": path}}}}
+	}
+	result, err := RunPlaybook(context.Background(), core, "brief", "tag test", "test", nil)
+	if err != nil || result.Status != "failed" {
+		t.Fatalf("run = %+v, err=%v", result, err)
+	}
+	tail := traceTail(home)
+	found := false
+	for _, ev := range tail {
+		if ev["type"] == "tool" && ev["playbook"] == "brief" && ev["stage"] == "01-collect" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no stage-tagged tool event in trace tail: %v", tail)
+	}
+}
+
 func TestWorkspaceRejectsMissingContract(t *testing.T) {
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, "playbooks", "bad"), 0700); err != nil {

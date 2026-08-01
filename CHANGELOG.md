@@ -5,6 +5,8 @@
 ### Changed
 
 - Playbook stage completion now requires **write-attributed outputs**: a declared output passes verification only if a `write_file` call inside that stage's own tool log wrote it. Pre-seeded output files (the main loop doing the work and then `run_playbook` rubber-stamping it, as happened in the VPS Gmail incident) now fail the stage audit instead of passing it. (`verifyWorkspaceStageOutputs` checks the stage's recorded tool calls.)
+- Trace events emitted inside a playbook stage now carry `playbook` + `stage` tags, and the Ops > Traces view groups them into collapsible stage blocks — stage work is no longer flattened into a stream indistinguishable from main-loop tool calls. The playbook stage's contract text (`CONTEXT.md`) is now served to the dashboard and shown as an expandable viewer under Memory > Playbooks. (Why: the VPS daily-news run looked like the model did the searches itself and rubber-stamped the playbook, but the searches actually happened inside the stage; the dashboard was hiding the stage boundary.)
+- The repeated-tool loop guard is now skipped inside playbook stages: a stage whose whitelist is only `search_web` + `write_file` legitimately calls `search_web` many times, which is its declared job; the stage's own iteration cap remains the guard.
 
 - Rebuilt playbooks around filesystem workspaces and isolated durable runs. Stage contracts now live in `stages/NN-name/CONTEXT.md`; `state.json` records per-stage attempts, outputs, failures, and resume state so a failed later stage does not replay completed work.
 

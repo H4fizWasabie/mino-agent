@@ -682,7 +682,7 @@ function memPlaybooks(d){
     const stages = pb.stages || [], outputs = pb.outputs || [];
     return `<article class="memory-editor-card playbook-card"><div class="memory-editor-head"><div><code>${esc(pb.name)}</code><p>${esc(pb.description||"No description")}</p></div><span class="srcpill ${pb.status==="active"?"good":"warn"}">${esc(pb.status||"active")}</span></div>
       <div class="playbook-meta"><span>${stages.length} stage${stages.length===1?"":"s"}</span>${pb.schedule?`<span>schedule · ${esc(pb.schedule)}</span>`:""}${pb.notify?`<span>Telegram delivery</span>`:""}</div>
-      <div class="playbook-stages">${stages.map((stage,i)=>`<div><b>${String(stage.number||i+1).padStart(2,"0")}</b><span>${esc(stage.name||"stage")}</span>${(stage.tools||[]).length?`<small>${stage.tools.map(t=>esc(t)).join(" · ")}</small>`:""}</div>`).join("")}</div>
+      <div class="playbook-stages">${stages.map((stage,i)=>`<details class="playbook-stage" ${i===0?"open":""}><summary><b>${String(stage.number||i+1).padStart(2,"0")}</b><span>${esc(stage.name||"stage")}</span>${(stage.tools||[]).length?`<small>${stage.tools.map(t=>esc(t)).join(" · ")}</small>`:""}</summary>${stage.context?`<pre class="playbook-contract">${esc(stage.context)}</pre>`:`<div class="meta">No contract text</div>`}</details>`).join("")}</div>
       ${outputs.length?`<div class="playbook-outputs"><span>OUTPUT</span>${outputs.map(path=>`<code>${esc(path)}</code>`).join("")}</div>`:`<div class="meta playbook-empty-output">No output recorded yet</div>`}
       <div class="memory-editor-actions"><span class="meta">${esc(pb.path||"")}</span>${reveal(pb.path||"","open folder")}</div></article>`;
   }).join("")}</div>`;
@@ -794,8 +794,25 @@ function opsUsage(d){
 
 function opsTraces(d){
   const events=d.trace_tail||[], turns=d.turns||[];
-  return `<section class="surface-head"><div><span class="section-kicker">TRACE STREAM</span><h2>What happened, in order</h2><p>Structured JSONL events from every turn, model pass, and tool invocation.</p></div><strong>${esc(d.trace_file||"no trace")}</strong></section>
-    <div class="trace-layout"><section><div class="overview-section-head"><div><span class="section-kicker">EVENTS</span><h2>Latest trace lines</h2></div>${reveal("traces","open folder")}</div>${events.length?`<div class="trace-stream">${events.map(e=>`<div><span class="trace-mark ${esc(e.type)}"></span><code>${esc(e.type)}</code><p>${esc(String(e.detail||"").slice(0,120))}</p><time>${esc((e.ts||"").replace("T"," ").slice(11,19))}</time></div>`).join("")}</div>`:`<div class="surface-empty"><span>⌁</span><strong>No trace lines today</strong></div>`}</section>
+  // Group events into stage blocks: a stage run is a contiguous run of events
+  // carrying the same playbook+stage tag. Untagged events (main loop) stay flat.
+  const groups=[];
+  for(const e of events){
+    const key=e.playbook&&e.stage?`${e.playbook}/${e.stage}`:null;
+    if(key&&groups.length&&groups[groups.length-1].key===key&&!groups[groups.length-1].closed){
+      groups[groups.length-1].events.push(e);
+    } else {
+      const last=groups[groups.length-1];
+      if(last&&last.key) last.closed=true;
+      groups.push({key,playbook:e.playbook,stage:e.stage,events:[e]});
+    }
+  }
+  const row=e=>`<div><span class="trace-mark ${esc(e.type)}"></span><code>${esc(e.type)}</code><p>${esc(String(e.detail||"").slice(0,120))}</p><time>${esc((e.ts||"").replace("T"," ").slice(11,19))}</time></div>`;
+  const body=groups.map(g=>g.key
+    ? `<details class="trace-stage" open><summary><span class="trace-mark stage"></span><code>${esc(g.playbook)}</code><b>${esc(g.stage)}</b><time>${g.events.length} events</time></summary><div class="trace-stream">${g.events.map(row).join("")}</div></details>`
+    : row(g.events[0])).join("");
+  return `<section class="surface-head"><div><span class="section-kicker">TRACE STREAM</span><h2>What happened, in order</h2><p>Structured JSONL events from every turn, model pass, and tool invocation. Stage work is grouped — expand a stage to see its calls.</p></div><strong>${esc(d.trace_file||"no trace")}</strong></section>
+    <div class="trace-layout"><section><div class="overview-section-head"><div><span class="section-kicker">EVENTS</span><h2>Latest trace lines</h2></div>${reveal("traces","open folder")}</div>${events.length?`<div class="trace-stream">${body}</div>`:`<div class="surface-empty"><span>⌁</span><strong>No trace lines today</strong></div>`}</section>
       <aside><span class="section-kicker">TRACE SUMMARY</span><div class="trace-stat"><strong>${turns.length}</strong><span>recent turns</span></div><div class="trace-stat"><strong>${turns.reduce((n,t)=>n+(t.llm_calls||[]).length,0)}</strong><span>model passes</span></div><div class="trace-stat"><strong>${turns.reduce((n,t)=>n+(t.tools||[]).length,0)}</strong><span>tool invocations</span></div><p>Trace files are plain JSONL. They remain inspectable even if the dashboard is offline.</p></aside></div>`;
 }
 
