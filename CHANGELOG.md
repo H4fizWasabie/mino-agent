@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Playbook Layer 3 references (ICM): stages can declare a `## References` section pointing at rule/convention files (voice, brand, domain conventions). The runner injects them into the stage prompt as constraints, resolved stage-dir-first then playbook-dir, hard-capped at 4K chars per stage. Missing references warn and are skipped — advisory by design, unlike tools/outputs which fail loud.
 - Playbook stage contract validation: a stage that declares a `## Tools` list must include `write_file` when it declares an output (three incidents in a week came from stages that could never write their result), and every declared tool must exist in the registry (phantom names like `invoke_llm` are rejected at run time). Load fails loud instead of after 3 LLM attempts.
 
 ### Fixed

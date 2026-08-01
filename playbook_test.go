@@ -1095,3 +1095,62 @@ func TestRunPlaybookRejectsUnknownDeclaredTool(t *testing.T) {
 		t.Fatalf("error = %v, want unknown-tool rejection", err)
 	}
 }
+
+func TestParseStageExtractsReferences(t *testing.T) {
+	tmp := t.TempDir()
+	os.WriteFile(filepath.Join(tmp, "01-make.md"), []byte("# Stage 1\n\n## Do\n\n1. Work.\n\n## References\n\n- `references/voice.md`\n- references/conventions.md\n"), 0644)
+	stage, err := parseStage(tmp, "01-make.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stage.Refs) != 2 || stage.Refs[0] != "references/voice.md" || stage.Refs[1] != "references/conventions.md" {
+		t.Fatalf("refs = %v", stage.Refs)
+	}
+}
+
+func TestBuildStagePromptIncludesReferences(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "references"), 0700)
+	os.WriteFile(filepath.Join(dir, "references", "voice.md"), []byte("Write in a warm, concise tone. Always address Abah."), 0644)
+
+	pb := &Playbook{Name: "news", Dir: dir}
+	stage := StageFile{Number: 1, Name: "make", Path: filepath.Join(dir, "01-make.md"), Refs: []string{"references/voice.md"}}
+
+	got := buildStagePrompt(pb, stage, "")
+	if !strings.Contains(got, "## Stage References") || !strings.Contains(got, "warm, concise tone") {
+		t.Fatalf("prompt missing references: %.300s", got)
+	}
+
+	// missing reference must not break the prompt
+	stage.Refs = []string{"references/ghost.md", "references/voice.md"}
+	got = buildStagePrompt(pb, stage, "")
+	if !strings.Contains(got, "warm, concise tone") {
+		t.Fatalf("prompt missing surviving reference: %.300s", got)
+	}
+}
+
+func TestBuildStagePromptCapsReferences(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "refs"), 0700)
+	big := strings.Repeat("x", 10000)
+	os.WriteFile(filepath.Join(dir, "refs", "big.md"), []byte(big), 0644)
+
+	pb := &Playbook{Name: "news", Dir: dir}
+	stage := StageFile{Number: 1, Name: "make", Path: filepath.Join(dir, "01-make.md"), Refs: []string{"refs/big.md"}}
+	got := buildStagePrompt(pb, stage, "")
+	refSection := ""
+	if i := strings.Index(got, "## Stage References"); i >= 0 {
+		end := strings.Index(got[i:], "## Rules")
+		if end >= 0 {
+			refSection = got[i : i+end]
+		} else {
+			refSection = got[i:]
+		}
+	}
+	if refSection == "" {
+		t.Fatalf("references section missing")
+	}
+	if len(refSection) > 4300 {
+		t.Fatalf("references section too large: %d chars", len(refSection))
+	}
+}

@@ -36,6 +36,7 @@ type StageFile struct {
 	Reads  []string
 	Dos    []string
 	Tools  []string // optional capability set; order remains LLM-controlled
+	Refs   []string // Layer 3: reference files (rules/conventions), resolved per stage
 	Write  string   // relative to playbook output/ dir
 }
 
@@ -266,6 +267,21 @@ func parseStage(dir, fname string) (StageFile, error) {
 		}
 	}
 
+	// ## References — Layer 3: rule/convention files this stage applies.
+	// Same list format as ## Read, but paths point at reference material
+	// (voice, brand, domain conventions), resolved relative to the stage
+	// file's directory first, then the playbook directory.
+	refsSection := extractSection(raw, "## References")
+	if refsSection != "" {
+		for _, line := range strings.Split(refsSection, "\n") {
+			line = strings.TrimSpace(line)
+			line = strings.Trim(strings.TrimPrefix(line, "- "), "`")
+			if line != "" {
+				stage.Refs = append(stage.Refs, line)
+			}
+		}
+	}
+
 	if writeSection != "" {
 		// extract path from backticks or raw. Only the FIRST backtick pair is
 		// authoritative: later bullets are commentary and must not change the
@@ -345,6 +361,34 @@ func buildStagePrompt(pb *Playbook, stage StageFile, userMessage string, loc ...
 	b.WriteString("## Playbook Context\n\n")
 	b.WriteString(fmt.Sprintf("The playbook directory is `%s`. Relative paths such as `output/...` are relative to it.\n\n", pb.Dir))
 
+	// Layer 3: declared reference files, appended as constraints with a hard
+	// cap — every reference token re-sends on each loop iteration of the stage.
+	if len(stage.Refs) > 0 {
+		const refCap = 4000
+		var refs strings.Builder
+		for _, ref := range stage.Refs {
+			if refs.Len() >= refCap {
+				break
+			}
+			path := resolveStageRef(pb, stage, ref)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				slog.Warn("playbook stage reference missing", "playbook", pb.Name, "stage", stage.Number, "ref", ref)
+				continue
+			}
+			content := strings.TrimSpace(string(data))
+			if len(content) > refCap-refs.Len() {
+				content = content[:refCap-refs.Len()]
+			}
+			fmt.Fprintf(&refs, "\n### %s\n\n%s\n", ref, content)
+		}
+		if refs.Len() > 0 {
+			b.WriteString("## Stage References\n\nThese are this playbook's conventions and constraints. Apply them to your work.\n")
+			b.WriteString(refs.String())
+			b.WriteString("\n")
+		}
+	}
+
 	b.WriteString("## Rules\n\n")
 	b.WriteString("- Follow the instructions above. Work step by step.\n")
 	b.WriteString("- If you encounter an error, try to fix it. If you cannot fix it after a reasonable attempt, write the error to the output file and stop.\n")
@@ -364,6 +408,24 @@ func buildStagePrompt(pb *Playbook, stage StageFile, userMessage string, loc ...
 // Absolute declared paths are honored as-is (validated at load time); relative
 // ones are rebased into the playbook output/ dir. Date templates (YYYY-MM-DD)
 // expand in loc (nil → local time).
+// resolveStageRef resolves a declared reference path: stage-file directory
+// first, then the playbook directory. Absolute paths are used as-is.
+func resolveStageRef(pb *Playbook, stage StageFile, ref string) string {
+	if filepath.IsAbs(ref) {
+		return ref
+	}
+	stageDir := filepath.Dir(stage.Path)
+	if p := filepath.Join(stageDir, ref); fileExists(p) {
+		return p
+	}
+	return filepath.Join(pb.Dir, ref)
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
 func outputPath(pb *Playbook, stage StageFile, loc ...*time.Location) string {
 	zone := time.Local
 	if len(loc) > 0 && loc[0] != nil {
