@@ -226,17 +226,64 @@ func (b *MCPBridge) registerFlattenedTools(serverName string, c *client.Client, 
 		}
 	}
 
-	// Step 2: query each connected toolkit for its tool schemas.
-	schemas := make(map[string]map[string]any)
+	// Step 2: query each connected toolkit, collecting tool slugs from the
+	// search results (primary + related). Schemas come from a single
+	// GET_TOOL_SCHEMAS call afterwards — search responses do not reliably carry
+	// inline schemas.
+	var slugs []string
+	seen := make(map[string]bool)
+	collect := func(out string) {
+		var resp struct {
+			Data struct {
+				Results []struct {
+					PrimaryToolSlugs  []string `json:"primary_tool_slugs"`
+					RelatedToolSlugs  []string `json:"related_tool_slugs"`
+				} `json:"results"`
+			} `json:"data"`
+		}
+		if json.Unmarshal([]byte(out), &resp) != nil {
+			return
+		}
+		for _, r := range resp.Data.Results {
+			for _, slug := range append(append([]string{}, r.PrimaryToolSlugs...), r.RelatedToolSlugs...) {
+				if slug != "" && !seen[slug] {
+					seen[slug] = true
+					slugs = append(slugs, slug)
+				}
+			}
+		}
+	}
 	if len(toolkits) == 0 {
-		// Fallback: the broad query may itself carry inline schemas.
-		schemas = extractSearchSchemas(discovery)
+		collect(discovery)
 	}
 	for _, toolkit := range toolkits {
 		out := mcpCallDirect(c, "COMPOSIO_SEARCH_TOOLS", map[string]any{
 			"queries": []any{map[string]any{"use_case": "list " + toolkit + " tools"}},
 		})
-		for slug, s := range extractSearchSchemas(out) {
+		collect(out)
+	}
+	if len(slugs) == 0 {
+		slog.Warn("mcp flatten: no tool slugs found", "server", serverName)
+		return
+	}
+
+	// Step 3: fetch the flat schemas for all collected slugs in one call.
+	schemaOut := mcpCallDirect(c, "COMPOSIO_GET_TOOL_SCHEMAS", map[string]any{
+		"tool_slugs": slugs,
+		"include":    []string{"input_schema"},
+	})
+	var schemaResp struct {
+		Data struct {
+			ToolSchemas map[string]map[string]any `json:"tool_schemas"`
+		} `json:"data"`
+	}
+	schemas := map[string]map[string]any{}
+	if json.Unmarshal([]byte(schemaOut), &schemaResp) == nil {
+		schemas = schemaResp.Data.ToolSchemas
+	}
+	// Also accept inline schemas from search responses as a fallback.
+	if len(toolkits) == 0 {
+		for slug, s := range extractSearchSchemas(discovery) {
 			schemas[slug] = s
 		}
 	}
