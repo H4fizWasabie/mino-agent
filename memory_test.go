@@ -846,3 +846,33 @@ func TestDistillOutputsDue(t *testing.T) {
 		t.Fatal("failed artifact must stay undistilled for retry")
 	}
 }
+
+func TestDashboardGraphPayloadIncludesCommunities(t *testing.T) {
+	home := t.TempDir()
+	db := Connect(home)
+	defer db.Close()
+	cfg := &Settings{Home: home, MemoriesDir: filepath.Join(home, "memories")}
+	gm := NewGraphMemory(cfg.MemoriesDir, cfg)
+	gm.RecordFact(Fact{ID: "a", Type: "semantic", Subject: "Fact A"})
+	gm.SetCommunities(map[string]int{"a": 0}, []string{"a"}, map[string]string{"0": "Test"})
+
+	previous := dashCore
+	dashCore = &Core{DB: db, Settings: cfg, Memory: &Memory{db: db, graph: gm}, Tools: NewRegistry()}
+	defer func() { dashCore = previous }()
+
+	rec := httptest.NewRecorder()
+	handleDataAPI(rec, httptest.NewRequest(http.MethodGet, "/api/data", nil))
+	var payload struct {
+		Graph struct {
+			Communities map[string]int    `json:"communities"`
+			Gods        []string          `json:"gods"`
+			Labels      map[string]string `json:"labels"`
+		} `json:"graph"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Graph.Communities["a"] != 0 || len(payload.Graph.Gods) != 1 || payload.Graph.Labels["0"] != "Test" {
+		t.Fatalf("graph payload missing community fields: %+v", payload.Graph)
+	}
+}

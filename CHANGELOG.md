@@ -4,6 +4,8 @@
 
 ### Added
 
+- `manage_memory` tool actions: `maintain` (full 6h pass on demand), `judge_edges`, `distill_outputs`; dashboard graph payload now includes communities, god nodes, and labels.
+
 - Playbook run outputs distill into one compact episodic memory node per run (content, post ID, when, outcome) plus semantic facts for durable knowledge; undistilled rows survive cleanup until processed.
 
 - Every new or edited memory gets LLM-judged edges within minutes (5 per pass, retried on failure) — graphify-style incremental update without a full rebuild.

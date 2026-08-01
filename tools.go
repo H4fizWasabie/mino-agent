@@ -1461,11 +1461,11 @@ func markitdownHTML(html string) string {
 func makeManageMemoryTool(mem *Memory) *Tool {
 	return &Tool{
 		Name:        "manage_memory",
-		Description: "Manage your own memory: correct, forget, confirm, or reject a stored fact — or run maintenance yourself (status, consolidate, dedup, rebuild_edges, clean_edges). Use fact actions only after an explicit user signal; maintenance actions are yours to run when memory needs it.",
+		Description: "Manage your own memory: correct, forget, confirm, or reject a stored fact — or run maintenance yourself (status, consolidate, dedup, rebuild_edges, clean_edges, maintain, judge_edges, distill_outputs). Use fact actions only after an explicit user signal; maintenance actions are yours to run when memory needs it.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"action":  map[string]any{"type": "string", "description": "'correct', 'forget', 'confirm', 'reject', 'status', 'consolidate', 'dedup', 'rebuild_edges', or 'clean_edges'"},
+				"action":  map[string]any{"type": "string", "description": "'correct', 'forget', 'confirm', 'reject', 'status', 'consolidate', 'dedup', 'rebuild_edges', 'clean_edges', 'maintain', 'judge_edges', or 'distill_outputs'"},
 				"subject": map[string]any{"type": "string", "description": "Subject (fact actions only)"},
 				"content": map[string]any{"type": "string", "description": "New content (for correct)"},
 			},
@@ -1514,6 +1514,18 @@ func makeManageMemoryTool(mem *Memory) *Tool {
 			case "clean_edges":
 				n := mem.graph.RemoveMutualInferredEdges()
 				return fmt.Sprintf("removed %d contradictory inferred edges", n)
+			case "maintain":
+				edges, comms, err := mem.MaintainGraph()
+				if err != nil {
+					return fmt.Sprintf("maintenance incomplete: %v", err)
+				}
+				return fmt.Sprintf("maintained graph: %d edges, %d communities", edges, comms)
+			case "judge_edges":
+				n := mem.JudgeChangedFacts()
+				return fmt.Sprintf("judged %d edges across new memories", n)
+			case "distill_outputs":
+				n := mem.DistillOutputsDue()
+				return fmt.Sprintf("distilled %d playbook outputs", n)
 			}
 
 			if subject == "" {
