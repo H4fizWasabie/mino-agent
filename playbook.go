@@ -635,7 +635,7 @@ func updateManagedPlaybook(core *Core, name string, args map[string]any) string 
 	if err != nil {
 		return fmt.Sprintf("Error: %v", err)
 	}
-	if run, err := latestResumablePlaybookRun(pb); err != nil {
+	if run, err := latestResumablePlaybookRun(pb, core.Tools); err != nil {
 		return fmt.Sprintf("Error: %v", err)
 	} else if run != nil {
 		return fmt.Sprintf("Error: playbook %s has resumable run %s; finish it before changing its contract", name, run.ID)
@@ -698,7 +698,7 @@ func deleteManagedPlaybook(core *Core, name string) string {
 	if err != nil {
 		return fmt.Sprintf("Error: %v", err)
 	}
-	if run, err := latestResumablePlaybookRun(pb); err != nil {
+	if run, err := latestResumablePlaybookRun(pb, core.Tools); err != nil {
 		return fmt.Sprintf("Error: %v", err)
 	} else if run != nil {
 		return fmt.Sprintf("Error: playbook %s has resumable run %s; finish it before deletion", name, run.ID)

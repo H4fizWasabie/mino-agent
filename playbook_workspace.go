@@ -251,11 +251,11 @@ func firstHeading(text string) string {
 
 func playbookRunsDir(pb *PlaybookWorkspace) string { return filepath.Join(pb.Dir, "runs") }
 
-func loadOrCreatePlaybookRun(pb *PlaybookWorkspace, request, sessionID string, now time.Time) (*PlaybookRun, error) {
+func loadOrCreatePlaybookRun(pb *PlaybookWorkspace, registry *Registry, request, sessionID string, now time.Time) (*PlaybookRun, error) {
 	if err := os.MkdirAll(playbookRunsDir(pb), 0700); err != nil {
 		return nil, err
 	}
-	if run, err := latestResumablePlaybookRun(pb); err != nil {
+	if run, err := latestResumablePlaybookRun(pb, registry); err != nil {
 		return nil, err
 	} else if run != nil {
 		return run, nil
@@ -267,7 +267,7 @@ func loadOrCreatePlaybookRun(pb *PlaybookWorkspace, request, sessionID string, n
 	return run, savePlaybookRun(pb, run)
 }
 
-func latestResumablePlaybookRun(pb *PlaybookWorkspace) (*PlaybookRun, error) {
+func latestResumablePlaybookRun(pb *PlaybookWorkspace, registry *Registry) (*PlaybookRun, error) {
 	entries, err := os.ReadDir(playbookRunsDir(pb))
 	if err != nil && !os.IsNotExist(err) {
 		return nil, err
@@ -285,9 +285,25 @@ func latestResumablePlaybookRun(pb *PlaybookWorkspace) (*PlaybookRun, error) {
 			continue
 		}
 		var run PlaybookRun
-		if json.Unmarshal(data, &run) == nil && (run.Status == "running" || run.Status == "failed") {
-			return &run, nil
+		if json.Unmarshal(data, &run) != nil {
+			continue
 		}
+		if run.Status != "running" && run.Status != "failed" {
+			continue
+		}
+		// Resume is only safe when the next incomplete stage is read-only
+		// (retry-safe). A destructive stage that failed may already have
+		// executed its external side effect (posted, deleted, sent); resuming
+		// would re-execute it — the VPS duplicate-Threads-post incident. Such
+		// runs are terminal: they fail loud and require a fresh run.
+		next := nextPlaybookStage(&run)
+		if next != nil {
+			stage, ok := workspaceStage(pb, next.Number)
+			if !ok || !stageRetrySafe(registry, stage) {
+				continue
+			}
+		}
+		return &run, nil
 	}
 	return nil, nil
 }
@@ -488,7 +504,7 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 	if err := validateWorkspaceStageTools(pb, core.Tools); err != nil {
 		return nil, err
 	}
-	run, err := loadOrCreatePlaybookRun(pb, request, sessionID, time.Now())
+	run, err := loadOrCreatePlaybookRun(pb, core.Tools, request, sessionID, time.Now())
 	if err != nil {
 		return nil, err
 	}

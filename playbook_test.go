@@ -22,7 +22,7 @@ func TestWorkspaceRunResumesFirstIncompleteStage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err := loadOrCreatePlaybookRun(pb, "make the briefing", "test", time.Now())
+	run, err := loadOrCreatePlaybookRun(pb, registry, "make the briefing", "test", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestWorkspaceRejectsPreSeededOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err := loadOrCreatePlaybookRun(pb, "cheat attempt", "test", time.Now())
+	run, err := loadOrCreatePlaybookRun(pb, registry, "cheat attempt", "test", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestWorkspaceLabelsSelfCertifiedStage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err := loadOrCreatePlaybookRun(pb, "run", "test", time.Now())
+	run, err := loadOrCreatePlaybookRun(pb, registry, "run", "test", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,6 +369,46 @@ func TestCapturePlaybookRequiresEvidence(t *testing.T) {
 	}
 }
 
+func TestWorkspaceDoesNotResumeDestructiveStage(t *testing.T) {
+	// A failed run whose next incomplete stage is destructive must be terminal:
+	// resuming it would re-execute the external side effect (the VPS
+	// duplicate-Threads-post incident — the stage posted, then failed
+	// verification, and each resume posted again).
+	home := t.TempDir()
+	writeWorkspaceStageTool(t, home, "destructive", "threads_post")
+	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	registry.Register(&Tool{Name: "threads_post", Behavior: BehaviorMutate})
+	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
+	pb, err := loadPlaybookWorkspace(home, "destructive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Create a failed run: stage attempts once, writes nothing, fails verification.
+	oldLoop := runPlaybookStageLoop
+	defer func() { runPlaybookStageLoop = oldLoop }()
+	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
+		return &LoopResult{Status: "complete", Reply: "done"} // no output: fails audit
+	}
+	result, err := RunPlaybook(context.Background(), core, "destructive", "run", "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "failed" {
+		t.Fatalf("first run should fail, got %+v", result)
+	}
+	// The failed run is NOT resumable: the next stage is destructive, so a new
+	// invocation must create a fresh run instead of replaying the side effect.
+	run, err := loadOrCreatePlaybookRun(pb, registry, "run again", "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "running" || len(run.Stages) != 1 || run.Stages[0].Attempts != 0 {
+		t.Fatalf("expected fresh run, got %+v", run)
+	}
+}
+
 func TestWorkspaceRejectsMissingContract(t *testing.T) {
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, "playbooks", "bad"), 0700); err != nil {
@@ -425,7 +465,7 @@ func TestManagePlaybookRefusesUpdateWithResumableRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadOrCreatePlaybookRun(pb, "brief", "test", time.Now()); err != nil {
+	if _, err := loadOrCreatePlaybookRun(pb, registry, "brief", "test", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	got := makeManagePlaybookTool(core).Fn(map[string]any{"action": "update", "name": "brief", "config": "status: paused\n"})
@@ -538,7 +578,7 @@ func TestWorkspaceRetriesReadOnlyStage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err := loadOrCreatePlaybookRun(pb, "run", "test", time.Now())
+	run, err := loadOrCreatePlaybookRun(pb, registry, "run", "test", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
