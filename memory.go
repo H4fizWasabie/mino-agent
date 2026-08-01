@@ -763,8 +763,14 @@ func (m *Memory) RebuildGraphEdges() (int, error) {
 func (m *Memory) MaintainGraph() (int, int, error) {
 	edges, err := m.RebuildGraphEdges()
 	if err != nil {
-		return edges, 0, err
+		// Deterministic steps must still run: a failed LLM batch means some
+		// facts were not re-judged (they retry next cycle), but clustering,
+		// cleanup, and labels never depend on LLM batch success. Gating them
+		// behind a fully-clean rebuild would starve communities forever when
+		// one batch of unrelated facts legitimately returns zero edges.
+		slog.Warn("graph rebuild partial; running deterministic maintenance", "error", err)
 	}
+	m.graph.RemoveMutualInferredEdges()
 	facts := m.graph.Facts()
 	communities, gods := ClusterGraph(facts)
 	labels := m.LabelCommunities(communities)
@@ -773,7 +779,7 @@ func (m *Memory) MaintainGraph() (int, int, error) {
 	for _, c := range communities {
 		seen[c] = struct{}{}
 	}
-	return edges, len(seen), nil
+	return edges, len(seen), err
 }
 
 // LabelCommunities names each cluster via the small model (best-effort).

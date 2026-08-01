@@ -920,3 +920,46 @@ func TestDashboardGraphPayloadIncludesCommunities(t *testing.T) {
 		t.Fatalf("graph payload missing community fields: %+v", payload.Graph)
 	}
 }
+
+func TestMaintainGraphClustersOnPartialRebuild(t *testing.T) {
+	// A failed LLM batch (empty edges response counts as failed) must not
+	// starve the deterministic steps: clustering, cleanup, and labels still
+	// run, so communities appear even while failed facts retry.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"edges\":[]}"}}]}`)
+	}))
+	defer server.Close()
+	pm := &ProviderManager{
+		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
+		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
+		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
+		sleep: func(time.Duration) {}, now: time.Now,
+	}
+	dir := t.TempDir()
+	gm := NewGraphMemory(filepath.Join(dir, "memories"), nil)
+	for _, f := range []Fact{
+		{ID: "a", Type: "semantic", Subject: "A", Edges: []Edge{{Target: "b", Rel: "related", Kind: "explicit"}}},
+		{ID: "b", Type: "semantic", Subject: "B", Edges: []Edge{{Target: "a", Rel: "related", Kind: "explicit"}}},
+		{ID: "c", Type: "semantic", Subject: "C"},
+	} {
+		if err := gm.RecordFact(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := &Memory{client: pm, graph: gm, embedder: &EmbeddingStore{docs: []embeddedDoc{
+		{Source: "fact:a", Embedding: []float32{1, 0}},
+		{Source: "fact:b", Embedding: []float32{0.9, 0.1}},
+		{Source: "fact:c", Embedding: []float32{0.5, 0.5}},
+	}}}
+	edges, communities, err := m.MaintainGraph()
+	if err == nil {
+		t.Fatal("partial rebuild must still surface its error")
+	}
+	if communities == 0 {
+		t.Fatalf("clustering must run on partial rebuild, got 0 communities (edges=%d)", edges)
+	}
+	if gm.Communities()["a"] == gm.Communities()["c"] && len(gm.Communities()) > 0 {
+		t.Fatalf("cluster separation wrong: %v", gm.Communities())
+	}
+}
