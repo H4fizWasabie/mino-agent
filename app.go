@@ -137,6 +137,7 @@ func NewCore() *Core {
 	tools.Register(behaves(makeListPlaybooksTool(s.Home), BehaviorObserve))
 	tools.Register(behaves(makeManagePlaybookTool(w), BehaviorMutate))
 	tools.Register(behaves(makeRunPlaybookTool(w), BehaviorMutate))
+	tools.Register(behaves(makeCapturePlaybookTool(w), BehaviorMutate))
 	tools.Register(behaves(makeSchedulePlaybookTool(s.Home, s.Timezone), BehaviorMutate))
 	tools.Register(behaves(makeListSchedulesTool(s.Home), BehaviorObserve))
 	tools.Register(behaves(makeCancelScheduleTool(s.Home), BehaviorMutate))

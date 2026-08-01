@@ -252,6 +252,133 @@ func makeRunPlaybookTool(core *Core) *Tool {
 }
 
 // makeListPlaybooksTool creates the list_playbooks tool.
+// makeCapturePlaybookTool compiles a playbook from evidence, not improvisation:
+// the stage contract's Tools whitelist and Outputs come from the audit log's
+// actual successful tool calls in the current session. The model supplies only
+// the goal prose (name, context, process). This is the teach → compile flow:
+// run the task, succeed, then capture it as a playbook.
+func makeCapturePlaybookTool(core *Core) *Tool {
+	return &Tool{
+		Name:        "capture_playbook",
+		Description: "Compile a playbook from the tool calls Mino actually made in the current session. Use after a task succeeded: the stage's Tools whitelist and Outputs are derived from the immutable audit log (real slugs, real paths) instead of being improvised. Supply name, root CONTEXT.md, and the process prose; the tool fills Tools/Outputs from evidence.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name":      map[string]any{"type": "string", "description": "Short hyphenated playbook name"},
+				"context":   map[string]any{"type": "string", "description": "Root CONTEXT.md content: purpose and routing"},
+				"process":   map[string]any{"type": "string", "description": "Stage Process section prose: the steps in order, written in the imperative"},
+				"stage":     map[string]any{"type": "string", "description": "Optional stage folder name without number (default: task)"},
+				"max_calls": map[string]any{"type": "integer", "description": "Optional: how many recent tool calls to consider (default 60)"},
+			},
+			"required": []string{"name", "context", "process"},
+		},
+		ContextFn: func(ctx context.Context, args map[string]any) string {
+			name, _ := args["name"].(string)
+			context, _ := args["context"].(string)
+			process, _ := args["process"].(string)
+			stage, _ := args["stage"].(string)
+			maxCalls := 60
+			if v, ok := args["max_calls"].(float64); ok && v > 0 {
+				maxCalls = int(v)
+			}
+			sid := ""
+			if v := ctx.Value(sessionIDKey{}); v != nil {
+				sid, _ = v.(string)
+			}
+			stageContext, err := buildCapturedStage(core, sid, stage, process, maxCalls)
+			if err != nil {
+				return fmt.Sprintf("Error: %v", err)
+			}
+			return createManagedPlaybook(core, name, map[string]any{
+				"context": context,
+				"stages":  []any{map[string]any{"name": "01-" + stageOrDefault(stage), "context": stageContext}},
+			})
+		},
+	}
+}
+
+func stageOrDefault(stage string) string {
+	if strings.TrimSpace(stage) == "" {
+		return "task"
+	}
+	return stage
+}
+
+// buildCapturedStage derives a stage contract from the audit log: the Tools
+// whitelist is the distinct set of successfully-executed tools in the session,
+// and the Outputs are the write_file paths actually written (re-anchored to the
+// run's output dir). Real slugs and real filenames — nothing invented.
+func buildCapturedStage(core *Core, sessionID, stageName, process string, maxCalls int) (string, error) {
+	data, err := os.ReadFile(filepath.Join(core.Settings.Home, "audit.jsonl"))
+	if err != nil {
+		return "", fmt.Errorf("cannot read audit log for capture: %v", err)
+	}
+	var calls []map[string]any
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var ev map[string]any
+		if json.Unmarshal([]byte(line), &ev) != nil {
+			continue
+		}
+		if ev["session_id"] != sessionID || ev["status"] != "ok" {
+			continue
+		}
+		calls = append(calls, ev)
+	}
+	if len(calls) == 0 {
+		return "", fmt.Errorf("no successful tool calls found in the audit log for this session — capture requires a task that actually ran")
+	}
+	if len(calls) > maxCalls {
+		calls = calls[len(calls)-maxCalls:]
+	}
+	tools := make([]string, 0)
+	seenTools := make(map[string]bool)
+	outputs := make([]string, 0)
+	seenOutputs := make(map[string]bool)
+	for _, call := range calls {
+		toolName, _ := call["tool_name"].(string)
+		if toolName == "" {
+			continue
+		}
+		if !seenTools[toolName] {
+			seenTools[toolName] = true
+			tools = append(tools, toolName)
+		}
+		if toolName != "write_file" {
+			continue
+		}
+		if args, ok := call["args"].(map[string]any); ok {
+			if path, ok := args["path"].(string); ok && path != "" {
+				base := filepath.Base(path)
+				if base != "." && base != string(filepath.Separator) && !seenOutputs[base] {
+					seenOutputs[base] = true
+					outputs = append(outputs, base)
+				}
+			}
+		}
+	}
+	if len(outputs) == 0 {
+		return "", fmt.Errorf("capture found no write_file calls in the audit log — a playbook stage must produce outputs")
+	}
+	// write_file is mandatory on every stage whitelist
+	if !seenTools["write_file"] {
+		tools = append(tools, "write_file")
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "# %s\n\n## Inputs\n\n| Source | File/Location | Section/Scope | Why |\n| --- | --- | --- | --- |\n\n## Process\n\n%s\n\n## Tools\n\n", stageOrDefault(stageName), process)
+	for _, tool := range tools {
+		fmt.Fprintf(&b, "- %s\n", tool)
+	}
+	b.WriteString("\n## Outputs\n\n| Artifact | Location | Format |\n| --- | --- | --- |\n")
+	for _, out := range outputs {
+		fmt.Fprintf(&b, "| Result | `output/%s` | Markdown |\n", out)
+	}
+	return b.String(), nil
+}
+
 func makeListPlaybooksTool(home string) *Tool {
 	return &Tool{
 		Name:        "list_playbooks",

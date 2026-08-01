@@ -274,6 +274,83 @@ func TestWorkspaceLabelsSelfCertifiedStage(t *testing.T) {
 	}
 }
 
+func TestCapturePlaybookDerivesEvidenceFromAudit(t *testing.T) {
+	// teach → compile: after a successful task, capture_playbook must derive the
+	// stage's Tools and Outputs from the audit log — real slugs, real filenames.
+	// The model's prose supplies Process only; it cannot invent tools or paths.
+	home := t.TempDir()
+	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	registry.Register(&Tool{Name: "search_web", Behavior: BehaviorObserve})
+	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
+	// Simulate the audit trail of a successful task: searched, then wrote a report.
+	audit := []map[string]any{
+		{"tool_name": "search_web", "args": map[string]any{"query": "AI news"}, "status": "ok", "session_id": "tg:1"},
+		{"tool_name": "search_web", "args": map[string]any{"query": "model releases"}, "status": "ok", "session_id": "tg:1"},
+		{"tool_name": "write_file", "args": map[string]any{"path": "/tmp/news-report.md"}, "status": "ok", "session_id": "tg:1"},
+		{"tool_name": "bash", "args": map[string]any{"command": "rm -rf /"}, "status": "error", "session_id": "tg:1"},
+		{"tool_name": "write_file", "args": map[string]any{"path": "/tmp/other-session.md"}, "status": "ok", "session_id": "tg:2"},
+	}
+	var b strings.Builder
+	for _, ev := range audit {
+		raw, _ := json.Marshal(ev)
+		b.Write(raw)
+		b.WriteString("\n")
+	}
+	if err := os.WriteFile(filepath.Join(home, "audit.jsonl"), []byte(b.String()), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.WithValue(context.Background(), sessionIDKey{}, "tg:1")
+	tool := makeCapturePlaybookTool(core)
+	got := tool.ContextFn(ctx, map[string]any{
+		"name":    "daily-news",
+		"context": "# Daily news\n",
+		"process": "1. Search for the latest AI news. 2. Write the report.",
+	})
+	if !strings.Contains(got, "Created and validated playbook daily-news") {
+		t.Fatalf("capture = %q", got)
+	}
+	pb, err := loadPlaybookWorkspace(home, "daily-news")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := pb.Stages[0]
+	// Tools derived from evidence: search_web + write_file. Not bash (error),
+	// not the other session's calls.
+	if len(stage.Tools) != 2 || !containsString(stage.Tools, "search_web") || !containsString(stage.Tools, "write_file") {
+		t.Fatalf("captured tools = %v, want [search_web write_file]", stage.Tools)
+	}
+	// Output derived from the real write_file path's basename.
+	if len(stage.Outputs) != 1 || stage.Outputs[0].Path != "output/news-report.md" {
+		t.Fatalf("captured outputs = %+v, want [output/news-report.md]", stage.Outputs)
+	}
+	// Process prose preserved.
+	if !strings.Contains(stage.Context, "Search for the latest AI news") {
+		t.Fatalf("process prose missing: %s", stage.Context)
+	}
+}
+
+func TestCapturePlaybookRequiresEvidence(t *testing.T) {
+	// No successful tool calls in the audit log → capture refuses: a playbook
+	// must be compiled from a task that actually ran, never improvised.
+	home := t.TempDir()
+	settings := &Settings{Home: home, Workspace: home}
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	core := &Core{Settings: settings, Tools: registry}
+	if err := os.WriteFile(filepath.Join(home, "audit.jsonl"), []byte(""), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.WithValue(context.Background(), sessionIDKey{}, "tg:1")
+	got := makeCapturePlaybookTool(core).ContextFn(ctx, map[string]any{
+		"name": "ghost", "context": "# Ghost\n", "process": "1. Do things.",
+	})
+	if !strings.Contains(got, "no successful tool calls") {
+		t.Fatalf("capture = %q, want evidence requirement", got)
+	}
+}
+
 func TestWorkspaceRejectsMissingContract(t *testing.T) {
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, "playbooks", "bad"), 0700); err != nil {
