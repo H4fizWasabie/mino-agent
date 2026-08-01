@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -275,6 +276,237 @@ func makeListPlaybooksTool(home string) *Tool {
 			return b.String()
 		},
 	}
+}
+
+// manage_playbook owns definition changes so the model need not manipulate
+// playbook internals or run state through generic filesystem tools.
+func makeManagePlaybookTool(core *Core) *Tool {
+	return &Tool{
+		Name:        "manage_playbook",
+		Description: "Create, inspect, validate, update, or permanently delete a playbook definition. Create requires a root CONTEXT.md and numbered stage contracts. Updates and deletion are refused while a run can resume; deletion is also refused while scheduled.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"action":        map[string]any{"type": "string", "enum": []string{"create", "inspect", "validate", "update", "delete"}},
+				"name":          map[string]any{"type": "string", "description": "Short hyphenated playbook name"},
+				"context":       map[string]any{"type": "string", "description": "Root CONTEXT.md content; required to create, optional to update"},
+				"config":        map[string]any{"type": "string", "description": "config.md content; optional"},
+				"stage_name":    map[string]any{"type": "string", "description": "NN-stage folder to add or update"},
+				"stage_context": map[string]any{"type": "string", "description": "Stage CONTEXT.md content used with stage_name"},
+				"stages":        map[string]any{"type": "array", "description": "Initial stages for create", "items": map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}, "context": map[string]any{"type": "string"}}, "required": []string{"name", "context"}}},
+			},
+			"required": []string{"action", "name"},
+		},
+		Fn: func(args map[string]any) string {
+			action, _ := args["action"].(string)
+			name, _ := args["name"].(string)
+			if !validPlaybookName(name) {
+				return "Error: name must use lowercase letters, digits, and single hyphens"
+			}
+			switch action {
+			case "create":
+				return createManagedPlaybook(core, name, args)
+			case "inspect":
+				return inspectManagedPlaybook(core.Settings.Home, name)
+			case "validate":
+				if err := validateManagedPlaybook(core, name); err != nil {
+					return fmt.Sprintf("Error: %v", err)
+				}
+				return fmt.Sprintf("Playbook %s is valid.", name)
+			case "update":
+				return updateManagedPlaybook(core, name, args)
+			case "delete":
+				return deleteManagedPlaybook(core, name)
+			default:
+				return "Error: action must be create, inspect, validate, update, or delete"
+			}
+		},
+	}
+}
+
+var playbookNamePattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+
+func validPlaybookName(name string) bool { return playbookNamePattern.MatchString(name) }
+
+func validateManagedPlaybook(core *Core, name string) error {
+	pb, err := loadPlaybookWorkspace(core.Settings.Home, name)
+	if err != nil {
+		return err
+	}
+	return validateWorkspaceStageTools(pb, core.Tools)
+}
+
+func createManagedPlaybook(core *Core, name string, args map[string]any) string {
+	dir := filepath.Join(core.Settings.Home, "playbooks", name)
+	if _, err := os.Stat(dir); err == nil {
+		return fmt.Sprintf("Error: playbook %s already exists", name)
+	}
+	context, _ := args["context"].(string)
+	stages, ok := args["stages"].([]any)
+	if strings.TrimSpace(context) == "" || !ok || len(stages) == 0 {
+		return "Error: create requires context and at least one stage"
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "stages"), 0700); err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	}
+	if err := writePlaybookFile(filepath.Join(dir, "CONTEXT.md"), context); err != nil {
+		_ = os.RemoveAll(dir)
+		return fmt.Sprintf("Error: %v", err)
+	}
+	config, _ := args["config"].(string)
+	if strings.TrimSpace(config) == "" {
+		config = "status: active\n"
+	}
+	if err := writePlaybookFile(filepath.Join(dir, "config.md"), config); err != nil {
+		_ = os.RemoveAll(dir)
+		return fmt.Sprintf("Error: %v", err)
+	}
+	for _, item := range stages {
+		stage, ok := item.(map[string]any)
+		if !ok {
+			_ = os.RemoveAll(dir)
+			return "Error: each stage must contain name and context"
+		}
+		stageName, _ := stage["name"].(string)
+		stageContext, _ := stage["context"].(string)
+		if !validStageName(stageName) || strings.TrimSpace(stageContext) == "" {
+			_ = os.RemoveAll(dir)
+			return "Error: each stage needs an NN-name and non-empty context"
+		}
+		if err := writePlaybookFile(filepath.Join(dir, "stages", stageName, "CONTEXT.md"), stageContext); err != nil {
+			_ = os.RemoveAll(dir)
+			return fmt.Sprintf("Error: %v", err)
+		}
+	}
+	if err := validateManagedPlaybook(core, name); err != nil {
+		_ = os.RemoveAll(dir)
+		return fmt.Sprintf("Error: invalid playbook: %v", err)
+	}
+	return fmt.Sprintf("Created and validated playbook %s.", name)
+}
+
+func updateManagedPlaybook(core *Core, name string, args map[string]any) string {
+	pb, err := loadPlaybookWorkspace(core.Settings.Home, name)
+	if err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	}
+	if run, err := latestResumablePlaybookRun(pb); err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	} else if run != nil {
+		return fmt.Sprintf("Error: playbook %s has resumable run %s; finish it before changing its contract", name, run.ID)
+	}
+	changes := managedPlaybookChanges(pb, args)
+	if len(changes) == 0 {
+		return "Error: update requires context, config, or stage_name with stage_context"
+	}
+	for _, change := range changes {
+		if err := writePlaybookFile(change.path, change.content); err != nil {
+			restoreManagedPlaybookChanges(changes)
+			return fmt.Sprintf("Error: %v", err)
+		}
+	}
+	if err := validateManagedPlaybook(core, name); err != nil {
+		restoreManagedPlaybookChanges(changes)
+		return fmt.Sprintf("Error: update rejected: %v", err)
+	}
+	return fmt.Sprintf("Updated and validated playbook %s.", name)
+}
+
+type managedPlaybookChange struct {
+	path, content string
+	old           []byte
+	existed       bool
+}
+
+func managedPlaybookChanges(pb *PlaybookWorkspace, args map[string]any) []managedPlaybookChange {
+	var changes []managedPlaybookChange
+	add := func(path, content string) {
+		old, err := os.ReadFile(path)
+		changes = append(changes, managedPlaybookChange{path: path, content: content, old: old, existed: err == nil})
+	}
+	if context, ok := args["context"].(string); ok {
+		add(filepath.Join(pb.Dir, "CONTEXT.md"), context)
+	}
+	if config, ok := args["config"].(string); ok {
+		add(filepath.Join(pb.Dir, "config.md"), config)
+	}
+	stageName, hasName := args["stage_name"].(string)
+	stageContext, hasContext := args["stage_context"].(string)
+	if hasName && hasContext && validStageName(stageName) {
+		add(filepath.Join(pb.Dir, "stages", stageName, "CONTEXT.md"), stageContext)
+	}
+	return changes
+}
+
+func restoreManagedPlaybookChanges(changes []managedPlaybookChange) {
+	for _, change := range changes {
+		if change.existed {
+			_ = writePlaybookFile(change.path, string(change.old))
+		} else {
+			_ = os.RemoveAll(filepath.Dir(change.path))
+		}
+	}
+}
+
+func deleteManagedPlaybook(core *Core, name string) string {
+	pb, err := loadPlaybookWorkspace(core.Settings.Home, name)
+	if err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	}
+	if run, err := latestResumablePlaybookRun(pb); err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	} else if run != nil {
+		return fmt.Sprintf("Error: playbook %s has resumable run %s; finish it before deletion", name, run.ID)
+	}
+	schedules, err := loadSchedules(core.Settings.Home)
+	if err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	}
+	for _, schedule := range schedules {
+		if schedule.Name == name {
+			return fmt.Sprintf("Error: cancel %s's schedule before deletion", name)
+		}
+	}
+	if err := os.RemoveAll(pb.Dir); err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	}
+	return fmt.Sprintf("Deleted playbook %s and its completed run history.", name)
+}
+
+func inspectManagedPlaybook(home, name string) string {
+	pb, err := loadPlaybookWorkspace(home, name)
+	if err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Playbook %s: %s (%s)\n", pb.Name, pb.Description, pb.Status)
+	for _, stage := range pb.Stages {
+		fmt.Fprintf(&b, "- %02d-%s: tools=%s outputs=%d\n", stage.Number, stage.Name, strings.Join(stage.Tools, ", "), len(stage.Outputs))
+	}
+	if run, err := latestPlaybookRun(pb); err == nil && run != nil {
+		fmt.Fprintf(&b, "Latest run %s: %s\n", run.ID, run.Status)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func validStageName(name string) bool {
+	parts := strings.SplitN(name, "-", 2)
+	if len(parts) != 2 || len(parts[0]) != 2 || !validPlaybookName(parts[1]) {
+		return false
+	}
+	_, err := strconv.Atoi(parts[0])
+	return err == nil && parts[0] != "00"
+}
+
+func writePlaybookFile(path, content string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(content), 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // PlaybookSchedule is one scheduled playbook entry in ~/.mino/schedules.json.

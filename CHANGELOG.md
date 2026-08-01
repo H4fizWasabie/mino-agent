@@ -21,8 +21,9 @@
   - Duplicate anonymous asset struct in `update.go` named once.
 
 ### Added
+- `manage_playbook` lets Mino create, inspect, validate, update, and delete autonomous playbook definitions while protecting scheduled and resumable runs from invalidation.
 - Memory self-maintenance: `manage_memory` gains `status`, `consolidate`, `dedup`, `rebuild_edges`, and `clean_edges` actions, so Mino can run the same maintenance passes the CLI subcommands trigger — on its live memory, by its own judgment. SOUL.md teaches the habit.
-- Playbook Layer 3 references (ICM): stages can declare a `## References` section pointing at rule/convention files (voice, brand, domain conventions). The runner injects them into the stage prompt as constraints, resolved stage-dir-first then playbook-dir, hard-capped at 4K chars per stage. Missing references warn and are skipped — advisory by design, unlike tools/outputs which fail loud.
+- Playbook Layer 3 references: stages can declare a `## References` section pointing at rule/convention files (voice, brand, domain conventions). The runner injects them into the stage prompt as constraints, resolved stage-dir-first then playbook-dir, hard-capped at 4K chars per stage. Missing references warn and are skipped — advisory by design, unlike tools/outputs which fail loud.
 - Playbook stage contract validation: a stage that declares a `## Tools` list must include `write_file` when it declares an output (three incidents in a week came from stages that could never write their result), and every declared tool must exist in the registry (phantom names like `invoke_llm` are rejected at run time). Load fails loud instead of after 3 LLM attempts.
 
 ### Fixed

@@ -18,7 +18,7 @@ Use this skill when Abah asks to create, improve, validate, or finish a repeatab
 
 - Use a playbook for a repeatable procedure with ordered stages, durable file output, or external scheduling.
 - Handle one-off questions normally; do not create a playbook just because a task has multiple tool calls.
-- Inspect existing playbooks with `list_playbooks` and `read_file` before creating a similar one.
+- Inspect existing playbooks with `list_playbooks` and `manage_playbook` before creating a similar one.
 
 ## Structure
 
@@ -61,8 +61,8 @@ Keep stages small and independently verifiable. Pass useful output to the next s
 
 1. Identify the repeatable goal, inputs, outputs, allowed tools, and verification.
 2. Inspect existing playbooks and reuse their conventions where appropriate.
-3. Write root `CONTEXT.md`, `config.md`, and stage `CONTEXT.md` files with `write_file`.
-4. Re-read every created file and verify stage contracts, tools, output paths, and no secrets.
+3. Create the definition with `manage_playbook` using its `create` action and full stage contracts.
+4. Use its `validate` action after every definition update; use `inspect` to see the latest run state.
 5. Run the playbook when Abah asks for a live test; otherwise report the created path and what remains to test.
 
 When resuming an unfinished playbook, inspect its latest run state and stage outputs. Continue from the first incomplete stage; never recreate a completed stage unless the playbook itself was changed.

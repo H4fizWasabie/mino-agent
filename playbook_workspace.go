@@ -98,6 +98,9 @@ var runPlaybookStageLoop = func(ctx context.Context, client LLMClient, sessionID
 }
 
 func loadPlaybookWorkspace(home, name string) (*PlaybookWorkspace, error) {
+	if !validPlaybookName(name) {
+		return nil, fmt.Errorf("invalid playbook name: %q", name)
+	}
 	dir := filepath.Join(home, "playbooks", name)
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 		return nil, fmt.Errorf("playbook not found: %s", name)

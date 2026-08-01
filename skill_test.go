@@ -74,7 +74,7 @@ func TestCodingSkillUsesWorkspaceAndChunkedWrites(t *testing.T) {
 }
 
 func TestPlaybookAuthoringSkillIsEmbedded(t *testing.T) {
-	for _, want := range []string{"name: playbook-authoring", "create playbook", "## Structure", "write_file", "Telegram"} {
+	for _, want := range []string{"name: playbook-authoring", "create playbook", "## Structure", "manage_playbook", "Telegram"} {
 		if !strings.Contains(playbookAuthoringSkill, want) {
 			t.Errorf("playbook authoring skill missing %q", want)
 		}

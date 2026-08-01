@@ -178,14 +178,15 @@ var essentialToolNames = map[string]bool{
 	"remember": true, "read_file": true, "write_file": true,
 	"save_note": true, "search_web": true, "bash": true,
 	"list_playbooks": true, "run_playbook": true,
-	"list_schedules": true, "cancel_schedule": true,
+	"manage_playbook": true,
+	"list_schedules":  true, "cancel_schedule": true,
 }
 
 var toolFamilies = [][]string{
 	{"read_file", "write_file", "edit_file"},
 	{"create_event", "list_events"},
 	{"create_reminder", "list_reminders", "cancel_reminder"},
-	{"list_playbooks", "run_playbook", "schedule_playbook"},
+	{"list_playbooks", "manage_playbook", "run_playbook", "schedule_playbook"},
 	{"list_schedules", "cancel_schedule"},
 	{"search_web", "fetch_url"},
 }

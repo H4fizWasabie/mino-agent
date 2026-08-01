@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -80,6 +81,65 @@ func TestWorkspaceRejectsMissingContract(t *testing.T) {
 	}
 	if _, err := loadPlaybookWorkspace(home, "bad"); err == nil {
 		t.Fatal("missing root contract was accepted")
+	}
+}
+
+func TestManagePlaybookLifecycle(t *testing.T) {
+	home := t.TempDir()
+	settings := &Settings{Home: home, Workspace: home}
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	core := &Core{Settings: settings, Tools: registry}
+	tool := makeManagePlaybookTool(core)
+	stage := "# Gather\n\n## Inputs\n\n| Source | File/Location | Section/Scope | Why |\n| --- | --- | --- | --- |\n\n## Process\n\n1. Write the report.\n\n## Tools\n\n- write_file\n\n## Outputs\n\n| Artifact | Location | Format |\n| --- | --- | --- |\n| Report | `output/report.md` | Markdown |\n"
+	create := tool.Fn(map[string]any{"action": "create", "name": "daily-report", "context": "# Daily report\n", "stages": []any{map[string]any{"name": "01-gather", "context": stage}}})
+	if create != "Created and validated playbook daily-report." {
+		t.Fatalf("create = %q", create)
+	}
+	if got := tool.Fn(map[string]any{"action": "validate", "name": "daily-report"}); got != "Playbook daily-report is valid." {
+		t.Fatalf("validate = %q", got)
+	}
+	if got := tool.Fn(map[string]any{"action": "inspect", "name": "daily-report"}); !strings.Contains(got, "01-gather") {
+		t.Fatalf("inspect = %q", got)
+	}
+	if err := saveSchedules(home, []PlaybookSchedule{{Name: "daily-report", Time: "09:00", Timezone: "Asia/Kuala_Lumpur"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := tool.Fn(map[string]any{"action": "delete", "name": "daily-report"}); !strings.Contains(got, "cancel") {
+		t.Fatalf("scheduled delete = %q", got)
+	}
+	if err := saveSchedules(home, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := tool.Fn(map[string]any{"action": "delete", "name": "daily-report"}); !strings.Contains(got, "Deleted") {
+		t.Fatalf("delete = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(home, "playbooks", "daily-report")); !os.IsNotExist(err) {
+		t.Fatalf("playbook still exists: %v", err)
+	}
+}
+
+func TestManagePlaybookRefusesUpdateWithResumableRun(t *testing.T) {
+	home := t.TempDir()
+	settings := &Settings{Home: home, Workspace: home}
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	core := &Core{Settings: settings, Tools: registry}
+	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect"})
+	pb, err := loadPlaybookWorkspace(home, "brief")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadOrCreatePlaybookRun(pb, "brief", "test", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	got := makeManagePlaybookTool(core).Fn(map[string]any{"action": "update", "name": "brief", "config": "status: paused\n"})
+	if !strings.Contains(got, "resumable run") {
+		t.Fatalf("update = %q", got)
+	}
+	data, err := os.ReadFile(filepath.Join(home, "playbooks", "brief", "config.md"))
+	if err == nil && strings.Contains(string(data), "paused") {
+		t.Fatalf("resumable playbook was changed: %s", data)
 	}
 }
 
