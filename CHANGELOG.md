@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- Tool artifact files (`compactToolOutput`) now get a unique per-write filename (`tool-<unixnano>.txt`) instead of `tool.txt` in a reused turn directory. The turn dirs in `/tmp/mino/results/<session>/<turn>/` reset across days, so old files lingered in slots that got rewritten by later runs — the model could follow an artifact path from context and read a stale result as its own. This happened in production: Mino's Gmail scan calls (Composio `GMAIL_FETCH_EMAILS` with `query`) returned correctly filtered old promotions, but it then read a 30-min-old stale artifact from the same dir and concluded the tool had no query support, stopping the cleanup with a wrong diagnosis. Unique names make a stale file unable to masquerade as a fresh result.
+
 ### Removed
 - Ponytail audit cuts (refactor pass):
   - Legacy SQLite `facts`/`episodes` tables, their FTS5 indexes, triggers, and column migrations dropped from the schema (the markdown graph is authoritative; fresh installs no longer create the dead archive tables). `MigrateLegacyFacts` still migrates pre-cutover installs — it now skips cleanly when the table is absent.

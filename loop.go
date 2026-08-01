@@ -524,7 +524,7 @@ func compactToolOutput(home, sessionID string, turn int, tool, output string) st
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return output[:artifactInlineLimit] + "\n[artifact write failed]"
 	}
-	path := filepath.Join(dir, safePath(tool)+".txt")
+	path := filepath.Join(dir, fmt.Sprintf("%s-%d.txt", safePath(tool), time.Now().UnixNano())) // unique name: reused turn dirs across days must never serve stale files as fresh results
 	if err := os.WriteFile(path, []byte(output), 0600); err != nil {
 		return output[:artifactInlineLimit] + "\n[artifact write failed]"
 	}
