@@ -146,6 +146,7 @@ func (m *Memory) DistillOutputsDue() int {
 		slog.Warn("distill scan failed", "error", err)
 		return 0
 	}
+	defer rows.Close()
 	type artifact struct{ path, sessionID, label string }
 	var arts []artifact
 	for rows.Next() {
@@ -154,7 +155,6 @@ func (m *Memory) DistillOutputsDue() int {
 			arts = append(arts, a)
 		}
 	}
-	rows.Close()
 	if len(arts) == 0 {
 		return 0
 	}
@@ -807,6 +807,7 @@ func (m *Memory) LabelCommunities(communities map[string]int) map[string]string 
 	var out struct {
 		Labels map[string]string `json:"labels"`
 	}
+	text = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(text, "```json"), "```"))
 	if err := json.Unmarshal([]byte(text), &out); err != nil {
 		return labels
 	}
@@ -842,10 +843,17 @@ func (m *Memory) JudgeChangedFacts() int {
 		if i >= 5 { // ponytail: bounded per pass, backlog drains over later passes
 			break
 		}
-		edges, ok := m.judgeFactEdges(*fact, facts)
+		if m.graph.JudgedAt(fact.ID) != "" {
+			continue // the 6h maintenance pass judged it first
+		}
+		edges, updated, ok := m.judgeFactEdges(*fact, facts)
 		if !ok {
 			continue
 		}
+		if m.graph.JudgedAt(fact.ID) != "" {
+			continue // 6h pass beat us to it; its edges win, skip the write
+		}
+		m.graph.ReplaceFact(*updated)
 		m.graph.MarkJudged(fact.ID)
 		judged += edges
 	}
@@ -854,19 +862,20 @@ func (m *Memory) JudgeChangedFacts() int {
 
 // judgeFactEdges runs one small-model judgment pass for a single SOURCE fact
 // against its embedding candidates (from GraphCandidates over all facts, as in
-// RebuildGraphEdges). Returns the number of inferred edges written and whether
-// the judgment succeeded. A successful pass with zero edges means the LLM
-// judged the fact and found no relationships — the fact is still marked
-// judged. Only failures (no candidates, LLM/parse/write errors) leave the
-// fact unjudged for retry.
-func (m *Memory) judgeFactEdges(fact Fact, all []Fact) (int, bool) {
+// RebuildGraphEdges). Returns the number of inferred edges, the fact to write,
+// and whether the judgment succeeded. The caller writes the fact only if no
+// other pass judged it meanwhile (5-min/6h race guard). A successful pass
+// with zero edges means the LLM judged the fact and found no relationships —
+// the fact is still marked judged. Only failures (no candidates, LLM/parse/write
+// errors) leave the fact unjudged for retry.
+func (m *Memory) judgeFactEdges(fact Fact, all []Fact) (int, *Fact, bool) {
 	if m.embedder == nil {
-		return 0, false
+		return 0, nil, false
 	}
 	candidates := m.embedder.GraphCandidates(all, 6)
 	ids := candidates[fact.ID]
 	if len(ids) == 0 {
-		return 0, false
+		return 0, nil, false
 	}
 	var claims strings.Builder
 	allowed := make(map[string]bool)
@@ -880,7 +889,7 @@ func (m *Memory) judgeFactEdges(fact Fact, all []Fact) (int, bool) {
 	resp, err := m.client.CreateJSON("graph-rebuild", SmallModel,
 		[]Message{{Role: "user", Content: fmt.Sprintf(graphRebuildPrompt, claims.String())}}, 1400, "")
 	if err != nil {
-		return 0, false
+		return 0, nil, false
 	}
 	text := resp.FinalText
 	if text == "" {
@@ -892,7 +901,7 @@ func (m *Memory) judgeFactEdges(fact Fact, all []Fact) (int, bool) {
 	}
 	edges, err := parseGraphRebuildResponse(text)
 	if err != nil {
-		return 0, false
+		return 0, nil, false
 	}
 	inferred := make([]Edge, 0, len(edges))
 	for _, edge := range edges {
@@ -908,10 +917,7 @@ func (m *Memory) judgeFactEdges(fact Fact, all []Fact) (int, bool) {
 		}
 	}
 	fact.Edges = append(fact.Edges, inferred...)
-	if err := m.graph.ReplaceFact(fact); err != nil {
-		return 0, false
-	}
-	return len(inferred), true
+	return len(inferred), &fact, true
 }
 
 // --- Dedup (background, every 6h, offset from consolidation) ---

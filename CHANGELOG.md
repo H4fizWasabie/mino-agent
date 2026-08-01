@@ -36,6 +36,7 @@
 
 ### Fixed
 - Facts are only marked judged when a graph rebuild completes with zero failed batches; a partial failure leaves facts eligible for the incremental judgment pass instead of trusting a rebuild that didn't write everything.
+- The 5-minute edge-judgment pass and the 6-hour graph rebuild could race on the same fact: the 5-min pass re-checks `JudgedAt` after its model call and skips its edge write + `MarkJudged` when the 6h pass already judged the fact, so the two passes' inferred edges no longer overwrite each other nondeterministically (the 6h write wins).
 - Facts without embeddings were invisible to graph edge inference: rebuild now backfills missing fact vectors before candidate generation, so migrated facts can gain edges instead of staying orphaned forever.
 - Graph-rebuild-written edges were mislabeled with `Source: "consolidation"`; edge provenance now follows the writer (`graph-rebuild` vs `consolidation`).
 - Mirrored inferred pairs are now resolved for any relation: when A→B and B→A are both inferred, the lower-confidence edge is dropped and explicit edges always survive (previously only `supersedes` pairs were cleaned).

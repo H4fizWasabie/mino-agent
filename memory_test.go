@@ -779,6 +779,50 @@ func TestJudgeChangedFacts(t *testing.T) {
 	}
 }
 
+func TestJudgeChangedFactsSkipsConcurrentJudgment(t *testing.T) {
+	// The 6h maintenance pass judging facts while the 5-min pass is mid-flight
+	// must win: JudgeChangedFacts re-checks JudgedAt after the model call and
+	// skips the write + MarkJudged, so the 6h edges are not overwritten.
+	dir := t.TempDir()
+	gm := NewGraphMemory(filepath.Join(dir, "memories"), nil)
+	gm.RecordFact(Fact{ID: "e", Type: "semantic", Subject: "Fact E"})
+	gm.RecordFact(Fact{ID: "d", Type: "semantic", Subject: "Fact D", Edges: []Edge{{Target: "e", Rel: "keeps", Kind: "explicit"}}})
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		// The 6h pass finishes all batches and marks every fact judged.
+		gm.MarkJudged("d")
+		gm.MarkJudged("e")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"edges\":[{\"source\":\"d\",\"target\":\"e\",\"rel\":\"depends_on\",\"confidence\":0.9}]}"}}]}`)
+	}))
+	defer server.Close()
+	pm := &ProviderManager{
+		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
+		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
+		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
+		sleep: func(time.Duration) {}, now: time.Now,
+	}
+	m := &Memory{client: pm, graph: gm, embedder: &EmbeddingStore{docs: []embeddedDoc{
+		{Source: "fact:d", Embedding: []float32{1, 0}},
+		{Source: "fact:e", Embedding: []float32{0.9, 0.1}},
+	}}}
+	if n := m.JudgeChangedFacts(); n != 0 {
+		t.Fatalf("judged %d edges, want 0 (6h pass already owns the facts)", n)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1 (second fact skipped by the pre-check)", calls)
+	}
+	d, _ := gm.FindFact("d")
+	if len(d.Edges) != 1 || d.Edges[0].Rel != "keeps" {
+		t.Fatalf("d edges = %+v, want untouched explicit edge (6h write wins)", d.Edges)
+	}
+	e, _ := gm.FindFact("e")
+	if len(e.Edges) != 0 {
+		t.Fatalf("e edges = %+v, want none (5-min inferred edge must not land)", e.Edges)
+	}
+}
+
 func TestDistillOutputsDue(t *testing.T) {
 	// Artifact row + output file → one episodic run node, row marked distilled.
 	dir := t.TempDir()

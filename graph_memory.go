@@ -223,6 +223,7 @@ func (gm *GraphMemory) loadAll() {
 	gm.judgedAt = make(map[string]string)
 	gm.communities = make(map[string]int)
 	gm.labels = make(map[string]string)
+	gm.gods = nil
 	entries, err := os.ReadDir(gm.dir)
 	if err != nil {
 		return
@@ -297,6 +298,7 @@ func (gm *GraphMemory) refreshLocked() error {
 	for name, stamp := range gm.files {
 		if _, ok := current[name]; !ok {
 			delete(gm.facts, stamp.ID)
+			delete(gm.judgedAt, stamp.ID)
 			changed = true
 		}
 	}
@@ -601,6 +603,9 @@ func (gm *GraphMemory) Feedback(id string, delta int) (*Fact, error) {
 
 // RemoveMutualInferredEdges resolves mirrored inferred pairs (A→B and B→A,
 // any relation): the lower-confidence edge is dropped, explicit edges win.
+// Equal-confidence mirrors are intentionally both kept — the strict >
+// comparison keeps ties: there is no signal to prefer one direction, and
+// dropping both would lose information.
 func (gm *GraphMemory) RemoveMutualInferredEdges() int {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()

@@ -112,7 +112,7 @@ func NewCore() *Core {
 					slog.Info("consolidation (threshold)", "new_facts", n)
 				}
 				if n := mem.JudgeChangedFacts(); n > 0 {
-					slog.Info("graph edge judgment", "facts", n)
+					slog.Info("graph edge judgment", "edges", n)
 				}
 				if n := mem.DistillOutputsDue(); n > 0 {
 					slog.Info("playbook output distillation", "written", n)
