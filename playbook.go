@@ -20,6 +20,11 @@ import (
 
 const maxStageIterations = 10
 
+// maxStageAttempts bounds stage-level retries within a single run. Retry-safe
+// stages (read-only whitelist) get at most this many attempts; the failure of
+// each attempt is fed back into the stage context.
+const maxStageAttempts = 2
+
 // PlaybookResult is the durable outcome returned by a playbook run.
 type PlaybookResult struct {
 	Name      string

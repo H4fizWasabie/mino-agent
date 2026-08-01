@@ -345,6 +345,28 @@ func playbookRunOutputPath(pb *PlaybookWorkspace, run *PlaybookRun, stage Worksp
 	return filepath.Join(playbookRunsDir(pb), run.ID, "stages", fmt.Sprintf("%02d-%s", stage.Number, stage.Name), filepath.FromSlash(output.Path))
 }
 
+// stageRetrySafe reports whether a stage may retry within a run: true only when
+// its whitelist is non-empty and every declared tool is read-only
+// (BehaviorObserve) or write_file (the required output mechanism). Destructive
+// or unclassifiable tools (bash, MCP mutations, edit_file, send_message) make
+// retry unsafe: a partially-executed destructive stage retried is how
+// double-deletions happen. An empty whitelist means unrestricted access — not
+// retry-safe.
+func stageRetrySafe(registry *Registry, stage WorkspaceStage) bool {
+	if len(stage.Tools) == 0 {
+		return false
+	}
+	for _, name := range stage.Tools {
+		if name == "write_file" {
+			continue
+		}
+		if registry.BehaviorFor(name, nil) != BehaviorObserve {
+			return false
+		}
+	}
+	return true
+}
+
 func validateWorkspaceStageTools(pb *PlaybookWorkspace, registry *Registry) error {
 	known := make(map[string]bool)
 	for _, tool := range registry.Catalog() {
@@ -439,44 +461,65 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 		if !ok {
 			return nil, fmt.Errorf("playbook %s run %s references missing stage %d", name, run.ID, state.Number)
 		}
-		state.Status, state.Error = "running", ""
-		state.Attempts++
-		state.StartedAt = time.Now().UTC()
-		if err := savePlaybookRun(pb, run); err != nil {
-			return nil, err
-		}
 		stageTools := core.Tools
 		if len(stage.Tools) > 0 {
 			stageTools = core.Tools.Only(stage.Tools...)
 		}
 		messages := append([]Message(nil), baseMessages...)
 		messages = append(messages, Message{Role: "user", Content: buildWorkspaceStagePrompt(pb, run, stage)})
-		// Tag every trace event inside this stage with its playbook/stage identity
-		// so the dashboard can group stage work instead of flattening it.
-		stageCtx := context.WithValue(ctx, traceTagKey{}, map[string]string{
-			"playbook": pb.Name,
-			"stage":    fmt.Sprintf("%02d-%s", stage.Number, stage.Name),
-		})
-		stageResult := runPlaybookStageLoop(stageCtx, core.Client, sessionID, system, messages, stageTools, maxStageIterations, core.Settings.MaxTokens, obs, core.Settings.Home)
-		result.TokensIn += stageResult.TokensIn
-		result.TokensOut += stageResult.TokensOut
-		result.ToolCalls = append(result.ToolCalls, stageResult.ToolCalls...)
-		result.Reply = stageResult.Reply
-		result.StagesRun++
-		state.EndedAt = time.Now().UTC()
-		outputs, verifyErr := verifyWorkspaceStageOutputs(pb, run, stage, stageResult.ToolCalls)
-		if stageResult.Status != "complete" || verifyErr != nil {
-			state.Status = "failed"
-			if stageResult.Status != "complete" {
-				state.Error = fmt.Sprintf("runtime %s: %s", stageResult.Status, stageResult.Reply)
-			} else {
-				state.Error = verifyErr.Error()
+		retrySafe := stageRetrySafe(core.Tools, stage)
+
+		var outputs []string
+		var verifyErr error
+		for attempt := 1; attempt <= maxStageAttempts; attempt++ {
+			state.Attempts++
+			state.StartedAt = time.Now().UTC()
+			state.Status = "running"
+			state.Error = ""
+			if err := savePlaybookRun(pb, run); err != nil {
+				return nil, err
 			}
-			run.Status = "failed"
-			_ = savePlaybookRun(pb, run)
-			result.Status = "failed"
-			result.Reply = fmt.Sprintf("Run %s stopped at stage %02d-%s: %s", run.ID, stage.Number, stage.Name, state.Error)
-			return result, nil
+			// Tag every trace event inside this stage with its playbook/stage identity
+			// so the dashboard can group stage work instead of flattening it.
+			stageCtx := context.WithValue(ctx, traceTagKey{}, map[string]string{
+				"playbook": pb.Name,
+				"stage":    fmt.Sprintf("%02d-%s", stage.Number, stage.Name),
+			})
+			stageResult := runPlaybookStageLoop(stageCtx, core.Client, sessionID, system, messages, stageTools, maxStageIterations, core.Settings.MaxTokens, obs, core.Settings.Home)
+			result.TokensIn += stageResult.TokensIn
+			result.TokensOut += stageResult.TokensOut
+			result.ToolCalls = append(result.ToolCalls, stageResult.ToolCalls...)
+			result.Reply = stageResult.Reply
+			result.StagesRun++
+			state.EndedAt = time.Now().UTC()
+			outputs, verifyErr = verifyWorkspaceStageOutputs(pb, run, stage, stageResult.ToolCalls)
+			if stageResult.Status == "complete" && verifyErr == nil {
+				break
+			}
+			// Failed attempt. Retry only when the stage is retry-safe (read-only
+			// whitelist) and the run was not cancelled — a user stop must never be
+			// overridden by an automatic retry.
+			if !retrySafe || stageResult.Status == "cancelled" || attempt >= maxStageAttempts {
+				state.Status = "failed"
+				if stageResult.Status != "complete" {
+					state.Error = fmt.Sprintf("runtime %s: %s", stageResult.Status, stageResult.Reply)
+				} else {
+					state.Error = verifyErr.Error()
+				}
+				run.Status = "failed"
+				_ = savePlaybookRun(pb, run)
+				result.Status = "failed"
+				result.Reply = fmt.Sprintf("Run %s stopped at stage %02d-%s: %s", run.ID, stage.Number, stage.Name, state.Error)
+				return result, nil
+			}
+			// Feed the failure back into the stage context and retry.
+			reason := ""
+			if stageResult.Status != "complete" {
+				reason = fmt.Sprintf("runtime %s: %s", stageResult.Status, stageResult.Reply)
+			} else {
+				reason = verifyErr.Error()
+			}
+			messages = append(messages, Message{Role: "user", Content: fmt.Sprintf("[System: stage attempt %d failed — %s. Fix the issue and complete the stage properly.]", attempt, reason)})
 		}
 		state.Status, state.Outputs = "complete", outputs
 		run.Status = "running"

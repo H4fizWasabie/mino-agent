@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,7 +46,7 @@ func TestWorkspaceRunResumesFirstIncompleteStage(t *testing.T) {
 		return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{{Name: "write_file", Args: map[string]any{"path": path1}}}}
 	}
 	result, err := RunPlaybook(context.Background(), core, "brief", "make the briefing", "test", nil)
-	if err != nil || result.Status != "failed" || result.StagesRun != 2 {
+	if err != nil || result.Status != "failed" || result.StagesRun != 3 {
 		t.Fatalf("first run = %+v, err=%v", result, err)
 	}
 	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
@@ -69,7 +70,7 @@ func TestWorkspaceRunResumesFirstIncompleteStage(t *testing.T) {
 	if err := json.Unmarshal(data, &saved); err != nil {
 		t.Fatal(err)
 	}
-	if saved.Stages[0].Attempts != 1 || saved.Stages[1].Attempts != 2 || saved.Status != "complete" {
+	if saved.Stages[0].Attempts != 1 || saved.Stages[1].Attempts != 3 || saved.Status != "complete" {
 		t.Fatalf("state = %+v", saved)
 	}
 }
@@ -118,8 +119,8 @@ func TestWorkspaceRejectsPreSeededOutput(t *testing.T) {
 	if !strings.Contains(result.Reply, "not written by this stage") {
 		t.Fatalf("reply = %q, want attribution failure", result.Reply)
 	}
-	if result.StagesRun != 1 {
-		t.Fatalf("StagesRun = %d, want 1 (stage attempted then failed)", result.StagesRun)
+	if result.StagesRun != 2 {
+		t.Fatalf("StagesRun = %d, want 2 (retry-safe stage attempted twice, both failed)", result.StagesRun)
 	}
 }
 
@@ -258,6 +259,116 @@ func TestManagePlaybookCanonicalizesGeneratedStageContracts(t *testing.T) {
 	}
 	if pb.Stages[0].Name != "research" || pb.Stages[1].Name != "report" || len(pb.Stages[0].Outputs) != 1 || pb.Stages[0].Tools[0] != "search_web" {
 		t.Fatalf("canonical workspace = %+v", pb.Stages)
+	}
+}
+
+// writeWorkspaceStageTool writes a one-stage playbook whose whitelist is the
+// given tools (plus write_file, which every stage must declare).
+func writeWorkspaceStageTool(t *testing.T, home, name string, tools ...string) {
+	t.Helper()
+	root := filepath.Join(home, "playbooks", name)
+	if err := os.MkdirAll(filepath.Join(root, "stages", "01-work"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "CONTEXT.md"), []byte("# Test playbook\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	all := append(append([]string{}, tools...), "write_file")
+	var b strings.Builder
+	b.WriteString("# Work\n\n## Inputs\n\n| Source | File/Location | Section/Scope | Why |\n| --- | --- | --- | --- |\n\n## Process\n\n1. Produce the result.\n\n## Tools\n\n")
+	for _, tool := range all {
+		fmt.Fprintf(&b, "- %s\n", tool)
+	}
+	b.WriteString("\n## Outputs\n\n| Artifact | Location | Format |\n| --- | --- | --- |\n| Result | `output/result.md` | Markdown |\n")
+	if err := os.WriteFile(filepath.Join(root, "stages", "01-work", "CONTEXT.md"), []byte(b.String()), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWorkspaceDoesNotRetryDestructiveStage(t *testing.T) {
+	// A stage whose whitelist contains a destructive tool (bash) must fail loud
+	// on the first attempt: retrying a partially-executed destructive stage is
+	// how double-deletions happen.
+	home := t.TempDir()
+	writeWorkspaceStageTool(t, home, "destructive", "bash")
+	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	registry.Register(&Tool{Name: "bash", Behavior: BehaviorMutate})
+	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
+	oldLoop := runPlaybookStageLoop
+	defer func() { runPlaybookStageLoop = oldLoop }()
+	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
+		return &LoopResult{Status: "complete", Reply: "done"} // no output written
+	}
+	result, err := RunPlaybook(context.Background(), core, "destructive", "run", "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "failed" {
+		t.Fatalf("destructive stage should fail, got %+v", result)
+	}
+	if result.StagesRun != 1 {
+		t.Fatalf("StagesRun = %d, want 1 (destructive stage must not retry)", result.StagesRun)
+	}
+	pb, err := loadPlaybookWorkspace(home, "destructive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run2, err := latestPlaybookRun(pb)
+	if err != nil || run2 == nil {
+		t.Fatalf("latest run: %v %v", run2, err)
+	}
+	if run2.Stages[0].Attempts != 1 {
+		t.Fatalf("Attempts = %d, want 1 (no retry)", run2.Stages[0].Attempts)
+	}
+}
+
+func TestWorkspaceRetriesReadOnlyStage(t *testing.T) {
+	// A read-only whitelist (search_web + write_file) is retry-safe: the first
+	// attempt fails verification, the retry succeeds.
+	home := t.TempDir()
+	writeWorkspaceStageTool(t, home, "readonly", "search_web")
+	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	registry.Register(&Tool{Name: "search_web", Behavior: BehaviorObserve})
+	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
+	pb, err := loadPlaybookWorkspace(home, "readonly")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := loadOrCreatePlaybookRun(pb, "run", "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage1, _ := workspaceStage(pb, 1)
+	path := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
+	oldLoop := runPlaybookStageLoop
+	defer func() { runPlaybookStageLoop = oldLoop }()
+	attempts := 0
+	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
+		attempts++
+		if attempts == 1 {
+			return &LoopResult{Status: "complete", Reply: "done"} // no output: fails audit
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("result"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{{Name: "write_file", Args: map[string]any{"path": path}}}}
+	}
+	result, err := RunPlaybook(context.Background(), core, "readonly", "run", "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "complete" {
+		t.Fatalf("read-only stage should complete after retry, got %+v", result)
+	}
+	if attempts != 2 || result.StagesRun != 2 {
+		t.Fatalf("attempts = %d, StagesRun = %d, want 2 (retried once)", attempts, result.StagesRun)
 	}
 }
 
