@@ -68,6 +68,29 @@ type PlaybookRunStage struct {
 	EndedAt   time.Time `json:"ended_at,omitempty"`
 }
 
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func extractSection(raw, heading string) string {
+	start := strings.Index(raw, heading)
+	if start < 0 {
+		return ""
+	}
+	rest := raw[start+len(heading):]
+	for i, line := range strings.Split(rest, "\n") {
+		if i > 0 && strings.HasPrefix(line, "## ") {
+			return strings.TrimSpace(strings.Join(strings.Split(rest, "\n")[:i], "\n"))
+		}
+	}
+	return strings.TrimSpace(rest)
+}
+
 // runPlaybookStageLoop is an internal seam: production uses the canonical loop;
 // focused run-state tests can substitute a deterministic stage outcome.
 var runPlaybookStageLoop = func(ctx context.Context, client LLMClient, sessionID, system string, messages []Message, tools *Registry, maxIterations, maxTokens int, obs Observer, traceHome string) *LoopResult {
