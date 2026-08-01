@@ -77,12 +77,12 @@ type fileStamp struct {
 }
 
 type index struct {
-	Version      int                   `json:"version"`
-	Facts        map[string]indexEntry `json:"facts"`
-	Files        map[string]fileStamp  `json:"files"`
-	Communities  map[string]int        `json:"communities,omitempty"`
-	Gods         []string              `json:"gods,omitempty"`
-	Labels       map[string]string     `json:"labels,omitempty"`
+	Version     int                   `json:"version"`
+	Facts       map[string]indexEntry `json:"facts"`
+	Files       map[string]fileStamp  `json:"files"`
+	Communities map[string]int        `json:"communities,omitempty"`
+	Gods        []string              `json:"gods,omitempty"`
+	Labels      map[string]string     `json:"labels,omitempty"`
 }
 
 func (gm *GraphMemory) indexPath() string {
