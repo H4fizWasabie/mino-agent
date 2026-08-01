@@ -201,34 +201,54 @@ func (b *MCPBridge) registerFlattenedTools(serverName string, c *client.Client, 
 	if len(wrappers) == 0 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	// Broad search to enumerate toolkits + their tool schemas in one call.
-	// Uses the direct client, NOT b.call: registerFlattenedTools runs during
-	// connect, and b.call takes b.mu — calling it here would deadlock startup.
-	searchArgs := map[string]any{
-		"queries": []any{map[string]any{"use_case": "list available tools and toolkits"}},
+	// Enumerate toolkits with targeted queries. A single broad query returns
+	// only a handful of tools; connected toolkits must be queried individually
+	// to surface their schemas. The search response carries inline tool_schemas
+	// for the matched tools, which are the flat schemas we re-expose.
+	queries := []string{
+		"list available tools and toolkits",
+		"list instagram tools",
+		"list gmail tools",
+		"list google calendar tools",
+		"list notion tools",
+		"list slack tools",
+		"list github tools",
+		"list google drive tools",
+		"list telegram tools",
+		"list discord tools",
+		"list twitter tools",
+		"list linkedin tools",
+		"list whatsapp tools",
+		"list facebook tools",
 	}
-	out := mcpCallDirect(c, "COMPOSIO_SEARCH_TOOLS", searchArgs)
-
-	var resp struct {
-		Data struct {
-			Results []struct {
+	schemas := make(map[string]map[string]any)
+	for _, useCase := range queries {
+		// Uses the direct client, NOT b.call: registerFlattenedTools runs during
+		// connect, and b.call takes b.mu — calling it here would deadlock startup.
+		out := mcpCallDirect(c, "COMPOSIO_SEARCH_TOOLS", map[string]any{
+			"queries": []any{map[string]any{"use_case": useCase}},
+		})
+		var resp struct {
+			Data struct {
+				Results []struct {
+					ToolSchemas map[string]map[string]any `json:"tool_schemas"`
+				} `json:"results"`
 				ToolSchemas map[string]map[string]any `json:"tool_schemas"`
-			} `json:"results"`
-			ToolSchemas map[string]map[string]any `json:"tool_schemas"`
-		} `json:"data"`
-	}
-	if json.Unmarshal([]byte(out), &resp) != nil {
-		slog.Warn("mcp flatten: cannot parse search response", "server", serverName)
-		return
-	}
-
-	schemas := resp.Data.ToolSchemas
-	for _, r := range resp.Data.Results {
-		for slug, s := range r.ToolSchemas {
+			} `json:"data"`
+		}
+		if json.Unmarshal([]byte(out), &resp) != nil {
+			continue
+		}
+		for slug, s := range resp.Data.ToolSchemas {
 			schemas[slug] = s
+		}
+		for _, r := range resp.Data.Results {
+			for slug, s := range r.ToolSchemas {
+				schemas[slug] = s
+			}
 		}
 	}
 	if len(schemas) == 0 {
