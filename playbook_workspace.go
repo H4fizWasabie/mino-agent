@@ -510,7 +510,13 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 	}
 	result := &PlaybookResult{Name: name}
 	conversation := core.Sessions.Get(sessionID)
-	system := appendSystemTime(conversation.Session.BuildPlaybookSystem(run.Request, ""), time.Now(), core.Settings.Location())
+	// Cache stability: the system prompt must be byte-stable across all
+	// iterations of a stage so the provider's prefix cache stays warm. The
+	// clock goes into the stage prompt (user role) instead — the same intent
+	// the main loop documents ("Time is injected as user message for cache
+	// stability"). Before this fix the timestamp in system forced a full cache
+	// rewrite on every call (~63% of playbook input billed at full rate).
+	system := conversation.Session.BuildPlaybookSystem(run.Request, "")
 	baseMessages := conversation.Session.PlaybookContext(system)
 	// Label the run self-certified when any stage's Audit declares `self` — the
 	// audit trail then marks that no machine verified those outputs.
@@ -540,7 +546,7 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 			stageTools = core.Tools.Only(stage.Tools...)
 		}
 		messages := append([]Message(nil), baseMessages...)
-		messages = append(messages, Message{Role: "user", Content: buildWorkspaceStagePrompt(pb, run, stage)})
+		messages = append(messages, Message{Role: "user", Content: buildWorkspaceStagePrompt(pb, run, stage) + "\n\n" + appendSystemTime("", time.Now(), core.Settings.Location())})
 		retrySafe := stageRetrySafe(core.Tools, stage)
 
 		var outputs []string

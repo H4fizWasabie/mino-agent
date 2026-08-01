@@ -271,10 +271,11 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 		w.auditLog(sessionID, eventType, message, iteration)
 	})
 	system := conversation.Session.BuildSystem(userMessage, source)
-	// Keep the clock in the system prompt and the fresh user turn so stale
-	// schedule/history text cannot override the configured local time.
+	// Cache stability: keep the system prompt byte-stable across calls so the
+	// provider prefix cache stays warm. The clock is appended to the fresh user
+	// turn only — stale schedule/history text cannot override it, and the
+	// timestamp no longer forces a full cache rewrite on every call.
 	clock := authoritativeClock(time.Now(), w.Settings.Location())
-	system += "\n" + clock
 	messages, userContext := conversation.Session.ContextFor(system, userMessage)
 	if len(messages) > 0 {
 		messages[len(messages)-1].Content += "\n\n" + clock + "\nUse this clock; do not infer the current time from conversation history."

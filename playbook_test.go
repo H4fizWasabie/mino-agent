@@ -636,3 +636,35 @@ func writeWorkspacePlaybook(t *testing.T, home, name string, stages []string) {
 		}
 	}
 }
+
+func TestPlaybookSystemPromptHasNoClock(t *testing.T) {
+	// Cache stability: the playbook system prompt must be byte-stable across
+	// stage iterations. The clock is injected into the stage prompt (user role),
+	// never into system — a timestamp in system would force a full provider
+	// cache rewrite on every iteration (~63% of input billed at full rate).
+	home := t.TempDir()
+	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect"})
+	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
+	pb, err := loadPlaybookWorkspace(home, "brief")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation := core.Sessions.Get("test")
+	system := conversation.Session.BuildPlaybookSystem("run it", "")
+	if strings.Contains(system, "System time") || strings.Contains(system, "AUTHORITATIVE LOCAL CLOCK") {
+		t.Fatalf("system prompt contains a clock: %s", system)
+	}
+	run, err := loadOrCreatePlaybookRun(pb, registry, "run it", "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, _ := workspaceStage(pb, 1)
+	// The clock lands in the user-role stage message, not in system.
+	stageMsg := buildWorkspaceStagePrompt(pb, run, stage) + "\n\n" + appendSystemTime("", time.Now(), core.Settings.Location())
+	if !strings.Contains(stageMsg, "System time") {
+		t.Fatalf("stage message missing clock: %s", stageMsg)
+	}
+}

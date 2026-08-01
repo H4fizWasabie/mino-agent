@@ -129,6 +129,7 @@ func (b *MCPBridge) connect(cfg mcpServerConfig) {
 	}
 
 	count := 0
+	var flatTools []flatToolDef
 	for _, t := range toolsResp.Tools {
 		fullName := fmt.Sprintf("MCP_%s_%s", cfg.Name, t.Name)
 		if _, ok := b.registry.tools[fullName]; ok {
@@ -148,8 +149,129 @@ func (b *MCPBridge) connect(cfg mcpServerConfig) {
 		})
 		b.servers[cfg.Name] = active
 		count++
+		// Wrapper tools (executor + slugs, e.g. Composio's MULTI_EXECUTE)
+		// expose inner tools only as nested args. Many models fail to build
+		// that nesting (observed with gpt-5.6-luna emitting arguments:{}).
+		// Collect them for flat re-exposure below.
+		if schemaHasToolsArray(t.InputSchema) {
+			flatTools = append(flatTools, flatToolDef{server: cfg.Name, wrapper: toolName, wrapperDesc: t.Description})
+		}
 	}
+	b.registerFlattenedTools(cfg.Name, c, flatTools)
 	slog.Info("mcp tools registered", "server", cfg.Name, "tools", count)
+}
+
+// flatToolDef records a wrapper-shaped MCP tool whose inner tools (slugs) can
+// be re-exposed with flat top-level args — the shape every model handles.
+type flatToolDef struct {
+	server     string
+	wrapper    string
+	wrapperDesc string
+}
+
+// schemaHasToolsArray reports whether the tool schema contains a "tools" array
+// whose items carry tool_slug + arguments — the nested-executor pattern used by
+// Composio's COMPOSIO_MULTI_EXECUTE_TOOL and similar servers.
+func schemaHasToolsArray(schema mcp.ToolInputSchema) bool {
+	raw, ok := schema.Properties["tools"]
+	if !ok {
+		return false
+	}
+	item := map[string]any{}
+	if m, ok := raw.(map[string]any); ok {
+		if items, ok := m["items"].(map[string]any); ok {
+			item = items
+		}
+	}
+	if itemProps, ok := item["properties"].(map[string]any); ok {
+		_, hasSlug := itemProps["tool_slug"]
+		_, hasArgs := itemProps["arguments"]
+		return hasSlug && hasArgs
+	}
+	return false
+}
+
+// registerFlattenedTools re-exposes inner toolkit tools with flat schemas. For
+// Composio, it queries COMPOSIO_SEARCH_TOOLS with a broad query; the response
+// carries toolkit_connection_statuses (active toolkits) plus inline tool_schemas
+// (flat schemas for the matched tools). Each inner tool is registered as
+// MCP_<server>_<SLUG> and, when called, re-wrapped into the executor's nested
+// args. One generic mechanism — no per-toolkit code.
+func (b *MCPBridge) registerFlattenedTools(serverName string, c *client.Client, wrappers []flatToolDef) {
+	if len(wrappers) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// Broad search to enumerate toolkits + their tool schemas in one call.
+	out := b.call(serverName, "COMPOSIO_SEARCH_TOOLS", map[string]any{
+		"queries": []any{map[string]any{"use_case": "list available tools and toolkits"}},
+	})
+
+	var resp struct {
+		Data struct {
+			Results []struct {
+				ToolSchemas map[string]map[string]any `json:"tool_schemas"`
+			} `json:"results"`
+			ToolSchemas map[string]map[string]any `json:"tool_schemas"`
+		} `json:"data"`
+	}
+	if json.Unmarshal([]byte(out), &resp) != nil {
+		slog.Warn("mcp flatten: cannot parse search response", "server", serverName)
+		return
+	}
+
+	schemas := resp.Data.ToolSchemas
+	for _, r := range resp.Data.Results {
+		for slug, s := range r.ToolSchemas {
+			schemas[slug] = s
+		}
+	}
+	if len(schemas) == 0 {
+		slog.Warn("mcp flatten: no tool schemas returned", "server", serverName)
+		return
+	}
+
+	registered := 0
+	for slug, s := range schemas {
+		if strings.HasPrefix(strings.ToLower(descOf(s)), "deprecated") {
+			continue // don't offer deprecated tools alongside their replacements
+		}
+		fullName := fmt.Sprintf("MCP_%s_%s", serverName, slug)
+		if _, ok := b.registry.tools[fullName]; ok {
+			continue
+		}
+		wrapper := wrappers[0].wrapper // all wrappers share the same executor shape
+		innerSlug := slug
+		inputSchema := map[string]any{"type": "object", "properties": map[string]any{}}
+		if props, ok := s["input_schema"].(map[string]any); ok {
+			inputSchema = props
+		}
+		b.registry.Register(&Tool{
+			Name:        fullName,
+			Description: fmt.Sprintf("[MCP:%s flattened] %s", serverName, descOf(s)),
+			Schema:      inputSchema,
+			Fn: func(args map[string]any) string {
+				return b.call(serverName, wrapper, map[string]any{
+					"tools": []any{map[string]any{
+						"tool_slug": innerSlug,
+						"arguments": args,
+					}},
+				})
+			},
+		})
+		registered++
+	}
+	slog.Info("mcp flattened tools registered", "server", serverName, "tools", registered)
+	_ = ctx
+}
+
+func descOf(s map[string]any) string {
+	if d, ok := s["description"].(string); ok {
+		return d
+	}
+	return ""
 }
 
 func (b *MCPBridge) call(server, tool string, args map[string]any) string {
