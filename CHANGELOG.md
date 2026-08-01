@@ -4,6 +4,8 @@
 
 ### Added
 
+- `mino maintain-memory` CLI subcommand runs the full maintenance pass (edge re-inference, mirrored-pair cleanup, community detection, labels) on demand.
+
 - `manage_memory` tool actions: `maintain` (full 6h pass on demand), `judge_edges`, `distill_outputs`; dashboard graph payload now includes communities, god nodes, and labels.
 
 - Playbook run outputs distill into one compact episodic memory node per run (content, post ID, when, outcome) plus semantic facts for durable knowledge; undistilled rows survive cleanup until processed.
