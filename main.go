@@ -31,6 +31,10 @@ func main() {
 			s := LoadSettings()
 			RebuildMemoryEdges(s)
 			return
+		case "maintain-memory", "--maintain-memory":
+			s := LoadSettings()
+			MaintainMemory(s)
+			return
 		case "clean-memory-edges", "--clean-memory-edges":
 			s := LoadSettings()
 			CleanMemoryEdges(s)

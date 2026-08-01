@@ -1179,6 +1179,31 @@ func RebuildMemoryEdges(s *Settings) {
 	fmt.Printf("Rebuilt %d inferred graph edges\n", n)
 }
 
+// MaintainMemory runs the full scheduled maintenance pass on demand: edge
+// re-inference, mirrored-pair cleanup, community detection, and labels.
+func MaintainMemory(s *Settings) {
+	db := Connect(s.Home)
+	defer db.Close()
+	authStore := LoadAuthStore(s.Home)
+	client, err := NewProviderManager(s.Home, s, authStore)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "graph maintenance unavailable: %v\n", err)
+		return
+	}
+	m := NewMemory(db, client, s)
+	key := os.Getenv("MINO_OPENROUTER_KEY")
+	if key == "" {
+		fmt.Fprintln(os.Stderr, "graph maintenance requires MINO_OPENROUTER_KEY")
+		return
+	}
+	m.embedder = NewEmbeddingStore(db, key, envOr("MINO_EMBED_MODEL", "openai/text-embedding-3-large"))
+	edges, communities, err := m.MaintainGraph()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "graph maintenance incomplete: %v\n", err)
+	}
+	fmt.Printf("Maintained graph: %d edges, %d communities\n", edges, communities)
+}
+
 func CleanMemoryEdges(s *Settings) {
 	db := Connect(s.Home)
 	defer db.Close()
