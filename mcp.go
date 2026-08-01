@@ -191,12 +191,12 @@ func schemaHasToolsArray(schema mcp.ToolInputSchema) bool {
 	return false
 }
 
-// registerFlattenedTools re-exposes inner toolkit tools with flat schemas. For
-// Composio, it queries COMPOSIO_SEARCH_TOOLS with a broad query; the response
-// carries toolkit_connection_statuses (active toolkits) plus inline tool_schemas
-// (flat schemas for the matched tools). Each inner tool is registered as
-// MCP_<server>_<SLUG> and, when called, re-wrapped into the executor's nested
-// args. One generic mechanism — no per-toolkit code.
+// registerFlattenedTools re-exposes inner toolkit tools with flat schemas. It
+// discovers connected toolkits from the server's own response
+// (toolkit_connection_statuses) rather than any hardcoded list, then queries
+// each connected toolkit to surface its schemas. Each inner tool is registered
+// as MCP_<server>_<SLUG> and, when called, re-wrapped into the executor's
+// nested args. One generic mechanism — no per-toolkit code, no hardcoded names.
 func (b *MCPBridge) registerFlattenedTools(serverName string, c *client.Client, wrappers []flatToolDef) {
 	if len(wrappers) == 0 {
 		return
@@ -204,51 +204,40 @@ func (b *MCPBridge) registerFlattenedTools(serverName string, c *client.Client, 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	// Enumerate toolkits with targeted queries. A single broad query returns
-	// only a handful of tools; connected toolkits must be queried individually
-	// to surface their schemas. The search response carries inline tool_schemas
-	// for the matched tools, which are the flat schemas we re-expose.
-	queries := []string{
-		"list available tools and toolkits",
-		"list instagram tools",
-		"list gmail tools",
-		"list google calendar tools",
-		"list notion tools",
-		"list slack tools",
-		"list github tools",
-		"list google drive tools",
-		"list telegram tools",
-		"list discord tools",
-		"list twitter tools",
-		"list linkedin tools",
-		"list whatsapp tools",
-		"list facebook tools",
+	// Step 1: discover which toolkits are connected. The search response reports
+	// toolkit_connection_statuses — the server's own list, not ours.
+	discovery := mcpCallDirect(c, "COMPOSIO_SEARCH_TOOLS", map[string]any{
+		"queries": []any{map[string]any{"use_case": "list available tools and toolkits"}},
+	})
+	var discResp struct {
+		Data struct {
+			ToolkitConnectionStatuses []struct {
+				Toolkit            string `json:"toolkit"`
+				HasActiveConnection bool   `json:"has_active_connection"`
+			} `json:"toolkit_connection_statuses"`
+		} `json:"data"`
 	}
-	schemas := make(map[string]map[string]any)
-	for _, useCase := range queries {
-		// Uses the direct client, NOT b.call: registerFlattenedTools runs during
-		// connect, and b.call takes b.mu — calling it here would deadlock startup.
-		out := mcpCallDirect(c, "COMPOSIO_SEARCH_TOOLS", map[string]any{
-			"queries": []any{map[string]any{"use_case": useCase}},
-		})
-		var resp struct {
-			Data struct {
-				Results []struct {
-					ToolSchemas map[string]map[string]any `json:"tool_schemas"`
-				} `json:"results"`
-				ToolSchemas map[string]map[string]any `json:"tool_schemas"`
-			} `json:"data"`
-		}
-		if json.Unmarshal([]byte(out), &resp) != nil {
-			continue
-		}
-		for slug, s := range resp.Data.ToolSchemas {
-			schemas[slug] = s
-		}
-		for _, r := range resp.Data.Results {
-			for slug, s := range r.ToolSchemas {
-				schemas[slug] = s
+	var toolkits []string
+	if json.Unmarshal([]byte(discovery), &discResp) == nil {
+		for _, s := range discResp.Data.ToolkitConnectionStatuses {
+			if s.Toolkit != "" && s.HasActiveConnection {
+				toolkits = append(toolkits, s.Toolkit)
 			}
+		}
+	}
+
+	// Step 2: query each connected toolkit for its tool schemas.
+	schemas := make(map[string]map[string]any)
+	if len(toolkits) == 0 {
+		// Fallback: the broad query may itself carry inline schemas.
+		schemas = extractSearchSchemas(discovery)
+	}
+	for _, toolkit := range toolkits {
+		out := mcpCallDirect(c, "COMPOSIO_SEARCH_TOOLS", map[string]any{
+			"queries": []any{map[string]any{"use_case": "list " + toolkit + " tools"}},
+		})
+		for slug, s := range extractSearchSchemas(out) {
+			schemas[slug] = s
 		}
 	}
 	if len(schemas) == 0 {
@@ -288,6 +277,32 @@ func (b *MCPBridge) registerFlattenedTools(serverName string, c *client.Client, 
 	}
 	slog.Info("mcp flattened tools registered", "server", serverName, "tools", registered)
 	_ = ctx
+}
+
+// extractSearchSchemas pulls inline tool_schemas out of a COMPOSIO_SEARCH_TOOLS
+// response. Schemas may live at data.tool_schemas or inside each result.
+func extractSearchSchemas(out string) map[string]map[string]any {
+	var resp struct {
+		Data struct {
+			Results []struct {
+				ToolSchemas map[string]map[string]any `json:"tool_schemas"`
+			} `json:"results"`
+			ToolSchemas map[string]map[string]any `json:"tool_schemas"`
+		} `json:"data"`
+	}
+	if json.Unmarshal([]byte(out), &resp) != nil {
+		return nil
+	}
+	schemas := make(map[string]map[string]any)
+	for slug, s := range resp.Data.ToolSchemas {
+		schemas[slug] = s
+	}
+	for _, r := range resp.Data.Results {
+		for slug, s := range r.ToolSchemas {
+			schemas[slug] = s
+		}
+	}
+	return schemas
 }
 
 func descOf(s map[string]any) string {
