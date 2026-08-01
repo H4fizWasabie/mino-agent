@@ -37,6 +37,7 @@
 - Rebuilt playbooks around filesystem workspaces and isolated durable runs. Stage contracts now live in `stages/NN-name/CONTEXT.md`; `state.json` records per-stage attempts, outputs, failures, and resume state so a failed later stage does not replay completed work.
 
 ### Fixed
+- Deterministic maintenance steps (mirror cleanup, Louvain clustering, god nodes, labels) now run even when the edge rebuild had failed LLM batches — an empty-edge batch no longer starves communities forever; failed batches retry next cycle.
 - Facts are only marked judged when a graph rebuild completes with zero failed batches; a partial failure leaves facts eligible for the incremental judgment pass instead of trusting a rebuild that didn't write everything.
 - The 5-minute edge-judgment pass and the 6-hour graph rebuild could race on the same fact: the 5-min pass re-checks `JudgedAt` after its model call and skips its edge write + `MarkJudged` when the 6h pass already judged the fact, so the two passes' inferred edges no longer overwrite each other nondeterministically (the 6h write wins).
 - Facts without embeddings were invisible to graph edge inference: rebuild now backfills missing fact vectors before candidate generation, so migrated facts can gain edges instead of staying orphaned forever.
