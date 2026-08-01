@@ -33,6 +33,7 @@ type WorkspaceStage struct {
 	Inputs  []StageInput
 	Tools   []string
 	Outputs []StageOutput
+	Audit   string
 }
 
 type StageInput struct {
@@ -180,6 +181,7 @@ func loadWorkspaceStage(dir, folder string) (*WorkspaceStage, error) {
 	stage.Inputs = parseStageInputs(extractSection(context, "## Inputs"))
 	stage.Tools = parseStageTools(extractSection(context, "## Tools"))
 	stage.Outputs = parseStageOutputs(extractSection(context, "## Outputs"))
+	stage.Audit = extractSection(context, "## Audit")
 	return stage, nil
 }
 
@@ -345,6 +347,20 @@ func playbookRunOutputPath(pb *PlaybookWorkspace, run *PlaybookRun, stage Worksp
 	return filepath.Join(playbookRunsDir(pb), run.ID, "stages", fmt.Sprintf("%02d-%s", stage.Number, stage.Name), filepath.FromSlash(output.Path))
 }
 
+// stageSelfCertified reports whether the stage's Audit section declares `self`
+// (category 3: the model judges its own non-mechanically-verifiable work). The
+// run is then labeled self-certified so the audit trail marks it as unverified.
+func stageSelfCertified(stage WorkspaceStage) bool {
+	lower := strings.ToLower(stage.Audit)
+	for _, line := range strings.Split(lower, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "self" || strings.HasPrefix(line, "self:") || line == "- self" {
+			return true
+		}
+	}
+	return false
+}
+
 // playbookWriteGuard enforces the contract read-only rule: the playbook tree
 // (definitions AND runs) is writable only from inside the stage execution of
 // that playbook, and only within its own run directory. The main loop can never
@@ -404,6 +420,15 @@ func validateWorkspaceStageTools(pb *PlaybookWorkspace, registry *Registry) erro
 		for _, name := range stage.Tools {
 			if !known[name] {
 				return fmt.Errorf("playbook %s: stage %d (%s) declares unknown tool %q", pb.Name, stage.Number, stage.Name, name)
+			}
+		}
+		// Autonomy rule: playbooks are standing orders that run without a human
+		// present. A stage that defers to a human ("Ask Abah", "request
+		// approval", "wait for the user") is a conversation, not a playbook.
+		lower := strings.ToLower(stage.Context)
+		for _, pattern := range []string{"ask abah", "ask the user", "request approval", "ask for approval", "wait for approval", "human checkpoint", "stop here"} {
+			if strings.Contains(lower, pattern) {
+				return fmt.Errorf("playbook %s: stage %d (%s) requires a human checkpoint (%q) — playbooks are autonomous; if the task needs Abah, it is not a playbook", pb.Name, stage.Number, stage.Name, pattern)
 			}
 		}
 	}
@@ -471,6 +496,14 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 	conversation := core.Sessions.Get(sessionID)
 	system := appendSystemTime(conversation.Session.BuildPlaybookSystem(run.Request, ""), time.Now(), core.Settings.Location())
 	baseMessages := conversation.Session.PlaybookContext(system)
+	// Label the run self-certified when any stage's Audit declares `self` — the
+	// audit trail then marks that no machine verified those outputs.
+	for _, stage := range pb.Stages {
+		if stageSelfCertified(stage) {
+			result.SelfCertified = true
+			break
+		}
+	}
 
 	for {
 		state := nextPlaybookStage(run)

@@ -27,14 +27,15 @@ const maxStageAttempts = 2
 
 // PlaybookResult is the durable outcome returned by a playbook run.
 type PlaybookResult struct {
-	Name      string
-	StagesRun int
-	Status    string
-	Reply     string
-	Outputs   []string
-	ToolCalls []ToolCall
-	TokensIn  int
-	TokensOut int
+	Name          string
+	StagesRun     int
+	Status        string
+	Reply         string
+	Outputs       []string
+	ToolCalls     []ToolCall
+	TokensIn      int
+	TokensOut     int
+	SelfCertified bool
 }
 
 func RunPlaybook(ctx context.Context, core *Core, name, request, sessionID string, obs Observer) (*PlaybookResult, error) {
@@ -47,7 +48,7 @@ func RunPlaybook(ctx context.Context, core *Core, name, request, sessionID strin
 			core.Memory.RecordArtifact(sessionID, name+" output", output, int(info.Size()))
 		}
 	}
-	logTrace(core.Settings.Home, "playbook_run", map[string]any{"name": name, "status": result.Status, "stages": result.StagesRun})
+	logTrace(core.Settings.Home, "playbook_run", map[string]any{"name": name, "status": result.Status, "stages": result.StagesRun, "self_certified": result.SelfCertified})
 	return result, nil
 }
 

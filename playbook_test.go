@@ -206,6 +206,74 @@ func TestPlaybookWriteGuard(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRejectsHumanCheckpointStage(t *testing.T) {
+	// Autonomy rule: a stage that defers to a human is a conversation, not a
+	// playbook — validation must reject it at creation time.
+	home := t.TempDir()
+	settings := &Settings{Home: home, Workspace: home}
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	core := &Core{Settings: settings, Tools: registry}
+	tool := makeManagePlaybookTool(core)
+	stage := "# Review\n\n## Inputs\n\n| Source | File/Location | Section/Scope | Why |\n| --- | --- | --- | --- |\n\n## Process\n\n1. Write the report.\n2. Stop here. Ask Abah.\n\n## Tools\n\n- write_file\n\n## Outputs\n\n| Artifact | Location | Format |\n| --- | --- | --- |\n| Report | `output/report.md` | Markdown |\n"
+	got := tool.Fn(map[string]any{"action": "create", "name": "needs-abah", "context": "# Needs Abah\n", "stages": []any{map[string]any{"name": "01-review", "context": stage}}})
+	if !strings.Contains(got, "human checkpoint") {
+		t.Fatalf("create = %q, want human-checkpoint rejection", got)
+	}
+}
+
+func TestWorkspaceLabelsSelfCertifiedStage(t *testing.T) {
+	// A stage whose Audit section declares `self` marks the run self-certified:
+	// the model judged its own work and the audit trail must say so.
+	home := t.TempDir()
+	writeWorkspaceStageTool(t, home, "selfish", "search_web")
+	// add an Audit section declaring self
+	stageDir := filepath.Join(home, "playbooks", "selfish", "stages", "01-work", "CONTEXT.md")
+	data, err := os.ReadFile(stageDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stageDir, append(data, []byte("\n## Audit\n\n- self\n")...), 0600); err != nil {
+		t.Fatal(err)
+	}
+	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	registry.Register(&Tool{Name: "search_web", Behavior: BehaviorObserve})
+	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
+	pb, err := loadPlaybookWorkspace(home, "selfish")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := loadOrCreatePlaybookRun(pb, "run", "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage1, _ := workspaceStage(pb, 1)
+	path := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
+	oldLoop := runPlaybookStageLoop
+	defer func() { runPlaybookStageLoop = oldLoop }()
+	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("result"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{{Name: "write_file", Args: map[string]any{"path": path}}}}
+	}
+	result, err := RunPlaybook(context.Background(), core, "selfish", "run", "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "complete" {
+		t.Fatalf("run = %+v", result)
+	}
+	if !result.SelfCertified {
+		t.Fatal("self-certified stage did not label the run")
+	}
+}
+
 func TestWorkspaceRejectsMissingContract(t *testing.T) {
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, "playbooks", "bad"), 0700); err != nil {
