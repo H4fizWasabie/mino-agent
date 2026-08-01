@@ -57,6 +57,9 @@ func NewMCPBridge(home string, registry *Registry) *MCPBridge {
 // Start loads every config in mcp.d/, connects each server, and registers its
 // tools. Servers that don't start are skipped with a warning.
 func (b *MCPBridge) Start() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	entries, err := os.ReadDir(b.dir)
 	if err != nil {
 		return
@@ -79,9 +82,6 @@ func (b *MCPBridge) Start() {
 		if cfg.Name == "" {
 			cfg.Name = strings.TrimSuffix(e.Name(), ".json")
 		}
-		// connect must run WITHOUT b.mu held: registerFlattenedTools performs
-		// live MCP calls (via direct client) and registering tools takes the
-		// registry lock. Holding b.mu here deadlocked startup.
 		b.connect(cfg)
 	}
 }
@@ -129,7 +129,6 @@ func (b *MCPBridge) connect(cfg mcpServerConfig) {
 	}
 
 	count := 0
-	var flatTools []flatToolDef
 	for _, t := range toolsResp.Tools {
 		fullName := fmt.Sprintf("MCP_%s_%s", cfg.Name, t.Name)
 		if _, ok := b.registry.tools[fullName]; ok {
@@ -149,214 +148,8 @@ func (b *MCPBridge) connect(cfg mcpServerConfig) {
 		})
 		b.servers[cfg.Name] = active
 		count++
-		// Wrapper tools (executor + slugs, e.g. Composio's MULTI_EXECUTE)
-		// expose inner tools only as nested args. Many models fail to build
-		// that nesting (observed with gpt-5.6-luna emitting arguments:{}).
-		// Collect them for flat re-exposure below.
-		if schemaHasToolsArray(t.InputSchema) {
-			flatTools = append(flatTools, flatToolDef{server: cfg.Name, wrapper: toolName, wrapperDesc: t.Description})
-		}
 	}
-	b.registerFlattenedTools(cfg.Name, c, flatTools)
 	slog.Info("mcp tools registered", "server", cfg.Name, "tools", count)
-}
-
-// flatToolDef records a wrapper-shaped MCP tool whose inner tools (slugs) can
-// be re-exposed with flat top-level args — the shape every model handles.
-type flatToolDef struct {
-	server     string
-	wrapper    string
-	wrapperDesc string
-}
-
-// schemaHasToolsArray reports whether the tool schema contains a "tools" array
-// whose items carry tool_slug + arguments — the nested-executor pattern used by
-// Composio's COMPOSIO_MULTI_EXECUTE_TOOL and similar servers.
-func schemaHasToolsArray(schema mcp.ToolInputSchema) bool {
-	raw, ok := schema.Properties["tools"]
-	if !ok {
-		return false
-	}
-	item := map[string]any{}
-	if m, ok := raw.(map[string]any); ok {
-		if items, ok := m["items"].(map[string]any); ok {
-			item = items
-		}
-	}
-	if itemProps, ok := item["properties"].(map[string]any); ok {
-		_, hasSlug := itemProps["tool_slug"]
-		_, hasArgs := itemProps["arguments"]
-		return hasSlug && hasArgs
-	}
-	return false
-}
-
-// registerFlattenedTools re-exposes inner toolkit tools with flat schemas. It
-// discovers connected toolkits from the server's own response
-// (toolkit_connection_statuses) rather than any hardcoded list, then queries
-// each connected toolkit to surface its schemas. Each inner tool is registered
-// as MCP_<server>_<SLUG> and, when called, re-wrapped into the executor's
-// nested args. One generic mechanism — no per-toolkit code, no hardcoded names.
-func (b *MCPBridge) registerFlattenedTools(serverName string, c *client.Client, wrappers []flatToolDef) {
-	if len(wrappers) == 0 {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-
-	// Step 1: discover which toolkits are connected. The search response reports
-	// toolkit_connection_statuses — the server's own list, not ours.
-	discovery := mcpCallDirect(c, "COMPOSIO_SEARCH_TOOLS", map[string]any{
-		"queries": []any{map[string]any{"use_case": "list available tools and toolkits"}},
-	})
-	var discResp struct {
-		Data struct {
-			ToolkitConnectionStatuses []struct {
-				Toolkit            string `json:"toolkit"`
-				HasActiveConnection bool   `json:"has_active_connection"`
-			} `json:"toolkit_connection_statuses"`
-		} `json:"data"`
-	}
-	var toolkits []string
-	if json.Unmarshal([]byte(discovery), &discResp) == nil {
-		for _, s := range discResp.Data.ToolkitConnectionStatuses {
-			if s.Toolkit != "" && s.HasActiveConnection {
-				toolkits = append(toolkits, s.Toolkit)
-			}
-		}
-	}
-
-	// Step 2: query each connected toolkit, collecting tool slugs from the
-	// search results (primary + related). Schemas come from a single
-	// GET_TOOL_SCHEMAS call afterwards — search responses do not reliably carry
-	// inline schemas.
-	var slugs []string
-	seen := make(map[string]bool)
-	collect := func(out string) {
-		var resp struct {
-			Data struct {
-				Results []struct {
-					PrimaryToolSlugs  []string `json:"primary_tool_slugs"`
-					RelatedToolSlugs  []string `json:"related_tool_slugs"`
-				} `json:"results"`
-			} `json:"data"`
-		}
-		if json.Unmarshal([]byte(out), &resp) != nil {
-			return
-		}
-		for _, r := range resp.Data.Results {
-			for _, slug := range append(append([]string{}, r.PrimaryToolSlugs...), r.RelatedToolSlugs...) {
-				if slug != "" && !seen[slug] {
-					seen[slug] = true
-					slugs = append(slugs, slug)
-				}
-			}
-		}
-	}
-	if len(toolkits) == 0 {
-		collect(discovery)
-	}
-	for _, toolkit := range toolkits {
-		out := mcpCallDirect(c, "COMPOSIO_SEARCH_TOOLS", map[string]any{
-			"queries": []any{map[string]any{"use_case": "list " + toolkit + " tools"}},
-		})
-		collect(out)
-	}
-	if len(slugs) == 0 {
-		slog.Warn("mcp flatten: no tool slugs found", "server", serverName)
-		return
-	}
-
-	// Step 3: fetch the flat schemas for all collected slugs in one call.
-	schemaOut := mcpCallDirect(c, "COMPOSIO_GET_TOOL_SCHEMAS", map[string]any{
-		"tool_slugs": slugs,
-		"include":    []string{"input_schema"},
-	})
-	var schemaResp struct {
-		Data struct {
-			ToolSchemas map[string]map[string]any `json:"tool_schemas"`
-		} `json:"data"`
-	}
-	schemas := map[string]map[string]any{}
-	if json.Unmarshal([]byte(schemaOut), &schemaResp) == nil {
-		schemas = schemaResp.Data.ToolSchemas
-	}
-	// Also accept inline schemas from search responses as a fallback.
-	if len(toolkits) == 0 {
-		for slug, s := range extractSearchSchemas(discovery) {
-			schemas[slug] = s
-		}
-	}
-	if len(schemas) == 0 {
-		slog.Warn("mcp flatten: no tool schemas returned", "server", serverName)
-		return
-	}
-
-	registered := 0
-	for slug, s := range schemas {
-		if strings.HasPrefix(strings.ToLower(descOf(s)), "deprecated") {
-			continue // don't offer deprecated tools alongside their replacements
-		}
-		fullName := fmt.Sprintf("MCP_%s_%s", serverName, slug)
-		if _, ok := b.registry.tools[fullName]; ok {
-			continue
-		}
-		wrapper := wrappers[0].wrapper // all wrappers share the same executor shape
-		innerSlug := slug
-		inputSchema := map[string]any{"type": "object", "properties": map[string]any{}}
-		if props, ok := s["input_schema"].(map[string]any); ok {
-			inputSchema = props
-		}
-		b.registry.Register(&Tool{
-			Name:        fullName,
-			Description: fmt.Sprintf("[MCP:%s flattened] %s", serverName, descOf(s)),
-			Schema:      inputSchema,
-			Fn: func(args map[string]any) string {
-				return b.call(serverName, wrapper, map[string]any{
-					"tools": []any{map[string]any{
-						"tool_slug": innerSlug,
-						"arguments": args,
-					}},
-				})
-			},
-		})
-		registered++
-	}
-	slog.Info("mcp flattened tools registered", "server", serverName, "tools", registered)
-	_ = ctx
-}
-
-// extractSearchSchemas pulls inline tool_schemas out of a COMPOSIO_SEARCH_TOOLS
-// response. Schemas may live at data.tool_schemas or inside each result.
-func extractSearchSchemas(out string) map[string]map[string]any {
-	var resp struct {
-		Data struct {
-			Results []struct {
-				ToolSchemas map[string]map[string]any `json:"tool_schemas"`
-			} `json:"results"`
-			ToolSchemas map[string]map[string]any `json:"tool_schemas"`
-		} `json:"data"`
-	}
-	if json.Unmarshal([]byte(out), &resp) != nil {
-		return nil
-	}
-	schemas := make(map[string]map[string]any)
-	for slug, s := range resp.Data.ToolSchemas {
-		schemas[slug] = s
-	}
-	for _, r := range resp.Data.Results {
-		for slug, s := range r.ToolSchemas {
-			schemas[slug] = s
-		}
-	}
-	return schemas
-}
-
-func descOf(s map[string]any) string {
-	if d, ok := s["description"].(string); ok {
-		return d
-	}
-	return ""
 }
 
 func (b *MCPBridge) call(server, tool string, args map[string]any) string {
@@ -366,20 +159,13 @@ func (b *MCPBridge) call(server, tool string, args map[string]any) string {
 	if active == nil {
 		return fmt.Sprintf("MCP server %q is not connected", server)
 	}
-	return mcpCallDirect(active.client, tool, args)
-}
-
-// mcpCallDirect performs an MCP tool call on an already-connected client
-// without touching the bridge mutex. Used both by b.call (runtime) and by
-// registerFlattenedTools (startup, where b.mu must not be held).
-func mcpCallDirect(c *client.Client, tool string, args map[string]any) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	result, err := c.CallTool(ctx, mcp.CallToolRequest{
+	result, err := active.client.CallTool(ctx, mcp.CallToolRequest{
 		Params: mcp.CallToolParams{Name: tool, Arguments: args},
 	})
 	if err != nil {
-		return fmt.Sprintf("MCP call %s failed: %v", tool, err)
+		return fmt.Sprintf("MCP call %s_%s failed: %v", server, tool, err)
 	}
 	var out strings.Builder
 	for _, block := range result.Content {
@@ -407,6 +193,9 @@ func (b *MCPBridge) Close() {
 // Reload re-scans mcp.d/ for new server configs and connects them.
 // Already-connected servers are skipped — only new configs are picked up.
 func (b *MCPBridge) Reload() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	entries, err := os.ReadDir(b.dir)
 	if err != nil {
 		return
@@ -430,10 +219,7 @@ func (b *MCPBridge) Reload() {
 		if cfg.Name == "" {
 			cfg.Name = strings.TrimSuffix(e.Name(), ".json")
 		}
-		b.mu.Lock()
-		_, connected := b.servers[cfg.Name]
-		b.mu.Unlock()
-		if connected {
+		if _, ok := b.servers[cfg.Name]; ok {
 			continue // already connected
 		}
 		b.connect(cfg)

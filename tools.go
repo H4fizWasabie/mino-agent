@@ -211,51 +211,6 @@ var toolFamilies = [][]string{
 	{"search_web", "fetch_url"},
 }
 
-// mcpToolkitFamily returns the toolkit family of an MCP tool name:
-// MCP_composio_INSTAGRAM_POST_IG_USER_MEDIA → "composio_INSTAGRAM".
-// Tools from the same MCP server and toolkit share a family so the gate can
-// expand them together (the Instagram pair/trio is used as a unit).
-func mcpToolkitFamily(name string) string {
-	parts := strings.SplitN(name, "_", 3)
-	if len(parts) < 3 || !strings.HasPrefix(name, "MCP_") {
-		return ""
-	}
-	slug := parts[2]
-	toolkit := slug
-	if i := strings.IndexByte(slug, '_'); i > 0 {
-		toolkit = slug[:i]
-	}
-	return parts[1] + "_" + toolkit
-}
-
-// schemaHasToolsArrayTool reports whether a registered tool carries the
-// nested-executor schema shape (a tools[] array with tool_slug + arguments).
-func schemaHasToolsArrayTool(t *Tool) bool {
-	if t == nil {
-		return false
-	}
-	props, ok := t.Schema["properties"].(map[string]any)
-	if !ok {
-		return false
-	}
-	raw, ok := props["tools"]
-	if !ok {
-		return false
-	}
-	item := map[string]any{}
-	if m, ok := raw.(map[string]any); ok {
-		if items, ok := m["items"].(map[string]any); ok {
-			item = items
-		}
-	}
-	if itemProps, ok := item["properties"].(map[string]any); ok {
-		_, hasSlug := itemProps["tool_slug"]
-		_, hasArgs := itemProps["arguments"]
-		return hasSlug && hasArgs
-	}
-	return false
-}
-
 // SchemasForContext keeps the everyday tools available and retrieves specialist
 // schemas from the full assembled context, including skills, playbooks, history,
 // and prior observations. A registry without an index is static (used by tests
@@ -292,64 +247,22 @@ func (r *Registry) SchemasForContext(fullCtx string, oneTurnText string, es *Emb
 		}
 	}
 
-	// MCP tools: keyword FTS5 only on one-turn window (keyword-gate).
-	// Families expand by toolkit: once one INSTAGRAM tool matches, the whole
-	// Instagram family is included (flattened schemas are small — a handful of
-	// fields each — so a family costs less than one wrapper tool). Wrapper tools
-	// (the nested-executor shapes, e.g. Composio's MULTI_EXECUTE) are suppressed
-	// when any of their flattened children are present: the model should use the
-	// flat tools, and the wrapper is only the fallback.
-	mcpSelected := make(map[string]bool)
+	// MCP tools: keyword FTS5 is the final gate (one-turn window).
+	// searchToolNames returns matches already ranked by bm25 relevance — the
+	// order is meaningful (best match first), so take the top-N in that order
+	// and never re-sort alphabetically. Cap 5 keeps the context budget bounded
+	// while giving the model the handful of relevant schemas it needs.
+	const maxMCPTools = 5
+	mcpCount := 0
 	for _, name := range r.searchToolNames(oneTurnText) {
-		if strings.HasPrefix(name, "MCP_") {
-			mcpSelected[name] = true
-		}
-	}
-	// Expand each selected MCP tool to its full toolkit family.
-	mcpNames := make([]string, 0, len(mcpSelected))
-	for name := range mcpSelected {
-		mcpNames = append(mcpNames, name)
-	}
-	sort.Strings(mcpNames)
-	// Family expansion: group selected MCP tools by toolkit, then include every
-	// member of each selected toolkit. Cap the total MCP schema budget — the old
-	// flat cap of 3 was sized for six giant wrapper tools; flattened families are
-	// many small schemas, so a generous cap costs less than one wrapper.
-	const maxMCPSchemas = 12
-	mcpIncluded := make(map[string]bool)
-	for _, name := range mcpNames {
-		family := mcpToolkitFamily(name)
-		if family == "" {
-			mcpIncluded[name] = true
+		if !strings.HasPrefix(name, "MCP_") {
 			continue
 		}
-		for member := range r.tools {
-			if strings.HasPrefix(member, "MCP_") && mcpToolkitFamily(member) == family {
-				mcpIncluded[member] = true
-			}
-		}
-	}
-	// Suppress wrapper tools (nested executor shapes) when their flattened
-	// children are present in the same family.
-	for name := range mcpIncluded {
-		if !schemaHasToolsArrayTool(r.tools[name]) {
-			continue
-		}
-		family := mcpToolkitFamily(name)
-		for member := range mcpIncluded {
-			if member != name && mcpToolkitFamily(member) == family && !schemaHasToolsArrayTool(r.tools[member]) {
-				delete(mcpIncluded, name)
-				break
-			}
-		}
-	}
-	var mcpNames2 []string
-	for name := range mcpIncluded {
-		mcpNames2 = append(mcpNames2, name)
-	}
-	sort.Strings(mcpNames2)
-	for _, name := range mcpNames2[:min(maxMCPSchemas, len(mcpNames2))] {
 		selected[name] = true
+		mcpCount++
+		if mcpCount >= maxMCPTools {
+			break
+		}
 	}
 
 	for _, family := range toolFamilies {
