@@ -93,6 +93,18 @@ func NewCore() *Core {
 				}
 			}
 		}()
+		go func() { // graph maintenance — 6-hour, offset +45min from consolidation
+			time.Sleep(45 * time.Minute)
+			for {
+				time.Sleep(6 * time.Hour)
+				edges, comms, err := mem.MaintainGraph()
+				if err != nil {
+					slog.Warn("graph maintenance incomplete", "error", err)
+				} else {
+					slog.Info("graph maintenance", "edges", edges, "communities", comms)
+				}
+			}
+		}()
 		go func() { // 5-minute threshold check — triggers when context nears 80% full
 			for {
 				time.Sleep(5 * time.Minute)

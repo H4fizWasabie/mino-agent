@@ -10,6 +10,8 @@
 
 - Edge-judgment ledger tracks which facts still need LLM edge judgment; index.json v3 carries judgment state, communities, god nodes, and labels.
 
+- Scheduled 6-hourly graph maintenance: full edge re-inference, mirrored-pair cleanup, Louvain community detection, god nodes, and LLM community labels — the manual `mino rebuild-edges` CLI is no longer required.
+
 ### Changed
 
 - schema v6: session_artifacts.distilled queue flag.

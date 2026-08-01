@@ -738,6 +738,10 @@ func (m *Memory) RebuildGraphEdges() (int, error) {
 			}
 		}
 	}
+	// The full pass saw every fact, so none need the per-fact re-judgment pass.
+	for _, fact := range facts {
+		m.graph.MarkJudged(fact.ID)
+	}
 	if rekeyed > 0 {
 		slog.Info("graph embeddings rekeyed", "facts", rekeyed)
 	}
@@ -749,6 +753,72 @@ func (m *Memory) RebuildGraphEdges() (int, error) {
 		return edgesWritten, fmt.Errorf("graph rebuild had %d failed batches", failed)
 	}
 	return edgesWritten, nil
+}
+
+// MaintainGraph is the scheduled full maintenance pass: re-infer all edges,
+// resolve mirrored pairs, cluster, and label communities. Returns counts.
+func (m *Memory) MaintainGraph() (int, int, error) {
+	edges, err := m.RebuildGraphEdges()
+	if err != nil {
+		return edges, 0, err
+	}
+	m.graph.RemoveMutualInferredEdges()
+	facts := m.graph.Facts()
+	communities, gods := ClusterGraph(facts)
+	labels := m.LabelCommunities(communities)
+	m.graph.SetCommunities(communities, gods, labels)
+	return edges, len(communities), nil
+}
+
+// LabelCommunities names each cluster via the small model (best-effort).
+func (m *Memory) LabelCommunities(communities map[string]int) map[string]string {
+	labels := make(map[string]string)
+	if m.client == nil || len(communities) == 0 {
+		return labels
+	}
+	byComm := make(map[int][]string)
+	for id, c := range communities {
+		byComm[c] = append(byComm[c], id)
+	}
+	var comms strings.Builder
+	for _, c := range sortedCommunityIDs(byComm) {
+		fmt.Fprintf(&comms, "COMMUNITY %d: %s\n", c, strings.Join(byComm[c], ", "))
+	}
+	resp, err := m.client.CreateJSON("community-labels", SmallModel,
+		[]Message{{Role: "user", Content: fmt.Sprintf(
+			"Name each community of a personal knowledge graph in 2-5 words. Facts listed by ID.\n\n%s\nReply ONLY JSON: {\"labels\":{\"0\":\"User Profile\",\"1\":\"Procura World\"}}", comms.String())}}, 400, "")
+	if err != nil {
+		return labels
+	}
+	text := resp.FinalText
+	if text == "" {
+		for _, block := range resp.Content {
+			if block.Type == "text" {
+				text += block.Text
+			}
+		}
+	}
+	var out struct {
+		Labels map[string]string `json:"labels"`
+	}
+	if err := json.Unmarshal([]byte(text), &out); err != nil {
+		return labels
+	}
+	for c, label := range out.Labels {
+		if label != "" {
+			labels[c] = label
+		}
+	}
+	return labels
+}
+
+func sortedCommunityIDs(byComm map[int][]string) []int {
+	ids := make([]int, 0, len(byComm))
+	for c := range byComm {
+		ids = append(ids, c)
+	}
+	sort.Ints(ids)
+	return ids
 }
 
 // JudgeChangedFacts gives every new or edited memory its own edge-judgment
