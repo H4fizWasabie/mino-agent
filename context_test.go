@@ -215,3 +215,24 @@ func TestLoopExecutesModelRequestedToolsWithoutDedupState(t *testing.T) {
 		t.Fatalf("executions=%d calls=%d, want 2/2", executions, len(result.ToolCalls))
 	}
 }
+
+func TestExplicitPlaybookCommandDetection(t *testing.T) {
+	cases := []struct {
+		msg  string
+		name string
+		want bool
+	}{
+		{"run the daily ai news playbook", "daily-ai-company-news", true},
+		{"run daily-ai-company-news now", "daily-ai-company-news", true},
+		{"please run the gmail cleanup playbook", "gmail-daily-cleanup", true},
+		{"what news did you find today", "daily-ai-company-news", false},
+		{"tell me about gmail", "gmail-daily-cleanup", false},
+		{"run the report", "daily-ai-company-news", false},
+		{"execute the news playbook", "daily-ai-company-news", true},
+	}
+	for _, c := range cases {
+		if got := explicitPlaybookCommand(c.msg, c.name); got != c.want {
+			t.Errorf("explicitPlaybookCommand(%q, %q) = %v, want %v", c.msg, c.name, got, c.want)
+		}
+	}
+}

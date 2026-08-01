@@ -117,10 +117,20 @@ func (s *Session) buildSystem(userMessage, source string, includePlaybookRouting
 			playbookName, playbookDesc, playbookScore = MatchPlaybook(s.settings.Home, userMessage, s.mem.embedder)
 		}
 		if playbookName != "" && playbookScore >= 0.3 {
-			parts = append(parts, fmt.Sprintf(
-				"\nPOSSIBLY RELEVANT PLAYBOOK: \"%s\" — %s\nUse run_playbook with name=\"%s\" only if this repeatable procedure is the best fit for the current request. Otherwise handle the request normally.",
-				playbookName, playbookDesc, playbookName,
-			))
+			// Explicit command: the user named the playbook ("run the daily news
+			// playbook") or asked for it directly. No decision layer — the playbook
+			// IS the task. The model must run it, not improvise the work itself.
+			if explicitPlaybookCommand(userMessage, playbookName) {
+				parts = append(parts, fmt.Sprintf(
+					"\nThe user explicitly asked to run the \"%s\" playbook. Your first action MUST be run_playbook with name=\"%s\". Do NOT do the work yourself first — the playbook's stages perform the task. Run it, then report the result.",
+					playbookName, playbookName,
+				))
+			} else {
+				parts = append(parts, fmt.Sprintf(
+					"\nPOSSIBLY RELEVANT PLAYBOOK: \"%s\" — %s\nUse run_playbook with name=\"%s\" only if this repeatable procedure is the best fit for the current request. Otherwise handle the request normally.",
+					playbookName, playbookDesc, playbookName,
+				))
+			}
 		}
 	}
 	return strings.Join(parts, "\n")
@@ -131,6 +141,42 @@ func abs(n int) int {
 		return -n
 	}
 	return n
+}
+
+// explicitPlaybookCommand reports whether the user message is a direct order to
+// run the given playbook rather than an unsolicited request that merely matches
+// it. An explicit command names the playbook ("run the daily news playbook",
+// "run daily-ai-company-news") or uses a run verb plus the playbook's words.
+func explicitPlaybookCommand(userMessage, playbookName string) bool {
+	msg := strings.ToLower(userMessage)
+	if strings.Contains(msg, strings.ToLower(playbookName)) {
+		return true
+	}
+	words := strings.Fields(strings.ReplaceAll(playbookName, "-", " "))
+	if len(words) < 2 {
+		return false
+	}
+	runVerb := false
+	for _, w := range strings.Fields(msg) {
+		if w == "run" || w == "execute" || w == "start" {
+			runVerb = true
+		}
+	}
+	if !runVerb {
+		return false
+	}
+	// Require the message to mention a playbook and at least one of the
+	// playbook's distinguishing words, so "run the report" does not match
+	// every playbook while "run the news playbook" matches the news one.
+	if !strings.Contains(msg, "playbook") && !strings.Contains(msg, strings.ToLower(playbookName)) {
+		return false
+	}
+	for _, w := range words {
+		if len(w) >= 3 && strings.Contains(msg, w) {
+			return true
+		}
+	}
+	return false
 }
 
 // AddExchange — Core's add_exchange(): folds tool activity into [tools used: ...]
