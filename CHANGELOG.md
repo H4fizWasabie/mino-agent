@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- Playbook stage contract validation: a stage that declares a `## Tools` list must include `write_file` when it declares an output (three incidents in a week came from stages that could never write their result), and every declared tool must exist in the registry (phantom names like `invoke_llm` are rejected at run time). Load fails loud instead of after 3 LLM attempts.
+
 ### Fixed
 - Scheduled playbooks silently did nothing: two loader bugs meant the real work never ran. (1) `LoadPlaybook` only scanned top-level `NN-*.md` files, so playbooks authored with a `stages/` subdir (README.md + stages/search.md etc.) loaded README.md as a fake "stage 0" that "completed" by writing an execution plan — the 08:30/09:30/10:00 MYT runs all did this while reporting success. The loader now also scans `stages/`, orders stages by their declared `# Stage N` heading (or filename), and ignores README.md / PLAYBOOK_PROTOCOL.md. (2) `## Tools` bullets kept inline prose as the tool name (`- bash (to check existence)` → `"bash (to check existence)"`), so exact-match `Registry.Only` dropped every tool but the auto-appended read_file — the 08:00 threads-ai-learning run had only read_file and failed all 3 attempts. Tool lines now take the first token and `None` bullets are dropped (no restriction). Manual runs "worked" yesterday only because Mino did the work ad-hoc in chat before calling run_playbook; the files and binary were unchanged between manual and scheduled runs.
 

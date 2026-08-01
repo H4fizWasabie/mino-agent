@@ -129,6 +129,16 @@ func LoadPlaybook(playbooksDir, name string) (*Playbook, error) {
 		return nil, fmt.Errorf("no stage files in playbook: %s", name)
 	}
 
+	// Stage contract validation: a stage that restricts its tools must be able
+	// to produce its declared output. Three incidents in one week (invoke_llm
+	// phantom, missing write_file, "None" tool list) came from undeclared or
+	// unknown tools; fail loud at load instead of after 3 LLM attempts.
+	for _, s := range pb.Stages {
+		if s.Write != "" && len(s.Tools) > 0 && !containsString(s.Tools, "write_file") {
+			return nil, fmt.Errorf("playbook %s: stage %d (%s) declares tools without write_file but requires output %q", name, s.Number, s.Name, s.Write)
+		}
+	}
+
 	// stages/ files carry no filename number; their declared "# Stage N"
 	// heading (or the filename) decides execution order.
 	sort.SliceStable(pb.Stages, func(i, j int) bool {
@@ -466,6 +476,34 @@ func executeStage(
 
 // --- Runner ---
 
+// containsString reports whether a slice contains the given value.
+func containsString(list []string, want string) bool {
+	for _, v := range list {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+// validateStageTools rejects stage tool declarations that do not exist in the
+// registry — a phantom tool silently narrows the stage's abilities and has
+// produced confusing failures (invoke_llm, "None").
+func validateStageTools(pb *Playbook, registry *Registry) error {
+	known := make(map[string]bool)
+	for _, t := range registry.Catalog() {
+		known[t.Name] = true
+	}
+	for _, s := range pb.Stages {
+		for _, n := range s.Tools {
+			if !known[n] {
+				return fmt.Errorf("playbook %s: stage %d (%s) declares unknown tool %q", pb.Name, s.Number, s.Name, n)
+			}
+		}
+	}
+	return nil
+}
+
 // RunPlaybook loads and executes a playbook by name.
 // Uses Core's existing client, tools, and session infrastructure.
 func RunPlaybook(
@@ -480,6 +518,11 @@ func RunPlaybook(
 	pb, err := LoadPlaybook(playbooksDir, name)
 	if err != nil {
 		return nil, err
+	}
+	if core.Tools != nil {
+		if err := validateStageTools(pb, core.Tools); err != nil {
+			return nil, err
+		}
 	}
 
 	slog.Info("playbook started", "name", name, "stages", len(pb.Stages))

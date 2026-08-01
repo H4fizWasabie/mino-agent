@@ -228,7 +228,6 @@ func TestParseStageToolLinesWithComments(t *testing.T) {
 	}
 }
 
-
 func TestParseStageMissingSections(t *testing.T) {
 	// stage with only ## Do should work
 	tmp := t.TempDir()
@@ -488,7 +487,7 @@ func TestPlaybookCatalogUsesParsedFilesystemState(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "config.md"), []byte("description: Weekly audit\nschedule: Mon 09:00 Asia/Kuala_Lumpur\nstatus: active\nnotify: true\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "01-fetch.md"), []byte("## Tools\n- read_file\n## Write\n`output/audit.md`\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "01-fetch.md"), []byte("## Tools\n- read_file\n- write_file\n## Write\n`output/audit.md`\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "output", "audit.md"), []byte("done"), 0600); err != nil {
@@ -1043,5 +1042,56 @@ func TestDispatchDueSchedulesRecordsFireFailure(t *testing.T) {
 	trace, err := os.ReadFile(filepath.Join(home, "traces", time.Now().Format("2006-01-02")+".jsonl"))
 	if err != nil || !strings.Contains(string(trace), "schedule_fire_failed") {
 		t.Fatalf("trace missing schedule_fire_failed entry (err=%v)", err)
+	}
+}
+
+func TestLoadPlaybookRequiresWriteFileWhenToolsDeclared(t *testing.T) {
+	tests := []struct {
+		name    string
+		tools   string // "## Tools" section body, "" for none
+		wantErr bool
+	}{
+		{name: "tools without write_file and an output", tools: "- read_file\n- bash\n", wantErr: true},
+		{name: "tools including write_file", tools: "- write_file\n- read_file\n", wantErr: false},
+		{name: "no tools section is unrestricted", tools: "", wantErr: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			dir := filepath.Join(home, "playbooks", "pbtest")
+			os.MkdirAll(dir, 0700)
+			content := "# Stage 1: Do\n\n## Do\n\n1. Work.\n"
+			if tt.tools != "" {
+				content += "\n## Tools\n" + tt.tools + "\n"
+			}
+			content += "\n## Write\n\n- `output/01-result.md`\n"
+			os.WriteFile(filepath.Join(dir, "01-do.md"), []byte(content), 0644)
+
+			_, err := LoadPlaybook(filepath.Join(home, "playbooks"), "pbtest")
+			if tt.wantErr && (err == nil || !strings.Contains(err.Error(), "without write_file")) {
+				t.Fatalf("error = %v, want write_file contract error", err)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestRunPlaybookRejectsUnknownDeclaredTool(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, "playbooks", "phantom")
+	os.MkdirAll(dir, 0700)
+	os.WriteFile(filepath.Join(dir, "01-do.md"), []byte("# Stage 1\n\n## Do\n\n1. Work.\n\n## Tools\n- write_file\n- invoke_llm\n\n## Write\n\n- `output/01-result.md`\n"), 0644)
+
+	core := &Core{
+		Settings: &Settings{Home: home},
+		Tools:    NewRegistry(),
+	}
+	core.Tools.Register(&Tool{Name: "write_file", Schema: map[string]any{"type": "object"}})
+
+	_, err := RunPlaybook(context.Background(), core, "phantom", "", "sess", nil)
+	if err == nil || !strings.Contains(err.Error(), "declares unknown tool \"invoke_llm\"") {
+		t.Fatalf("error = %v, want unknown-tool rejection", err)
 	}
 }
