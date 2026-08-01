@@ -144,6 +144,91 @@ Threshold: 7
 	}
 }
 
+func TestLoadPlaybookStagesSubdir(t *testing.T) {
+	// Real-world authoring puts stages under stages/ with README.md at top
+	// level; the loader must ignore README and pick up stages/ files in the
+	// order their declared "# Stage N" headings say.
+	tmp := t.TempDir()
+	playbooksDir := filepath.Join(tmp, "playbooks")
+	dir := filepath.Join(playbooksDir, "news-daily")
+	os.MkdirAll(filepath.Join(dir, "stages"), 0700)
+	os.MkdirAll(filepath.Join(dir, "output"), 0700)
+
+	os.WriteFile(filepath.Join(dir, "README.md"), []byte("# News Daily\n\nNot a stage.\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "config.md"), []byte("description: test\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "stages", "search.md"), []byte("# Stage 1: Search\n\n## Do\n\n1. Search the web.\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "stages", "summarize.md"), []byte("# Stage 2: Summarize\n\n## Do\n\n1. Summarize.\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "stages", "report.md"), []byte("# Stage 3: Report\n\n## Do\n\n1. Report.\n"), 0644)
+
+	pb, err := LoadPlaybook(playbooksDir, "news-daily")
+	if err != nil {
+		t.Fatalf("LoadPlaybook: %v", err)
+	}
+	if len(pb.Stages) != 3 {
+		t.Fatalf("stages = %d, want 3 (README.md must not count)", len(pb.Stages))
+	}
+	want := []struct {
+		number int
+		name   string
+	}{
+		{1, "search"},
+		{2, "summarize"},
+		{3, "report"},
+	}
+	for i, w := range want {
+		if pb.Stages[i].Number != w.number || pb.Stages[i].Name != w.name {
+			t.Errorf("stage %d = %d/%q, want %d/%q", i, pb.Stages[i].Number, pb.Stages[i].Name, w.number, w.name)
+		}
+	}
+}
+
+func TestParseStageToolLinesWithComments(t *testing.T) {
+	// "- bash (to check existence)" must parse to "bash", and "None" bullets
+	// must be dropped (leaving no restriction → full toolset at runtime).
+	tmp := t.TempDir()
+	f := filepath.Join(tmp, "01-do.md")
+	os.WriteFile(f, []byte(`# Do it
+
+## Tools
+
+- bash (to check file existence)
+- read_file (to read the content)
+- None (text crafting only)
+
+## Write
+
+`+"`output/01-do.md`"+`
+`), 0644)
+
+	stage, err := parseStage(tmp, "01-do.md")
+	if err != nil {
+		t.Fatalf("parseStage: %v", err)
+	}
+	if want := []string{"bash", "read_file"}; !reflect.DeepEqual(stage.Tools, want) {
+		t.Errorf("tools = %v, want %v", stage.Tools, want)
+	}
+
+	// a stage whose only bullet is "None" gets no restriction at all
+	os.WriteFile(f, []byte(`# Craft only
+
+## Tools
+
+- None (LLM reasoning only)
+
+## Write
+
+`+"`output/01-do.md`"+`
+`), 0644)
+	stage, err = parseStage(tmp, "01-do.md")
+	if err != nil {
+		t.Fatalf("parseStage: %v", err)
+	}
+	if len(stage.Tools) != 0 {
+		t.Errorf("tools = %v, want none", stage.Tools)
+	}
+}
+
+
 func TestParseStageMissingSections(t *testing.T) {
 	// stage with only ## Do should work
 	tmp := t.TempDir()

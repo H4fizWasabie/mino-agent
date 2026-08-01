@@ -23,6 +23,10 @@ import (
 const maxStageRetries = 3
 const maxStageIterations = 10 // bounded runtime iterations within one stage attempt
 
+// stageNumberRe finds an explicit stage number in freeform stage files
+// ("# Stage 3: Report") when the filename carries no NN- prefix.
+var stageNumberRe = regexp.MustCompile(`(?m)^#+\s*Stage\s+(\d+)`)
+
 // StageFile is one numbered stage in a playbook.
 type StageFile struct {
 	Number int
@@ -78,7 +82,8 @@ func LoadPlaybook(playbooksDir, name string) (*Playbook, error) {
 		parseConfig(data, pb)
 	}
 
-	// find numbered stage files
+	// find stage files: numbered NN-*.md at top level, plus any *.md under
+	// stages/. README.md, PLAYBOOK_PROTOCOL.md, config.md etc. are not stages.
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -88,12 +93,17 @@ func LoadPlaybook(playbooksDir, name string) (*Playbook, error) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
 			continue
 		}
-		if e.Name() == "config.md" {
-			continue
+		if len(e.Name()) >= 2 && e.Name()[0] >= '0' && e.Name()[0] <= '9' && e.Name()[1] >= '0' && e.Name()[1] <= '9' {
+			stageFiles = append(stageFiles, e.Name())
 		}
-		stageFiles = append(stageFiles, e.Name())
 	}
-	sort.Strings(stageFiles)
+	if subEntries, err := os.ReadDir(filepath.Join(dir, "stages")); err == nil {
+		for _, e := range subEntries {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
+				stageFiles = append(stageFiles, filepath.Join("stages", e.Name()))
+			}
+		}
+	}
 
 	// absolute output paths may only point under the home dir that owns the
 	// playbooks dir (<home>/.mino/playbooks); anything else fails fast at load
@@ -118,6 +128,15 @@ func LoadPlaybook(playbooksDir, name string) (*Playbook, error) {
 	if len(pb.Stages) == 0 {
 		return nil, fmt.Errorf("no stage files in playbook: %s", name)
 	}
+
+	// stages/ files carry no filename number; their declared "# Stage N"
+	// heading (or the filename) decides execution order.
+	sort.SliceStable(pb.Stages, func(i, j int) bool {
+		if pb.Stages[i].Number != pb.Stages[j].Number {
+			return pb.Stages[i].Number < pb.Stages[j].Number
+		}
+		return pb.Stages[i].Name < pb.Stages[j].Name
+	})
 
 	return pb, nil
 }
@@ -155,16 +174,21 @@ func parseStage(dir, fname string) (StageFile, error) {
 	}
 	raw := string(data)
 
-	// extract number: "01-fetch.md" → 1
+	// extract number: "01-fetch.md" → 1; fall back to a declared
+	// "# Stage N" heading in freeform files ("stages/search.md").
 	num := 0
-	if len(fname) >= 2 && fname[0] >= '0' && fname[0] <= '9' && fname[1] >= '0' && fname[1] <= '9' {
-		fmt.Sscanf(fname[:2], "%d", &num)
+	base := filepath.Base(fname)
+	if len(base) >= 2 && base[0] >= '0' && base[0] <= '9' && base[1] >= '0' && base[1] <= '9' {
+		fmt.Sscanf(base[:2], "%d", &num)
+	} else if m := stageNumberRe.FindStringSubmatch(raw); m != nil {
+		fmt.Sscanf(m[1], "%d", &num)
 	}
-	// extract name: "01-fetch.md" → "fetch"
-	name := strings.TrimSuffix(fname, ".md")
-	if idx := strings.Index(name, "-"); idx >= 0 {
-		name = name[idx+1:]
+	// extract name: "01-fetch.md" → "fetch"; "scan-and-trash.md" stays
+	name := strings.TrimSuffix(base, ".md")
+	for len(name) > 0 && name[0] >= '0' && name[0] <= '9' {
+		name = name[1:]
 	}
+	name = strings.TrimPrefix(name, "-")
 
 	stage := StageFile{
 		Number: num,
@@ -218,9 +242,17 @@ func parseStage(dir, fname string) (StageFile, error) {
 			line = strings.TrimSpace(line)
 			line = strings.TrimPrefix(line, "- ")
 			line = strings.TrimSpace(strings.TrimPrefix(line, "-"))
-			if line != "" {
-				stage.Tools = append(stage.Tools, line)
+			// the bullet is "name", optionally followed by prose: take the
+			// first token only ("bash (to check existence)" → "bash").
+			fields := strings.Fields(line)
+			if len(fields) == 0 {
+				continue
 			}
+			tool := fields[0]
+			if tool == "None" || tool == "none" {
+				continue
+			}
+			stage.Tools = append(stage.Tools, tool)
 		}
 	}
 
