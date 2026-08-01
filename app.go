@@ -99,6 +99,9 @@ func NewCore() *Core {
 				if n := mem.ConsolidateIfFull(s.ContextChars); n > 0 {
 					slog.Info("consolidation (threshold)", "new_facts", n)
 				}
+				if n := mem.JudgeChangedFacts(); n > 0 {
+					slog.Info("graph edge judgment", "facts", n)
+				}
 			}
 		}()
 	}

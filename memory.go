@@ -591,6 +591,93 @@ func (m *Memory) RebuildGraphEdges() (int, error) {
 	return edgesWritten, nil
 }
 
+// JudgeChangedFacts gives every new or edited memory its own edge-judgment
+// pass (graphify-style incremental update). Bounded per pass; failures leave
+// the fact unjudged so the next pass retries. The deterministic recall floor
+// never depends on this. Returns the number of inferred edges written.
+func (m *Memory) JudgeChangedFacts() int {
+	if m.client == nil {
+		return 0
+	}
+	unjudged := m.graph.UnjudgedFacts()
+	facts := m.graph.Facts()
+	judged := 0
+	for i, fact := range unjudged {
+		if i >= 5 { // ponytail: bounded per pass, backlog drains over later passes
+			break
+		}
+		edges, ok := m.judgeFactEdges(*fact, facts)
+		if !ok {
+			continue
+		}
+		m.graph.MarkJudged(fact.ID)
+		judged += edges
+	}
+	return judged
+}
+
+// judgeFactEdges runs one small-model judgment pass for a single SOURCE fact
+// against its embedding candidates (from GraphCandidates over all facts, as in
+// RebuildGraphEdges). Returns the number of inferred edges written and whether
+// the judgment succeeded. A successful pass with zero edges means the LLM
+// judged the fact and found no relationships — the fact is still marked
+// judged. Only failures (no candidates, LLM/parse/write errors) leave the
+// fact unjudged for retry.
+func (m *Memory) judgeFactEdges(fact Fact, all []Fact) (int, bool) {
+	if m.embedder == nil {
+		return 0, false
+	}
+	candidates := m.embedder.GraphCandidates(all, 6)
+	ids := candidates[fact.ID]
+	if len(ids) == 0 {
+		return 0, false
+	}
+	var claims strings.Builder
+	allowed := make(map[string]bool)
+	fmt.Fprintf(&claims, "SOURCE %s: %s | %s\n", fact.ID, fact.Subject, fact.Body)
+	for _, c := range ids {
+		allowed[c.ID] = true
+		if other, ok := m.graph.FindFact(c.ID); ok {
+			fmt.Fprintf(&claims, "  CANDIDATE %s (%0.2f): %s | %s\n", c.ID, c.Score, other.Subject, other.Body)
+		}
+	}
+	resp, err := m.client.CreateJSON("graph-rebuild", SmallModel,
+		[]Message{{Role: "user", Content: fmt.Sprintf(graphRebuildPrompt, claims.String())}}, 1400, "")
+	if err != nil {
+		return 0, false
+	}
+	text := resp.FinalText
+	if text == "" {
+		for _, block := range resp.Content {
+			if block.Type == "text" {
+				text += block.Text
+			}
+		}
+	}
+	edges, err := parseGraphRebuildResponse(text)
+	if err != nil {
+		return 0, false
+	}
+	inferred := make([]Edge, 0, len(edges))
+	for _, edge := range edges {
+		inferred = append(inferred, Edge{Target: edge.Target, Rel: edge.Rel, Confidence: edge.Confidence})
+	}
+	inferred = m.validInferredEdges(inferred, allowed, "graph-rebuild")
+	fact.Edges = nil
+	if existing, ok := m.graph.FindFact(fact.ID); ok {
+		for _, e := range existing.Edges {
+			if e.Kind == "explicit" {
+				fact.Edges = append(fact.Edges, e)
+			}
+		}
+	}
+	fact.Edges = append(fact.Edges, inferred...)
+	if err := m.graph.ReplaceFact(fact); err != nil {
+		return 0, false
+	}
+	return len(inferred), true
+}
+
 // --- Dedup (background, every 6h, offset from consolidation) ---
 
 const dedupPrompt = `Merge these duplicate facts from a knowledge graph.

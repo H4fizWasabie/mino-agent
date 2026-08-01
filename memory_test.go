@@ -720,3 +720,61 @@ func TestRemoveMutualInferredEdgesAnyRelation(t *testing.T) {
 		t.Fatalf("b edges = %+v, want contains(0.95) + maintains(explicit)", b.Edges)
 	}
 }
+
+func TestJudgeChangedFacts(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"edges\":[{\"source\":\"b\",\"target\":\"a\",\"rel\":\"depends_on\",\"confidence\":0.9}]}"}}]}`)
+	}))
+	defer server.Close()
+	pm := &ProviderManager{
+		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
+		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
+		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
+		sleep: func(time.Duration) {}, now: time.Now,
+	}
+	dir := t.TempDir()
+	gm := NewGraphMemory(filepath.Join(dir, "memories"), nil)
+	gm.RecordFact(Fact{ID: "a", Type: "semantic", Subject: "Fact A"})
+	gm.RecordFact(Fact{ID: "b", Type: "semantic", Subject: "Fact B"})
+	m := &Memory{client: pm, graph: gm, embedder: &EmbeddingStore{docs: []embeddedDoc{
+		{Source: "fact:a", Embedding: []float32{1, 0}},
+		{Source: "fact:b", Embedding: []float32{0.9, 0.1}},
+	}}}
+	// Pass 1: b gets judged, edge written, marked.
+	if n := m.JudgeChangedFacts(); n != 1 {
+		t.Fatalf("judged %d facts, want 1", n)
+	}
+	b, _ := gm.FindFact("b")
+	if len(b.Edges) != 1 || b.Edges[0].Target != "a" || b.Edges[0].Rel != "depends_on" || b.Edges[0].Kind != "inferred" {
+		t.Fatalf("b edges = %+v", b.Edges)
+	}
+	// Pass 2: nothing left to judge, no LLM call.
+	before := calls
+	if n := m.JudgeChangedFacts(); n != 0 || calls != before {
+		t.Fatalf("second pass made %d calls (n=%d), want 0", calls-before, n)
+	}
+	// Failed pass retries: force empty response.
+	server2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `not json`)
+	}))
+	defer server2.Close()
+	pm2 := &ProviderManager{
+		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server2.URL, Model: "main", Small: "small"}},
+		clients:   map[string]*Client{"fake": NewClient("test-key", server2.URL)},
+		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
+		sleep: func(time.Duration) {}, now: time.Now,
+	}
+	gm2 := NewGraphMemory(filepath.Join(dir, "memories2"), nil)
+	gm2.RecordFact(Fact{ID: "c", Type: "semantic", Subject: "Fact C"})
+	m2 := &Memory{client: pm2, graph: gm2, embedder: &EmbeddingStore{docs: []embeddedDoc{}}}
+	if n := m2.JudgeChangedFacts(); n != 0 {
+		t.Fatalf("failed pass returned %d, want 0 (retry next pass)", n)
+	}
+	if got := gm2.UnjudgedFacts(); len(got) != 1 || got[0].ID != "c" {
+		t.Fatalf("failed pass must leave fact unjudged: %+v", got)
+	}
+}

@@ -4,6 +4,8 @@
 
 ### Added
 
+- Every new or edited memory gets LLM-judged edges within minutes (5 per pass, retried on failure) — graphify-style incremental update without a full rebuild.
+
 - Edge-judgment ledger tracks which facts still need LLM edge judgment; index.json v3 carries judgment state, communities, god nodes, and labels.
 
 ### Changed
