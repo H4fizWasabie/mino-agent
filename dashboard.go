@@ -659,10 +659,9 @@ func playbookCatalog(home string) []map[string]any {
 }
 
 func loadPlaybookCatalog(home string) []map[string]any {
-	playbooksDir := filepath.Join(home, "playbooks")
 	var out []map[string]any
 	for _, name := range ListPlaybooks(home) {
-		pb, err := LoadPlaybook(playbooksDir, name)
+		pb, err := loadPlaybookWorkspace(home, name)
 		if err != nil {
 			out = append(out, map[string]any{"name": name, "path": filepath.Join("playbooks", name), "error": err.Error()})
 			continue
@@ -670,15 +669,18 @@ func loadPlaybookCatalog(home string) []map[string]any {
 		stages := make([]map[string]any, 0, len(pb.Stages))
 		for _, stage := range pb.Stages {
 			stages = append(stages, map[string]any{
-				"number": stage.Number, "name": stage.Name, "reads": stage.Reads,
-				"tools": stage.Tools, "write": stage.Write,
+				"number": stage.Number, "name": stage.Name, "inputs": stage.Inputs,
+				"tools": stage.Tools, "outputs": stage.Outputs,
 			})
 		}
 		outputs := []string{}
-		for _, path := range sortedFiles(filepath.Join(pb.Dir, "output", "*.md")) {
-			rel, relErr := filepath.Rel(home, path)
-			if relErr == nil {
-				outputs = append(outputs, rel)
+		if run, _ := latestPlaybookRun(pb); run != nil {
+			for _, stage := range run.Stages {
+				for _, path := range stage.Outputs {
+					if rel, err := filepath.Rel(home, path); err == nil {
+						outputs = append(outputs, rel)
+					}
+				}
 			}
 		}
 		out = append(out, map[string]any{
@@ -887,7 +889,7 @@ func handleResponsibilityEvidence(w http.ResponseWriter, r *http.Request) {
 	clean := filepath.Clean(path)
 	parts := strings.Split(clean, string(filepath.Separator))
 	if dashCore == nil || dashCore.Settings == nil || filepath.IsAbs(path) ||
-		clean != path || len(parts) < 4 || parts[0] != "playbooks" || parts[2] != "output" {
+		clean != path || len(parts) < 8 || parts[0] != "playbooks" || parts[2] != "runs" || parts[4] != "stages" || parts[6] != "output" {
 		http.Error(w, "evidence path not allowed", http.StatusForbidden)
 		return
 	}
@@ -896,7 +898,7 @@ func handleResponsibilityEvidence(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "evidence storage unavailable", http.StatusInternalServerError)
 		return
 	}
-	outputDir, outputErr := filepath.EvalSymlinks(filepath.Join(home, parts[0], parts[1], parts[2]))
+	outputDir, outputErr := filepath.EvalSymlinks(filepath.Join(home, parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], parts[6]))
 	resolved, resolveErr := filepath.EvalSymlinks(filepath.Join(home, clean))
 	if resolveErr != nil {
 		http.NotFound(w, r)

@@ -3,7 +3,6 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"path/filepath"
 	"time"
 )
 
@@ -106,7 +105,7 @@ func (s *ResponsibilityStore) importRoutine(home string, schedule PlaybookSchedu
 		return err
 	}
 	title := schedule.Name
-	if playbook, err := LoadPlaybook(filepath.Join(home, "playbooks"), schedule.Name); err == nil && playbook.Description != "" {
+	if playbook, err := loadPlaybookWorkspace(home, schedule.Name); err == nil && playbook.Description != "" {
 		title = playbook.Description
 	}
 	var lastRun *time.Time

@@ -1,149 +1,99 @@
-# Mino — Playbook Architecture
+# Mino Playbook Architecture
 
 ## Purpose
 
-A playbook is an optional filesystem state machine for a repeatable procedure.
-It is not Mino's chat architecture and it does not replace normal reasoning.
+A playbook is an autonomous, repeatable contract between Mino and its owner. It is a filesystem workspace with ordered stage contracts and durable run state. It does not replace Mino's normal reasoning loop.
 
-Every user message enters Mino's normal runtime. A matched playbook is offered
-as context, like a relevant skill or the `recall` tool. Mino decides whether the
-procedure fits the current request and may call `run_playbook`. Questions,
-follow-ups, and one-off actions continue normally when a playbook is unnecessary.
+Every message still enters the canonical runtime. Mino may choose a relevant playbook and call `run_playbook`. Once started, the runner creates or resumes a playbook run and executes from the first incomplete stage.
 
-## Filesystem layout
+## Definition layout
 
 ```text
-~/.mino/playbooks/<id>/
-├── config.md       # description, status, schedule, and shared values
-├── 01-<verb>.md    # stage 1
-├── 02-<verb>.md    # stage 2
-└── output/         # durable stage results
+~/.mino/playbooks/<name>/
+├── CONTEXT.md                 # workspace purpose and routing
+├── config.md                  # description, status, and shared values
+├── stages/
+│   ├── 01-collect/
+│   │   ├── CONTEXT.md         # stage contract
+│   │   └── references/        # stable stage rules
+│   └── 02-report/
+│       ├── CONTEXT.md
+│       └── references/
+└── runs/
+    └── <run-id>/
+        ├── state.json         # durable stage status and evidence
+        └── stages/
+            └── 01-collect/output/
 ```
 
-The folder name is the stable machine identifier. The description in
-`config.md` explains the procedure to Mino and humans.
+Definitions are editable by Mino. A run is separate from its definition, so a new run cannot overwrite prior evidence and a failed run can resume without redoing completed work.
 
-### `config.md`
+## Stage contract
 
-```markdown
-description: Fetch purchase orders, analyze suppliers, and draft a weekly audit
-status: active
-schedule: 09:00 Asia/Kuala_Lumpur
-notify: true
-Database: /srv/data/procurement.db
-Stale threshold: 7 days
-```
-
-Shared values remain in the file. Stages list `config.md` under `## Read`, and
-the model reads it through the normal file tool. The filesystem is the
-resolver; there is no placeholder or template engine.
-
-### Stage files
+Each `stages/NN-name/CONTEXT.md` defines:
 
 ```markdown
-# Fetch purchase orders
+# Collect source
 
-## Read
+## Inputs
 
-- `config.md`
-- `output/previous.md`
+| Source | File/Location | Section/Scope | Why |
+| --- | --- | --- | --- |
+| Shared rule | `shared/policy.md` | Full file | Selection rule |
 
-## Do
+## Process
 
-1. Read the configured source.
-2. Fetch the requested period.
-3. Write the verified result.
+1. Collect the source data.
+2. Apply the rule.
 
 ## Tools
 
 - read_file
 - write_file
-- bash
 
-## Write
+## Audit
 
-`output/purchase-orders.md`
+| Check | Pass condition |
+| --- | --- |
+| Coverage | Every requested source was checked |
+
+## Outputs
+
+| Artifact | Location | Format |
+| --- | --- | --- |
+| Candidates | `output/candidates.md` | Markdown table with IDs |
 ```
 
-- `## Read` names files the stage may need.
-- `## Do` describes the procedure.
-- `## Tools` optionally limits available capabilities; it does not prescribe
-  tool order.
-- `## Write` names exactly one expected output.
-- Stages run in numeric order without a dependency graph or branching engine.
+The runner loads only the declared stage contract and inputs. A stage output from the current run is available to the next stage through its declared relative input, for example `../01-collect/output/candidates.md`.
 
-## One runtime
+## Execution and recovery
 
 ```text
-user message
-  → normal Mino context and reasoning
-  → optional run_playbook tool call
-  → numbered stage runner
-  → canonical RunLoopContext for each stage
-  → verified output files
+run or scheduler fire
+  → find latest failed/running run, or create a new one
+  → find first non-complete stage
+  → load its declared inputs and references
+  → execute through the canonical Mino loop
+  → verify declared outputs
+  → persist stage result
+  → continue to the next stage
 ```
 
-There is no second agent or playbook-specific LLM loop. A stage uses the same
-provider, reasoning setting, tool execution, artifact compaction, traces, and
-session context as an ordinary Mino turn. Nested playbook suggestions are
-disabled while a stage is running.
+`state.json` records each stage's status, attempts, timestamps, outputs, and error. A failed stage stops the run. The next invocation resumes that stage; completed stages are never re-executed merely because a later stage failed.
 
-The runner gives each stage the original user request and its Markdown
-instructions. A stage attempt has at most eight runtime iterations. If the
-model stops without creating the declared output, the runner may retry the
-stage up to three times with a correction. Within an attempt, the canonical
-loop remains simple: call the model, execute its tools, return the observations,
-and repeat until the model stops or the iteration limit is reached.
+The playbook is an agreed autonomous contract. There is no approval protocol or human checkpoint state. Mino stops only when the contract cannot be fulfilled or verified truthfully.
 
-The runner snapshots the declared output before each attempt. A file created or
-updated by that attempt is proof of stage completion even if the model reaches
-its iteration limit after writing it. An unchanged file from an earlier run
-never satisfies the current attempt. Cancellation and runtime errors remain
-failures. Stages with external side effects must remain idempotent because a
-process restart can re-enter an earlier stage.
+## Scheduling
 
-Every completed stage adds its absolute output path to `PlaybookResult` and the
-session artifact catalog. The `run_playbook` observation therefore gives later
-conversation turns a concrete file to inspect instead of requiring the
-procedure to run again.
+Schedules decide when to invoke a playbook. They do not create a separate executor. A scheduled invocation uses the same run discovery and resume path as a manual invocation. `last_run` is timing metadata; the run state and its outputs are the outcome evidence.
 
-Human review is part of the procedure, not a programmatic approval subsystem.
-A stage that needs confirmation says `Stop here. Ask Abah.` The runner returns
-`blocked`, and a later user message decides what happens next.
+## Management
 
-## Discovery and choice
+Mino may create, edit, validate, schedule, disable, or delete playbooks. Before activation it must validate the folder contract, declared tools, output paths, and absence of secrets. Definition changes apply to future runs; an active run keeps its recorded stage state.
 
-`MatchPlaybook` currently works as follows:
+## Boundaries
 
-1. Keyword overlap checks the folder identifier, description, and stage text.
-2. If keyword matching finds nothing and embeddings are configured, semantic
-   similarity checks descriptions.
-3. A match at the hint threshold is added to Mino's system context as a
-   possibly relevant procedure.
-4. Mino decides whether to call `run_playbook` or handle the request normally.
-
-A score never executes a playbook by itself. This preserves conversational
-context: a follow-up about an existing result should be answered as a
-follow-up, not automatically rerun as a procedure.
-
-## Scheduling and delivery
-
-Schedules are external orchestration, not a second task runtime:
-
-- `schedule_playbook` writes schedule and notification values to `config.md`.
-- `mino-playbook-dispatcher.timer` checks due configurations once per minute.
-- `mino-playbook-runner` sends an explicit request to the running Mino service.
-- The runner selects output created by that run and delivers it through
-  Telegram when configured.
-- `flock` prevents overlapping scheduled runs of the same playbook.
-
-Systemd decides when to request execution. Mino still owns reasoning and stage
-execution.
-
-## Source map
-
-- `app.go`: normal conversational entry point
-- `session.go`: optional playbook candidate context
-- `playbook.go`: parsing, matching, tools, and linear stage runner
-- `loop.go`: canonical reasoning and tool runtime used by chat and stages
-- `extensions/mino-playbook-*.sh`: external scheduling and delivery
+- The canonical Mino loop remains the sole agent loop.
+- Filesystem run state is authoritative for playbook progress.
+- External mutations require declared verification; an output report alone is not proof of an external outcome.
+- Tool adapters hide provider-specific protocols from playbook contracts.

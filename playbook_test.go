@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -385,14 +386,9 @@ func TestFormatPlaybookResultReportsGenericOutputs(t *testing.T) {
 
 func TestRespondForLetsModelChooseMatchedPlaybook(t *testing.T) {
 	home := t.TempDir()
+	writeWorkspacePlaybook(t, home, "procurement-audit", []string{"01-fetch"})
 	dir := filepath.Join(home, "playbooks", "procurement-audit")
-	if err := os.MkdirAll(filepath.Join(dir, "output"), 0700); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.WriteFile(filepath.Join(dir, "config.md"), []byte("description: Weekly procurement audit\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "01-fetch.md"), []byte("## Do\n1. Fetch data\n## Write\n`output/data.md`\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -434,18 +430,8 @@ func TestRespondForLetsModelChooseMatchedPlaybook(t *testing.T) {
 
 func TestMatchPlaybookKeyword(t *testing.T) {
 	tmp := t.TempDir()
-	playbooksDir := filepath.Join(tmp, "playbooks")
-
-	dir := filepath.Join(playbooksDir, "procurement-audit")
-	os.MkdirAll(filepath.Join(dir, "output"), 0700)
-	os.WriteFile(filepath.Join(dir, "config.md"), []byte(`description: Weekly procurement audit — fetch POs and analyze
-`), 0644)
-	os.WriteFile(filepath.Join(dir, "01-fetch.md"), []byte(`# Fetch
-## Do
-1. Query
-## Write
-`+"`output/01-data.md`"+`
-`), 0644)
+	writeWorkspacePlaybook(t, tmp, "procurement-audit", []string{"01-fetch"})
+	os.WriteFile(filepath.Join(tmp, "playbooks", "procurement-audit", "config.md"), []byte("description: Weekly procurement audit fetch POs and analyze\n"), 0644)
 
 	name, desc, score := MatchPlaybook(tmp, "send me the procurement data", nil)
 	if name != "procurement-audit" {
@@ -461,12 +447,8 @@ func TestMatchPlaybookKeyword(t *testing.T) {
 
 func TestListPlaybooks(t *testing.T) {
 	tmp := t.TempDir()
-	playbooksDir := filepath.Join(tmp, "playbooks")
-
 	for _, name := range []string{"alpha", "beta", "gamma"} {
-		dir := filepath.Join(playbooksDir, name)
-		os.MkdirAll(filepath.Join(dir, "output"), 0700)
-		os.WriteFile(filepath.Join(dir, "01-test.md"), []byte("## Do\n1. thing\n"), 0644)
+		writeWorkspacePlaybook(t, tmp, name, []string{"01-test"})
 	}
 
 	names := ListPlaybooks(tmp)
@@ -480,17 +462,28 @@ func TestListPlaybooks(t *testing.T) {
 
 func TestPlaybookCatalogUsesParsedFilesystemState(t *testing.T) {
 	home := t.TempDir()
+	writeWorkspacePlaybook(t, home, "procurement-audit", []string{"01-fetch"})
 	dir := filepath.Join(home, "playbooks", "procurement-audit")
-	if err := os.MkdirAll(filepath.Join(dir, "output"), 0700); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.WriteFile(filepath.Join(dir, "config.md"), []byte("description: Weekly audit\nschedule: Mon 09:00 Asia/Kuala_Lumpur\nstatus: active\nnotify: true\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "01-fetch.md"), []byte("## Tools\n- read_file\n- write_file\n## Write\n`output/audit.md`\n"), 0600); err != nil {
+	pb, err := loadPlaybookWorkspace(home, "procurement-audit")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "output", "audit.md"), []byte("done"), 0600); err != nil {
+	run, err := loadOrCreatePlaybookRun(pb, "test", "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := playbookRunOutputPath(pb, run, pb.Stages[0], pb.Stages[0].Outputs[0])
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("done"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	run.Status, run.Stages[0].Status, run.Stages[0].Outputs = "complete", "complete", []string{path}
+	if err := savePlaybookRun(pb, run); err != nil {
 		t.Fatal(err)
 	}
 
@@ -503,25 +496,20 @@ func TestPlaybookCatalogUsesParsedFilesystemState(t *testing.T) {
 		t.Fatalf("catalog metadata = %#v", item)
 	}
 	stages, ok := item["stages"].([]map[string]any)
-	if !ok || len(stages) != 1 || stages[0]["write"] != "output/audit.md" {
+	if !ok || len(stages) != 1 {
 		t.Fatalf("catalog stages = %#v", item["stages"])
 	}
 	outputs, ok := item["outputs"].([]string)
-	if !ok || len(outputs) != 1 || outputs[0] != filepath.Join("playbooks", "procurement-audit", "output", "audit.md") {
+	if !ok || len(outputs) != 1 || outputs[0] != filepath.Join("playbooks", "procurement-audit", "runs", run.ID, "stages", "01-fetch", "output", "result.md") {
 		t.Fatalf("catalog outputs = %#v", item["outputs"])
 	}
 }
 
 func TestSchedulePlaybook(t *testing.T) {
 	home := t.TempDir()
+	writeWorkspacePlaybook(t, home, "news", []string{"01-news"})
 	dir := filepath.Join(home, "playbooks", "news")
-	if err := os.MkdirAll(filepath.Join(dir, "output"), 0700); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.WriteFile(filepath.Join(dir, "config.md"), []byte("description: News\nstatus: active\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "01-news.md"), []byte("## Do\n1. Search\n## Write\n`output/news.md`\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1080,9 +1068,10 @@ func TestLoadPlaybookRequiresWriteFileWhenToolsDeclared(t *testing.T) {
 
 func TestRunPlaybookRejectsUnknownDeclaredTool(t *testing.T) {
 	home := t.TempDir()
-	dir := filepath.Join(home, "playbooks", "phantom")
+	dir := filepath.Join(home, "playbooks", "phantom", "stages", "01-do")
 	os.MkdirAll(dir, 0700)
-	os.WriteFile(filepath.Join(dir, "01-do.md"), []byte("# Stage 1\n\n## Do\n\n1. Work.\n\n## Tools\n- write_file\n- invoke_llm\n\n## Write\n\n- `output/01-result.md`\n"), 0644)
+	os.WriteFile(filepath.Join(home, "playbooks", "phantom", "CONTEXT.md"), []byte("# Phantom\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "CONTEXT.md"), []byte("# Do\n\n## Tools\n- write_file\n- invoke_llm\n\n## Outputs\n\n| Artifact | Location | Format |\n| --- | --- | --- |\n| Result | `output/result.md` | Markdown |\n"), 0644)
 
 	core := &Core{
 		Settings: &Settings{Home: home},
@@ -1190,5 +1179,109 @@ scan:
 	}
 	if !strings.Contains(retry, outPath) {
 		t.Fatalf("retry prompt missing output path: %.300s", retry)
+	}
+}
+
+func TestWorkspaceRunResumesFirstIncompleteStage(t *testing.T) {
+	home := t.TempDir()
+	writeWorkspacePlaybook(t, home, "brief", []string{
+		"01-collect", "02-report",
+	})
+	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
+
+	pb, err := loadPlaybookWorkspace(home, "brief")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := loadOrCreatePlaybookRun(pb, "make the briefing", "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage1, _ := workspaceStage(pb, 1)
+	stage2, _ := workspaceStage(pb, 2)
+	path1 := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
+	path2 := playbookRunOutputPath(pb, run, stage2, stage2.Outputs[0])
+	// Remove the provisional run so RunPlaybook exercises creation itself with a
+	// predictable timestamp-independent state.
+	if err := os.RemoveAll(filepath.Join(playbookRunsDir(pb), run.ID)); err != nil {
+		t.Fatal(err)
+	}
+
+	oldLoop := runPlaybookStageLoop
+	defer func() { runPlaybookStageLoop = oldLoop }()
+	calls := 0
+	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
+		calls++
+		if calls == 1 {
+			if err := os.MkdirAll(filepath.Dir(path1), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path1, []byte("collected"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return &LoopResult{Status: "complete", Reply: "done"}
+	}
+	// The generated run ID is time-based, so point the first execution at the
+	// pre-created state by restoring it before invoking the runner.
+	if err := savePlaybookRun(pb, run); err != nil {
+		t.Fatal(err)
+	}
+	result, err := RunPlaybook(context.Background(), core, "brief", "make the briefing", "test", nil)
+	if err != nil || result.Status != "failed" {
+		t.Fatalf("first run = %+v, err=%v", result, err)
+	}
+
+	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
+		if err := os.MkdirAll(filepath.Dir(path2), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path2, []byte("reported"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		return &LoopResult{Status: "complete", Reply: "done"}
+	}
+	result, err = RunPlaybook(context.Background(), core, "brief", "ignored on resume", "test", nil)
+	if err != nil || result.Status != "complete" || result.StagesRun != 1 {
+		t.Fatalf("resume = %+v, err=%v", result, err)
+	}
+	data, err := os.ReadFile(filepath.Join(playbookRunsDir(pb), run.ID, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved PlaybookRun
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Stages[0].Status != "complete" || saved.Stages[0].Attempts != 1 || saved.Stages[1].Status != "complete" || saved.Stages[1].Attempts != 2 {
+		t.Fatalf("saved stage state = %+v", saved.Stages)
+	}
+}
+
+func writeWorkspacePlaybook(t *testing.T, home, name string, stages []string) {
+	t.Helper()
+	root := filepath.Join(home, "playbooks", name)
+	if err := os.MkdirAll(filepath.Join(root, "stages"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "CONTEXT.md"), []byte("# Test playbook\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range stages {
+		dir := filepath.Join(root, "stages", stage)
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		content := "# " + stage + "\n\n## Inputs\n\n| Source | File/Location | Section/Scope | Why |\n| --- | --- | --- | --- |\n"
+		if stage != stages[0] {
+			content += "| Previous stage | `../" + stages[0] + "/output/result.md` | Full file | Handoff |\n"
+		}
+		content += "\n## Process\n\n1. Produce the result.\n\n## Tools\n\n- write_file\n\n## Outputs\n\n| Artifact | Location | Format |\n| --- | --- | --- |\n| Result | `output/result.md` | Markdown |\n"
+		if err := os.WriteFile(filepath.Join(dir, "CONTEXT.md"), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

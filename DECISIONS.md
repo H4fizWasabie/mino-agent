@@ -60,9 +60,9 @@ Every N exchanges, a small model distills chat logs into durable facts and episo
 
 ## 6. Playbooks and recovery
 
-Multi-step workflows live in numbered Markdown stages under a playbook directory. Each stage reads the files named by its `## Read` section and writes its verified result to `output/`. Output files are the durable, inspectable checkpoint.
+Multi-step workflows live in playbook workspaces with root and stage `CONTEXT.md` contracts. Each invocation has a separate filesystem run containing `state.json` and stage outputs. A resumed run starts at its first incomplete stage; completed stages are not replayed.
 
-The runtime no longer uses the former `active_tasks` checkpoint protocol. A restarted run may re-enter the playbook, so stages with external side effects must be idempotent or guard themselves with their output.
+The runtime uses the canonical loop for each stage. Run state records the durable checkpoint, while declared outputs and external verification provide evidence.
 
 **Why:** The filesystem is simpler to inspect, edit, back up, and hand off than a second task state machine.
 
@@ -96,9 +96,9 @@ Mino uses lightweight mechanical recovery around an LLM-controlled tool loop:
 4. **Immutable audit log.** Tool calls and outputs are appended to a separate
    restricted log.
 
-There is no `request_approval` or `resolve_approval` protocol. Procedures that
-need a human decision express it directly in a playbook stage with `Stop here.
-Ask Abah.` Normal conversation can likewise ask for required confirmation.
+There is no `request_approval` or `resolve_approval` protocol. A playbook is an
+agreed autonomous contract: Mino proceeds without approval and stops only when
+it cannot fulfill or verify the contract truthfully.
 
 **Why:** Recovery and evidence remain mechanical, while human decisions stay in
 the conversation and procedure instead of creating a second approval state

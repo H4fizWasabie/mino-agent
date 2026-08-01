@@ -195,10 +195,10 @@ config.go            — environment variable → Settings
 update.go            — self-update from GitHub releases
 ```
 
-Playbooks are the state machine. Each is a numbered Markdown file with
-`## Read`, `## Do`, and `## Write` stages. Memory routes vague prompts to the
-right playbook. Mino runs each stage through the canonical agent loop with
-retries. Progress is written back to the playbook file — resume on restart.
+Playbooks are filesystem workspaces with numbered stage folders and explicit
+`Inputs`, `Process`, `Audit`, and `Outputs` contracts. Memory routes vague
+prompts to the right playbook. Mino runs each stage through the canonical agent
+loop and records durable per-run state, resuming from the first incomplete stage.
 See [PLAYBOOKS_DESIGN.md](PLAYBOOKS_DESIGN.md).
 
 ## Free AI stack

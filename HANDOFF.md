@@ -12,7 +12,8 @@
 - Selected stages use the canonical `RunLoopContext`, not a second agent loop.
 - The loop executes model-requested tools directly and feeds observations back;
   it has no tool-result cache or repeated-call state machine.
-- Human decisions are written as `Stop here. Ask Abah.` stage checkpoints;
+- Playbooks are autonomous contracts; stages stop only on a real failure or
+  failed verification;
   there are no programmatic approval tools.
 - Stage output files are durable state and restart recovery points.
 - Systemd provides schedule timing; the running Mino service performs the work.

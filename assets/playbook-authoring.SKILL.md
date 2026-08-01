@@ -26,22 +26,29 @@ Create one folder under `~/.mino/playbooks/` using a short hyphenated identifier
 
 ```text
 <name>/
+  CONTEXT.md
   config.md
-  01-<stage>.md
-  02-<stage>.md
-  output/
+  stages/
+    01-<stage>/
+      CONTEXT.md
+      references/
+    02-<stage>/
+      CONTEXT.md
+      references/
+  runs/                       # created by Mino; never hand-edit state.json
 ```
 
 `config.md` should contain a concise `description`, plus `status: active`. Add `schedule` and `notify` only when Abah explicitly wants scheduled delivery.
 
-Each numbered stage must contain:
+Each numbered stage folder must contain `CONTEXT.md` with:
 
-- `## Read` — files or config values it needs
-- `## Do` — the smallest ordered procedure
+- `## Inputs` — an explicit table of files and sections it needs
+- `## Process` — the smallest ordered procedure
 - `## Tools` — only the tools genuinely needed
-- `## Write` — exactly one output path under `output/`
+- `## Audit` — optional checks with concrete pass conditions
+- `## Outputs` — a table of output paths under `output/`
 
-Keep stages small and independently verifiable. Pass useful output to the next stage through files, not hidden assumptions. If a stage needs human confirmation, say `Stop here. Ask Abah.`
+Keep stages small and independently verifiable. Pass useful output to the next stage through files, not hidden assumptions. A later stage refers to an earlier output as `../01-stage/output/file.md` in its Inputs table. Mino creates a separate run directory for every execution, resumes the first incomplete stage, and never needs approval to continue an agreed playbook.
 
 ## Safety and delivery
 
@@ -52,10 +59,10 @@ Keep stages small and independently verifiable. Pass useful output to the next s
 
 ## Authoring workflow
 
-1. Identify the repeatable goal, inputs, output, and any human checkpoint.
+1. Identify the repeatable goal, inputs, outputs, allowed tools, and verification.
 2. Inspect existing playbooks and reuse their conventions where appropriate.
-3. Write `config.md` and numbered stage files with `write_file`.
-4. Re-read every created file and verify stage sections, tools, output paths, and no secrets.
+3. Write root `CONTEXT.md`, `config.md`, and stage `CONTEXT.md` files with `write_file`.
+4. Re-read every created file and verify stage contracts, tools, output paths, and no secrets.
 5. Run the playbook when Abah asks for a live test; otherwise report the created path and what remains to test.
 
-When resuming an unfinished playbook, inspect its existing stages and output first. Continue from the missing or stale output instead of blindly recreating completed work.
+When resuming an unfinished playbook, inspect its latest run state and stage outputs. Continue from the first incomplete stage; never recreate a completed stage unless the playbook itself was changed.

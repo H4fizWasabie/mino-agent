@@ -131,16 +131,10 @@ func TestResponsibilityStoreDoesNotReopenTerminalState(t *testing.T) {
 
 func TestResponsibilityStoreBootstrapsCurrentStateOnce(t *testing.T) {
 	home := t.TempDir()
+	writeWorkspacePlaybook(t, home, "morning-briefing", []string{"01-send"})
 	playbookDir := filepath.Join(home, "playbooks", "morning-briefing")
-	if err := os.MkdirAll(playbookDir, 0700); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.WriteFile(filepath.Join(playbookDir, "config.md"), []byte(
 		"description: Send a concise morning briefing\nstatus: active\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(playbookDir, "01-send.md"), []byte(
-		"# Send\n\n## Write\n\n`output/brief.md`\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(home, "schedules.json"), []byte(
@@ -334,7 +328,8 @@ func TestDashboardReadsTodayWorkAndResponsibilityHistory(t *testing.T) {
 
 func TestResponsibilityEvidenceServesOnlyPlaybookOutputs(t *testing.T) {
 	home := t.TempDir()
-	output := filepath.Join(home, "playbooks", "ai-news-daily", "output", "01-ai-news.md")
+	relOutput := filepath.Join("playbooks", "ai-news-daily", "runs", "run-1", "stages", "01-news", "output", "ai-news.md")
+	output := filepath.Join(home, relOutput)
 	if err := os.MkdirAll(filepath.Dir(output), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +340,7 @@ func TestResponsibilityEvidenceServesOnlyPlaybookOutputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(filepath.Join(home, "providers.json"),
-		filepath.Join(home, "playbooks", "ai-news-daily", "output", "leak.md")); err != nil {
+		filepath.Join(home, "playbooks", "ai-news-daily", "runs", "run-1", "stages", "01-news", "output", "leak.md")); err != nil {
 		t.Fatal(err)
 	}
 	previous := dashCore
@@ -357,10 +352,10 @@ func TestResponsibilityEvidenceServesOnlyPlaybookOutputs(t *testing.T) {
 		status     int
 		body       string
 	}{
-		{"output", "playbooks/ai-news-daily/output/01-ai-news.md", http.StatusOK, "# Verified AI news"},
+		{"output", filepath.ToSlash(relOutput), http.StatusOK, "# Verified AI news"},
 		{"configuration", "providers.json", http.StatusForbidden, ""},
-		{"traversal", "playbooks/ai-news-daily/output/../../providers.json", http.StatusForbidden, ""},
-		{"symlink", "playbooks/ai-news-daily/output/leak.md", http.StatusForbidden, ""},
+		{"traversal", "playbooks/ai-news-daily/runs/run-1/stages/01-news/output/../../../../../../providers.json", http.StatusForbidden, ""},
+		{"symlink", "playbooks/ai-news-daily/runs/run-1/stages/01-news/output/leak.md", http.StatusForbidden, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()

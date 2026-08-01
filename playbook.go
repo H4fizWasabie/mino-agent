@@ -595,67 +595,16 @@ func RunPlaybook(
 	sessionID string,
 	obs Observer,
 ) (*PlaybookResult, error) {
-	playbooksDir := filepath.Join(core.Settings.Home, "playbooks")
-	pb, err := LoadPlaybook(playbooksDir, name)
+	result, err := runWorkspacePlaybook(ctx, core, name, userMessage, sessionID, obs)
 	if err != nil {
 		return nil, err
 	}
-	if core.Tools != nil {
-		if err := validateStageTools(pb, core.Tools); err != nil {
-			return nil, err
+	for _, output := range result.Outputs {
+		if info, statErr := os.Stat(output); statErr == nil && core.Memory != nil {
+			core.Memory.RecordArtifact(sessionID, name+" output", output, int(info.Size()))
 		}
 	}
-
-	slog.Info("playbook started", "name", name, "stages", len(pb.Stages))
-	logTrace(core.Settings.Home, "playbook_start", map[string]any{"name": name, "stages": len(pb.Stages)})
-
-	result := &PlaybookResult{Name: name}
-	conversation := core.Sessions.Get(sessionID)
-	system := conversation.Session.BuildPlaybookSystem(userMessage, "")
-	system = appendSystemTime(system, time.Now(), core.Settings.Location())
-	baseMessages := conversation.Session.PlaybookContext(system)
-
-	for i, stage := range pb.Stages {
-		slog.Info("playbook stage executing", "playbook", name, "stage", stage.Number, "name", stage.Name)
-
-		reply, calls, ti, to, err := executeStage(
-			ctx, core.Client, sessionID, system,
-			pb, stage, userMessage, baseMessages, core.Tools, core.Settings.MaxTokens,
-			obs, core.Settings.Home, core.Settings.Location(),
-		)
-		result.TokensIn += ti
-		result.TokensOut += to
-		result.ToolCalls = append(result.ToolCalls, calls...)
-		result.Reply = reply
-		result.StagesRun = i + 1
-
-		if err != nil {
-			result.Status = "failed"
-			result.Reply = fmt.Sprintf("Stage %d (%s) failed: %v", stage.Number, stage.Name, err)
-			slog.Error("playbook stage failed", "playbook", name, "stage", stage.Number, "error", err)
-			logTrace(core.Settings.Home, "playbook_stage_failed", map[string]any{"stage": stage.Number, "error": err.Error()})
-			return result, nil // not an error — playbook result carries the failure
-		}
-
-		outPath := outputPath(pb, stage, core.Settings.Location())
-		result.Outputs = append(result.Outputs, outPath)
-		if core.Memory != nil {
-			if info, err := os.Stat(outPath); err == nil {
-				core.Memory.RecordArtifact(sessionID, fmt.Sprintf("%s stage %d output", name, stage.Number), outPath, int(info.Size()))
-			}
-		}
-
-		// check if stage wants human input ("Stop here. Ask Abah.")
-		if strings.Contains(strings.ToLower(reply), "stop here") ||
-			strings.Contains(strings.ToLower(reply), "ask abah") {
-			result.Status = "blocked"
-			logTrace(core.Settings.Home, "playbook_blocked", map[string]any{"stage": stage.Number})
-			return result, nil
-		}
-	}
-
-	result.Status = "complete"
-	logTrace(core.Settings.Home, "playbook_complete", map[string]any{"name": name, "stages": result.StagesRun})
+	logTrace(core.Settings.Home, "playbook_run", map[string]any{"name": name, "status": result.Status, "stages": result.StagesRun})
 	return result, nil
 }
 
@@ -678,7 +627,10 @@ func ListPlaybooks(home string) []string {
 	}
 	var names []string
 	for _, e := range entries {
-		if e.IsDir() && e.Name()[0] != '.' {
+		if !e.IsDir() || e.Name()[0] == '.' {
+			continue
+		}
+		if _, err := loadPlaybookWorkspace(home, e.Name()); err == nil {
 			names = append(names, e.Name())
 		}
 	}
@@ -705,14 +657,14 @@ func MatchPlaybook(home, prompt string, es *EmbeddingStore) (string, string, flo
 		}
 		bestName, bestDesc, bestScore := "", "", 0.0
 		for _, name := range playbooks {
-			pb, err := LoadPlaybook(filepath.Join(home, "playbooks"), name)
+			pb, err := loadPlaybookWorkspace(home, name)
 			if err != nil {
 				continue
 			}
 			// search description + name + all stage content
 			searchText := strings.ToLower(pb.Description + " " + name)
 			for _, s := range pb.Stages {
-				searchText += " " + strings.ToLower(s.Raw)
+				searchText += " " + strings.ToLower(s.Context)
 			}
 			textWords := make(map[string]bool)
 			for _, w := range strings.Fields(searchText) {
@@ -766,7 +718,7 @@ func MatchPlaybook(home, prompt string, es *EmbeddingStore) (string, string, flo
 	var candidates []candidate
 
 	for _, name := range playbooks {
-		pb, err := LoadPlaybook(filepath.Join(home, "playbooks"), name)
+		pb, err := loadPlaybookWorkspace(home, name)
 		if err != nil {
 			continue
 		}
@@ -797,55 +749,26 @@ func MatchPlaybook(home, prompt string, es *EmbeddingStore) (string, string, flo
 // CreateExamplePlaybook scaffolds a minimal playbook for testing.
 func CreateExamplePlaybook(home string) error {
 	dir := filepath.Join(home, "playbooks", "hello-world")
-	os.MkdirAll(filepath.Join(dir, "output"), 0700)
-
-	config := `description: A simple hello-world playbook that demonstrates the stage system
-schedule: every 24h
-status: active
-`
-	if err := os.WriteFile(filepath.Join(dir, "config.md"), []byte(config), 0644); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "stages", "01-greet"), 0700); err != nil {
 		return err
 	}
-
-	stage1 := `# Write a greeting
-
-## Read
-
-(no previous stage — this is stage 1)
-
-## Do
-
-1. Write a friendly greeting message with today's date
-2. Include a random fun fact
-
-## Write
-
-` + "`output/01-greeting.md`" + `
-`
-	if err := os.WriteFile(filepath.Join(dir, "01-greet.md"), []byte(stage1), 0644); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "stages", "02-respond"), 0700); err != nil {
 		return err
 	}
-
-	stage2 := `# Read and respond
-
-## Read
-
-- ` + "`output/01-greeting.md`" + ` (the greeting from stage 1)
-
-## Do
-
-1. Read the greeting file
-2. Respond to the user with the greeting content
-3. Say "Hello from Mino playbooks!"
-
-## Write
-
-` + "`output/02-response.md`" + `
-`
-	if err := os.WriteFile(filepath.Join(dir, "02-respond.md"), []byte(stage2), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "CONTEXT.md"), []byte("# Hello world\n\nA minimal autonomous greeting workflow.\n"), 0644); err != nil {
 		return err
 	}
-
+	if err := os.WriteFile(filepath.Join(dir, "config.md"), []byte("description: A simple hello-world playbook that demonstrates durable runs\nstatus: active\n"), 0644); err != nil {
+		return err
+	}
+	stage1 := "# Greet\n\n## Inputs\n\n| Source | File/Location | Section/Scope | Why |\n| --- | --- | --- | --- |\n\n## Process\n\n1. Write a friendly greeting with today's date.\n\n## Tools\n\n- write_file\n\n## Outputs\n\n| Artifact | Location | Format |\n| --- | --- | --- |\n| Greeting | `output/greeting.md` | Markdown |\n"
+	if err := os.WriteFile(filepath.Join(dir, "stages", "01-greet", "CONTEXT.md"), []byte(stage1), 0644); err != nil {
+		return err
+	}
+	stage2 := "# Respond\n\n## Inputs\n\n| Source | File/Location | Section/Scope | Why |\n| --- | --- | --- | --- |\n| Previous stage | `../01-greet/output/greeting.md` | Full file | Greeting to deliver |\n\n## Process\n\n1. Read the greeting.\n2. Write a concise response.\n\n## Tools\n\n- write_file\n\n## Outputs\n\n| Artifact | Location | Format |\n| --- | --- | --- |\n| Response | `output/response.md` | Markdown |\n"
+	if err := os.WriteFile(filepath.Join(dir, "stages", "02-respond", "CONTEXT.md"), []byte(stage2), 0644); err != nil {
+		return err
+	}
 	slog.Info("example playbook created", "path", dir)
 	return nil
 }
@@ -898,11 +821,10 @@ func makeListPlaybooksTool(home string) *Tool {
 			if len(names) == 0 {
 				return "No playbooks found. Create one in ~/.mino/playbooks/<name>/"
 			}
-			playbooksDir := filepath.Join(home, "playbooks")
 			var b strings.Builder
 			b.WriteString("Available playbooks:\n")
 			for _, name := range names {
-				pb, err := LoadPlaybook(playbooksDir, name)
+				pb, err := loadPlaybookWorkspace(home, name)
 				if err != nil {
 					fmt.Fprintf(&b, "- %s (error: %v)\n", name, err)
 					continue
@@ -996,7 +918,7 @@ func makeSchedulePlaybookTool(home, timezone string) *Tool {
 			if _, err := time.LoadLocation(zone); err != nil {
 				return fmt.Sprintf("Error: invalid timezone %q", zone)
 			}
-			if _, err := LoadPlaybook(filepath.Join(home, "playbooks"), name); err != nil {
+			if _, err := loadPlaybookWorkspace(home, name); err != nil {
 				return fmt.Sprintf("Error: %v", err)
 			}
 			scheds, err := loadSchedules(home)
@@ -1168,21 +1090,28 @@ func formatPlaybookResult(result *PlaybookResult) string {
 func listActiveTasksPlaybook(home string) []map[string]any {
 	playbooks := ListPlaybooks(home)
 	var tasks []map[string]any
-	playbooksDir := filepath.Join(home, "playbooks")
 	for _, name := range playbooks {
-		pb, err := LoadPlaybook(playbooksDir, name)
+		pb, err := loadPlaybookWorkspace(home, name)
 		if err != nil || pb.Status != "active" {
 			continue
 		}
-		// check if there's in-progress output
-		outputDir := filepath.Join(pb.Dir, "output")
-		entries, _ := os.ReadDir(outputDir)
-		hasOutput := len(entries) > 0
+		run, _ := latestPlaybookRun(pb)
+		hasOutput, runStatus := false, "pending"
+		if run != nil {
+			runStatus = run.Status
+			for _, stage := range run.Stages {
+				if len(stage.Outputs) > 0 {
+					hasOutput = true
+					break
+				}
+			}
+		}
 		tasks = append(tasks, map[string]any{
 			"goal":       pb.Description,
 			"status":     pb.Status,
 			"stages":     len(pb.Stages),
 			"has_output": hasOutput,
+			"run_status": runStatus,
 			"playbook":   name,
 		})
 	}
