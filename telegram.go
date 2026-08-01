@@ -54,7 +54,11 @@ func deliverOutboxOnce(s *Settings) int {
 			continue
 		}
 		if sendTelegramText(s.Telegram, s.TelegramChatID, string(data), true) {
-			os.Remove(path)
+			if err := os.Remove(path); err != nil {
+				// Delivered but cleanup failed: count it and log loud — retrying
+				// would duplicate the message, and silence would hide the stale file.
+				slog.Error("outbox delivered but cleanup failed", "file", e.Name(), "error", err)
+			}
 			delivered++
 			logTrace(s.Home, "outbox_delivered", map[string]any{"file": e.Name()})
 		} else {

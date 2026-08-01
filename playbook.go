@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -487,6 +488,7 @@ func executeStage(
 	var allCalls []ToolCall
 
 	for attempt := 1; attempt <= maxStageRetries; attempt++ {
+		attemptStart := len(allCalls)
 		outPath := outputPath(pb, stage, loc...)
 		before := inspectOutput(outPath)
 		messages := append([]Message(nil), baseMessages...)
@@ -529,11 +531,28 @@ func executeStage(
 		// A completed model turn without a fresh output does not satisfy the stage.
 		slog.Warn("playbook stage output unchanged", "playbook", pb.Name, "stage", stage.Number, "attempt", attempt, "expected", outPath)
 		if attempt < maxStageRetries {
-			userMsg = buildStagePrompt(pb, stage, userMessage, loc...) + fmt.Sprintf("\n## Retry\n\nThe output file `%s` was not created or updated by the previous attempt. Complete the remaining steps and write the output file. Do NOT repeat steps that already succeeded.\n", outPath)
+			// Retries start with a fresh context: tell the model what the
+			// previous attempt actually did, so "do not repeat steps that
+			// already succeeded" is enforceable and side effects stay single.
+			userMsg = buildStagePrompt(pb, stage, userMessage, loc...) + fmt.Sprintf("\n## Retry\n\nThe output file `%s` was not created or updated by the previous attempt.\n\nYour previous attempt's actions:\n%s\n\nComplete the remaining steps and write the output file. Do NOT repeat steps that already succeeded.\n", outPath, toolTrail(allCalls[attemptStart:]))
 		}
 	}
 
 	return "", allCalls, tokensIn, tokensOut, fmt.Errorf("stage %d failed after %d attempts: output not created or updated", stage.Number, maxStageRetries)
+}
+
+// toolTrail renders the previous attempt's tool calls as a compact list for
+// the retry prompt: `name(args) -> ok|error`.
+func toolTrail(calls []ToolCall) string {
+	if len(calls) == 0 {
+		return "(no tools were called)"
+	}
+	var b strings.Builder
+	for _, c := range calls {
+		args, _ := json.Marshal(c.Args)
+		fmt.Fprintf(&b, "- %s(%s) -> %s\n", c.Name, args, toolOutputStatus(c.Output))
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // --- Runner ---
@@ -908,9 +927,16 @@ type PlaybookSchedule struct {
 	LastError string `json:"last_error,omitempty"` // last fire failure, empty when healthy
 }
 
+// schedulesMu serializes read-modify-write of schedules.json: the dispatch
+// goroutine updates last_run/last_error while schedule_playbook and
+// cancel_schedule tools edit the same file from the LLM thread.
+var schedulesMu sync.Mutex
+
 func scheduleFilePath(home string) string { return filepath.Join(home, "schedules.json") }
 
 func loadSchedules(home string) ([]PlaybookSchedule, error) {
+	schedulesMu.Lock()
+	defer schedulesMu.Unlock()
 	path := scheduleFilePath(home)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -927,6 +953,8 @@ func loadSchedules(home string) ([]PlaybookSchedule, error) {
 }
 
 func saveSchedules(home string, scheds []PlaybookSchedule) error {
+	schedulesMu.Lock()
+	defer schedulesMu.Unlock()
 	path := scheduleFilePath(home)
 	if len(scheds) == 0 {
 		os.Remove(path)

@@ -1154,3 +1154,41 @@ func TestBuildStagePromptCapsReferences(t *testing.T) {
 		t.Fatalf("references section too large: %d chars", len(refSection))
 	}
 }
+
+func TestExecuteStageRetryPromptIncludesPreviousAttempt(t *testing.T) {
+	// The retry prompt must tell the model what the failed attempt did, so
+	// "do not repeat steps that already succeeded" is enforceable — otherwise
+	// retries redo side effects (double posts, duplicate sends).
+	pb := &Playbook{Name: "generic", Dir: t.TempDir()}
+	stage := StageFile{Number: 1, Name: "write", Write: "output/result.md"}
+	outPath := outputPath(pb, stage)
+	client := &fakeClient{script: []*LLMResponse{
+		scriptedResp([]ContentBlock{toolBlock("write_file", map[string]any{"path": "/tmp/nowhere.md", "content": "x"}), textBlock("DONE")}, "stop"),
+		scriptedResp([]ContentBlock{textBlock("DONE")}, "stop"),
+	}}
+
+	_, _, _, _, err := executeStage(
+		context.Background(), client, "retry-trail", "", pb, stage,
+		"do the work", nil, NewRegistry(), 100, nil, pb.Dir,
+	)
+	if err == nil || !strings.Contains(err.Error(), "not created or updated") {
+		t.Fatalf("error = %v", err)
+	}
+	// the first retry user message must contain the previous attempt's trail
+	retry := ""
+scan:
+	for _, msgs := range client.messages {
+		for _, m := range msgs {
+			if m.Role == "user" && strings.Contains(m.Content, "## Retry") {
+				retry = m.Content
+				break scan
+			}
+		}
+	}
+	if !strings.Contains(retry, "previous attempt's actions") || !strings.Contains(retry, "write_file") {
+		t.Fatalf("retry prompt missing attempt trail: %.300s", retry)
+	}
+	if !strings.Contains(retry, outPath) {
+		t.Fatalf("retry prompt missing output path: %.300s", retry)
+	}
+}
