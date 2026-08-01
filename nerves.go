@@ -183,27 +183,59 @@ CURRENT STATE:
 
 // --- Loop detection (ticket 003 — placeholder, wired to snapshot) ---
 
-var loopDetectionThreshold = 3
+var loopDetectionThreshold = 3 // exact repeats
 
-// detectLoop checks if the last N tool calls are identical.
+// loopNameThreshold: consecutive same-tool calls regardless of args. Higher
+// than the exact threshold so legit batch reads (read_file ×5) stay quiet;
+// a 6th same-name call is almost always a stuck model (composio discovery
+// loops, repeated run_playbook) and worth a nudge.
+var loopNameThreshold = 6
+
+// detectLoop checks the recent tool history for two loop signals:
+// exact repeats (identical name+args) and same-name streaks (any args).
 // Returns true and a message if a loop is detected.
 func detectLoop(history []string) (bool, string) {
-	if len(history) < loopDetectionThreshold {
-		return false, ""
-	}
-	last := history[len(history)-1]
-	count := 0
-	for i := len(history) - 1; i >= 0; i-- {
-		if history[i] == last {
-			count++
-		} else {
-			break
+	// exact-repeat signal: identical calls in a row
+	if len(history) >= loopDetectionThreshold {
+		last := history[len(history)-1]
+		count := 0
+		for i := len(history) - 1; i >= 0; i-- {
+			if history[i] == last {
+				count++
+			} else {
+				break
+			}
+		}
+		if count >= loopDetectionThreshold {
+			return true, fmt.Sprintf("Detected %d repeated calls to %s", count, last)
 		}
 	}
-	if count >= loopDetectionThreshold {
-		return true, fmt.Sprintf("Detected %d repeated calls to %s", count, last)
+	// same-name signal: the same tool over and over, args varying (the args
+	// of a stuck call often drift — composio steps, metrics — so byte-exact
+	// matching misses the loop; the tool name does not).
+	if len(history) >= loopNameThreshold {
+		lastName := toolName(history[len(history)-1])
+		count := 0
+		for i := len(history) - 1; i >= 0; i-- {
+			if toolName(history[i]) == lastName {
+				count++
+			} else {
+				break
+			}
+		}
+		if count >= loopNameThreshold {
+			return true, fmt.Sprintf("Detected %d consecutive calls to %s without progress", count, lastName)
+		}
 	}
 	return false, ""
+}
+
+// toolName extracts the tool name from a history entry "name(args)".
+func toolName(entry string) string {
+	if i := strings.Index(entry, "("); i > 0 {
+		return entry[:i]
+	}
+	return entry
 }
 
 // --- Read-only tool filtering ---
