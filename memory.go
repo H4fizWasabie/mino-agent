@@ -738,9 +738,12 @@ func (m *Memory) RebuildGraphEdges() (int, error) {
 			}
 		}
 	}
-	// The full pass saw every fact, so none need the per-fact re-judgment pass.
-	for _, fact := range facts {
-		m.graph.MarkJudged(fact.ID)
+	// Only mark judged when the rebuild wrote every batch: a partial failure
+	// must leave facts eligible for the incremental judgment pass.
+	if failed == 0 {
+		for _, fact := range facts {
+			m.graph.MarkJudged(fact.ID)
+		}
 	}
 	if rekeyed > 0 {
 		slog.Info("graph embeddings rekeyed", "facts", rekeyed)
@@ -762,12 +765,15 @@ func (m *Memory) MaintainGraph() (int, int, error) {
 	if err != nil {
 		return edges, 0, err
 	}
-	m.graph.RemoveMutualInferredEdges()
 	facts := m.graph.Facts()
 	communities, gods := ClusterGraph(facts)
 	labels := m.LabelCommunities(communities)
 	m.graph.SetCommunities(communities, gods, labels)
-	return edges, len(communities), nil
+	seen := make(map[int]struct{})
+	for _, c := range communities {
+		seen[c] = struct{}{}
+	}
+	return edges, len(seen), nil
 }
 
 // LabelCommunities names each cluster via the small model (best-effort).

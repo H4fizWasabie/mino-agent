@@ -33,6 +33,7 @@
 - Rebuilt playbooks around filesystem workspaces and isolated durable runs. Stage contracts now live in `stages/NN-name/CONTEXT.md`; `state.json` records per-stage attempts, outputs, failures, and resume state so a failed later stage does not replay completed work.
 
 ### Fixed
+- Facts are only marked judged when a graph rebuild completes with zero failed batches; a partial failure leaves facts eligible for the incremental judgment pass instead of trusting a rebuild that didn't write everything.
 - Facts without embeddings were invisible to graph edge inference: rebuild now backfills missing fact vectors before candidate generation, so migrated facts can gain edges instead of staying orphaned forever.
 - Graph-rebuild-written edges were mislabeled with `Source: "consolidation"`; edge provenance now follows the writer (`graph-rebuild` vs `consolidation`).
 - Mirrored inferred pairs are now resolved for any relation: when A→B and B→A are both inferred, the lower-confidence edge is dropped and explicit edges always survive (previously only `supersedes` pairs were cleaned).
