@@ -8,6 +8,31 @@
 1. **Check `CHANGELOG.md`** to understand recent changes and patterns.
 2. **Understand the philosophy**: Mino is a Go rewrite synthesizing Mino (architecture), Mino (capabilities), and Mino (context). Keep it simple. If Mino doesn't have it, question why Mino needs it.
 
+## Engineering discipline (Karpathy rules)
+
+Behavioral guidelines that bias toward caution over speed. For trivial tasks, use judgment.
+
+### Think before coding
+- Don't assume. Don't hide confusion. Surface tradeoffs.
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them — don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+### Surgical changes
+- Touch only what you must. Clean up only your own mess.
+- Don't "improve" adjacent code, comments, or formatting. Don't refactor what isn't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it — don't delete it.
+- Remove imports/variables/functions YOUR changes made unused; don't remove pre-existing dead code unless asked.
+- The test: every changed line should trace directly to the request.
+
+### Goal-driven execution
+- Define success criteria before coding. "Add validation" → "write tests for invalid inputs, then make them pass".
+- "Fix the bug" → "write a test that reproduces it, then make it pass".
+- "Refactor X" → "ensure tests pass before and after".
+- For multi-step tasks, state a brief plan with a verify check per step.
+
 ## Rules
 
 ### Simplicity (the prime directive)
