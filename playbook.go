@@ -305,14 +305,19 @@ func stageOrDefault(stage string) string {
 }
 
 // buildCapturedStage derives a stage contract from the audit log: the Tools
-// whitelist is the distinct set of successfully-executed tools in the session,
-// and the Outputs are the write_file paths actually written (re-anchored to the
-// run's output dir). Real slugs and real filenames — nothing invented.
+// whitelist is the distinct set of successfully-executed tools in the session's
+// current turn, and the Outputs are the write_file paths actually written
+// (re-anchored to the run's output dir). Real slugs and real filenames — nothing
+// invented, nothing stale from earlier turns.
 func buildCapturedStage(core *Core, sessionID, stageName, process string, maxCalls int) (string, error) {
 	data, err := os.ReadFile(filepath.Join(core.Settings.Home, "audit.jsonl"))
 	if err != nil {
 		return "", fmt.Errorf("cannot read audit log for capture: %v", err)
 	}
+	// Scope to the current turn: only events after the session's most recent
+	// user message. Earlier turns in the same session (e.g. an old Gmail task)
+	// must not pollute the captured contract with their tools and outputs.
+	turnStart := lastUserMessageTime(core.DB, sessionID)
 	var calls []map[string]any
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
@@ -326,10 +331,15 @@ func buildCapturedStage(core *Core, sessionID, stageName, process string, maxCal
 		if ev["session_id"] != sessionID || ev["status"] != "ok" {
 			continue
 		}
+		if ts, ok := ev["timestamp"].(string); ok && turnStart != nil {
+			if t, err := time.Parse(time.RFC3339, ts); err != nil || t.Before(*turnStart) {
+				continue
+			}
+		}
 		calls = append(calls, ev)
 	}
 	if len(calls) == 0 {
-		return "", fmt.Errorf("no successful tool calls found in the audit log for this session — capture requires a task that actually ran")
+		return "", fmt.Errorf("no successful tool calls found in the audit log for this session's current turn — capture requires a task that actually ran")
 	}
 	if len(calls) > maxCalls {
 		calls = calls[len(calls)-maxCalls:]
@@ -367,6 +377,9 @@ func buildCapturedStage(core *Core, sessionID, stageName, process string, maxCal
 	if !seenTools["write_file"] {
 		tools = append(tools, "write_file")
 	}
+	// Re-anchor absolute paths in the process prose to the run's output dir:
+	// stages write into their own run directory, never to captured absolute paths.
+	process = reAnchorOutputPaths(process, outputs)
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n## Inputs\n\n| Source | File/Location | Section/Scope | Why |\n| --- | --- | --- | --- |\n\n## Process\n\n%s\n\n## Tools\n\n", stageOrDefault(stageName), process)
 	for _, tool := range tools {
@@ -377,6 +390,25 @@ func buildCapturedStage(core *Core, sessionID, stageName, process string, maxCal
 		fmt.Fprintf(&b, "| Result | `output/%s` | Markdown |\n", out)
 	}
 	return b.String(), nil
+}
+
+// lastUserMessageTime returns the timestamp of the session's most recent user
+// message, or nil when the database is unavailable. chat_log.created_at is UTC.
+func lastUserMessageTime(db *sql.DB, sessionID string) *time.Time {
+	if db == nil {
+		return nil
+	}
+	var created string
+	err := db.QueryRow("SELECT created_at FROM chat_log WHERE session_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1", sessionID).Scan(&created)
+	if err != nil {
+		return nil
+	}
+	// chat_log stores datetime('now') → "2006-01-02 15:04:05" UTC
+	t, err := time.Parse("2006-01-02 15:04:05", created)
+	if err != nil {
+		return nil
+	}
+	return &t
 }
 
 func makeListPlaybooksTool(home string) *Tool {
@@ -458,6 +490,19 @@ func makeManagePlaybookTool(core *Core) *Tool {
 }
 
 var playbookNamePattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+
+// reAnchorOutputPaths rewrites captured absolute paths in process prose to the
+// run-relative output dir: `/any/dir/report.md` → `output/report.md`. Stages
+// write into their own run directory; captured absolute paths would be refused
+// by the playbook write guard during execution. Only paths ending in a captured
+// output basename are rewritten.
+func reAnchorOutputPaths(process string, outputs []string) string {
+	for _, out := range outputs {
+		quoted := regexp.QuoteMeta(out)
+		process = regexp.MustCompile(`(?:\S*/)?` + quoted).ReplaceAllString(process, "output/"+out)
+	}
+	return process
+}
 
 func validPlaybookName(name string) bool { return playbookNamePattern.MatchString(name) }
 

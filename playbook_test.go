@@ -276,21 +276,31 @@ func TestWorkspaceLabelsSelfCertifiedStage(t *testing.T) {
 
 func TestCapturePlaybookDerivesEvidenceFromAudit(t *testing.T) {
 	// teach → compile: after a successful task, capture_playbook must derive the
-	// stage's Tools and Outputs from the audit log — real slugs, real filenames.
-	// The model's prose supplies Process only; it cannot invent tools or paths.
+	// stage's Tools and Outputs from the audit log — real slugs, real filenames,
+	// scoped to the current turn only. The model's prose supplies Process only;
+	// it cannot invent tools or paths, and stale calls from earlier turns in the
+	// same session must not leak into the contract.
 	home := t.TempDir()
 	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
 	registry := NewRegistry()
 	registry.Register(makeWriteTool(home, home))
 	registry.Register(&Tool{Name: "search_web", Behavior: BehaviorObserve})
-	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
-	// Simulate the audit trail of a successful task: searched, then wrote a report.
+	db := Connect(home)
+	defer db.Close()
+	mem := NewMemory(db, nil, settings)
+	core := &Core{Settings: settings, DB: db, Tools: registry, Sessions: NewSessionManager(settings, mem), Memory: mem}
+	// Simulate the audit trail: stale Gmail work from an earlier turn (same
+	// session), then the current turn's task (searched, then wrote a report).
+	stale := time.Now().UTC().Add(-2 * time.Hour)
+	now := time.Now().UTC()
 	audit := []map[string]any{
-		{"tool_name": "search_web", "args": map[string]any{"query": "AI news"}, "status": "ok", "session_id": "tg:1"},
-		{"tool_name": "search_web", "args": map[string]any{"query": "model releases"}, "status": "ok", "session_id": "tg:1"},
-		{"tool_name": "write_file", "args": map[string]any{"path": "/tmp/news-report.md"}, "status": "ok", "session_id": "tg:1"},
-		{"tool_name": "bash", "args": map[string]any{"command": "rm -rf /"}, "status": "error", "session_id": "tg:1"},
-		{"tool_name": "write_file", "args": map[string]any{"path": "/tmp/other-session.md"}, "status": "ok", "session_id": "tg:2"},
+		{"tool_name": "MCP_composio_COMPOSIO_MULTI_EXECUTE_TOOL", "args": map[string]any{}, "status": "ok", "session_id": "tg:1", "timestamp": stale.Format(time.RFC3339)},
+		{"tool_name": "bash", "args": map[string]any{"command": "rm -rf /"}, "status": "error", "session_id": "tg:1", "timestamp": stale.Format(time.RFC3339)},
+		{"tool_name": "write_file", "args": map[string]any{"path": "/tmp/old-gmail-scan.md"}, "status": "ok", "session_id": "tg:1", "timestamp": stale.Format(time.RFC3339)},
+		{"tool_name": "search_web", "args": map[string]any{"query": "AI news"}, "status": "ok", "session_id": "tg:1", "timestamp": now.Format(time.RFC3339)},
+		{"tool_name": "search_web", "args": map[string]any{"query": "model releases"}, "status": "ok", "session_id": "tg:1", "timestamp": now.Format(time.RFC3339)},
+		{"tool_name": "write_file", "args": map[string]any{"path": "/home/knowledge/ai-daily/2026-08-01.md"}, "status": "ok", "session_id": "tg:1", "timestamp": now.Format(time.RFC3339)},
+		{"tool_name": "write_file", "args": map[string]any{"path": "/tmp/other-session.md"}, "status": "ok", "session_id": "tg:2", "timestamp": now.Format(time.RFC3339)},
 	}
 	var b strings.Builder
 	for _, ev := range audit {
@@ -301,12 +311,14 @@ func TestCapturePlaybookDerivesEvidenceFromAudit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "audit.jsonl"), []byte(b.String()), 0600); err != nil {
 		t.Fatal(err)
 	}
+	// The current turn starts with a user message in chat_log.
+	mem.LogChat("user", "search and save the report", "tg:1", "dashboard")
 	ctx := context.WithValue(context.Background(), sessionIDKey{}, "tg:1")
 	tool := makeCapturePlaybookTool(core)
 	got := tool.ContextFn(ctx, map[string]any{
 		"name":    "daily-news",
 		"context": "# Daily news\n",
-		"process": "1. Search for the latest AI news. 2. Write the report.",
+		"process": "1. Search for the latest AI news. 2. Write the report to /home/knowledge/ai-daily/2026-08-01.md.",
 	})
 	if !strings.Contains(got, "Created and validated playbook daily-news") {
 		t.Fatalf("capture = %q", got)
@@ -316,18 +328,21 @@ func TestCapturePlaybookDerivesEvidenceFromAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	stage := pb.Stages[0]
-	// Tools derived from evidence: search_web + write_file. Not bash (error),
-	// not the other session's calls.
+	// Tools derived from the current turn only: search_web + write_file. Not the
+	// stale MCP/bash calls, not the other session's calls.
 	if len(stage.Tools) != 2 || !containsString(stage.Tools, "search_web") || !containsString(stage.Tools, "write_file") {
 		t.Fatalf("captured tools = %v, want [search_web write_file]", stage.Tools)
 	}
-	// Output derived from the real write_file path's basename.
-	if len(stage.Outputs) != 1 || stage.Outputs[0].Path != "output/news-report.md" {
-		t.Fatalf("captured outputs = %+v, want [output/news-report.md]", stage.Outputs)
+	// Output derived from the current turn's write_file path's basename only.
+	if len(stage.Outputs) != 1 || stage.Outputs[0].Path != "output/2026-08-01.md" {
+		t.Fatalf("captured outputs = %+v, want [output/2026-08-01.md]", stage.Outputs)
 	}
-	// Process prose preserved.
+	// Process prose preserved, with the absolute path re-anchored to the run dir.
 	if !strings.Contains(stage.Context, "Search for the latest AI news") {
 		t.Fatalf("process prose missing: %s", stage.Context)
+	}
+	if strings.Contains(stage.Context, "/home/knowledge") {
+		t.Fatalf("absolute path not re-anchored: %s", stage.Context)
 	}
 }
 
