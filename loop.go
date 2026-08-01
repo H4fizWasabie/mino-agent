@@ -91,6 +91,12 @@ func RunLoopContext(
 	ctx = context.WithValue(ctx, sessionIDKey{}, sessionID)
 	ctx = context.WithValue(ctx, userMessageKey{}, lastUserContent(messages))
 
+	// Turn-boundary marker for the audit log: capture_playbook scopes its
+	// evidence to the task turn preceding the capture request.
+	if tools != nil {
+		tools.LogTurnStart(sessionID)
+	}
+
 	// Stage context (playbook/stage) for trace attribution: every event written
 	// while inside a playbook stage carries its stage identity so the dashboard
 	// can group them instead of showing a flat stream.

@@ -92,6 +92,26 @@ func (r *Registry) SetAuditLog(path string) error {
 	return nil
 }
 
+// LogTurnStart writes an explicit turn-boundary marker to the immutable audit
+// log. capture_playbook uses these markers to scope evidence to the task turn
+// that preceded the capture request — chat_log timestamps cannot serve this
+// role because they are written at turn end.
+func (r *Registry) LogTurnStart(sessionID string) {
+	r.auditMu.Lock()
+	defer r.auditMu.Unlock()
+	if r.auditFile == nil {
+		return
+	}
+	record := map[string]any{
+		"event":      "turn_start",
+		"session_id": sessionID,
+		"timestamp":  time.Now().UTC().Format(time.RFC3339),
+	}
+	raw, _ := json.Marshal(record)
+	r.auditFile.Write(raw)
+	r.auditFile.Write([]byte("\n"))
+}
+
 // CloseAuditLog flushes and closes the audit log.
 func (r *Registry) CloseAuditLog() {
 	if r.auditFile != nil {

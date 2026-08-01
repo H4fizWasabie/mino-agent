@@ -290,17 +290,22 @@ func TestCapturePlaybookDerivesEvidenceFromAudit(t *testing.T) {
 	mem := NewMemory(db, nil, settings)
 	core := &Core{Settings: settings, DB: db, Tools: registry, Sessions: NewSessionManager(settings, mem), Memory: mem}
 	// Simulate the audit trail: stale Gmail work from an earlier turn (same
-	// session), then the current turn's task (searched, then wrote a report).
+	// session), then the current task turn (searched, then wrote a report).
 	stale := time.Now().UTC().Add(-2 * time.Hour)
+	teachStart := time.Now().UTC().Add(-time.Minute)
 	now := time.Now().UTC()
 	audit := []map[string]any{
+		{"event": "turn_start", "session_id": "tg:1", "timestamp": stale.Format(time.RFC3339)},
 		{"tool_name": "MCP_composio_COMPOSIO_MULTI_EXECUTE_TOOL", "args": map[string]any{}, "status": "ok", "session_id": "tg:1", "timestamp": stale.Format(time.RFC3339)},
 		{"tool_name": "bash", "args": map[string]any{"command": "rm -rf /"}, "status": "error", "session_id": "tg:1", "timestamp": stale.Format(time.RFC3339)},
 		{"tool_name": "write_file", "args": map[string]any{"path": "/tmp/old-gmail-scan.md"}, "status": "ok", "session_id": "tg:1", "timestamp": stale.Format(time.RFC3339)},
-		{"tool_name": "search_web", "args": map[string]any{"query": "AI news"}, "status": "ok", "session_id": "tg:1", "timestamp": now.Format(time.RFC3339)},
-		{"tool_name": "search_web", "args": map[string]any{"query": "model releases"}, "status": "ok", "session_id": "tg:1", "timestamp": now.Format(time.RFC3339)},
-		{"tool_name": "write_file", "args": map[string]any{"path": "/home/knowledge/ai-daily/2026-08-01.md"}, "status": "ok", "session_id": "tg:1", "timestamp": now.Format(time.RFC3339)},
+		{"event": "turn_start", "session_id": "tg:1", "timestamp": teachStart.Format(time.RFC3339)},
+		{"tool_name": "search_web", "args": map[string]any{"query": "AI news"}, "status": "ok", "session_id": "tg:1", "timestamp": teachStart.Format(time.RFC3339)},
+		{"tool_name": "search_web", "args": map[string]any{"query": "model releases"}, "status": "ok", "session_id": "tg:1", "timestamp": teachStart.Format(time.RFC3339)},
+		{"tool_name": "write_file", "args": map[string]any{"path": "/home/knowledge/ai-daily/2026-08-01.md"}, "status": "ok", "session_id": "tg:1", "timestamp": teachStart.Format(time.RFC3339)},
 		{"tool_name": "write_file", "args": map[string]any{"path": "/tmp/other-session.md"}, "status": "ok", "session_id": "tg:2", "timestamp": now.Format(time.RFC3339)},
+		{"event": "turn_start", "session_id": "tg:1", "timestamp": now.Format(time.RFC3339)},
+		{"tool_name": "query_audit", "args": map[string]any{}, "status": "ok", "session_id": "tg:1", "timestamp": now.Format(time.RFC3339)},
 	}
 	var b strings.Builder
 	for _, ev := range audit {
@@ -311,8 +316,6 @@ func TestCapturePlaybookDerivesEvidenceFromAudit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "audit.jsonl"), []byte(b.String()), 0600); err != nil {
 		t.Fatal(err)
 	}
-	// The current turn starts with a user message in chat_log.
-	mem.LogChat("user", "search and save the report", "tg:1", "dashboard")
 	ctx := context.WithValue(context.Background(), sessionIDKey{}, "tg:1")
 	tool := makeCapturePlaybookTool(core)
 	got := tool.ContextFn(ctx, map[string]any{
@@ -361,8 +364,8 @@ func TestCapturePlaybookRequiresEvidence(t *testing.T) {
 	got := makeCapturePlaybookTool(core).ContextFn(ctx, map[string]any{
 		"name": "ghost", "context": "# Ghost\n", "process": "1. Do things.",
 	})
-	if !strings.Contains(got, "no successful tool calls") {
-		t.Fatalf("capture = %q, want evidence requirement", got)
+	if !strings.Contains(got, "no completed task turn") {
+		t.Fatalf("capture = %q, want turn requirement", got)
 	}
 }
 

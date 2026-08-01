@@ -305,19 +305,20 @@ func stageOrDefault(stage string) string {
 }
 
 // buildCapturedStage derives a stage contract from the audit log: the Tools
-// whitelist is the distinct set of successfully-executed tools in the session's
-// current turn, and the Outputs are the write_file paths actually written
-// (re-anchored to the run's output dir). Real slugs and real filenames — nothing
-// invented, nothing stale from earlier turns.
+// whitelist is the distinct set of successfully-executed tools in the task turn
+// preceding the capture request, and the Outputs are the write_file paths
+// actually written (re-anchored to the run's output dir). Real slugs and real
+// filenames — nothing invented, nothing stale from earlier turns.
 func buildCapturedStage(core *Core, sessionID, stageName, process string, maxCalls int) (string, error) {
 	data, err := os.ReadFile(filepath.Join(core.Settings.Home, "audit.jsonl"))
 	if err != nil {
 		return "", fmt.Errorf("cannot read audit log for capture: %v", err)
 	}
-	// Scope to the current turn: only events after the session's most recent
-	// user message. Earlier turns in the same session (e.g. an old Gmail task)
-	// must not pollute the captured contract with their tools and outputs.
-	turnStart := lastUserMessageTime(core.DB, sessionID)
+	// Turn scoping: the audit log carries explicit turn_start markers (written
+	// when each loop begins). Evidence = events between the previous turn's
+	// start and the current turn's start — the task turn that just completed.
+	// chat_log timestamps cannot serve this role: they are written at turn end.
+	var turnStarts []time.Time
 	var calls []map[string]any
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
@@ -328,27 +329,47 @@ func buildCapturedStage(core *Core, sessionID, stageName, process string, maxCal
 		if json.Unmarshal([]byte(line), &ev) != nil {
 			continue
 		}
-		if ev["session_id"] != sessionID || ev["status"] != "ok" {
+		if ev["session_id"] != sessionID {
 			continue
 		}
-		if ts, ok := ev["timestamp"].(string); ok && turnStart != nil {
-			if t, err := time.Parse(time.RFC3339, ts); err != nil || t.Before(*turnStart) {
-				continue
+		if ev["event"] == "turn_start" {
+			if ts, ok := ev["timestamp"].(string); ok {
+				if t, err := time.Parse(time.RFC3339, ts); err == nil {
+					turnStarts = append(turnStarts, t)
+				}
 			}
+			continue
+		}
+		if ev["status"] != "ok" {
+			continue
 		}
 		calls = append(calls, ev)
 	}
-	if len(calls) == 0 {
-		return "", fmt.Errorf("no successful tool calls found in the audit log for this session's current turn — capture requires a task that actually ran")
+	if len(turnStarts) < 2 {
+		return "", fmt.Errorf("no completed task turn found before the capture request — capture requires a task that actually ran")
 	}
-	if len(calls) > maxCalls {
-		calls = calls[len(calls)-maxCalls:]
+	// Previous turn start is the evidence window's beginning; the current turn
+	// start is its end (the capture request's own turn must not leak in).
+	windowStart, windowEnd := turnStarts[len(turnStarts)-2], turnStarts[len(turnStarts)-1]
+	var scoped []map[string]any
+	for _, call := range calls {
+		if ts, ok := call["timestamp"].(string); ok {
+			if t, err := time.Parse(time.RFC3339, ts); err == nil && !t.Before(windowStart) && t.Before(windowEnd) {
+				scoped = append(scoped, call)
+			}
+		}
+	}
+	if len(scoped) == 0 {
+		return "", fmt.Errorf("no successful tool calls found in the audit log for the completed task turn — capture requires a task that actually ran")
+	}
+	if len(scoped) > maxCalls {
+		scoped = scoped[len(scoped)-maxCalls:]
 	}
 	tools := make([]string, 0)
 	seenTools := make(map[string]bool)
 	outputs := make([]string, 0)
 	seenOutputs := make(map[string]bool)
-	for _, call := range calls {
+	for _, call := range scoped {
 		toolName, _ := call["tool_name"].(string)
 		if toolName == "" {
 			continue
@@ -390,25 +411,6 @@ func buildCapturedStage(core *Core, sessionID, stageName, process string, maxCal
 		fmt.Fprintf(&b, "| Result | `output/%s` | Markdown |\n", out)
 	}
 	return b.String(), nil
-}
-
-// lastUserMessageTime returns the timestamp of the session's most recent user
-// message, or nil when the database is unavailable. chat_log.created_at is UTC.
-func lastUserMessageTime(db *sql.DB, sessionID string) *time.Time {
-	if db == nil {
-		return nil
-	}
-	var created string
-	err := db.QueryRow("SELECT created_at FROM chat_log WHERE session_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1", sessionID).Scan(&created)
-	if err != nil {
-		return nil
-	}
-	// chat_log stores datetime('now') → "2006-01-02 15:04:05" UTC
-	t, err := time.Parse("2006-01-02 15:04:05", created)
-	if err != nil {
-		return nil
-	}
-	return &t
 }
 
 func makeListPlaybooksTool(home string) *Tool {
