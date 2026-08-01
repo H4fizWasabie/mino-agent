@@ -256,6 +256,18 @@ func (es *EmbeddingStore) RemoveFact(id string) {
 	es.RemoveSource("fact:" + id)
 }
 
+// HasFactEmbedding reports whether a stable fact:<id> vector exists.
+func (es *EmbeddingStore) HasFactEmbedding(id string) bool {
+	es.mu.RLock()
+	defer es.mu.RUnlock()
+	for _, d := range es.docs {
+		if d.Source == "fact:"+id {
+			return true
+		}
+	}
+	return false
+}
+
 func (es *EmbeddingStore) RemoveSource(source string) {
 	es.mu.Lock()
 	before := len(es.docs)

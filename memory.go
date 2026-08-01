@@ -320,7 +320,7 @@ func (m *Memory) consolidateSession(sid string) int {
 			At:      time.Now(),
 			Body:    f.Content,
 		}
-		fact.Edges = m.validInferredEdges(f.Edges, availableIDs.ids)
+		fact.Edges = m.validInferredEdges(f.Edges, availableIDs.ids, "consolidation")
 		if existing, ok := m.graph.FindFact(f.ID); ok {
 			fact.At = existing.At
 			fact.Why = existing.Why
@@ -423,7 +423,7 @@ func (m *Memory) graphCandidates(text string) graphCandidateSet {
 	return set
 }
 
-func (m *Memory) validInferredEdges(edges []Edge, candidates map[string]bool) []Edge {
+func (m *Memory) validInferredEdges(edges []Edge, candidates map[string]bool, source string) []Edge {
 	valid := make([]Edge, 0, len(edges))
 	seen := make(map[string]bool)
 	contradictory := make(map[string]bool)
@@ -450,7 +450,7 @@ func (m *Memory) validInferredEdges(edges []Edge, candidates map[string]bool) []
 		}
 		seen[key] = true
 		edge.Kind = "inferred"
-		edge.Source = "consolidation"
+		edge.Source = source
 		valid = append(valid, edge)
 	}
 	return valid
@@ -497,6 +497,14 @@ func (m *Memory) RebuildGraphEdges() (int, error) {
 		return 0, fmt.Errorf("graph rebuild requires provider and embedding store")
 	}
 	facts := m.graph.Facts()
+	// Backfill embeddings for facts that never got vectors (migrated facts,
+	// installs where the embedder was configured later). Without a vector a
+	// fact is invisible to GraphCandidates and can never gain edges.
+	for _, fact := range facts {
+		if !m.embedder.HasFactEmbedding(fact.ID) {
+			m.embedder.IndexFact(fact.ID, fact)
+		}
+	}
 	rekeyed := m.embedder.RekeyFacts(facts)
 	candidates := m.embedder.GraphCandidates(facts, 6)
 	byID := make(map[string]Fact, len(facts))
@@ -545,7 +553,7 @@ func (m *Memory) RebuildGraphEdges() (int, error) {
 			if !allowed[edge.Source][edge.Target] {
 				continue
 			}
-			valid := m.validInferredEdges([]Edge{{Target: edge.Target, Rel: edge.Rel, Confidence: edge.Confidence}}, allowed[edge.Source])
+			valid := m.validInferredEdges([]Edge{{Target: edge.Target, Rel: edge.Rel, Confidence: edge.Confidence}}, allowed[edge.Source], "graph-rebuild")
 			if len(valid) > 0 {
 				inferred[edge.Source] = append(inferred[edge.Source], valid...)
 			}

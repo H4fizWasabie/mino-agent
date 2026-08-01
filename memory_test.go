@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -103,7 +104,7 @@ func TestConsolidationEdgesRequireCandidatesConfidenceAndSpecificRelations(t *te
 		{Target: "keep", Rel: "depends_on", Confidence: 0.95},
 		{Target: "conflict", Rel: "depends_on", Confidence: 0.9},
 		{Target: "conflict", Rel: "supersedes", Confidence: 0.9},
-	}, map[string]bool{"keep": true, "conflict": true})
+	}, map[string]bool{"keep": true, "conflict": true}, "consolidation")
 	if len(edges) != 1 || edges[0].Target != "keep" || edges[0].Kind != "inferred" || edges[0].Source != "consolidation" {
 		t.Fatalf("validated edges = %+v", edges)
 	}
@@ -643,5 +644,79 @@ func TestManageMemorySelfMaintenanceActions(t *testing.T) {
 	// fact actions still require a subject
 	if got := tool.Fn(map[string]any{"action": "forget"}); !strings.Contains(got, "requires a subject") {
 		t.Fatalf("forget without subject = %q", got)
+	}
+}
+
+func TestGraphRebuildBackfillsMissingEmbeddings(t *testing.T) {
+	// RebuildGraphEdges must embed facts lacking vectors BEFORE GraphCandidates,
+	// else migrated facts are invisible to edge inference.
+	// The embedder calls the package-level httpClient (hardcoded OpenRouter
+	// URL), so swap it to route embedding requests to the local test server.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), "text-embedding") {
+			fmt.Fprint(w, `{"data":[{"embedding":[0.1,0.2,0.3]}]}`)
+			return
+		}
+		// Non-empty edges payload: an empty one counts as a failed batch and
+		// makes RebuildGraphEdges return an error. This edge targets nobody,
+		// so it is rejected by the allowed-candidates filter and writes nothing.
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"edges\":[{\"source\":\"orphan\",\"target\":\"nobody\",\"rel\":\"depends_on\",\"confidence\":0.9}]}"}}]}`)
+	}))
+	defer server.Close()
+	old := httpClient
+	httpClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		// Rewrite the hardcoded OpenRouter host to the local test server.
+		r2 := r.Clone(r.Context())
+		r2.URL.Scheme = "http"
+		r2.URL.Host = strings.TrimPrefix(server.URL, "http://")
+		return server.Client().Transport.RoundTrip(r2)
+	})}
+	defer func() { httpClient = old }()
+	pm := &ProviderManager{
+		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
+		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
+		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
+		sleep: func(time.Duration) {}, now: time.Now,
+	}
+	dir := t.TempDir()
+	gm := NewGraphMemory(filepath.Join(dir, "memories"), nil)
+	gm.RecordFact(Fact{ID: "orphan", Type: "semantic", Subject: "Orphan fact", Body: "Body"})
+	m := &Memory{client: pm, graph: gm, embedder: NewEmbeddingStore(Connect(dir), "test-key", "openai/text-embedding-3-large")}
+	if _, err := m.RebuildGraphEdges(); err != nil {
+		t.Fatalf("rebuild failed: %v", err)
+	}
+	if !m.embedder.HasFactEmbedding("orphan") {
+		t.Fatal("fact was not embedded during rebuild")
+	}
+}
+
+func TestRemoveMutualInferredEdgesAnyRelation(t *testing.T) {
+	dir := t.TempDir()
+	gm := NewGraphMemory(dir, nil)
+	// RecordFact filters edges to existing targets at write time, so record
+	// bare facts first and attach edges via ReplaceFact once both exist.
+	gm.RecordFact(Fact{ID: "a", Type: "semantic", Subject: "A"})
+	gm.RecordFact(Fact{ID: "b", Type: "semantic", Subject: "B"})
+	gm.ReplaceFact(Fact{ID: "a", Type: "semantic", Subject: "A", Edges: []Edge{{Target: "b", Rel: "used_in", Kind: "inferred", Confidence: 0.9}}})
+	gm.ReplaceFact(Fact{ID: "b", Type: "semantic", Subject: "B", Edges: []Edge{
+		{Target: "a", Rel: "contains", Kind: "inferred", Confidence: 0.95},
+		{Target: "a", Rel: "maintains", Kind: "explicit"},
+	}})
+	if n := gm.RemoveMutualInferredEdges(); n != 1 {
+		t.Fatalf("removed %d, want 1", n)
+	}
+	// Mutual rule: when A→B and B→A are BOTH inferred, drop the
+	// lower-confidence edge; explicit edges always survive. A→B (0.9)
+	// vs B→A (0.95): keep B→A, drop A→B. So after cleanup: a has 0
+	// edges, b has contains (0.95) + maintains (explicit) = 2 edges.
+	a, _ := gm.FindFact("a")
+	if len(a.Edges) != 0 {
+		t.Fatalf("a edges = %+v, want none (lower-confidence mirror dropped)", a.Edges)
+	}
+	b, _ := gm.FindFact("b")
+	if len(b.Edges) != 2 {
+		t.Fatalf("b edges = %+v, want contains(0.95) + maintains(explicit)", b.Edges)
 	}
 }

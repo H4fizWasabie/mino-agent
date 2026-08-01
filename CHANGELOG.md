@@ -25,6 +25,9 @@
 - Rebuilt playbooks around filesystem workspaces and isolated durable runs. Stage contracts now live in `stages/NN-name/CONTEXT.md`; `state.json` records per-stage attempts, outputs, failures, and resume state so a failed later stage does not replay completed work.
 
 ### Fixed
+- Facts without embeddings were invisible to graph edge inference: rebuild now backfills missing fact vectors before candidate generation, so migrated facts can gain edges instead of staying orphaned forever.
+- Graph-rebuild-written edges were mislabeled with `Source: "consolidation"`; edge provenance now follows the writer (`graph-rebuild` vs `consolidation`).
+- Mirrored inferred pairs are now resolved for any relation: when A→B and B→A are both inferred, the lower-confidence edge is dropped and explicit edges always survive (previously only `supersedes` pairs were cleaned).
 - Playbook authoring now canonicalizes generated semantic stage names, legacy output bullets, and Markdown-wrapped tool names at creation time before strict contract validation.
 - Tool artifact files (`compactToolOutput`) now get a unique per-write filename (`tool-<unixnano>.txt`) instead of `tool.txt` in a reused turn directory. The turn dirs in `/tmp/mino/results/<session>/<turn>/` reset across days, so old files lingered in slots that got rewritten by later runs — the model could follow an artifact path from context and read a stale result as its own. This happened in production: Mino's Gmail scan calls (Composio `GMAIL_FETCH_EMAILS` with `query`) returned correctly filtered old promotions, but it then read a 30-min-old stale artifact from the same dir and concluded the tool had no query support, stopping the cleanup with a wrong diagnosis. Unique names make a stale file unable to masquerade as a fresh result.
 

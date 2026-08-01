@@ -599,8 +599,8 @@ func (gm *GraphMemory) Feedback(id string, delta int) (*Fact, error) {
 	return &copy, nil
 }
 
-// RemoveMutualInferredEdges drops impossible reciprocal claims such as
-// A supersedes B and B supersedes A while preserving explicit edges.
+// RemoveMutualInferredEdges resolves mirrored inferred pairs (A→B and B→A,
+// any relation): the lower-confidence edge is dropped, explicit edges win.
 func (gm *GraphMemory) RemoveMutualInferredEdges() int {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
@@ -608,25 +608,19 @@ func (gm *GraphMemory) RemoveMutualInferredEdges() int {
 	for _, fact := range gm.facts {
 		filtered := fact.Edges[:0]
 		for _, edge := range fact.Edges {
-			if edge.Kind != "inferred" || edge.Rel != "supersedes" {
-				filtered = append(filtered, edge)
-				continue
-			}
-			target := gm.facts[edge.Target]
-			mutual := false
-			if target != nil {
-				for _, reverse := range target.Edges {
-					if reverse.Kind == "inferred" && reverse.Rel == edge.Rel && reverse.Target == fact.ID {
-						mutual = true
-						break
+			if edge.Kind == "inferred" {
+				target := gm.facts[edge.Target]
+				if target != nil {
+					for _, reverse := range target.Edges {
+						if reverse.Kind == "inferred" && reverse.Target == fact.ID && reverse.Confidence > edge.Confidence {
+							removed++
+							goto drop
+						}
 					}
 				}
 			}
-			if mutual {
-				removed++
-				continue
-			}
 			filtered = append(filtered, edge)
+		drop:
 		}
 		fact.Edges = filtered
 		if err := gm.writeFile(*fact); err == nil {
