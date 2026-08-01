@@ -148,8 +148,75 @@ func (b *MCPBridge) connect(cfg mcpServerConfig) {
 		})
 		b.servers[cfg.Name] = active
 		count++
+		// Nested-executor tools (a tools[] array carrying tool_slug + arguments,
+		// e.g. Composio's COMPOSIO_MULTI_EXECUTE_TOOL) force the model to build
+		// nested argument objects, which some models emit empty (observed with
+		// gpt-5.6-luna: correct slug, arguments:{} every time). Register a flat
+		// companion that takes arguments as a JSON string — a shape every model
+		// produces reliably — and re-wraps into the nested form on call.
+		if schemaHasNestedExecutor(t.InputSchema) {
+			flatName := fullName + "_FLAT"
+			if _, ok := b.registry.tools[flatName]; !ok {
+				b.registry.Register(&Tool{
+					Name:        flatName,
+					Description: fmt.Sprintf("[MCP:%s flat] %s — call with tool_slug plus arguments as a JSON string", cfg.Name, t.Name),
+					Schema: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"tool_slug":      map[string]any{"type": "string", "description": "The inner tool slug, e.g. INSTAGRAM_POST_IG_USER_MEDIA"},
+							"arguments_json": map[string]any{"type": "string", "description": "JSON string of the inner tool's arguments, e.g. {\"caption\":\"...\",\"image_url\":\"...\"}"},
+						},
+						"required": []string{"tool_slug", "arguments_json"},
+					},
+					Fn: func(args map[string]any) string {
+						slug, _ := args["tool_slug"].(string)
+						raw, _ := args["arguments_json"].(string)
+						wrapped, err := wrapExecutorArgs(slug, raw)
+						if err != nil {
+							return fmt.Sprintf("Error: %v", err)
+						}
+						return b.call(serverName, toolName, wrapped)
+					},
+				})
+			}
+		}
 	}
 	slog.Info("mcp tools registered", "server", cfg.Name, "tools", count)
+}
+
+// wrapExecutorArgs parses a flat arguments JSON string and re-wraps it into the
+// nested executor shape (tools[] with tool_slug + arguments) that the MCP
+// server expects. This is the flat-companion translation: the model supplies
+// (tool_slug, arguments_json) and never constructs nested objects.
+func wrapExecutorArgs(toolSlug, argumentsJSON string) (map[string]any, error) {
+	var inner map[string]any
+	if err := json.Unmarshal([]byte(argumentsJSON), &inner); err != nil {
+		return nil, fmt.Errorf("arguments_json is not valid JSON: %v", err)
+	}
+	return map[string]any{
+		"tools": []any{map[string]any{"tool_slug": toolSlug, "arguments": inner}},
+	}, nil
+}
+
+// schemaHasNestedExecutor reports whether a tool schema carries the
+// nested-executor shape: a "tools" array whose items have tool_slug + arguments.
+func schemaHasNestedExecutor(schema mcp.ToolInputSchema) bool {
+	raw, ok := schema.Properties["tools"]
+	if !ok {
+		return false
+	}
+	item := map[string]any{}
+	if m, ok := raw.(map[string]any); ok {
+		if items, ok := m["items"].(map[string]any); ok {
+			item = items
+		}
+	}
+	if itemProps, ok := item["properties"].(map[string]any); ok {
+		_, hasSlug := itemProps["tool_slug"]
+		_, hasArgs := itemProps["arguments"]
+		return hasSlug && hasArgs
+	}
+	return false
 }
 
 func (b *MCPBridge) call(server, tool string, args map[string]any) string {
