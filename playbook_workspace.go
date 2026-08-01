@@ -345,6 +345,31 @@ func playbookRunOutputPath(pb *PlaybookWorkspace, run *PlaybookRun, stage Worksp
 	return filepath.Join(playbookRunsDir(pb), run.ID, "stages", fmt.Sprintf("%02d-%s", stage.Number, stage.Name), filepath.FromSlash(output.Path))
 }
 
+// playbookWriteGuard enforces the contract read-only rule: the playbook tree
+// (definitions AND runs) is writable only from inside the stage execution of
+// that playbook, and only within its own run directory. The main loop can never
+// write into playbooks/ — that kills the pre-seed vector (main loop writes
+// outputs, then run_playbook rubber-stamps them). A stage can write its run's
+// outputs but cannot amend the contract (CONTEXT.md, stages/, config.md) or
+// another run's directory mid-execution.
+// Returns an error message, or "" when the write is allowed.
+func playbookWriteGuard(home, path string, ctx context.Context) string {
+	clean := filepath.Clean(path)
+	root := filepath.Clean(filepath.Join(home, "playbooks"))
+	if clean == root || !strings.HasPrefix(clean, root+string(filepath.Separator)) {
+		return ""
+	}
+	tags := traceTagsFromCtx(ctx)
+	if tags["playbook"] == "" {
+		return fmt.Sprintf("playbook tree is read-only outside stage execution: %s (use manage_playbook to edit playbooks)", path)
+	}
+	runDir := filepath.Join(root, tags["playbook"], "runs", tags["run"])
+	if !strings.HasPrefix(clean, runDir+string(filepath.Separator)) {
+		return fmt.Sprintf("playbook contract is read-only during execution: %s (only the current run's outputs are writable)", path)
+	}
+	return ""
+}
+
 // stageRetrySafe reports whether a stage may retry within a run: true only when
 // its whitelist is non-empty and every declared tool is read-only
 // (BehaviorObserve) or write_file (the required output mechanism). Destructive
@@ -484,6 +509,7 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 			stageCtx := context.WithValue(ctx, traceTagKey{}, map[string]string{
 				"playbook": pb.Name,
 				"stage":    fmt.Sprintf("%02d-%s", stage.Number, stage.Name),
+				"run":      run.ID,
 			})
 			stageResult := runPlaybookStageLoop(stageCtx, core.Client, sessionID, system, messages, stageTools, maxStageIterations, core.Settings.MaxTokens, obs, core.Settings.Home)
 			result.TokensIn += stageResult.TokensIn

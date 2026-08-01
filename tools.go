@@ -700,6 +700,9 @@ func makeWriteTool(workspace, home string) *Tool {
 			path, _ := args["path"].(string)
 			content, _ := args["content"].(string)
 			mode, _ := args["mode"].(string)
+			if guard := playbookWriteGuard(home, path, ctx); guard != "" {
+				return "Error: " + guard
+			}
 			os.MkdirAll(filepath.Dir(path), 0755)
 			flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
 			verb := "Wrote"
@@ -738,6 +741,9 @@ func makeEditTool(workspace, home string) *Tool {
 		},
 		ContextFn: func(ctx context.Context, args map[string]any) string {
 			path, _ := args["path"].(string)
+			if guard := playbookWriteGuard(home, path, ctx); guard != "" {
+				return "Error: " + guard
+			}
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return fmt.Sprintf("Error reading %s: %v", path, err)

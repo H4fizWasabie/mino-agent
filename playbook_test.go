@@ -169,6 +169,43 @@ func TestWorkspaceStageEventsCarryTraceTag(t *testing.T) {
 	}
 }
 
+func TestPlaybookWriteGuard(t *testing.T) {
+	// The playbook tree is read-only to the main loop and to stages outside
+	// their own run directory: pre-seeding outputs before run_playbook (the VPS
+	// cheat) must be refused, while a stage may write its own run outputs.
+	home := t.TempDir()
+	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect"})
+	ctx := context.Background()
+
+	// Main loop: any write into the playbook tree is refused.
+	if guard := playbookWriteGuard(home, filepath.Join(home, "playbooks", "brief", "output", "pre-seed.md"), ctx); guard == "" {
+		t.Fatal("main-loop write into playbook tree was allowed")
+	}
+	if guard := playbookWriteGuard(home, filepath.Join(home, "playbooks", "brief", "stages", "01-collect", "CONTEXT.md"), ctx); guard == "" {
+		t.Fatal("main-loop write into stage contract was allowed")
+	}
+	// Outside the tree: always allowed.
+	if guard := playbookWriteGuard(home, filepath.Join(home, "notes.md"), ctx); guard != "" {
+		t.Fatalf("outside-tree write refused: %s", guard)
+	}
+
+	// Inside a stage: only its own run directory is writable.
+	stageCtx := context.WithValue(ctx, traceTagKey{}, map[string]string{
+		"playbook": "brief",
+		"stage":    "01-collect",
+		"run":      "run-123",
+	})
+	if guard := playbookWriteGuard(home, filepath.Join(home, "playbooks", "brief", "runs", "run-123", "stages", "01-collect", "output", "result.md"), stageCtx); guard != "" {
+		t.Fatalf("stage write to own run output refused: %s", guard)
+	}
+	if guard := playbookWriteGuard(home, filepath.Join(home, "playbooks", "brief", "stages", "01-collect", "CONTEXT.md"), stageCtx); guard == "" {
+		t.Fatal("stage write to contract was allowed")
+	}
+	if guard := playbookWriteGuard(home, filepath.Join(home, "playbooks", "brief", "runs", "other-run", "output", "result.md"), stageCtx); guard == "" {
+		t.Fatal("stage write to another run was allowed")
+	}
+}
+
 func TestWorkspaceRejectsMissingContract(t *testing.T) {
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, "playbooks", "bad"), 0700); err != nil {
