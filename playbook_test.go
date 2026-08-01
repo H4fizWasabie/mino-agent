@@ -42,7 +42,7 @@ func TestWorkspaceRunResumesFirstIncompleteStage(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		return &LoopResult{Status: "complete", Reply: "done"}
+		return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{{Name: "write_file", Args: map[string]any{"path": path1}}}}
 	}
 	result, err := RunPlaybook(context.Background(), core, "brief", "make the briefing", "test", nil)
 	if err != nil || result.Status != "failed" || result.StagesRun != 2 {
@@ -55,7 +55,7 @@ func TestWorkspaceRunResumesFirstIncompleteStage(t *testing.T) {
 		if err := os.WriteFile(path2, []byte("reported"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		return &LoopResult{Status: "complete", Reply: "done"}
+		return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{{Name: "write_file", Args: map[string]any{"path": path2}}}}
 	}
 	result, err = RunPlaybook(context.Background(), core, "brief", "ignored on resume", "test", nil)
 	if err != nil || result.Status != "complete" || result.StagesRun != 1 {
@@ -71,6 +71,55 @@ func TestWorkspaceRunResumesFirstIncompleteStage(t *testing.T) {
 	}
 	if saved.Stages[0].Attempts != 1 || saved.Stages[1].Attempts != 2 || saved.Status != "complete" {
 		t.Fatalf("state = %+v", saved)
+	}
+}
+
+func TestWorkspaceRejectsPreSeededOutput(t *testing.T) {
+	// VPS incident reproduction: the main loop did the real work, hand-wrote the
+	// playbook output files, then run_playbook rubber-stamped them. write-attributed
+	// verification must fail the stage when the output was not written by the
+	// stage's own tool calls.
+	home := t.TempDir()
+	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect"})
+	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
+	pb, err := loadPlaybookWorkspace(home, "brief")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := loadOrCreatePlaybookRun(pb, "cheat attempt", "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage1, _ := workspaceStage(pb, 1)
+	path1 := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
+	// Main loop "cheats": writes the output file before the playbook runs.
+	if err := os.MkdirAll(filepath.Dir(path1), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path1, []byte("preseeded result"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	oldLoop := runPlaybookStageLoop
+	defer func() { runPlaybookStageLoop = oldLoop }()
+	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
+		// Stage does nothing — no write_file call. The pre-seeded file exists.
+		return &LoopResult{Status: "complete", Reply: "done"}
+	}
+	result, err := RunPlaybook(context.Background(), core, "brief", "cheat attempt", "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "failed" {
+		t.Fatalf("pre-seeded output passed verification: %+v", result)
+	}
+	if !strings.Contains(result.Reply, "not written by this stage") {
+		t.Fatalf("reply = %q, want attribution failure", result.Reply)
+	}
+	if result.StagesRun != 1 {
+		t.Fatalf("StagesRun = %d, want 1 (stage attempted then failed)", result.StagesRun)
 	}
 }
 

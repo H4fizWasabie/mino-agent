@@ -458,7 +458,7 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 		result.Reply = stageResult.Reply
 		result.StagesRun++
 		state.EndedAt = time.Now().UTC()
-		outputs, verifyErr := verifyWorkspaceStageOutputs(pb, run, stage)
+		outputs, verifyErr := verifyWorkspaceStageOutputs(pb, run, stage, stageResult.ToolCalls)
 		if stageResult.Status != "complete" || verifyErr != nil {
 			state.Status = "failed"
 			if stageResult.Status != "complete" {
@@ -490,13 +490,29 @@ func workspaceStage(pb *PlaybookWorkspace, number int) (WorkspaceStage, bool) {
 	return WorkspaceStage{}, false
 }
 
-func verifyWorkspaceStageOutputs(pb *PlaybookWorkspace, run *PlaybookRun, stage WorkspaceStage) ([]string, error) {
+// verifyWorkspaceStageOutputs enforces write-attributed completion: a declared
+// output passes only if it exists, is non-empty, AND was written by a write_file
+// call recorded inside this stage's own tool log. Pre-seeded files (main loop
+// doing the work, then run_playbook rubber-stamping) fail attribution.
+func verifyWorkspaceStageOutputs(pb *PlaybookWorkspace, run *PlaybookRun, stage WorkspaceStage, calls []ToolCall) ([]string, error) {
+	wrote := make(map[string]bool)
+	for _, call := range calls {
+		if call.Name != "write_file" {
+			continue
+		}
+		if path, _ := call.Args["path"].(string); path != "" {
+			wrote[filepath.Clean(path)] = true
+		}
+	}
 	outputs := make([]string, 0, len(stage.Outputs))
 	for _, output := range stage.Outputs {
 		path := playbookRunOutputPath(pb, run, stage, output)
 		info, err := os.Stat(path)
 		if err != nil || info.IsDir() || info.Size() == 0 {
 			return nil, fmt.Errorf("required output %q was not written", output.Path)
+		}
+		if !wrote[filepath.Clean(path)] {
+			return nil, fmt.Errorf("required output %q exists but was not written by this stage's tools", output.Path)
 		}
 		outputs = append(outputs, path)
 	}

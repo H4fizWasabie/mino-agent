@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Playbook stage completion now requires **write-attributed outputs**: a declared output passes verification only if a `write_file` call inside that stage's own tool log wrote it. Pre-seeded output files (the main loop doing the work and then `run_playbook` rubber-stamping it, as happened in the VPS Gmail incident) now fail the stage audit instead of passing it. (`verifyWorkspaceStageOutputs` checks the stage's recorded tool calls.)
+
 - Rebuilt playbooks around filesystem workspaces and isolated durable runs. Stage contracts now live in `stages/NN-name/CONTEXT.md`; `state.json` records per-stage attempts, outputs, failures, and resume state so a failed later stage does not replay completed work.
 
 ### Fixed
