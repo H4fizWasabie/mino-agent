@@ -388,6 +388,16 @@ func stageSelfCertified(stage WorkspaceStage) bool {
 func playbookWriteGuard(home, path string, ctx context.Context) string {
 	clean := filepath.Clean(path)
 	root := filepath.Clean(filepath.Join(home, "playbooks"))
+	// Doubled-home hallucination guard: models sometimes emit paths that repeat
+	// the home directory (e.g. /home/mino/.mino/.mino/playbooks/...). These are
+	// fabricated paths — writing there succeeds but the file never lands where
+	// verification looks, causing false-failed runs and duplicate side effects
+	// (the VPS ai-news triple-send). Reject the whole class: home followed by
+	// the home directory's own basename.
+	homeClean := filepath.Clean(home)
+	if strings.Contains(clean, homeClean+string(filepath.Separator)+filepath.Base(homeClean)) {
+		return fmt.Sprintf("suspicious doubled-path: %s (home directory appears more than once; use the exact declared output path)", path)
+	}
 	if clean == root || !strings.HasPrefix(clean, root+string(filepath.Separator)) {
 		return ""
 	}

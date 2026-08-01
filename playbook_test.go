@@ -188,6 +188,12 @@ func TestPlaybookWriteGuard(t *testing.T) {
 	if guard := playbookWriteGuard(home, filepath.Join(home, "notes.md"), ctx); guard != "" {
 		t.Fatalf("outside-tree write refused: %s", guard)
 	}
+	// Doubled-home hallucination (the VPS .mino/.mino/ class): rejected even
+	// though the path is outside the real playbook tree.
+	doubled := filepath.Join(home, filepath.Base(home), "playbooks", "brief", "output", "x.md")
+	if guard := playbookWriteGuard(home, doubled, ctx); guard == "" || !strings.Contains(guard, "doubled-path") {
+		t.Fatalf("doubled-home path not rejected: %s (guard=%q)", doubled, guard)
+	}
 
 	// Inside a stage: only its own run directory is writable.
 	stageCtx := context.WithValue(ctx, traceTagKey{}, map[string]string{
