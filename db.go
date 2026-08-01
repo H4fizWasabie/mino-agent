@@ -11,7 +11,7 @@ import (
 
 // CurrentSchemaVersion is incremented when the schema changes in a way
 // that needs explicit migration. Add a migration function in runMigrations().
-const CurrentSchemaVersion = 5
+const CurrentSchemaVersion = 6
 
 // Simplified schema — single statements, no triggers with embedded semicolons.
 var schemaStatements = []string{
@@ -53,6 +53,7 @@ var schemaStatements = []string{
 		session_id TEXT NOT NULL,
 		label TEXT NOT NULL,
 		size INTEGER NOT NULL,
+		distilled INTEGER NOT NULL DEFAULT 0,
 		created_at TEXT DEFAULT (datetime('now'))
 	)`,
 	`CREATE TABLE IF NOT EXISTS tool_calls (
@@ -164,6 +165,11 @@ func runMigrations(db *sql.DB) {
 	// v5: authoritative Responsibility projection and append-only history
 	if current < 5 {
 		current = 5
+	}
+	// v6: playbook output distillation queue
+	if current < 6 {
+		db.Exec("ALTER TABLE session_artifacts ADD COLUMN distilled INTEGER NOT NULL DEFAULT 0")
+		current = 6
 	}
 
 	if current != from {

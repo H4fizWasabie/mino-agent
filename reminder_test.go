@@ -15,7 +15,7 @@ func TestReminderToolsCreateListAndCancel(t *testing.T) {
 	db := Connect(home)
 	defer db.Close()
 	var version string
-	if err := db.QueryRow("SELECT value FROM _meta WHERE key = 'schema_version'").Scan(&version); err != nil || version != "5" {
+	if err := db.QueryRow("SELECT value FROM _meta WHERE key = 'schema_version'").Scan(&version); err != nil || version != "6" {
 		t.Fatalf("schema version = %q, err=%v", version, err)
 	}
 	location := time.FixedZone("MYT", 8*60*60)

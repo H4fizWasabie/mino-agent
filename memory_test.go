@@ -778,3 +778,71 @@ func TestJudgeChangedFacts(t *testing.T) {
 		t.Fatalf("failed pass must leave fact unjudged: %+v", got)
 	}
 }
+
+func TestDistillOutputsDue(t *testing.T) {
+	// Artifact row + output file → one episodic run node, row marked distilled.
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "results", "scheduled-threads-ai-learning", "1", "post.md")
+	os.MkdirAll(filepath.Dir(outputPath), 0755)
+	os.WriteFile(outputPath, []byte("# Threads post\nTakeaways on open-weight models. ID: 987654321"), 0644)
+	db := Connect(dir)
+	defer db.Close()
+	db.Exec("INSERT INTO session_artifacts (path, session_id, label, size) VALUES (?, 'scheduled-threads-ai-learning', 'threads-ai-learning output', 78)", outputPath)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"run\":{\"id\":\"ep_threads_ai_learning_2026_08_02\",\"subject\":\"Posted Threads takeaways 2026-08-02 (ID 987654321)\",\"body\":\"Daily AI learning takeaways posted; ID 987654321; published OK\",\"edges\":[{\"target\":\"threads_ai_learning_playbook\",\"rel\":\"instance_of\",\"kind\":\"explicit\"}]},\"facts\":[{\"id\":\"open_weight_models_letter\",\"subject\":\"25 tech companies warn against premature open-weight restrictions\",\"edges\":[]}]}"}}]}`)
+	}))
+	defer server.Close()
+	pm := &ProviderManager{
+		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
+		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
+		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
+		sleep: func(time.Duration) {}, now: time.Now,
+	}
+	gm := NewGraphMemory(filepath.Join(dir, "memories"), nil)
+	gm.RecordFact(Fact{ID: "threads_ai_learning_playbook", Type: "semantic", Subject: "Playbook publishes daily Threads takeaways"})
+	m := &Memory{db: db, client: pm, cfg: &Settings{Home: dir, MemoriesDir: filepath.Join(dir, "memories")}, graph: gm}
+	if n := m.DistillOutputsDue(); n != 1 {
+		t.Fatalf("distilled %d, want 1", n)
+	}
+	if fact, ok := gm.FindFact("ep_threads_ai_learning_2026_08_02"); !ok || fact.Subject == "" || len(fact.Edges) != 1 || fact.Edges[0].Target != "threads_ai_learning_playbook" {
+		t.Fatalf("run node = %+v, ok=%v", fact, ok)
+	}
+	if _, ok := gm.FindFact("open_weight_models_letter"); !ok {
+		t.Fatal("semantic fact from run content missing")
+	}
+	var distilled int
+	db.QueryRow("SELECT distilled FROM session_artifacts WHERE path = ?", outputPath).Scan(&distilled)
+	if distilled != 1 {
+		t.Fatal("artifact not marked distilled")
+	}
+	// Second pass: nothing left.
+	if n := m.DistillOutputsDue(); n != 0 {
+		t.Fatalf("second pass distilled %d, want 0", n)
+	}
+	// Failure path: garbage response leaves row undistilled.
+	outputPath2 := filepath.Join(dir, "results", "scheduled-gmail-daily-cleanup", "1", "log.md")
+	os.MkdirAll(filepath.Dir(outputPath2), 0755)
+	os.WriteFile(outputPath2, []byte("moved 3 emails"), 0644)
+	db.Exec("INSERT INTO session_artifacts (path, session_id, label, size) VALUES (?, 'scheduled-gmail-daily-cleanup', 'gmail-daily-cleanup output', 15)", outputPath2)
+	server2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `not json`)
+	}))
+	defer server2.Close()
+	pm2 := &ProviderManager{
+		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server2.URL, Model: "main", Small: "small"}},
+		clients:   map[string]*Client{"fake": NewClient("test-key", server2.URL)},
+		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
+		sleep: func(time.Duration) {}, now: time.Now,
+	}
+	m2 := &Memory{db: db, client: pm2, cfg: &Settings{Home: dir, MemoriesDir: filepath.Join(dir, "memories")}, graph: gm}
+	if n := m2.DistillOutputsDue(); n != 0 {
+		t.Fatalf("failed pass distilled %d, want 0", n)
+	}
+	db.QueryRow("SELECT distilled FROM session_artifacts WHERE path = ?", outputPath2).Scan(&distilled)
+	if distilled != 0 {
+		t.Fatal("failed artifact must stay undistilled for retry")
+	}
+}

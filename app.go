@@ -102,6 +102,9 @@ func NewCore() *Core {
 				if n := mem.JudgeChangedFacts(); n > 0 {
 					slog.Info("graph edge judgment", "facts", n)
 				}
+				if n := mem.DistillOutputsDue(); n > 0 {
+					slog.Info("playbook output distillation", "written", n)
+				}
 			}
 		}()
 	}

@@ -87,7 +87,167 @@ func (m *Memory) SessionArtifacts(sessionID string, maxChars int) string {
 }
 
 func (m *Memory) CleanupArtifacts() {
-	m.db.Exec("DELETE FROM session_artifacts WHERE created_at < datetime('now', '-1 day')")
+	// Only distilled rows are cleaned; undistilled rows are the distillation
+	// queue and must survive until the model processes them.
+	m.db.Exec("DELETE FROM session_artifacts WHERE distilled = 1 AND created_at < datetime('now', '-1 day')")
+}
+
+// --- Playbook output distillation (durable queue → episodic memory) ---
+
+const distillOutputPrompt = `You distill a playbook run's output files into long-term memory.
+
+The run produced these output files (path: content):
+%s
+
+Reply with ONLY this JSON:
+{"run": {"id": "snake_case_id_prefixed_ep_", "subject": "<one sentence: what was posted/produced, when, and the post/artifact ID if any>", "body": "<1-3 sentences: what happened, outcome>", "edges": [{"target": "<existing_id>", "rel": "<specific relation>", "kind": "explicit"}]}, "facts": [{"id": "snake_case_id", "subject": "<one sentence>", "content": "<optional>", "edges": []}]}
+
+Rules:
+- The run node is episodic: one per run, compact. Include the post/artifact ID and outcome in subject or body.
+- facts: ONLY durable knowledge worth remembering in a month — skip routine recurrence, keep deviations, anomalies, and high-content results.
+- Edge targets must be existing fact IDs from this list (use none if nothing fits):
+%s`
+
+type distilledRun struct {
+	Run   Fact   `json:"run"`
+	Facts []Fact `json:"facts"`
+}
+
+func parseDistillResponse(text string) (distilledRun, error) {
+	text = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(text, "```json"), "```"))
+	for start := 0; start < len(text); start++ {
+		if text[start] != '{' {
+			continue
+		}
+		for end := start + 1; end <= len(text); end++ {
+			if text[end-1] != '}' || !json.Valid([]byte(text[start:end])) {
+				continue
+			}
+			var out distilledRun
+			if err := json.Unmarshal([]byte(text[start:end]), &out); err == nil {
+				return out, nil
+			}
+		}
+	}
+	return distilledRun{}, fmt.Errorf("no valid distill object")
+}
+
+// DistillOutputsDue turns undistilled playbook outputs into one compact
+// episodic run node (+ optional semantic facts). The artifact row is the
+// durable queue: rows are marked distilled only after facts are written, and
+// CleanupArtifacts never deletes undistilled rows, so a down model cannot
+// lose an output.
+func (m *Memory) DistillOutputsDue() int {
+	if m.client == nil {
+		return 0
+	}
+	rows, err := m.db.Query("SELECT path, session_id, label FROM session_artifacts WHERE distilled = 0 ORDER BY created_at LIMIT 3")
+	if err != nil {
+		slog.Warn("distill scan failed", "error", err)
+		return 0
+	}
+	type artifact struct{ path, sessionID, label string }
+	var arts []artifact
+	for rows.Next() {
+		var a artifact
+		if rows.Scan(&a.path, &a.sessionID, &a.label) == nil {
+			arts = append(arts, a)
+		}
+	}
+	rows.Close()
+	if len(arts) == 0 {
+		return 0
+	}
+	// Group by run dir (session_id) so one run = one call = one node.
+	byRun := make(map[string][]artifact)
+	var runOrder []string
+	for _, a := range arts {
+		if _, ok := byRun[a.sessionID]; !ok {
+			runOrder = append(runOrder, a.sessionID)
+		}
+		byRun[a.sessionID] = append(byRun[a.sessionID], a)
+	}
+	written := 0
+	for _, sid := range runOrder {
+		var files strings.Builder
+		for _, a := range byRun[sid] {
+			data, err := os.ReadFile(a.path)
+			if err != nil {
+				continue
+			}
+			s := string(data)
+			if len(s) > 4000 { // ponytail: cap per file, the run node stays compact
+				s = s[:4000]
+			}
+			fmt.Fprintf(&files, "PATH %s\n%s\n---\n", a.path, s)
+		}
+		if files.Len() == 0 {
+			continue
+		}
+		ids := m.availableFactIDs()
+		resp, err := m.client.CreateJSON("distill-output", SmallModel,
+			[]Message{{Role: "user", Content: fmt.Sprintf(distillOutputPrompt, files.String(), ids)}}, 600, "")
+		if err != nil {
+			slog.Warn("distill model call failed", "run", sid, "error", err)
+			continue
+		}
+		text := resp.FinalText
+		if text == "" {
+			for _, block := range resp.Content {
+				if block.Type == "text" {
+					text += block.Text
+				}
+			}
+		}
+		out, err := parseDistillResponse(text)
+		if err != nil {
+			slog.Warn("distill response invalid", "run", sid, "error", err)
+			continue
+		}
+		if out.Run.ID == "" || out.Run.Subject == "" {
+			continue
+		}
+		out.Run.Type = "episodic"
+		out.Run.At = time.Now().UTC()
+		// Only explicit edges the model anchored to real facts; inferred edges
+		// are the judgment pass's job.
+		var kept []Edge
+		for _, e := range out.Run.Edges {
+			if e.Kind == "explicit" && e.Target != "" && e.Rel != "" {
+				kept = append(kept, e)
+			}
+		}
+		out.Run.Edges = kept
+		if err := m.graph.RecordFact(out.Run); err != nil {
+			slog.Warn("distill run write failed", "run", sid, "error", err)
+			continue
+		}
+		for _, f := range out.Facts {
+			if f.ID == "" || f.Subject == "" {
+				continue
+			}
+			f.Type = "semantic"
+			f.At = time.Now().UTC()
+			if err := m.graph.RecordFact(f); err != nil {
+				slog.Warn("distill fact write failed", "fact", f.ID, "error", err)
+			}
+		}
+		for _, a := range byRun[sid] {
+			m.db.Exec("UPDATE session_artifacts SET distilled = 1 WHERE path = ?", a.path)
+		}
+		written++ // one run = one node
+	}
+	return written
+}
+
+// availableFactIDs returns a prompt-safe list of existing fact IDs.
+func (m *Memory) availableFactIDs() string {
+	var ids []string
+	for _, f := range m.graph.Facts() {
+		ids = append(ids, f.ID)
+	}
+	sort.Strings(ids)
+	return strings.Join(ids, ", ")
 }
 
 // --- Semantic search (graph-backed) ---

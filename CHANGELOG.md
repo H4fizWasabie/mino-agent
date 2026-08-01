@@ -4,11 +4,15 @@
 
 ### Added
 
+- Playbook run outputs distill into one compact episodic memory node per run (content, post ID, when, outcome) plus semantic facts for durable knowledge; undistilled rows survive cleanup until processed.
+
 - Every new or edited memory gets LLM-judged edges within minutes (5 per pass, retried on failure) — graphify-style incremental update without a full rebuild.
 
 - Edge-judgment ledger tracks which facts still need LLM edge judgment; index.json v3 carries judgment state, communities, god nodes, and labels.
 
 ### Changed
+
+- schema v6: session_artifacts.distilled queue flag.
 
 - **MCP flattening**: the bridge now detects nested-executor wrapper tools (schema with a `tools[]` array carrying `tool_slug` + `arguments`, e.g. Composio's `COMPOSIO_MULTI_EXECUTE_TOOL`) and re-exposes their inner toolkit tools as first-class flat tools (`MCP_composio_INSTAGRAM_POST_IG_USER_MEDIA(caption, image_url, ig_user_id)`). The model never sees the nesting; the bridge re-wraps flat args into the executor internally. Deprecated tools are skipped. (Why: models like gpt-5.6-luna reliably emit empty `arguments: {}` for deeply nested tool-call schemas while believing they supplied them — the root cause of the Instagram/Gmail Composio failures. Flat tools work on every model, as `search_web`/`threads_post` proved.)
 - **MCP gate is now family-based**: when any MCP tool from a toolkit keyword-matches, the whole toolkit family is included (flattened schemas are small), wrapper tools are suppressed when their flattened children are present, and the flat MCP cap rose from 3 to 12. (Why: the old cap of 3 was sized for six giant wrapper tools; the Instagram flow alone needs three tools from one toolkit.)
