@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-02T01:57:32Z",
+  "title": "Design System: Mino Operator Timeline",
+  "extensions": {
+    "colorMeta": {
+      "paper": {"role": "neutral", "displayName": "Warm Paper", "canonical": "#e7e5de", "tonalRamp": ["#272621", "#4c4a42", "#716f65", "#97958b", "#bbb9b0", "#d7d5ce", "#e7e5de", "#f6f5f1"]},
+      "surface": {"role": "neutral", "displayName": "Raised Paper", "canonical": "#f0eee8", "tonalRamp": ["#292823", "#504e46", "#77746a", "#9f9c92", "#c6c3ba", "#dedcd5", "#f0eee8", "#faf9f6"]},
+      "ink": {"role": "neutral", "displayName": "Graphite Ink", "canonical": "#26313a", "tonalRamp": ["#11171c", "#26313a", "#47535d", "#68747d", "#8b969e", "#afb8be", "#d3d9dd", "#f1f3f4"]},
+      "indigo": {"role": "primary", "displayName": "Measured Indigo", "canonical": "#5264b8", "tonalRamp": ["#111738", "#222d65", "#35458f", "#5264b8", "#7484cf", "#9ca8e1", "#c7cef0", "#eff1fb"]},
+      "verified": {"role": "secondary", "displayName": "Verified Green", "canonical": "#21845b", "tonalRamp": ["#08291c", "#0d4931", "#146a48", "#21845b", "#4ca27b", "#7cc19e", "#b2dec8", "#e8f6ef"]},
+      "blocked": {"role": "tertiary", "displayName": "Blocked Red", "canonical": "#c0392b", "tonalRamp": ["#3a0c08", "#681712", "#96241b", "#c0392b", "#d9695f", "#e99a93", "#f4c9c5", "#faeceb"]}
+    },
+    "typographyMeta": {
+      "headline": {"displayName": "Outcome Headline", "purpose": "The day's owner-facing outcome."},
+      "title": {"displayName": "Responsibility Title", "purpose": "Named responsibilities and meaningful results."},
+      "body": {"displayName": "Operational Body", "purpose": "Readable explanations and actions."},
+      "label": {"displayName": "Evidence Label", "purpose": "Status, freshness, timestamps, and machine identity."}
+    },
+    "shadows": [
+      {"name": "floating-layer", "value": "0 18px 48px rgba(28,32,55,.14)", "purpose": "Health popover and expanded Ask surface only."}
+    ],
+    "motion": [
+      {"name": "state-change", "value": "160ms ease", "purpose": "Brief hover and state feedback; removed under prefers-reduced-motion."}
+    ],
+    "breakpoints": [
+      {"name": "mobile", "value": "719px"},
+      {"name": "compact-desktop", "value": "900px"}
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Action",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single strongest contextual owner action.",
+      "html": "<button class=\"ds-primary\">Review next step</button>",
+      "css": ".ds-primary{min-height:38px;padding:8px 12px;border:1px solid #5264b8;border-radius:8px;background:#5264b8;color:#fff;font:700 11.5px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;cursor:pointer;transition:background .16s ease}.ds-primary:hover{background:#3f509e}.ds-primary:focus-visible{outline:3px solid #dde2f5;outline-offset:2px}"
+    },
+    {
+      "name": "Secondary Action",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "A contextual Ask or evidence action beside the primary control.",
+      "html": "<button class=\"ds-secondary\">Ask Mino</button>",
+      "css": ".ds-secondary{min-height:38px;padding:8px 12px;border:1px solid #5264b8;border-radius:8px;background:transparent;color:#5264b8;font:700 11.5px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;cursor:pointer}.ds-secondary:hover{background:#dde2f5}.ds-secondary:focus-visible{outline:3px solid #dde2f5;outline-offset:2px}"
+    },
+    {
+      "name": "Ask Field",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "A quiet composer that expands into conversation only on request.",
+      "html": "<input class=\"ds-ask\" aria-label=\"Ask Mino\" placeholder=\"Ask Mino about this work…\">",
+      "css": ".ds-ask{width:100%;min-height:42px;padding:10px 13px;border:1px solid #babbb6;border-radius:8px;background:#e7e5de;color:#26313a;font:13.5px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;outline:none}.ds-ask:focus{border-color:#5264b8;box-shadow:0 0 0 3px #dde2f5}"
+    },
+    {
+      "name": "Status Label",
+      "kind": "chip",
+      "description": "A textual Responsibility state reinforced by semantic color.",
+      "html": "<span class=\"ds-status\">Verified</span>",
+      "css": ".ds-status{display:inline-flex;padding:2px 7px;border:1px solid #21845b;border-radius:99px;background:transparent;color:#21845b;font:700 8.5px ui-monospace,'SF Mono',Menlo,monospace;letter-spacing:.05em;text-transform:uppercase}"
+    },
+    {
+      "name": "Desktop Navigation",
+      "kind": "nav",
+      "description": "A compact row of owner concepts with a quiet active field.",
+      "html": "<nav class=\"ds-nav\" aria-label=\"Primary\"><a class=\"ds-nav-active\" href=\"#today\">Today</a><a href=\"#work\">Work</a><a href=\"#conversations\">Conversations</a><a href=\"#memory\">Memory</a><a href=\"#system\">System</a></nav>",
+      "css": ".ds-nav{display:flex;gap:2px;padding:8px;background:#f0eee8}.ds-nav a{padding:9px 12px;border-radius:8px;color:#5f6870;font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;text-decoration:none}.ds-nav a:hover{color:#26313a}.ds-nav a:focus-visible{outline:2px solid #5264b8;outline-offset:1px}.ds-nav .ds-nav-active{background:#dde2f5;color:#3f509e;font-weight:700}"
+    },
+    {
+      "name": "Responsibility Entry",
+      "kind": "custom",
+      "description": "The signature ruled journal entry: state, outcome, next action, and evidence.",
+      "html": "<article class=\"ds-entry\"><time>09:40</time><div><span class=\"ds-entry-state\">Needs you</span><h3>Choose the final supplier</h3><p>Two verified options remain. Review the trade-off before Mino proceeds.</p><button>Review next step</button></div></article>",
+      "css": ".ds-entry{display:grid;grid-template-columns:82px 1fr;gap:18px;padding:24px 0;border-top:1px solid #c9c8c1;border-bottom:1px solid #c9c8c1;color:#26313a}.ds-entry time{color:#7b8388;font:10px ui-monospace,'SF Mono',Menlo,monospace}.ds-entry-state{display:inline-flex;padding:2px 7px;border:1px solid #9a6500;border-radius:99px;color:#9a6500;font:700 8.5px ui-monospace,'SF Mono',Menlo,monospace;text-transform:uppercase}.ds-entry h3{margin:8px 0 4px;font:600 18px/1.25 'Iowan Old Style','Palatino Linotype',Palatino,Georgia,serif}.ds-entry p{max-width:66ch;margin:0 0 14px;color:#5f6870;font:12.5px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}.ds-entry button{min-height:38px;padding:8px 12px;border:1px solid #5264b8;border-radius:8px;background:#5264b8;color:#fff;font-weight:700}.ds-entry button:hover{background:#3f509e}.ds-entry button:focus-visible{outline:3px solid #dde2f5;outline-offset:2px}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Operator's Field Journal",
+    "overview": "Mino should feel like a calm, precise journal kept by a capable operator. The owner arrives to understand what changed, what needs a decision, and what proof exists. The interface therefore uses quiet paper surfaces, ink-led hierarchy, editorial outcome typography, and thin rules instead of command-center theater. The system is deliberately restrained, but not passive. Semantic status color appears where it changes the owner's decision; contextual Ask actions and evidence disclosures provide depth only when requested. Runtime machinery stays available under System without competing with the owner story.",
+    "keyCharacteristics": ["Owner outcomes lead; implementation detail recedes.", "Editorial headlines sit above practical sans-serif body copy.", "Thin rules and tonal layers organize content without card grids.", "Status is stated in words and reinforced, never replaced, by color.", "Evidence and diagnostics are pull-based."],
+    "rules": [
+      {"name": "The Earned Color Rule", "body": "Accent and semantic color must communicate action or state; never use them as ambient decoration.", "section": "colors"},
+      {"name": "The Truth Before Reassurance Rule", "body": "Green is reserved for evidence-backed, fresh operational or verified state. Stale or failed reads revoke it.", "section": "colors"},
+      {"name": "The Outcome Type Rule", "body": "Serif type belongs to outcomes and Responsibility titles, never to telemetry labels or controls.", "section": "typography"},
+      {"name": "The Flat Journal Rule", "body": "Journal entries never become floating cards at rest.", "section": "elevation"}
+    ],
+    "dos": ["Do lead every primary surface with an owner outcome or decision.", "Do derive health, freshness, and counts from current backend state.", "Do keep evidence available behind clear disclosure controls.", "Do preserve semantic labels and visible keyboard focus.", "Do adapt navigation and Ask behavior specifically for phones."],
+    "donts": ["Don't promote runtime architecture into primary navigation.", "Don't fabricate activity, proof, health, or reassuring empty states.", "Don't turn the journal into a grid of interchangeable metric cards.", "Don't use color, tiny glyphs, or motion as the only status signal.", "Don't make the secondary dashboard conversation permanently dominate the desktop workspace."]
+  }
+}

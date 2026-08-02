@@ -4,6 +4,8 @@
 
 ### Added
 
+- Operator Timeline dashboard shell: Today-first owner journal, grouped Work/Conversations/Memory/System navigation, contextual Ask, phone-specific bottom navigation, truthful freshness and health state, and redirects that preserve legacy dashboard hashes.
+
 - `mino maintain-memory` CLI subcommand runs the full maintenance pass (edge re-inference, mirrored-pair cleanup, community detection, labels) on demand.
 
 - `manage_memory` tool actions: `maintain` (full 6h pass on demand), `judge_edges`, `distill_outputs`; dashboard graph payload now includes communities, god nodes, and labels.
