@@ -61,7 +61,7 @@ func TestDeliverOutboxOnceSendsAndRemoves(t *testing.T) {
 	home := t.TempDir()
 	outbox := filepath.Join(home, "outbox")
 	os.MkdirAll(outbox, 0700)
-	os.WriteFile(filepath.Join(outbox, "msg_Abah.txt"), []byte("**Hello** Abah"), 0600)
+	os.WriteFile(filepath.Join(outbox, "msg_Owner.txt"), []byte("**Hello** Owner"), 0600)
 	os.WriteFile(filepath.Join(outbox, "msg_other.txt"), []byte("second"), 0600)
 
 	got := make(chan map[string]any, 4)
@@ -95,7 +95,7 @@ func TestDeliverOutboxFallsBackWithoutParseMode(t *testing.T) {
 	home := t.TempDir()
 	outbox := filepath.Join(home, "outbox")
 	os.MkdirAll(outbox, 0700)
-	os.WriteFile(filepath.Join(outbox, "msg_Abah.txt"), []byte("**unbalanced markdown"), 0600)
+	os.WriteFile(filepath.Join(outbox, "msg_Owner.txt"), []byte("**unbalanced markdown"), 0600)
 
 	attempts := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
