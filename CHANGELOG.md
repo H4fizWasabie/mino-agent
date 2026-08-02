@@ -39,6 +39,8 @@
 - Rebuilt playbooks around filesystem workspaces and isolated durable runs. Stage contracts now live in `stages/NN-name/CONTEXT.md`; `state.json` records per-stage attempts, outputs, failures, and resume state so a failed later stage does not replay completed work.
 
 ### Fixed
+- Conversation History now opens above the expanded Ask surface instead of rendering invisibly underneath it.
+
 - Distill queue no longer jams on dead rows: an artifact whose file is gone (e.g. /tmp cleaned on reboot) is tombstoned (marked distilled) so the queue advances — previously it was re-selected every pass, blocking all newer artifacts (like playbook outputs) behind it forever.
 - Deterministic maintenance steps (mirror cleanup, Louvain clustering, god nodes, labels) now run even when the edge rebuild had failed LLM batches — an empty-edge batch no longer starves communities forever; failed batches retry next cycle.
 - Facts are only marked judged when a graph rebuild completes with zero failed batches; a partial failure leaves facts eligible for the incremental judgment pass instead of trusting a rebuild that didn't write everything.

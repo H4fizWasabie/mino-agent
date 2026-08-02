@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -37,5 +38,16 @@ func TestEvalReportRequiresReleaseEvidence(t *testing.T) {
 	}
 	if got := evalReport(home); got["judge"] != "live certification" {
 		t.Fatalf("report judge = %#v", got["judge"])
+	}
+}
+
+func TestDashboardSessionMenuStacksAboveDock(t *testing.T) {
+	css, err := staticFiles.ReadFile("static/style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	styles := string(css)
+	if !strings.Contains(styles, ".sessmenu{position:fixed;z-index:50") {
+		t.Fatal("session history menu must use viewport positioning above the conversation dock")
 	}
 }

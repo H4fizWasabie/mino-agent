@@ -350,7 +350,7 @@
   .sessbtn{background:var(--panel);border:1px solid var(--line2);border-radius:7px;color:var(--ink2);
            padding:5px 11px;font-size:12.5px;cursor:pointer}
   .sessbtn:hover{border-color:var(--accent);color:var(--accent)}
-  .sessmenu{position:absolute;z-index:30;background:var(--panel);border:1px solid var(--line2);border-radius:10px;
+  .sessmenu{position:fixed;z-index:50;background:var(--panel);border:1px solid var(--line2);border-radius:10px;
             box-shadow:0 8px 30px rgba(0,0,0,.28);width:300px;max-height:340px;overflow-y:auto;padding:6px}
   .sessitem{padding:8px 10px;border-radius:7px;cursor:pointer;font-size:12.5px}
   .sessitem:hover{background:var(--accent-soft)}
