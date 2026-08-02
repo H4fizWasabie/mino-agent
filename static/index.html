@@ -1,57 +1,79 @@
-<!doctype html><html><head><meta charset="utf-8">
+<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Mino</title>
 <link rel="icon" type="image/png" href="/static/assets/logo-mark.png">
-<link rel="stylesheet" href="/static/style.css"></head><body class="app-shell">
-<nav id="nav">
-  <div class="brand">
-    <span class="brand-mark"><img src="/static/assets/logo-mark.png" alt="Mino"></span>
-    <span class="brand-copy"><b>Mino</b><small id="model"></small></span>
-    <button id="nav-toggle" title="Hide sidebar">&#10094;</button></div>
-  <div class="nav-label">Workspace</div>
-  <a href="#today" data-v="today" data-icon="◉"><span class="nav-text">Today</span><span class="n" id="n-today"></span></a>
-  <a href="#work" data-v="work" data-icon="□"><span class="nav-text">Work</span><span class="n" id="n-work"></span></a>
-  <a href="#overview" data-v="overview" data-icon="⌂"><span class="nav-text">Overview</span></a>
-  <a href="#gateway" data-v="gateway" data-icon="↔"><span class="nav-text">Gateway</span><span class="n" id="n-gw"></span></a>
-  <a href="#loop" data-v="loop" data-icon="◌"><span class="nav-text">Loop</span><span class="n" id="n-loop"></span></a>
-  <a href="#memory" data-v="memory" data-icon="✦"><span class="nav-text">Memory</span><span class="n" id="n-mem"></span></a>
-  <a href="#graph" data-v="graph" data-icon="⬡"><span class="nav-text">Graph</span></a>
-  <a href="#tools" data-v="tools" data-icon="⌘"><span class="nav-text">Tools</span><span class="n" id="n-tools"></span></a>
-  <a href="#files" data-v="files" data-icon="▤"><span class="nav-text">Files</span></a>
-  <div class="nav-label nav-label-secondary">System</div>
-  <a href="#database" data-v="database" data-icon="▦"><span class="nav-text">Database</span><span class="n" id="n-db"></span></a>
-  <a href="#ops" data-v="ops" data-icon="⌁"><span class="nav-text">Ops</span><span class="n" id="n-ops"></span></a>
-  <a href="#settings" data-v="settings" data-icon="⚙"><span class="nav-text">Settings</span></a>
-  <a href="#activetasks" data-v="activetasks" data-icon="✓"><span class="nav-text">Active Tasks</span></a>
-  <div class="nav-foot"><span class="nav-pulse"></span><span>Core online</span><small>SQLite · local state</small></div>
-</nav>
-<div class="resizer" id="nav-resizer" title="Drag to resize sidebar"></div>
+<link rel="stylesheet" href="/static/style.css"></head><body class="app-shell" data-view="today">
+<!--
+THESIS: Mino is an owner journal for accepted responsibility, not a command-center map of its implementation.
+OWN-WORLD: quiet paper surfaces, ink-first hierarchy, semantic state color, editorial outcomes, and precise evidence.
+STORY: see what changed, resolve what needs you, inspect verified outcomes, then pull runtime detail only when needed.
+FIRST VIEWPORT: compact navigation above one readable journal; truthful health at the edge; Ask rests at the bottom.
+FORM: B — Operator Timeline, the accepted product direction recorded in DASHBOARD_DESIGN.md.
+FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
+-->
+<header class="operator-nav">
+  <a class="operator-brand" href="#today" aria-label="Mino Today">
+    <span class="brand-mark"><img src="/static/assets/logo-mark.png" alt=""></span>
+    <span>Mino</span>
+  </a>
+  <nav aria-label="Primary navigation">
+    <a href="#today" data-v="today">Today<span class="nav-count" id="n-today"></span></a>
+    <a href="#work" data-v="work">Work<span class="nav-count" id="n-work"></span></a>
+    <a href="#conversations" data-v="conversations">Conversations</a>
+    <a href="#memory" data-v="memory">Memory</a>
+    <a href="#system" data-v="system">System</a>
+  </nav>
+  <div class="operator-actions">
+    <button class="health-button" id="health-toggle" type="button" aria-expanded="false" aria-controls="health-panel">
+      <span class="health-dot" aria-hidden="true"></span><span id="health-label">Connecting</span>
+    </button>
+    <button class="ask-button" id="ask-top" type="button">Ask Mino</button>
+  </div>
+  <section class="health-panel" id="health-panel" hidden aria-label="Runtime health">
+    <div><strong id="health-panel-label">Connecting</strong><span id="health-freshness">Waiting for current state</span></div>
+    <dl id="health-details"></dl>
+    <label class="health-theme"><span>Appearance</span><select id="theme-mode" aria-label="Appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+    <a href="#system/overview">Inspect system</a>
+  </section>
+</header>
+
 <main>
   <header class="pagehead">
-    <div class="pagehead-top"><div><div class="eyebrow">MINO COMMAND CENTER</div><h1 id="title">Overview</h1></div>
-      <div class="shell-status"><span class="status-dot"></span><span>Operational</span><span class="status-sep">·</span><span id="shell-clock">Live</span><label class="theme-picker"><span>Theme</span><select id="theme-mode" aria-label="Theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div></div>
-    <div class="sub" id="sub"></div>
+    <h1 id="title">Today</h1>
+    <p class="sub" id="sub" aria-live="polite">Connecting to current state…</p>
   </header>
   <div id="view"></div>
 </main>
-<div class="resizer" id="dock-resizer" title="Drag to resize chat"></div>
-<aside id="dock">
+
+<aside id="dock" aria-label="Conversation with Mino">
   <div class="dockhead">
-    <span class="dt">Chat</span>
-    <span class="arch-status"></span>
-    <button id="dock-close" title="Collapse chat">&rsaquo;</button>
+    <div><strong>Conversation</strong><span class="arch-status" aria-live="polite"></span></div>
+    <button id="dock-close" type="button" aria-label="Close conversation">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
   </div>
-  <div class="sesshead" style="padding:8px 2px 0">
-    <button class="sessbtn" onclick="newChat()">+ New chat</button>
-    <button class="sessbtn" onclick="toggleSessMenu(event)">History &#9662;</button>
+  <div class="sesshead">
+    <button class="sessbtn" type="button" onclick="newChat()">New conversation</button>
+    <button class="sessbtn" type="button" onclick="toggleSessMenu(event)">History <span aria-hidden="true">⌄</span></button>
   </div>
-  <div class="chatlog" id="docklog"></div>
+  <div class="chatlog" id="docklog" role="log" aria-live="polite" aria-relevant="additions text"></div>
   <div class="chatbar">
-    <input id="dmsg" placeholder="Hi Mino! What can you do?" autocomplete="off">
-    <button id="mic" title="Click to talk — local Whisper, no cloud"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
-    <button id="dsend">Send</button>
+    <button id="ask-expand" class="ask-expand" type="button" aria-label="Open conversation" aria-expanded="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14v10H9l-4 3V6z"/></svg>
+    </button>
+    <label class="sr-only" for="dmsg">Message Mino</label>
+    <input id="dmsg" placeholder="Ask Mino…" autocomplete="off">
+    <button id="mic" type="button" aria-label="Record a voice message"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+    <button id="dsend" type="button">Send</button>
   </div>
 </aside>
-<button id="nav-reopen" title="Show sidebar">&#9776;</button>
-<button id="dock-reopen" title="Open chat">&lsaquo; Chat</button>
+
+<nav class="mobile-nav" aria-label="Mobile navigation">
+  <a href="#today" data-v="today"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M7 3v4M17 3v4M5 11h4v4H5zM12 11h7M12 15h5M5 19h14"/></svg><span>Today</span><b id="mobile-n-today"></b></a>
+  <a href="#work" data-v="work"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16v13H4zM8 7V4h8v3M8 12h8M8 16h5"/></svg><span>Work</span></a>
+  <a href="#conversations" data-v="conversations"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v12H9l-5 3V5zM8 9h8M8 13h5"/></svg><span>Inbox</span></a>
+  <button id="ask-mobile" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18"/></svg><span>Ask</span></button>
+  <a href="#system" data-v="system"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg><span>More</span></a>
+</nav>
+
 <script src="/static/app.js"></script></body></html>

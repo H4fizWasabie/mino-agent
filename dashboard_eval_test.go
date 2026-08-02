@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -37,5 +38,39 @@ func TestEvalReportRequiresReleaseEvidence(t *testing.T) {
 	}
 	if got := evalReport(home); got["judge"] != "live certification" {
 		t.Fatalf("report judge = %#v", got["judge"])
+	}
+}
+
+func TestDashboardSessionMenuStacksAboveDock(t *testing.T) {
+	css, err := staticFiles.ReadFile("static/style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	styles := string(css)
+	if !strings.Contains(styles, ".sessmenu{position:fixed;z-index:50") {
+		t.Fatal("session history menu must use viewport positioning above the conversation dock")
+	}
+}
+
+func TestDashboardViewsSurviveUnchangedPollingRefresh(t *testing.T) {
+	script, err := staticFiles.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := string(script)
+	if !strings.Contains(app, `nextMarkup !== renderedMarkup`) {
+		t.Fatal("polling must not replace unchanged dashboard markup")
+	}
+	if !strings.Contains(app, `activateView(view, sub)`) {
+		t.Fatal("view-specific loaders must run only after markup is installed")
+	}
+	if !strings.Contains(app, `[...(d.skills || [])].sort`) {
+		t.Fatal("skills must render in a deterministic order across polls")
+	}
+	if !strings.Contains(app, `view === "memory" && sub === "graph" && activeView === "memory" && activeSub === "graph"`) {
+		t.Fatal("polling must preserve the active Memory Graph canvas")
+	}
+	if !strings.Contains(app, `canvas.isConnected && graphState?.canvas === canvas`) {
+		t.Fatal("obsolete graph animation loops must stop when their canvas is replaced")
 	}
 }

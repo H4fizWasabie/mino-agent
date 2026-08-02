@@ -411,14 +411,45 @@ async function sendChat(fromInput){
 function wireDock(){
   const b = document.getElementById("dsend"), i = document.getElementById("dmsg");
   if (b) b.onclick = () => sendChat(i);
-  if (i) i.onkeydown = e => { if (e.key==="Enter") sendChat(i); };
-  const close = document.getElementById("dock-close"), reopen = document.getElementById("dock-reopen");
-  const setClosed = v => { document.body.classList.toggle("dock-closed", v); localStorage.setItem("dockClosed", v?"1":"0"); };
-  if (close) close.onclick = () => setClosed(true);
-  if (reopen) reopen.onclick = () => setClosed(false);
-  const saved = localStorage.getItem("dockClosed");
-  setClosed(saved === null ? window.innerWidth < 1180 : saved === "1");
+  if (i) {
+    i.onkeydown = e => { if (e.key==="Enter") sendChat(i); };
+    i.onfocus = () => setAskOpen(true);
+  }
+  document.getElementById("dock-close")?.addEventListener("click", () => setAskOpen(false));
+  document.getElementById("ask-expand")?.addEventListener("click", () => setAskOpen(true));
+  document.getElementById("ask-top")?.addEventListener("click", () => setAskOpen(true));
+  document.getElementById("ask-mobile")?.addEventListener("click", () => setAskOpen(true));
   syncChatLogs();
+}
+
+function setAskOpen(open){
+  document.body.classList.toggle("ask-open", open);
+  const expand=document.getElementById("ask-expand");
+  if(expand) expand.setAttribute("aria-expanded", open?"true":"false");
+  if(open) setTimeout(()=>document.getElementById("dmsg")?.focus(), 20);
+}
+
+function askAboutResponsibility(title){
+  setAskOpen(true);
+  const input=document.getElementById("dmsg");
+  if(input){ input.value=`Help me resolve “${title}”`; input.setSelectionRange(input.value.length,input.value.length); }
+}
+
+function wireOperatorShell(){
+  const toggle=document.getElementById("health-toggle"), panel=document.getElementById("health-panel");
+  const setHealthOpen=open=>{
+    if(!toggle||!panel) return;
+    panel.hidden=!open;
+    toggle.setAttribute("aria-expanded",open?"true":"false");
+  };
+  toggle?.addEventListener("click",event=>{ event.stopPropagation(); setHealthOpen(panel.hidden); });
+  panel?.addEventListener("click",event=>event.stopPropagation());
+  document.addEventListener("click",()=>setHealthOpen(false));
+  document.addEventListener("keydown",event=>{
+    if(event.key!=="Escape") return;
+    setHealthOpen(false);
+    if(document.body.classList.contains("ask-open")) setAskOpen(false);
+  });
 }
 
 // --- Mino Runtime Spine: the whole process, driven only by real dashboard data.
@@ -556,8 +587,7 @@ async function switchSession(id){
 // sure the dock is visible.
 let liveView = null;   // a conversation opened from the inbox, kept live-updated
 async function openConversation(id){
-  document.body.classList.remove("dock-closed");
-  localStorage.setItem("dockClosed", "0");
+  setAskOpen(true);
   liveView = id;
   await switchSession(id);   // switch the agent so a reply continues this thread
   render();                  // reflect the active-session highlight in the inbox
@@ -653,7 +683,7 @@ function memEpisodic(d){
   return h;
 }
 function memSkills(d){
-  const skills = d.skills || [];
+  const skills = [...(d.skills || [])].sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")));
   let h = `<section class="memory-tab-head"><div><span class="section-kicker">PROCEDURAL MEMORY</span><h2>Reusable skills</h2><p>Instructions loaded only when a message matches. Teach Mino in chat, edit below, or add a SKILL.md file.</p></div><strong>${skills.length}</strong></section>
     <div class="memory-callout"><span>⌘</span><p>Skills are selective context, not permanent prompt weight. ${reveal("skills","Open the skills folder →")}</p></div>`;
   h += skills.map((sk,i) => {
@@ -823,16 +853,17 @@ function opsRelease(d){
     <section class="command-card"><span class="section-kicker">RUN LOCALLY</span><h3><code>make gate</code></h3><p>The release gate is intentionally manual. A deploy should be a conscious decision backed by a fresh result.</p></section>`;
 }
 
+async function loadOAuthProviders(){
+  const el=document.getElementById("oauth-providers"); if(!el) return;
+  try {
+    const r=await (await fetch("/api/oauth/providers")).json(), list=r.providers||[];
+    oauthProviders=Object.fromEntries(list.map(p=>[p.name,p]));
+    el.innerHTML=list.length?list.map(p=>{ const name=encodeURIComponent(p.name).replace(/'/g,"%27"); return `<article><div><strong>${esc(p.display_name||p.name)}</strong><small>${esc((p.models||[]).join(" · "))}</small></div>${p.logged_in?`<span class="status-chip good">logged in</span>`:`<button class="oauth-btn" onclick="startOAuth(decodeURIComponent('${name}'))">Login with ${esc(p.display_name||p.name)}</button>`}</article>`; }).join(""):`<div class="surface-empty compact"><strong>No OAuth providers available</strong></div>`;
+  } catch(e){ el.innerHTML=`<div class="surface-empty compact"><strong>OAuth unavailable</strong><p>${esc(e.message)}</p></div>`; }
+}
+
 function settingsView(d){
   const cfg=d.settings||{providers:[],config_file:""}, providers=cfg.providers||[];
-  setTimeout(async()=>{
-    const el=document.getElementById("oauth-providers"); if(!el) return;
-    try {
-      const r=await (await fetch("/api/oauth/providers")).json(), list=r.providers||[];
-      oauthProviders=Object.fromEntries(list.map(p=>[p.name,p]));
-      el.innerHTML=list.length?list.map(p=>{ const name=encodeURIComponent(p.name).replace(/'/g,"%27"); return `<article><div><strong>${esc(p.display_name||p.name)}</strong><small>${esc((p.models||[]).join(" · "))}</small></div>${p.logged_in?`<span class="status-chip good">logged in</span>`:`<button class="oauth-btn" onclick="startOAuth(decodeURIComponent('${name}'))">Login with ${esc(p.display_name||p.name)}</button>`}</article>`; }).join(""):`<div class="surface-empty compact"><strong>No OAuth providers available</strong></div>`;
-    } catch(e){ el.innerHTML=`<div class="surface-empty compact"><strong>OAuth unavailable</strong><p>${esc(e.message)}</p></div>`; }
-  },0);
   return `<section class="settings-hero"><div><span class="section-kicker">RUNTIME CONFIGURATION</span><h2>Simple, visible, restart-bound.</h2><p>Manage provider priority, credentials, and OAuth connections from one local surface.</p></div><div class="settings-runtime"><span class="runtime-kicker"><i></i> ACTIVE RUNTIME</span><strong>${esc(d.active_provider||d.provider)} · ${esc(d.model)}</strong><span class="provider-clickable" onclick="toggleProviderMenu(event)" title="Switch provider, model, or reasoning">${esc(d.reasoning||"default")} reasoning · ${(d.sessions||[]).length} conversations <i class="dropdown-arrow">▾</i></span><small>${esc(d.home)}</small></div></section>
     <div class="overview-section-head"><div><span class="section-kicker">PROVIDER CHAIN</span><h2>Priority and health</h2></div><button class="oauth-btn" onclick="showAddProvider()">+ Add Provider</button></div>
     <form id="add-provider-form" class="add-provider-form" hidden onsubmit="event.preventDefault();addProvider()"><input id="provider-name" placeholder="Name" required><input id="provider-base-url" type="url" placeholder="Base URL" required><input id="provider-model" placeholder="Model" required><input id="provider-small-model" placeholder="Small model"><input id="provider-api-key" type="password" placeholder="API key (optional)"><input id="provider-priority" type="number" min="1" value="10" placeholder="Priority"><button type="submit">Add</button><span id="provider-form-status" aria-live="polite"></span></form>
@@ -884,10 +915,12 @@ function responsibilityEvidence(value){
 function responsibilityEntry(entry){
   const latest=entry.latest||{}, status=entry.status||"waiting";
   const action=entry.next_action?`<div class="responsibility-next"><span>Next</span><strong>${esc(entry.next_action)}</strong><small>${esc(entry.next_owner||entry.owner||"mino")}</small></div>`:"";
+  const needsOwner=status==="needs_you"||status==="blocked";
+  const ownerActions=needsOwner?`<div class="responsibility-actions"><a href="#responsibility/${encodeURIComponent(entry.id)}">Review next step</a><button type="button" onclick="askAboutResponsibility(${jsArg(entry.title)})">Ask Mino</button></div>`:"";
   return `<article class="responsibility-entry status-${esc(status)}">
     <time>${esc(responsibilityTime(latest.at))}</time>
     <div class="responsibility-copy"><div class="responsibility-title"><a href="#responsibility/${encodeURIComponent(entry.id)}">${esc(entry.title)}</a><span class="responsibility-status ${esc(status)}">${esc(responsibilityStatus(status))}</span></div>
-      <p>${esc(latest.summary||entry.outcome||"No meaningful update recorded.")}</p>${action}${responsibilityEvidence(latest.evidence)}</div>
+      <p>${esc(latest.summary||entry.outcome||"No meaningful update recorded.")}</p>${action}${ownerActions}${responsibilityEvidence(latest.evidence)}</div>
     <a class="responsibility-open" href="#responsibility/${encodeURIComponent(entry.id)}" aria-label="Open Responsibility">→</a>
   </article>`;
 }
@@ -896,14 +929,15 @@ function todayView(d){
   if(state.error) return `<div class="responsibility-empty"><span>!</span><strong>Responsibility state is unavailable.</strong><p>${esc(state.error)}</p></div>`;
   const needs=entries.filter(x=>x.status==="needs_you"||x.status==="blocked").length;
   const date=new Intl.DateTimeFormat("en-MY",{timeZone:d.timezone||"Asia/Kuala_Lumpur",weekday:"long",day:"numeric",month:"long"}).format(new Date());
-  return `<section class="responsibility-hero"><div><span class="section-kicker">OWNER JOURNAL</span><h2>${esc(date)}</h2><p>Meaningful changes in work Mino has accepted—not raw runtime activity.</p></div><div class="responsibility-tally ${needs?"attention":""}"><strong>${needs}</strong><span>need${needs===1?"s":""} your attention</span><small>${entries.length} meaningful update${entries.length===1?"":"s"} today</small></div></section>
+  return `<section class="responsibility-hero"><div><h2>${esc(date)}</h2><p>Meaningful changes in work Mino has accepted—not raw runtime activity.</p></div><p class="responsibility-summary ${needs?"attention":""}"><strong>${needs?`${needs} need${needs===1?"s":""} you`:"Nothing needs you"}</strong><span>${entries.length} meaningful update${entries.length===1?"":"s"} today</span></p></section>
     ${entries.length?`<div class="today-journal">${entries.map(responsibilityEntry).join("")}</div>`:`<div class="responsibility-empty"><span>◉</span><strong>Nothing needs attention today.</strong><p>Mino has not recorded a meaningful Responsibility change yet.</p><a href="#work">Review current Work →</a></div>`}`;
 }
 function workView(d){
   const state=d.responsibilities||{}, entries=state.work||[];
   if(state.error) return `<div class="responsibility-empty"><span>!</span><strong>Responsibility state is unavailable.</strong><p>${esc(state.error)}</p></div>`;
   const groups=["needs_you","blocked","working","waiting","verified","stopped"];
-  return `<section class="responsibility-hero"><div><span class="section-kicker">RESPONSIBILITY PORTFOLIO</span><h2>Work Mino owns.</h2><p>Standing Routines and durable outcomes, grouped by their truthful current state.</p></div><div class="responsibility-tally"><strong>${entries.length}</strong><span>Responsibilities</span><small>${entries.filter(x=>!["verified","stopped"].includes(x.status)).length} currently open</small></div></section>
+  const open=entries.filter(x=>!["verified","stopped"].includes(x.status)).length;
+  return `<section class="responsibility-hero"><div><h2>Work Mino owns.</h2><p>Standing Routines and durable outcomes, grouped by their truthful current state.</p></div><p class="responsibility-summary"><strong>${open} open</strong><span>${entries.length} Responsibilities in total</span></p></section>
     ${entries.length?groups.map(status=>{const items=entries.filter(x=>x.status===status);return items.length?`<section class="work-group"><header><h3>${esc(responsibilityStatus(status))}</h3><span>${items.length}</span></header><div>${items.map(responsibilityEntry).join("")}</div></section>`:""}).join(""):`<div class="responsibility-empty"><span>□</span><strong>Mino owns no Work yet.</strong><p>A request appears here when it must survive a turn, dependency, deadline, or future verification.</p></div>`}`;
 }
 function overviewResponsibility(d){
@@ -936,12 +970,31 @@ async function loadResponsibilityDetail(id){
   }
 }
 
+function systemView(d, sub){
+  sub=sub||"overview";
+  const section=sub.startsWith("tool")||sub==="mcp"?"tools":sub.startsWith("database-")?"database":sub.startsWith("files-")?"files":sub;
+  const tabs=[["overview","Overview"],["runtime","Runtime"],["tools","Tools"],["database","Database"],["files","Files"],["settings","Settings"]];
+  const h=subtabBar("system",tabs,section);
+  if(sub==="runtime") return h+`<section class="system-intro"><h2>Runtime and execution</h2><p>The machinery behind owner outcomes. Trace activity stays here until you choose to inspect it.</p></section><section class="overview-cover">${archSVG(d)}</section>`+VIEWS.loop(d);
+  if(sub==="tools") return h+VIEWS.tools(d,"available");
+  if(sub==="tool-results") return h+VIEWS.tools(d,"results");
+  if(sub==="mcp") return h+VIEWS.tools(d,"mcp");
+  if(sub==="database") return h+VIEWS.database(d,"overview");
+  if(sub.startsWith("database-")) return h+VIEWS.database(d,decodeURIComponent(sub.slice(9)));
+  if(sub==="files") return h+VIEWS.files(d);
+  if(sub.startsWith("files-")) return h+VIEWS.files(d,sub.slice(6));
+  if(sub==="settings") return h+settingsView(d);
+  if(sub==="schedules") return h+activeTasksView(d);
+  if(sub==="usage") return h+opsUsage(d);
+  if(sub==="traces") return h+opsTraces(d);
+  if(sub==="release") return h+opsRelease(d);
+  return h+opsOverview(d);
+}
+
 const VIEWS = {
   today(d){ return todayView(d); },
   work(d){ return workView(d); },
   responsibility(d, id){
-    id=decodeURIComponent(id||"");
-    setTimeout(()=>loadResponsibilityDetail(id),0);
     return `<div id="responsibility-detail">${spinner()}</div>`;
   },
   // Gateway: ONE unified conversation across every channel (dashboard, telegram,
@@ -973,6 +1026,8 @@ const VIEWS = {
       <div class="gateway-principle"><span class="principle-icon">✦</span><strong>One brain, every channel</strong><p>Dashboard, Telegram, voice, and terminal messages share Mino’s runtime and memory.</p><div class="channel-list"><span>dashboard</span><span>telegram</span><span>voice</span><span>terminal</span></div></div></aside></section>`;
     return h;
   },
+  conversations(d){ return VIEWS.gateway(d); },
+  system(d, sub){ return systemView(d,sub); },
   overview(d){
     return `${overviewResponsibility(d)}<section class="overview-runtime"><div class="cover-intro"><div><span class="section-kicker">RUNTIME INSPECTION</span><h2>Follow the process, live.</h2><p>Inspect every turn from gateway to verified completion, with state, tools, sidecars, and telemetry in one map.</p></div><div class="cover-status"><span><i></i> Operational</span><span class="arch-status"></span><a href="#settings">Runtime settings →</a></div></div>
       <section class="overview-cover">${archSVG(d)}</section></section>`;
@@ -987,13 +1042,14 @@ const VIEWS = {
   },
   memory(d, sub){
     sub = sub || "overview";
-    const tabs = [["overview","Overview"],["semantic","Semantic",(d.facts||[]).length],
-      ["episodic","Episodic",(d.episodes||[]).length],["skills","Skills",(d.skills||[]).length],
+    const tabs = [["overview","Overview"],["semantic","Knowledge",(d.facts||[]).length],
+      ["episodic","Episodes",(d.episodes||[]).length],["graph","Graph"],["skills","Skills",(d.skills||[]).length],
       ["playbooks","Playbooks",(d.playbooks||[]).length],
       ["soul","SOUL"],["consolidation","Consolidation",d.chat_pending]];
     let h = subtabBar("memory", tabs, sub);
     if (sub==="semantic") return h + memSemantic(d);
     if (sub==="episodic") return h + memEpisodic(d);
+    if (sub==="graph") return h + VIEWS.graph(d);
     if (sub==="skills") return h + memSkills(d);
     if (sub==="playbooks") return h + memPlaybooks(d);
     if (sub==="soul") return h + memSoul(d);
@@ -1051,25 +1107,13 @@ const VIEWS = {
   files(d, sub){
     const root = "/tmp/mino/results";
     sub = sub ? decodeURIComponent(sub) : root;
-    const h = `<section class="files-hero"><div><span class="section-kicker">VPS FILE BROWSER</span><h2>${esc(sub)}</h2><p>Every file Mino creates lives here — tool outputs, uploads, artifacts.</p></div></section>
+    return `<section class="files-hero"><div><span class="section-kicker">VPS FILE BROWSER</span><h2>${esc(sub)}</h2><p>Every file Mino creates lives here — tool outputs, uploads, artifacts.</p></div></section>
       <div id="files-tree" class="files-tree">${spinner()}</div>`;
-    setTimeout(async () => {
-      const el = document.getElementById("files-tree");
-      if (!el) return;
-      try {
-        const url = "/api/files" + (sub !== root ? "?path=" + encodeURIComponent(sub) : "");
-        const tree = await (await fetch(url)).json();
-        if (!Array.isArray(tree)) { el.innerHTML = `<span class="files-error">${esc(tree.error||"bad response")}</span>`; return; }
-        el.innerHTML = renderFileTree(tree, sub);
-      } catch(e) { el.innerHTML = `<span class="files-error">Could not load: ${esc(e.message)}</span>`; }
-    }, 50);
-    return h;
   },
 
   graph(d){
     const raw = d.graph;
     if (!raw || !raw.facts) return `<section class="graph-hero"><div><span class="section-kicker">KNOWLEDGE GRAPH</span><h2>Memory Graph</h2><p>No graph data yet. Memories are built during conversations.</p></div></section>`;
-    setTimeout(() => initGraph(raw), 50);
     return `<section class="graph-hero"><div><span class="section-kicker">KNOWLEDGE GRAPH</span><h2>Memory Graph</h2><p>${Object.keys(raw.facts).length} facts · ${countEdges(raw.facts)} relationships</p></div>
       <div class="graph-controls">
         <div class="graph-query"><input id="graph-search" type="search" placeholder="Query Mino's memories..." oninput="filterGraph()"><button onclick="clearGraphQuery()" title="Clear query">Clear</button></div>
@@ -1082,6 +1126,26 @@ const VIEWS = {
       <aside id="graph-detail" class="graph-detail"></aside>`;
   },
 };
+
+async function loadFilesView(sub){
+  const root="/tmp/mino/results", path=sub?decodeURIComponent(sub):root;
+  const el=document.getElementById("files-tree");
+  if(!el) return;
+  try {
+    const url="/api/files"+(path!==root?"?path="+encodeURIComponent(path):"");
+    const tree=await (await fetch(url)).json();
+    if(!Array.isArray(tree)){ el.innerHTML=`<span class="files-error">${esc(tree.error||"bad response")}</span>`; return; }
+    el.innerHTML=renderFileTree(tree,path);
+  } catch(e){ el.innerHTML=`<span class="files-error">Could not load: ${esc(e.message)}</span>`; }
+}
+
+function activateView(view, sub){
+  if(view==="responsibility") setTimeout(()=>loadResponsibilityDetail(decodeURIComponent(sub||"")),0);
+  if(view==="memory"&&sub==="graph"&&D.graph?.facts) setTimeout(()=>initGraph(D.graph),50);
+  if((view==="system"&&sub==="files")||view==="files") setTimeout(()=>loadFilesView(""),50);
+  if(view==="system"&&sub?.startsWith("files-")) setTimeout(()=>loadFilesView(sub.slice(6)),50);
+  if((view==="system"&&sub==="settings")||view==="settings") setTimeout(loadOAuthProviders,0);
+}
 
 // ---- Live Runtime Spine animation: illuminate only the active trace stage,
 // driven by the event stream so any gateway can move the same process map.
@@ -1130,13 +1194,32 @@ async function pollEvents(){
   } catch(e){ /* server busy */ }
 }
 
-let activeView = null, activeSub = null;
-const TITLES = {chat:"Chat & watch", ops:"LLM Ops",
+let activeView = null, activeSub = null, renderedRoute = "", renderedMarkup = "";
+const TITLES = {chat:"Chat & watch", conversations:"Conversations", system:"System", ops:"System",
                 today:"Today — owner journal", work:"Work — responsibilities", responsibility:"Responsibility",
                 database:"Database — everything Mino stores (state.db)", activetasks:"Active Schedules — playbook runs",
                 files:"Files — VPS artifacts and outputs",
                 graph:"Memory Graph — interactive visualization",
                 onboarding:"Welcome — set up your Mino"};
+
+function canonicalRoute(){
+  const parts=(location.hash||"#today").slice(1).split("/"), raw=parts[0]||"today", sub=parts[1]||null;
+  let route=[raw,sub];
+  if(raw==="overview") route=["today",null];
+  else if(raw==="gateway"||raw==="chat") route=["conversations",null];
+  else if(raw==="loop") route=["system","runtime"];
+  else if(raw==="tools") route=["system",sub==="results"?"tool-results":sub==="mcp"?"mcp":"tools"];
+  else if(raw==="database") route=["system",sub?`database-${sub}`:"database"];
+  else if(raw==="files") route=["system",sub?`files-${sub}`:"files"];
+  else if(raw==="ops") route=["system",sub&&sub!=="overview"?sub:"overview"];
+  else if(raw==="settings") route=["system","settings"];
+  else if(raw==="activetasks") route=["system","schedules"];
+  else if(raw==="graph") route=["memory","graph"];
+  const canonical=route[0]+(route[1]?`/${route[1]}`:"");
+  if(canonical!==parts.slice(0,2).filter(Boolean).join("/")) history.replaceState(null,"","#"+canonical);
+  return route;
+}
+
 function render(){
   if (!D) return;
   // onboarding gate: redirect if no API key configured
@@ -1144,51 +1227,72 @@ function render(){
     location.hash = "#onboarding"; return;
   }
   if (!D.needs_onboarding && location.hash.startsWith("#onboarding")) {
-    location.hash = "#overview"; return;
+    location.hash = "#today"; return;
   }
-  const [v, subRaw] = (location.hash||"#overview").slice(1).split("/");
-  const sub = subRaw || null;
-  const view = VIEWS[v] ? v : "overview";
+  const [v, sub] = canonicalRoute();
+  const view = VIEWS[v] ? v : "today";
   document.body.classList.toggle("onboarding-mode", view === "onboarding");
+  document.body.dataset.view=view;
   const subChanged = sub !== activeSub || view !== activeView;
-  document.querySelectorAll("nav a").forEach(a=>a.classList.toggle("on", a.dataset.v===view));
-  document.getElementById("title").textContent = TITLES[view] || view[0].toUpperCase()+view.slice(1);
-  if (view === "overview"){
+  const primary=view==="responsibility"?"work":view;
+  document.querySelectorAll("[data-v]").forEach(a=>a.classList.toggle("on", a.dataset.v===primary));
+  const title=TITLES[view] || view[0].toUpperCase()+view.slice(1);
+  document.getElementById("title").textContent = title;
+  document.title=title.replace(/\s+—.*$/,"")+" · Mino";
+  let preserve=false;
+  if (view === "overview" && activeView === "overview" && animating){
     // don't rebuild mid-animation or the glowing SVG gets wiped
-    if (activeView !== "overview" || !animating){ document.getElementById("view").innerHTML = VIEWS.overview(D); }
+    preserve=true;
   } else if ((view === "memory" || view === "settings" || view === "database" || view === "onboarding") && editing && !subChanged){
     // don't wipe an in-progress edit on the 5s refresh — but DO switch sub-tabs
-  } else if (view === "graph" && activeView === "graph" && !subChanged) {
+    preserve=true;
+  } else if (view === "memory" && sub === "graph" && activeView === "memory" && activeSub === "graph") {
     // don't rebuild graph on 5s refresh — force sim keeps running
-  } else {
-    editing = false;
-    document.getElementById("view").innerHTML = VIEWS[view](D, sub);
+    preserve=true;
+  }
+  if(!preserve){
+    const route=view+"/"+(sub||""), nextMarkup=VIEWS[view](D,sub);
+    if(route!==renderedRoute||nextMarkup !== renderedMarkup){
+      editing=false;
+      document.getElementById("view").innerHTML=nextMarkup;
+      renderedRoute=route; renderedMarkup=nextMarkup;
+      activateView(view, sub);
+    }
   }
   activeView = view; activeSub = sub;
-  document.getElementById("model").textContent = `${D.provider} · ${D.model}`;
-  document.getElementById("n-gw").textContent = (D.chat_log||[]).length;
   const responsibilityViews=D.responsibilities||{today:[],work:[]};
-  document.getElementById("n-today").textContent = responsibilityViews.today.filter(x=>x.status==="needs_you"||x.status==="blocked").length||"";
-  document.getElementById("n-work").textContent = responsibilityViews.work.filter(x=>!["verified","stopped"].includes(x.status)).length||"";
-  document.getElementById("n-loop").textContent = D.stats.turns;
-  document.getElementById("n-mem").textContent = (D.facts||[]).length + (D.episodes||[]).length;
-  document.getElementById("n-tools").textContent = (D.tools&&D.tools.catalog||[]).length;
-  document.getElementById("n-db").textContent = (D.db && D.db.all_tables.length) || "";
-  document.getElementById("n-ops").textContent = "";
+  const attention=responsibilityViews.today.filter(x=>x.status==="needs_you"||x.status==="blocked").length;
+  const open=responsibilityViews.work.filter(x=>!["verified","stopped"].includes(x.status)).length;
+  document.getElementById("n-today").textContent = attention||"";
+  document.getElementById("n-work").textContent = open||"";
+  document.getElementById("mobile-n-today").textContent = attention||"";
 }
-let lastFetch = Date.now();
+let lastFetch = 0, refreshFailed = false;
 function tickLive(){
-  if (!D) return;
-  const ago = Math.round((Date.now()-lastFetch)/1000);
-  document.getElementById("sub").innerHTML =
-    `<span class="live"><span class="dot"></span>live</span> · updated ${ago}s ago · ${esc(D.home)}`;
+  const age=lastFetch?Math.round((Date.now()-lastFetch)/1000):null;
+  const stale=refreshFailed||age==null||age>15;
+  const responsibilityError=Boolean(D&&D.responsibilities&&D.responsibilities.error);
+  const mcp=D&&D.tools&&D.tools.mcp;
+  const degraded=!stale&&!responsibilityError&&mcp&&mcp.configured&&!mcp.live;
+  const state=stale?"lost":responsibilityError?"attention":degraded?"degraded":"operational";
+  const label={lost:"Connection lost",attention:"Attention",degraded:"Degraded",operational:"Operational"}[state];
+  const freshness=age==null?"Waiting for current state":`Updated ${age}s ago`;
+  document.body.dataset.health=state;
+  document.getElementById("sub").textContent=`${label} · ${freshness}`;
+  document.getElementById("health-label").textContent=label;
+  document.getElementById("health-panel-label").textContent=label;
+  document.getElementById("health-freshness").textContent=freshness;
+  const details=document.getElementById("health-details");
+  if(details&&D) details.innerHTML=`<div><dt>Provider</dt><dd>${esc(D.active_provider||D.provider||"Unavailable")}</dd></div><div><dt>Responsibilities</dt><dd>${responsibilityError?"Unavailable":"Current"}</dd></div><div><dt>Schedules</dt><dd>${(D.active_tasks||[]).length} active</dd></div><div><dt>MCP</dt><dd>${mcp?(mcp.live?"Connected":mcp.configured?"Unavailable":"Not configured"):"Unknown"}</dd></div>`;
 }
 async function refresh(){
   try {
-    D = await (await fetch("/api/data")).json(); lastFetch = Date.now();
+    const response=await fetch("/api/data");
+    if(!response.ok) throw new Error(`dashboard returned ${response.status}`);
+    D = await response.json(); lastFetch = Date.now(); refreshFailed=false;
     render(); tickLive();
     syncLiveView();   // live-update an opened conversation (e.g. new phone messages)
-  } catch(e){ /* server restarting — keep showing last data */ }
+  } catch(e){ refreshFailed=true; tickLive(); }
 }
 // --- resizable columns: drag the thin handle between nav|main and main|dock.
 // Width lives in a CSS var + localStorage, so it survives refreshes.
@@ -1547,7 +1651,7 @@ function initGraph(raw) {
   function tick() {
     for (let i = 0; i < 3; i++) simulate(); // run multiple sim steps per frame
     draw();
-    if (graphState) requestAnimationFrame(tick);
+    if (canvas.isConnected && graphState?.canvas === canvas) requestAnimationFrame(tick);
   }
 
   // Interaction: screen-to-world helper
@@ -1709,7 +1813,7 @@ function initGraph(raw) {
   }
 
   graphState = {
-    nodes, nodeMap, edges, neighbors,
+    canvas, nodes, nodeMap, edges, neighbors,
     selectNode(id) {
       const n = nodeMap[id];
       if (n) { selectedNode = n; showDetail(n); draw(); }
@@ -1820,6 +1924,6 @@ window.addEventListener("resize", () => {
   if (D && activeView === "overview") document.getElementById("view").innerHTML = VIEWS.overview(D);
 });
 window.__hold = (v)=>{ animating = v; };   // test hook: freeze the diagram
-wireDock(); wireChrome(); wireMic();
+wireDock(); wireOperatorShell(); wireMic();
 refresh(); setInterval(refresh, 5000); setInterval(tickLive, 1000);
 pollEvents(); setInterval(pollEvents, 450);   // live harness animation
