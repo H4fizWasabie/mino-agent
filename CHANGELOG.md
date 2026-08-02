@@ -39,6 +39,8 @@
 - Rebuilt playbooks around filesystem workspaces and isolated durable runs. Stage contracts now live in `stages/NN-name/CONTEXT.md`; `state.json` records per-stage attempts, outputs, failures, and resume state so a failed later stage does not replay completed work.
 
 ### Fixed
+- Dashboard polling no longer rebuilds unchanged views: Graph, Settings, Playbooks, and other interactive surfaces preserve canvas, disclosure, focus, and form state while five-second data polling continues; obsolete graph animation loops stop after navigation.
+
 - Conversation History now opens above the expanded Ask surface instead of rendering invisibly underneath it.
 
 - Distill queue no longer jams on dead rows: an artifact whose file is gone (e.g. /tmp cleaned on reboot) is tombstoned (marked distilled) so the queue advances — previously it was re-selected every pass, blocking all newer artifacts (like playbook outputs) behind it forever.

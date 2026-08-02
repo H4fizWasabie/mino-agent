@@ -683,7 +683,7 @@ function memEpisodic(d){
   return h;
 }
 function memSkills(d){
-  const skills = d.skills || [];
+  const skills = [...(d.skills || [])].sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")));
   let h = `<section class="memory-tab-head"><div><span class="section-kicker">PROCEDURAL MEMORY</span><h2>Reusable skills</h2><p>Instructions loaded only when a message matches. Teach Mino in chat, edit below, or add a SKILL.md file.</p></div><strong>${skills.length}</strong></section>
     <div class="memory-callout"><span>⌘</span><p>Skills are selective context, not permanent prompt weight. ${reveal("skills","Open the skills folder →")}</p></div>`;
   h += skills.map((sk,i) => {
@@ -853,16 +853,17 @@ function opsRelease(d){
     <section class="command-card"><span class="section-kicker">RUN LOCALLY</span><h3><code>make gate</code></h3><p>The release gate is intentionally manual. A deploy should be a conscious decision backed by a fresh result.</p></section>`;
 }
 
+async function loadOAuthProviders(){
+  const el=document.getElementById("oauth-providers"); if(!el) return;
+  try {
+    const r=await (await fetch("/api/oauth/providers")).json(), list=r.providers||[];
+    oauthProviders=Object.fromEntries(list.map(p=>[p.name,p]));
+    el.innerHTML=list.length?list.map(p=>{ const name=encodeURIComponent(p.name).replace(/'/g,"%27"); return `<article><div><strong>${esc(p.display_name||p.name)}</strong><small>${esc((p.models||[]).join(" · "))}</small></div>${p.logged_in?`<span class="status-chip good">logged in</span>`:`<button class="oauth-btn" onclick="startOAuth(decodeURIComponent('${name}'))">Login with ${esc(p.display_name||p.name)}</button>`}</article>`; }).join(""):`<div class="surface-empty compact"><strong>No OAuth providers available</strong></div>`;
+  } catch(e){ el.innerHTML=`<div class="surface-empty compact"><strong>OAuth unavailable</strong><p>${esc(e.message)}</p></div>`; }
+}
+
 function settingsView(d){
   const cfg=d.settings||{providers:[],config_file:""}, providers=cfg.providers||[];
-  setTimeout(async()=>{
-    const el=document.getElementById("oauth-providers"); if(!el) return;
-    try {
-      const r=await (await fetch("/api/oauth/providers")).json(), list=r.providers||[];
-      oauthProviders=Object.fromEntries(list.map(p=>[p.name,p]));
-      el.innerHTML=list.length?list.map(p=>{ const name=encodeURIComponent(p.name).replace(/'/g,"%27"); return `<article><div><strong>${esc(p.display_name||p.name)}</strong><small>${esc((p.models||[]).join(" · "))}</small></div>${p.logged_in?`<span class="status-chip good">logged in</span>`:`<button class="oauth-btn" onclick="startOAuth(decodeURIComponent('${name}'))">Login with ${esc(p.display_name||p.name)}</button>`}</article>`; }).join(""):`<div class="surface-empty compact"><strong>No OAuth providers available</strong></div>`;
-    } catch(e){ el.innerHTML=`<div class="surface-empty compact"><strong>OAuth unavailable</strong><p>${esc(e.message)}</p></div>`; }
-  },0);
   return `<section class="settings-hero"><div><span class="section-kicker">RUNTIME CONFIGURATION</span><h2>Simple, visible, restart-bound.</h2><p>Manage provider priority, credentials, and OAuth connections from one local surface.</p></div><div class="settings-runtime"><span class="runtime-kicker"><i></i> ACTIVE RUNTIME</span><strong>${esc(d.active_provider||d.provider)} · ${esc(d.model)}</strong><span class="provider-clickable" onclick="toggleProviderMenu(event)" title="Switch provider, model, or reasoning">${esc(d.reasoning||"default")} reasoning · ${(d.sessions||[]).length} conversations <i class="dropdown-arrow">▾</i></span><small>${esc(d.home)}</small></div></section>
     <div class="overview-section-head"><div><span class="section-kicker">PROVIDER CHAIN</span><h2>Priority and health</h2></div><button class="oauth-btn" onclick="showAddProvider()">+ Add Provider</button></div>
     <form id="add-provider-form" class="add-provider-form" hidden onsubmit="event.preventDefault();addProvider()"><input id="provider-name" placeholder="Name" required><input id="provider-base-url" type="url" placeholder="Base URL" required><input id="provider-model" placeholder="Model" required><input id="provider-small-model" placeholder="Small model"><input id="provider-api-key" type="password" placeholder="API key (optional)"><input id="provider-priority" type="number" min="1" value="10" placeholder="Priority"><button type="submit">Add</button><span id="provider-form-status" aria-live="polite"></span></form>
@@ -994,8 +995,6 @@ const VIEWS = {
   today(d){ return todayView(d); },
   work(d){ return workView(d); },
   responsibility(d, id){
-    id=decodeURIComponent(id||"");
-    setTimeout(()=>loadResponsibilityDetail(id),0);
     return `<div id="responsibility-detail">${spinner()}</div>`;
   },
   // Gateway: ONE unified conversation across every channel (dashboard, telegram,
@@ -1108,25 +1107,13 @@ const VIEWS = {
   files(d, sub){
     const root = "/tmp/mino/results";
     sub = sub ? decodeURIComponent(sub) : root;
-    const h = `<section class="files-hero"><div><span class="section-kicker">VPS FILE BROWSER</span><h2>${esc(sub)}</h2><p>Every file Mino creates lives here — tool outputs, uploads, artifacts.</p></div></section>
+    return `<section class="files-hero"><div><span class="section-kicker">VPS FILE BROWSER</span><h2>${esc(sub)}</h2><p>Every file Mino creates lives here — tool outputs, uploads, artifacts.</p></div></section>
       <div id="files-tree" class="files-tree">${spinner()}</div>`;
-    setTimeout(async () => {
-      const el = document.getElementById("files-tree");
-      if (!el) return;
-      try {
-        const url = "/api/files" + (sub !== root ? "?path=" + encodeURIComponent(sub) : "");
-        const tree = await (await fetch(url)).json();
-        if (!Array.isArray(tree)) { el.innerHTML = `<span class="files-error">${esc(tree.error||"bad response")}</span>`; return; }
-        el.innerHTML = renderFileTree(tree, sub);
-      } catch(e) { el.innerHTML = `<span class="files-error">Could not load: ${esc(e.message)}</span>`; }
-    }, 50);
-    return h;
   },
 
   graph(d){
     const raw = d.graph;
     if (!raw || !raw.facts) return `<section class="graph-hero"><div><span class="section-kicker">KNOWLEDGE GRAPH</span><h2>Memory Graph</h2><p>No graph data yet. Memories are built during conversations.</p></div></section>`;
-    setTimeout(() => initGraph(raw), 50);
     return `<section class="graph-hero"><div><span class="section-kicker">KNOWLEDGE GRAPH</span><h2>Memory Graph</h2><p>${Object.keys(raw.facts).length} facts · ${countEdges(raw.facts)} relationships</p></div>
       <div class="graph-controls">
         <div class="graph-query"><input id="graph-search" type="search" placeholder="Query Mino's memories..." oninput="filterGraph()"><button onclick="clearGraphQuery()" title="Clear query">Clear</button></div>
@@ -1139,6 +1126,26 @@ const VIEWS = {
       <aside id="graph-detail" class="graph-detail"></aside>`;
   },
 };
+
+async function loadFilesView(sub){
+  const root="/tmp/mino/results", path=sub?decodeURIComponent(sub):root;
+  const el=document.getElementById("files-tree");
+  if(!el) return;
+  try {
+    const url="/api/files"+(path!==root?"?path="+encodeURIComponent(path):"");
+    const tree=await (await fetch(url)).json();
+    if(!Array.isArray(tree)){ el.innerHTML=`<span class="files-error">${esc(tree.error||"bad response")}</span>`; return; }
+    el.innerHTML=renderFileTree(tree,path);
+  } catch(e){ el.innerHTML=`<span class="files-error">Could not load: ${esc(e.message)}</span>`; }
+}
+
+function activateView(view, sub){
+  if(view==="responsibility") setTimeout(()=>loadResponsibilityDetail(decodeURIComponent(sub||"")),0);
+  if(view==="memory"&&sub==="graph"&&D.graph?.facts) setTimeout(()=>initGraph(D.graph),50);
+  if((view==="system"&&sub==="files")||view==="files") setTimeout(()=>loadFilesView(""),50);
+  if(view==="system"&&sub?.startsWith("files-")) setTimeout(()=>loadFilesView(sub.slice(6)),50);
+  if((view==="system"&&sub==="settings")||view==="settings") setTimeout(loadOAuthProviders,0);
+}
 
 // ---- Live Runtime Spine animation: illuminate only the active trace stage,
 // driven by the event stream so any gateway can move the same process map.
@@ -1187,7 +1194,7 @@ async function pollEvents(){
   } catch(e){ /* server busy */ }
 }
 
-let activeView = null, activeSub = null;
+let activeView = null, activeSub = null, renderedRoute = "", renderedMarkup = "";
 const TITLES = {chat:"Chat & watch", conversations:"Conversations", system:"System", ops:"System",
                 today:"Today — owner journal", work:"Work — responsibilities", responsibility:"Responsibility",
                 database:"Database — everything Mino stores (state.db)", activetasks:"Active Schedules — playbook runs",
@@ -1232,16 +1239,25 @@ function render(){
   const title=TITLES[view] || view[0].toUpperCase()+view.slice(1);
   document.getElementById("title").textContent = title;
   document.title=title.replace(/\s+—.*$/,"")+" · Mino";
-  if (view === "overview"){
+  let preserve=false;
+  if (view === "overview" && activeView === "overview" && animating){
     // don't rebuild mid-animation or the glowing SVG gets wiped
-    if (activeView !== "overview" || !animating){ document.getElementById("view").innerHTML = VIEWS.overview(D); }
+    preserve=true;
   } else if ((view === "memory" || view === "settings" || view === "database" || view === "onboarding") && editing && !subChanged){
     // don't wipe an in-progress edit on the 5s refresh — but DO switch sub-tabs
-  } else if (view === "graph" && activeView === "graph" && !subChanged) {
+    preserve=true;
+  } else if (view === "memory" && sub === "graph" && activeView === "memory" && activeSub === "graph") {
     // don't rebuild graph on 5s refresh — force sim keeps running
-  } else {
-    editing = false;
-    document.getElementById("view").innerHTML = VIEWS[view](D, sub);
+    preserve=true;
+  }
+  if(!preserve){
+    const route=view+"/"+(sub||""), nextMarkup=VIEWS[view](D,sub);
+    if(route!==renderedRoute||nextMarkup !== renderedMarkup){
+      editing=false;
+      document.getElementById("view").innerHTML=nextMarkup;
+      renderedRoute=route; renderedMarkup=nextMarkup;
+      activateView(view, sub);
+    }
   }
   activeView = view; activeSub = sub;
   const responsibilityViews=D.responsibilities||{today:[],work:[]};
@@ -1635,7 +1651,7 @@ function initGraph(raw) {
   function tick() {
     for (let i = 0; i < 3; i++) simulate(); // run multiple sim steps per frame
     draw();
-    if (graphState) requestAnimationFrame(tick);
+    if (canvas.isConnected && graphState?.canvas === canvas) requestAnimationFrame(tick);
   }
 
   // Interaction: screen-to-world helper
@@ -1797,7 +1813,7 @@ function initGraph(raw) {
   }
 
   graphState = {
-    nodes, nodeMap, edges, neighbors,
+    canvas, nodes, nodeMap, edges, neighbors,
     selectNode(id) {
       const n = nodeMap[id];
       if (n) { selectedNode = n; showDetail(n); draw(); }
