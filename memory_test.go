@@ -963,3 +963,60 @@ func TestMaintainGraphClustersOnPartialRebuild(t *testing.T) {
 		t.Fatalf("cluster separation wrong: %v", gm.Communities())
 	}
 }
+
+func TestDistillOutputsDueTombstonesMissingFiles(t *testing.T) {
+	// A dead row (artifact file deleted, e.g. /tmp cleaned on reboot) must be
+	// marked distilled so the queue advances past it — otherwise it is
+	// re-selected every pass and blocks all newer artifacts forever.
+	dir := t.TempDir()
+	db := Connect(dir)
+	defer db.Close()
+	deadPath := filepath.Join(dir, "results", "tg_123", "1", "MCP_composio_dump.txt")
+	os.MkdirAll(filepath.Dir(deadPath), 0755)
+	// NOTE: deadPath file is deliberately NOT created — the row is stale.
+	db.Exec("INSERT INTO session_artifacts (path, session_id, label, size) VALUES (?, 'tg_123', 'dead output', 10)", deadPath)
+
+	alivePath := filepath.Join(dir, "results", "scheduled-threads-ai-learning", "1", "post.md")
+	os.MkdirAll(filepath.Dir(alivePath), 0755)
+	os.WriteFile(alivePath, []byte("# Threads post\nTakeaways. ID: 111"), 0644)
+	db.Exec("INSERT INTO session_artifacts (path, session_id, label, size) VALUES (?, 'scheduled-threads-ai-learning', 'threads-ai-learning output', 30)", alivePath)
+
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"run\":{\"id\":\"ep_threads_2026_08_02\",\"subject\":\"Posted takeaways (ID 111)\",\"body\":\"Published OK\",\"edges\":[]},\"facts\":[]}"}}]}`)
+	}))
+	defer server.Close()
+	pm := &ProviderManager{
+		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
+		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
+		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
+		sleep: func(time.Duration) {}, now: time.Now,
+	}
+	gm := NewGraphMemory(filepath.Join(dir, "memories"), nil)
+	m := &Memory{db: db, client: pm, cfg: &Settings{Home: dir, MemoriesDir: filepath.Join(dir, "memories")}, graph: gm}
+
+	// Pass 1: dead row tombstoned (marked distilled, no LLM call for it);
+	// alive row distilled normally.
+	if n := m.DistillOutputsDue(); n != 1 {
+		t.Fatalf("distilled %d runs, want 1 (only the alive run)", n)
+	}
+	var deadDistilled, aliveDistilled int
+	db.QueryRow("SELECT distilled FROM session_artifacts WHERE path = ?", deadPath).Scan(&deadDistilled)
+	db.QueryRow("SELECT distilled FROM session_artifacts WHERE path = ?", alivePath).Scan(&aliveDistilled)
+	if deadDistilled != 1 {
+		t.Fatal("dead row must be tombstoned (marked distilled) so the queue advances")
+	}
+	if aliveDistilled != 1 {
+		t.Fatal("alive row must be distilled normally")
+	}
+	if _, ok := gm.FindFact("ep_threads_2026_08_02"); !ok {
+		t.Fatal("alive run node missing")
+	}
+	// Pass 2: queue empty, no LLM call at all.
+	before := calls
+	if n := m.DistillOutputsDue(); n != 0 || calls != before {
+		t.Fatalf("second pass: n=%d calls=%d (before %d), want 0/0", n, calls, before)
+	}
+}
