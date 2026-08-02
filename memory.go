@@ -173,6 +173,13 @@ func (m *Memory) DistillOutputsDue() int {
 		for _, a := range byRun[sid] {
 			data, err := os.ReadFile(a.path)
 			if err != nil {
+				if os.IsNotExist(err) {
+					// Dead row: the artifact file is gone (e.g. /tmp cleaned on
+					// reboot). Tombstone it so the queue advances — otherwise
+					// it is re-selected every pass and blocks all newer
+					// artifacts forever.
+					m.db.Exec("UPDATE session_artifacts SET distilled = 1 WHERE path = ?", a.path)
+				}
 				continue
 			}
 			s := string(data)
