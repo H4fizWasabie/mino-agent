@@ -4,14 +4,14 @@ One binary. One SQLite file. Your own AI assistant.
 
 [![DeepWiki](https://img.shields.io/badge/DeepWiki-Architecture%20Docs-blue)](https://deepwiki.com/H4fizWasabie/mino-agent)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/H4fizWasabie/mino-agent)
-![Version](https://img.shields.io/badge/version-v1.5.0-blue)
+![Version](https://img.shields.io/badge/version-v2.0.1-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 - **Dashboard** — chat, memory, tools, database, ops
 - **Telegram** — same agent, any device
-- **Playbooks** — repeatable markdown workflows, stage-by-stage execution with retry, resume on restart
+- **Playbooks** — autonomous repeatable workflows: teach once, compile from evidence, schedule daily, verified outputs, Telegram reports
 - **Coding tools** — read, write, edit, grep, glob, git, graphify, codegraph, bash
-- **Memory** — Markdown-authoritative graph memory, SQLite operational state and diagnostics, auto-consolidation, one-time reminders
+- **Memory** — Markdown-authoritative graph memory with self-maintenance (edge judgment, community detection, 6-hourly maintenance), SQLite operational state, auto-consolidation, one-time reminders
 - **Multi-provider** — priority, fallback, circuit breaking, and OpenRouter provider routing (including Exacto tool-call routing)
 - **OAuth login** — Claude, Codex (ChatGPT), GitHub Copilot, xAI/Grok
 - **Web search** — Tavily API (free tier available)
@@ -183,10 +183,13 @@ provider_manager.go  — priority, retry, fallback, circuit breaking
 oauth.go             — PKCE + device-code OAuth, embedded provider configs
 dashboard.go         — web UI + REST API + SSE streaming
 telegram.go          — Telegram bot gateway
-mcp.go               — MCP bridge (stdio-based servers)
+mcp.go               — MCP bridge (stdio + HTTP servers, flat companions for nested-executor tools)
 skill.go             — skill loader (SKILL.md files)
 extensions.go        — HTTP extension protocol
-playbook.go          — numbered Markdown workflows and stage runner
+playbook.go          — playbook management, capture_playbook (teach → compile), scheduling
+playbook_workspace.go— playbook run engine: durable runs, write-attributed verification, retry policy
+memory.go            — operational SQLite state and consolidation bridge
+graph_memory.go      — Markdown-authoritative semantic graph memory with self-maintenance (edge judgment, communities, 6-hourly maintenance)
 adapters.go          — working memory, patterns, embeddings
 reminder.go          — persistent one-time reminders with Telegram delivery
 eval.go              — evaluation harness for automated correctness
@@ -195,11 +198,15 @@ config.go            — environment variable → Settings
 update.go            — self-update from GitHub releases
 ```
 
-Playbooks are filesystem workspaces with numbered stage folders and explicit
-`Inputs`, `Process`, `Audit`, and `Outputs` contracts. Memory routes vague
-prompts to the right playbook. Mino runs each stage through the canonical agent
-loop and records durable per-run state, resuming from the first incomplete stage.
-See [PLAYBOOKS_DESIGN.md](PLAYBOOKS_DESIGN.md).
+Playbooks are filesystem workspaces with `stages/NN-name/CONTEXT.md` contracts
+(`Inputs`, `Process`, `Tools`, `Outputs`). The recommended way to author one is
+**capture_playbook**: run a task once, then compile it into a playbook from the
+audit evidence — real tool calls, real outputs, nothing improvised. Each run
+gets an isolated workspace with verified outputs: a stage only passes when its
+declared outputs were written by that stage's own tool calls. Read-only stages
+retry on failure; destructive stages fail loud and never double-execute.
+Playbooks are autonomous-only — if a task needs the owner mid-way, it is a
+conversation, not a playbook. See [PLAYBOOKS_DESIGN.md](PLAYBOOKS_DESIGN.md).
 
 ## Free AI stack
 
