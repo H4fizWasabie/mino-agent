@@ -10,7 +10,7 @@ Date: 2026-07-28 UTC deployment / 2026-07-29 Asia/Kuala_Lumpur work session
 
 ## VPS
 
-- Host: `100.101.53.98`
+- Host: `vps-host`
 - Release: `v1.3.0`
 - Binary SHA-256: `667a72f654e490184bf037f2cf79fb37f4ddb959020feb1e96aaa11c07c4370b` (local = remote)
 - `/health`: `{"status":"ok","version":"v1.3.0"}`

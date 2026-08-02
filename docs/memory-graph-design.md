@@ -1,6 +1,6 @@
 # Memory Graph — Design Notes
 
-> Captured from discussion with Abah, 2025. Replaces flat FTS5 memory with
+> Captured from an owner design discussion, 2025. Replaces flat FTS5 memory with
 > graphify-style knowledge graph.
 
 ## Problem
@@ -12,7 +12,7 @@ The LLM reconstructs "why these facts relate" every turn.
 Observed symptoms (from VPS, July 2026):
 
 - Same fact duplicated 6+ times with slight wording variations
-- "Abah's name is Hafiz" stored 5 times (IDs 72, 73, 76, 95, 158)
+- "the owner's name" stored 5 times (IDs 72, 73, 76, 95, 158)
 - "Mino OSS project" stored 7 times (IDs 82, 85, 98, 107, 114, 117, 159)
 - Large unrelated ephemera stored as facts (AI news briefs, transient intents)
 - No dedup, no edges, no structure
@@ -40,7 +40,7 @@ methodology — nodes, typed edges, community detection, subgraph traversal.
 ---
 id: abah_prefers_golang        # snake_case, unique, deterministic from subject
 type: semantic                  # semantic | episodic
-subject: Abah prefers Go for backend development
+subject: owner prefers Go for backend development
 at: 2025-01-15T10:30:00+08:00  # ISO 8601, when captured
 edge:                           # explicit relationships
   - target: abah_is_hafiz
@@ -102,7 +102,7 @@ exists → merge/update/skip instead of duplicate.
 
 ### Context efficiency
 
-Current recall for "What do I know about Abah?": ~400 tokens, 60% duplication.
+Current recall for "What do I know about the owner?": ~400 tokens, 60% duplication.
 Same query with `remember`: ~80 tokens of subgraph. No duplication. LLM pulls
 body only when needed via `read_file`.
 

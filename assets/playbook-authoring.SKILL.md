@@ -12,7 +12,7 @@ triggers:
 
 # Playbook authoring
 
-Use this skill when Abah asks to create, improve, validate, or finish a repeatable workflow.
+Use this skill when the owner asks to create, improve, validate, or finish a repeatable workflow.
 
 ## Decide first
 
@@ -38,7 +38,7 @@ Create one folder under `~/.mino/playbooks/` using a short hyphenated identifier
   runs/                       # created by Mino; never hand-edit state.json
 ```
 
-`config.md` should contain a concise `description`, plus `status: active`. Add `schedule` and `notify` only when Abah explicitly wants scheduled delivery.
+`config.md` should contain a concise `description`, plus `status: active`. Add `schedule` and `notify` only when the owner explicitly wants scheduled delivery.
 
 Each numbered stage folder must contain `CONTEXT.md` with:
 
@@ -63,6 +63,6 @@ Keep stages small and independently verifiable. Pass useful output to the next s
 2. Inspect existing playbooks and reuse their conventions where appropriate.
 3. Create the definition with `manage_playbook` using its `create` action and full stage contracts.
 4. Use its `validate` action after every definition update; use `inspect` to see the latest run state.
-5. Run the playbook when Abah asks for a live test; otherwise report the created path and what remains to test.
+5. Run the playbook when the owner asks for a live test; otherwise report the created path and what remains to test.
 
 When resuming an unfinished playbook, inspect its latest run state and stage outputs. Continue from the first incomplete stage; never recreate a completed stage unless the playbook itself was changed.

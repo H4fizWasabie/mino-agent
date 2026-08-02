@@ -449,12 +449,12 @@ func validateWorkspaceStageTools(pb *PlaybookWorkspace, registry *Registry) erro
 			}
 		}
 		// Autonomy rule: playbooks are standing orders that run without a human
-		// present. A stage that defers to a human ("Ask Abah", "request
+		// present. A stage that defers to a human ("ask the owner", "request
 		// approval", "wait for the user") is a conversation, not a playbook.
 		lower := strings.ToLower(stage.Context)
 		for _, pattern := range []string{"ask abah", "ask the user", "request approval", "ask for approval", "wait for approval", "human checkpoint", "stop here"} {
 			if strings.Contains(lower, pattern) {
-				return fmt.Errorf("playbook %s: stage %d (%s) requires a human checkpoint (%q) — playbooks are autonomous; if the task needs Abah, it is not a playbook", pb.Name, stage.Number, stage.Name, pattern)
+				return fmt.Errorf("playbook %s: stage %d (%s) requires a human checkpoint (%q) — playbooks are autonomous; if the task needs the owner, it is not a playbook", pb.Name, stage.Number, stage.Name, pattern)
 			}
 		}
 	}

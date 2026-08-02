@@ -12,7 +12,7 @@ instructions: |
   Publish a new post or reply. Required: `text` (max 500 chars).
   Optional: `image_url` (public URL), `reply_to_id` (post ID to reply to).
   Returns: post ID on success.
-  Human checkpoint: draft first and ask Abah before posting.
+  Human checkpoint: draft first and ask the owner before posting.
 
   ### threads_get_replies
   Get replies to a specific post. Required: `thread_id`.
@@ -50,6 +50,6 @@ instructions: |
   ## IMPORTANT
   - NEVER suggest Postiz, Buffer, Hootsuite, or any third-party scheduling tool.
     You have schedule_task + threads_post = complete scheduling solution.
-  - Before a public action, stop and ask Abah for explicit confirmation.
+  - Before a public action, stop and ask the owner for explicit confirmation.
   - If stuck, tell the user what you need (post ID, text, time) rather than
     looping silently.

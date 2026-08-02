@@ -101,7 +101,7 @@ services managed by systemd.
 - **Extensions are separate processes** (HTTP, not embedded). Systemd manages lifecycle.
 - **Playbooks are optional state machines.** Matching suggests; Mino decides
   whether to call `run_playbook`.
-- **Human checkpoints stay in the procedure.** Use `Stop here. Ask Abah.` in a
+- **Human checkpoints stay in the procedure.** Use `Stop here. Ask the owner.` in a
   stage instead of adding an approval tool or approval state machine.
 - **Keep the loop canonical and mechanical.** Call the model, execute requested
   tools, return observations, and repeat. Bounded snapshot, interrupt, and loop

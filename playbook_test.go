@@ -221,8 +221,8 @@ func TestWorkspaceRejectsHumanCheckpointStage(t *testing.T) {
 	registry.Register(makeWriteTool(home, home))
 	core := &Core{Settings: settings, Tools: registry}
 	tool := makeManagePlaybookTool(core)
-	stage := "# Review\n\n## Inputs\n\n| Source | File/Location | Section/Scope | Why |\n| --- | --- | --- | --- |\n\n## Process\n\n1. Write the report.\n2. Stop here. Ask Abah.\n\n## Tools\n\n- write_file\n\n## Outputs\n\n| Artifact | Location | Format |\n| --- | --- | --- |\n| Report | `output/report.md` | Markdown |\n"
-	got := tool.Fn(map[string]any{"action": "create", "name": "needs-abah", "context": "# Needs Abah\n", "stages": []any{map[string]any{"name": "01-review", "context": stage}}})
+	stage := "# Review\n\n## Inputs\n\n| Source | File/Location | Section/Scope | Why |\n| --- | --- | --- | --- |\n\n## Process\n\n1. Write the report.\n2. Stop here. Ask the owner.\n\n## Tools\n\n- write_file\n\n## Outputs\n\n| Artifact | Location | Format |\n| --- | --- | --- |\n| Report | `output/report.md` | Markdown |\n"
+	got := tool.Fn(map[string]any{"action": "create", "name": "needs-owner", "context": "# Needs owner\n", "stages": []any{map[string]any{"name": "01-review", "context": stage}}})
 	if !strings.Contains(got, "human checkpoint") {
 		t.Fatalf("create = %q, want human-checkpoint rejection", got)
 	}

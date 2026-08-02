@@ -14,14 +14,14 @@ func TestGraphMemoryRecordAndRemember(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := gm.RecordFact(Fact{
-		ID: "abah", Type: "semantic", Subject: "Abah maintains Mino",
+		ID: "owner", Type: "semantic", Subject: "Owner maintains Mino",
 		Edges: []Edge{{Target: "mino", Rel: "maintains"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	got := gm.Remember("Abah")
-	if !strings.Contains(got, "Abah maintains Mino") || !strings.Contains(got, "[maintains]") {
+	got := gm.Remember("Owner")
+	if !strings.Contains(got, "Owner maintains Mino") || !strings.Contains(got, "[maintains]") {
 		t.Fatalf("remember() = %q", got)
 	}
 }

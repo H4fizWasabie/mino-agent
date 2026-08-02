@@ -20,7 +20,7 @@ import (
 
 var telegramAPIBase = "https://api.telegram.org"
 
-// runOutboxDispatcher drains the outbox to Abah's Telegram. send_message only
+// runOutboxDispatcher drains the outbox to the owner's Telegram. send_message only
 // drafts to the outbox; without a drain, scheduled reports never arrive
 // (2026-07-31: both daily reports sat in outbox/ undelivered).
 func runOutboxDispatcher(core *Core) {
@@ -189,7 +189,7 @@ func handleTelegramMessage(w *Core, bot *tgbotapi.BotAPI, message *tgbotapi.Mess
 			progress, _ := data["text"].(string)
 			showProgress(progress)
 		case "loop":
-			// Proactive notification: Mino notices it's looping and tells Abah
+			// Proactive notification: Mino notices it's looping and tells the owner
 			msg, _ := data["message"].(string)
 			if msg != "" {
 				bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("🔄 %s — continuing but trying to self-correct.", msg)))
