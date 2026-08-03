@@ -4,6 +4,8 @@
 
 ### Added
 
+- Onboarding collects optional Cloudflare Workers AI credentials (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`) alongside the existing Telegram/Tavily fields, so image generation is configured at first setup instead of by hand-editing `mino.env`.
+- `generate_image` now renders via Cloudflare Workers AI (free tier, `MINO_IMAGE_MODEL`, default `@cf/leonardo/phoenix-1.0` — a clear quality step up from flux-1-schnell) with Pollinations.ai as automatic fallback. Keys are `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID`, dashboard-savable via `mino.env` like `TAVILY_API_KEY`; any failure (missing keys, HTTP error, bad response) logs and falls through to the existing pollinations path, which stays free and keyless. Response handling accepts both raw image bytes (phoenix family) and JSON envelopes with `image`/`images` (flux family), so switching `MINO_IMAGE_MODEL` needs no rebuild. (Why: pollinations alone is a shared free queue — inconsistent quality and random rate limiting; Cloudflare gives a dedicated free quota of ~10k neurons/day with no credit card. Google Gemini free tier was evaluated first but grants zero image-generation quota to new accounts; the paid third-party catalog — nano-banana, gpt-image-2, recraft, imagen — needs billing, so the free `@cf/` list is the ceiling for now.)
 - Operator Timeline dashboard shell: Today-first owner journal, grouped Work/Conversations/Memory/System navigation, contextual Ask, phone-specific bottom navigation, truthful freshness and health state, and redirects that preserve legacy dashboard hashes.
 
 - `mino maintain-memory` CLI subcommand runs the full maintenance pass (edge re-inference, mirrored-pair cleanup, community detection, labels) on demand.
@@ -19,6 +21,9 @@
 - Scheduled 6-hourly graph maintenance: full edge re-inference, mirrored-pair cleanup, Louvain community detection, god nodes, and LLM community labels — the manual `mino rebuild-edges` CLI is no longer required.
 
 ### Changed
+
+- Onboarding `/api/settings` now merges into the existing `mino.env` instead of rewriting it, so unrelated keys (`CLOUDFLARE_*`, `THREADS_*`, `MINO_OPENROUTER_KEY`, ...) survive a re-onboard; keys are written sorted for diffable files. (Why: the old rewrite silently wiped every key not in the onboarding form.)
+
 
 - schema v6: session_artifacts.distilled queue flag.
 

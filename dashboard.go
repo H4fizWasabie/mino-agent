@@ -1476,6 +1476,8 @@ func handleSettingsAPI(w http.ResponseWriter, r *http.Request) {
 		SmallModel    string `json:"small_model"`
 		TelegramToken string `json:"telegram_token"`
 		TavilyKey     string `json:"tavily_key"`
+		CfToken       string `json:"cf_token"`
+		CfAccountID   string `json:"cf_account_id"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	// api_key is optional (keyless providers like Ollama)
@@ -1521,23 +1523,67 @@ func handleSettingsAPI(w http.ResponseWriter, r *http.Request) {
 	if body.APIKey != "" && dashCore.AuthStore != nil {
 		dashCore.AuthStore.Set(name, body.APIKey)
 	}
-	// write mino.env so systemd picks it up
-	envPath := filepath.Join(home, "mino.env")
-	envData := fmt.Sprintf("MINO_HOME=%s\nMINO_API_KEY=%s\nMINO_BASE_URL=%s\nMINO_MODEL=%s\nMINO_SMALL_MODEL=%s\nMINO_TIMEZONE=%s\n",
-		home, body.APIKey, body.BaseURL, body.Model, body.SmallModel, dashCore.Settings.Timezone)
-	if body.TelegramToken != "" {
-		envData += fmt.Sprintf("TELEGRAM_BOT_TOKEN=%s\n", body.TelegramToken)
+	// write mino.env so systemd picks it up; merge instead of rewriting so
+	// unrelated keys (CLOUDFLARE_*, THREADS_*, MINO_OPENROUTER_KEY, ...) survive
+	updates := map[string]string{
+		"MINO_HOME":          home,
+		"MINO_API_KEY":       body.APIKey,
+		"MINO_BASE_URL":      body.BaseURL,
+		"MINO_MODEL":         body.Model,
+		"MINO_SMALL_MODEL":   body.SmallModel,
+		"MINO_TIMEZONE":      dashCore.Settings.Timezone,
+		"TELEGRAM_BOT_TOKEN": body.TelegramToken,
+		"TAVILY_API_KEY":     body.TavilyKey,
+		"CLOUDFLARE_API_TOKEN":  body.CfToken,
+		"CLOUDFLARE_ACCOUNT_ID": body.CfAccountID,
+	}
+	if err := mergeEnvFile(filepath.Join(home, "mino.env"), updates); err != nil {
+		slog.Warn("mino.env merge failed", "error", err)
 	}
 	if body.TavilyKey != "" {
-		envData += fmt.Sprintf("TAVILY_API_KEY=%s\n", body.TavilyKey)
 		os.Setenv("TAVILY_API_KEY", body.TavilyKey)
 	}
-	os.WriteFile(envPath, []byte(envData), 0600)
+	if body.CfToken != "" {
+		os.Setenv("CLOUDFLARE_API_TOKEN", body.CfToken)
+	}
+	if body.CfAccountID != "" {
+		os.Setenv("CLOUDFLARE_ACCOUNT_ID", body.CfAccountID)
+	}
 	// pick up changes without restart
 	if dashCore.Client != nil {
 		dashCore.Client.ReloadProviders(home)
 	}
 	json.NewEncoder(w).Encode(map[string]any{"ok": true, "message": "Saved."})
+}
+
+// mergeEnvFile updates KEY=VALUE lines in an env file in place, preserving
+// every other key. Empty values leave the existing key untouched.
+func mergeEnvFile(path string, updates map[string]string) error {
+	env := map[string]string{}
+	if data, err := os.ReadFile(path); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			k, v, ok := strings.Cut(line, "=")
+			k = strings.TrimSpace(k)
+			if ok && k != "" && strings.TrimSpace(v) != "" {
+				env[k] = v
+			}
+		}
+	}
+	for k, v := range updates {
+		if v != "" {
+			env[k] = v
+		}
+	}
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var sb strings.Builder
+	for _, k := range keys {
+		sb.WriteString(k + "=" + env[k] + "\n")
+	}
+	return os.WriteFile(path, []byte(sb.String()), 0600)
 }
 
 func countRows(db *sql.DB, table string) (int, error) {
