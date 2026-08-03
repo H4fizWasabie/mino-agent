@@ -1476,6 +1476,8 @@ func handleSettingsAPI(w http.ResponseWriter, r *http.Request) {
 		SmallModel    string `json:"small_model"`
 		TelegramToken string `json:"telegram_token"`
 		TavilyKey     string `json:"tavily_key"`
+		CfToken       string `json:"cf_token"`
+		CfAccountID   string `json:"cf_account_id"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
 	// api_key is optional (keyless providers like Ollama)
@@ -1531,6 +1533,14 @@ func handleSettingsAPI(w http.ResponseWriter, r *http.Request) {
 	if body.TavilyKey != "" {
 		envData += fmt.Sprintf("TAVILY_API_KEY=%s\n", body.TavilyKey)
 		os.Setenv("TAVILY_API_KEY", body.TavilyKey)
+	}
+	if body.CfToken != "" {
+		envData += fmt.Sprintf("CLOUDFLARE_API_TOKEN=%s\n", body.CfToken)
+		os.Setenv("CLOUDFLARE_API_TOKEN", body.CfToken)
+	}
+	if body.CfAccountID != "" {
+		envData += fmt.Sprintf("CLOUDFLARE_ACCOUNT_ID=%s\n", body.CfAccountID)
+		os.Setenv("CLOUDFLARE_ACCOUNT_ID", body.CfAccountID)
 	}
 	os.WriteFile(envPath, []byte(envData), 0600)
 	// pick up changes without restart
