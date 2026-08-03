@@ -4,6 +4,8 @@
 
 ### Added
 
+- `generate_image` now renders via Cloudflare Workers AI (flux-1-schnell, free tier) with Pollinations.ai as automatic fallback. Keys are `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID`, dashboard-savable via `mino.env` like `TAVILY_API_KEY`; any failure (missing keys, HTTP error, bad response) logs and falls through to the existing pollinations path, which stays free and keyless. (Why: pollinations alone is a shared free queue — inconsistent quality and random rate limiting; Cloudflare gives a dedicated free quota of ~10k neurons/day with no credit card. Google Gemini free tier was evaluated first but grants zero image-generation quota to new accounts.)
+
 - `mino maintain-memory` CLI subcommand runs the full maintenance pass (edge re-inference, mirrored-pair cleanup, community detection, labels) on demand.
 
 - `manage_memory` tool actions: `maintain` (full 6h pass on demand), `judge_edges`, `distill_outputs`; dashboard graph payload now includes communities, god nodes, and labels.
