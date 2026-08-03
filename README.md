@@ -4,7 +4,7 @@ One binary. One SQLite file. Your own AI assistant.
 
 [![DeepWiki](https://img.shields.io/badge/DeepWiki-Architecture%20Docs-blue)](https://deepwiki.com/H4fizWasabie/mino-agent)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/H4fizWasabie/mino-agent)
-![Version](https://img.shields.io/badge/version-v2.0.1-blue)
+![Version](https://img.shields.io/badge/version-v2.1.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 - **Dashboard** — chat, memory, tools, database, ops
@@ -213,7 +213,7 @@ conversation, not a playbook. See [PLAYBOOKS_DESIGN.md](PLAYBOOKS_DESIGN.md).
 Mino can run entirely on free tiers:
 
 - **LLM**: Any free model via OpenRouter or OpenCode Zen
-- **Image gen**: [Pollinations.ai](https://pollinations.ai) (free, no key)
+- **Image gen**: Cloudflare Workers AI (free tier, ~10k images/day) with [Pollinations.ai](https://pollinations.ai) fallback (free, no key)
 - **Embeddings**: via OpenRouter (free tier available)
 - **Web search**: Tavily (free tier: 1000 searches/month)
 - **URL fetch**: pipes HTML through readability extraction

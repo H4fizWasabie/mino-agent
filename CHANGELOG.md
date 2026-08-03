@@ -2,52 +2,26 @@
 
 ## [Unreleased]
 
+## [v2.1.0] — Operator Timeline & Image Generation
+
 ### Added
 
 - Onboarding collects optional Cloudflare Workers AI credentials (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`) alongside the existing Telegram/Tavily fields, so image generation is configured at first setup instead of by hand-editing `mino.env`.
-- `generate_image` now renders via Cloudflare Workers AI (free tier, `MINO_IMAGE_MODEL`, default `@cf/leonardo/phoenix-1.0` — a clear quality step up from flux-1-schnell) with Pollinations.ai as automatic fallback. Keys are `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID`, dashboard-savable via `mino.env` like `TAVILY_API_KEY`; any failure (missing keys, HTTP error, bad response) logs and falls through to the existing pollinations path, which stays free and keyless. Response handling accepts both raw image bytes (phoenix family) and JSON envelopes with `image`/`images` (flux family), so switching `MINO_IMAGE_MODEL` needs no rebuild. (Why: pollinations alone is a shared free queue — inconsistent quality and random rate limiting; Cloudflare gives a dedicated free quota of ~10k neurons/day with no credit card. Google Gemini free tier was evaluated first but grants zero image-generation quota to new accounts; the paid third-party catalog — nano-banana, gpt-image-2, recraft, imagen — needs billing, so the free `@cf/` list is the ceiling for now.)
+- `generate_image` now renders via Cloudflare Workers AI (free tier, `MINO_IMAGE_MODEL`, default `@cf/black-forest-labs/flux-1-schnell` ≈ 0.4 neurons/image, `@cf/leonardo/phoenix-1.0` switchable at ~100× the neurons) with Pollinations.ai as automatic fallback. Keys are `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID`, dashboard-savable via `mino.env` like `TAVILY_API_KEY`; any failure (missing keys, HTTP error, bad response) logs and falls through to the existing pollinations path, which stays free and keyless. Response handling accepts both raw image bytes (phoenix family) and JSON envelopes with `image`/`images` (flux family), so switching `MINO_IMAGE_MODEL` needs no rebuild. (Why: pollinations is a shared free queue with inconsistent quality; Cloudflare gives dedicated free quota ~10k neurons/day with no credit card. Gemini free tier grants zero image quota to new accounts; the paid catalog — nano-banana, gpt-image-2, recraft, imagen — needs billing.)
 - Operator Timeline dashboard shell: Today-first owner journal, grouped Work/Conversations/Memory/System navigation, contextual Ask, phone-specific bottom navigation, truthful freshness and health state, and redirects that preserve legacy dashboard hashes.
-
-- `mino maintain-memory` CLI subcommand runs the full maintenance pass (edge re-inference, mirrored-pair cleanup, community detection, labels) on demand.
-
-- `manage_memory` tool actions: `maintain` (full 6h pass on demand), `judge_edges`, `distill_outputs`; dashboard graph payload now includes communities, god nodes, and labels.
-
-- Playbook run outputs distill into one compact episodic memory node per run (content, post ID, when, outcome) plus semantic facts for durable knowledge; undistilled rows survive cleanup until processed.
-
-- Every new or edited memory gets LLM-judged edges within minutes (5 per pass, retried on failure) — graphify-style incremental update without a full rebuild.
-
-- Edge-judgment ledger tracks which facts still need LLM edge judgment; index.json v3 carries judgment state, communities, god nodes, and labels.
-
-- Scheduled 6-hourly graph maintenance: full edge re-inference, mirrored-pair cleanup, Louvain community detection, god nodes, and LLM community labels — the manual `mino rebuild-edges` CLI is no longer required.
 
 ### Changed
 
 - Onboarding `/api/settings` now merges into the existing `mino.env` instead of rewriting it, so unrelated keys (`CLOUDFLARE_*`, `THREADS_*`, `MINO_OPENROUTER_KEY`, ...) survive a re-onboard; keys are written sorted for diffable files. (Why: the old rewrite silently wiped every key not in the onboarding form.)
 
-
-- schema v6: session_artifacts.distilled queue flag.
-
-- **MCP flattening**: the bridge now detects nested-executor wrapper tools (schema with a `tools[]` array carrying `tool_slug` + `arguments`, e.g. Composio's `COMPOSIO_MULTI_EXECUTE_TOOL`) and re-exposes their inner toolkit tools as first-class flat tools (`MCP_composio_INSTAGRAM_POST_IG_USER_MEDIA(caption, image_url, ig_user_id)`). The model never sees the nesting; the bridge re-wraps flat args into the executor internally. Deprecated tools are skipped. (Why: models like gpt-5.6-luna reliably emit empty `arguments: {}` for deeply nested tool-call schemas while believing they supplied them — the root cause of the Instagram/Gmail Composio failures. Flat tools work on every model, as `search_web`/`threads_post` proved.)
-- **MCP gate is now family-based**: when any MCP tool from a toolkit keyword-matches, the whole toolkit family is included (flattened schemas are small), wrapper tools are suppressed when their flattened children are present, and the flat MCP cap rose from 3 to 12. (Why: the old cap of 3 was sized for six giant wrapper tools; the Instagram flow alone needs three tools from one toolkit.)
-- **Provider prefix cache now stays warm**: the clock is injected as a user-role message instead of being appended to the system prompt, in both the main loop and the playbook runner. (Why: the timestamp in system forced a full provider cache rewrite on every call — usage data showed ~63% of input billed at full rate with 522 cache rewrites and near-zero reuse. The system prompt is now byte-stable across stage iterations; the intent was already documented at session.go:86 "Time is injected as user message for cache stability" but the playbook path never followed it.)
-
-- Playbook stage completion now requires **write-attributed outputs**: a declared output passes verification only if a `write_file` call inside that stage's own tool log wrote it. Pre-seeded output files (the main loop doing the work and then `run_playbook` rubber-stamping it, as happened in the VPS Gmail incident) now fail the stage audit instead of passing it. (`verifyWorkspaceStageOutputs` checks the stage's recorded tool calls.)
-- Trace events emitted inside a playbook stage now carry `playbook` + `stage` tags, and the Ops > Traces view groups them into collapsible stage blocks — stage work is no longer flattened into a stream indistinguishable from main-loop tool calls. The playbook stage's contract text (`CONTEXT.md`) is now served to the dashboard and shown as an expandable viewer under Memory > Playbooks. (Why: the VPS daily-news run looked like the model did the searches itself and rubber-stamped the playbook, but the searches actually happened inside the stage; the dashboard was hiding the stage boundary.)
-- The repeated-tool loop guard is now skipped inside playbook stages: a stage whose whitelist is only `search_web` + `write_file` legitimately calls `search_web` many times, which is its declared job; the stage's own iteration cap remains the guard.
-- Playbook stages now retry within a run **only when their whitelist is read-only** (every declared tool is `BehaviorObserve`, plus `write_file`). Destructive or unclassifiable tools (bash, MCP mutations) make a stage retry-unsafe: a partially-executed destructive stage retried is how double-deletions happen, so those stages fail loud on the first attempt. Each retry feeds the previous failure back into the stage context; a user stop (cancelled) never triggers a retry. (Why: transient failures in read-only stages self-heal; destructive stages must not double-execute.)
-- The playbook tree is now **read-only to the main loop and to stages outside their own run directory**: `write_file`/`edit_file` refuse any path under `playbooks/<name>/` unless the call comes from inside that playbook's stage execution and targets that run's output dir. This kills the pre-seed vector mechanically — the main loop physically cannot write playbook outputs before `run_playbook` stamps them, and a stage cannot amend its own contract (CONTEXT.md, stages/, config.md) mid-execution. Editing stays out-of-band via `manage_playbook`, which writes directly.
-- Explicit playbook commands now bypass the suggestion layer: when the user names a playbook ("run the daily news playbook"), the context instructs Mino that `run_playbook` **must** be its first action — no improvising the work in the main loop first. Unsolicited prompts still get the soft "possibly relevant" hint, and scheduled fires already invoke `RunPlaybook` directly.
-- Playbook validation now **rejects stages that declare human checkpoints** ("Stop here. Ask the owner.", "request approval", etc.) at create/update time: playbooks are standing orders that run without a human present — if the task needs the owner, it is not a playbook. Stages whose `## Audit` section declares `self` mark the run **self-certified** in the result and the trace, so unverified (model-judged) outputs are visible in the audit trail instead of masquerading as machine-verified.
-- New **`capture_playbook` tool (teach → compile)**: after a task succeeds, Mino can compile it into a playbook where the stage's Tools whitelist and Outputs are derived from the immutable audit log — the actual tool slugs that returned `ok` and the actual `write_file` paths — not improvised from memory. The model supplies only the goal prose (name, context, process). This kills the bug class that broke the VPS Gmail playbook (invented `GMAIL_MOVE_EMAIL`, mismatched filenames): a playbook must be compiled from a task that actually ran.
-- **Failed destructive stages are now terminal, not resumable**: `run_playbook` resumes a failed run only when the next incomplete stage is read-only (retry-safe). A destructive stage (threads_post, trash, send) that failed may already have executed its external side effect — the VPS duplicate-Threads-post incident: the stage posted, then failed output verification, and each resume re-ran the stage and posted again. Such runs now fail loud and a new invocation starts a fresh run instead of replaying the side effect.
-
-- Rebuilt playbooks around filesystem workspaces and isolated durable runs. Stage contracts now live in `stages/NN-name/CONTEXT.md`; `state.json` records per-stage attempts, outputs, failures, and resume state so a failed later stage does not replay completed work.
-
 ### Fixed
-- Dashboard polling no longer rebuilds unchanged views: Graph, Settings, Playbooks, and other interactive surfaces preserve canvas, disclosure, focus, and form state while five-second data polling continues; obsolete graph animation loops stop after navigation.
 
+- Dashboard polling no longer rebuilds unchanged views: Graph, Settings, Playbooks, and other interactive surfaces preserve canvas, disclosure, focus, and form state while five-second data polling continues; obsolete graph animation loops stop after navigation.
 - Conversation History now opens above the expanded Ask surface instead of rendering invisibly underneath it.
 
+## [v2.0.1] — Memory Graph, Playbook Hardening & MCP Flattening
+
+### Fixed
 - Distill queue no longer jams on dead rows: an artifact whose file is gone (e.g. /tmp cleaned on reboot) is tombstoned (marked distilled) so the queue advances — previously it was re-selected every pass, blocking all newer artifacts (like playbook outputs) behind it forever.
 - Deterministic maintenance steps (mirror cleanup, Louvain clustering, god nodes, labels) now run even when the edge rebuild had failed LLM batches — an empty-edge batch no longer starves communities forever; failed batches retry next cycle.
 - Facts are only marked judged when a graph rebuild completes with zero failed batches; a partial failure leaves facts eligible for the incremental judgment pass instead of trusting a rebuild that didn't write everything.
