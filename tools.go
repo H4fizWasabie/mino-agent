@@ -1871,7 +1871,7 @@ func generateWithCloudflare(prompt string) (string, error) {
 		model = readEnvFile("MINO_IMAGE_MODEL")
 	}
 	if model == "" {
-		model = "@cf/leonardo/phoenix-1.0"
+		model = "@cf/black-forest-labs/flux-1-schnell"
 	}
 	body, _ := json.Marshal(map[string]string{"prompt": prompt})
 	req, _ := http.NewRequest("POST", "https://api.cloudflare.com/client/v4/accounts/"+account+"/ai/run/"+model, bytes.NewReader(body))
