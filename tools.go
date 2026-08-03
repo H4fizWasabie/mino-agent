@@ -1801,7 +1801,7 @@ func makeViewImageTool() *Tool {
 func makeGenerateImageTool(home string) *Tool {
 	return &Tool{
 		Name:        "generate_image",
-		Description: "Generate an image or picture from a text prompt using Cloudflare Workers AI (free tier); falls back to Pollinations.ai (free, no key). Use when user asks to: generate image, create picture, draw, make art, visualize, illustrate, render.",
+		Description: "Generate an image or picture from a text prompt using Cloudflare Workers AI (free tier, model from MINO_IMAGE_MODEL); falls back to Pollinations.ai (free, no key). Use when user asks to: generate image, create picture, draw, make art, visualize, illustrate, render.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -1845,14 +1845,15 @@ func makeGenerateImageTool(home string) *Tool {
 type cfImageResponse struct {
 	Success bool   `json:"success"`
 	Result  struct {
-		Image string `json:"image"`
+		Image  string   `json:"image"`
+		Images []string `json:"images"`
 	} `json:"result"`
 }
 
-// generateWithCloudflare renders the prompt via Cloudflare Workers AI
-// (flux-1-schnell, free tier) and saves it, returning the saved path.
-// Returns an error when the credentials are missing or the call fails, so
-// callers can fall back to pollinations.
+// generateWithCloudflare renders the prompt via Cloudflare Workers AI and
+// saves it, returning the saved path. The model is MINO_IMAGE_MODEL
+// (default @cf/leonardo/phoenix-1.0). Returns an error when the credentials
+// are missing or the call fails, so callers can fall back to pollinations.
 func generateWithCloudflare(prompt string) (string, error) {
 	token := os.Getenv("CLOUDFLARE_API_TOKEN")
 	if token == "" {
@@ -1865,8 +1866,15 @@ func generateWithCloudflare(prompt string) (string, error) {
 	if token == "" || account == "" {
 		return "", errors.New("CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID not set")
 	}
+	model := os.Getenv("MINO_IMAGE_MODEL")
+	if model == "" {
+		model = readEnvFile("MINO_IMAGE_MODEL")
+	}
+	if model == "" {
+		model = "@cf/leonardo/phoenix-1.0"
+	}
 	body, _ := json.Marshal(map[string]string{"prompt": prompt})
-	req, _ := http.NewRequest("POST", "https://api.cloudflare.com/client/v4/accounts/"+account+"/ai/run/@cf/black-forest-labs/flux-1-schnell", bytes.NewReader(body))
+	req, _ := http.NewRequest("POST", "https://api.cloudflare.com/client/v4/accounts/"+account+"/ai/run/"+model, bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := imageClient.Do(req)
@@ -1878,29 +1886,53 @@ func generateWithCloudflare(prompt string) (string, error) {
 	if resp.StatusCode >= 400 {
 		return "", fmt.Errorf("cloudflare %d: %s", resp.StatusCode, strings.TrimSpace(string(data))[:min(200, len(data))])
 	}
-	img, err := parseCFImage(data)
-	if err != nil {
-		return "", err
+	// Some models (e.g. leonardo/phoenix) return raw image bytes;
+	// others (flux) return a JSON envelope with base64.
+	img, ext := data, ""
+	if ct := resp.Header.Get("Content-Type"); strings.HasPrefix(ct, "image/") {
+		ext = extFor(ct)
+	} else {
+		img, err = parseCFImage(data)
+		if err != nil {
+			return "", err
+		}
+		ext = ".png"
 	}
 	dir := filepath.Join("/tmp/mino/results", "images")
 	os.MkdirAll(dir, 0700)
-	path := filepath.Join(dir, fmt.Sprintf("%d.png", time.Now().UnixNano()))
+	path := filepath.Join(dir, fmt.Sprintf("%d%s", time.Now().UnixNano(), ext))
 	if err := os.WriteFile(path, img, 0600); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Image saved to %s (via Cloudflare Workers AI)", path), nil
+	return fmt.Sprintf("Image saved to %s (via Cloudflare Workers AI %s)", path, model), nil
 }
 
-// parseCFImage decodes the base64 image from a Cloudflare Workers AI response.
+// extFor maps an image content type to a file extension.
+func extFor(ct string) string {
+	if strings.Contains(ct, "png") {
+		return ".png"
+	}
+	if strings.Contains(ct, "webp") {
+		return ".webp"
+	}
+	return ".jpg"
+}
+
+// parseCFImage decodes the base64 image from a Cloudflare Workers AI JSON
+// response (single "image" or array "images").
 func parseCFImage(data []byte) ([]byte, error) {
 	var out cfImageResponse
 	if err := json.Unmarshal(data, &out); err != nil {
 		return nil, err
 	}
-	if !out.Success || out.Result.Image == "" {
+	b64 := out.Result.Image
+	if b64 == "" && len(out.Result.Images) > 0 {
+		b64 = out.Result.Images[0]
+	}
+	if !out.Success || b64 == "" {
 		return nil, errors.New("cloudflare: no image in response")
 	}
-	img, err := base64.StdEncoding.DecodeString(out.Result.Image)
+	img, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
 		return nil, err
 	}

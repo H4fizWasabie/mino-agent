@@ -15,6 +15,7 @@ func TestParseCFImage(t *testing.T) {
 		wantErr bool
 	}{
 		{"valid image decodes", `{"success":true,"result":{"image":"` + b64 + `"}}`, false},
+		{"valid images array decodes", `{"success":true,"result":{"images":["` + b64 + `"]}}`, false},
 		{"success false errors", `{"success":false,"result":{}}`, true},
 		{"empty image errors", `{"success":true,"result":{"image":""}}`, true},
 		{"bad json errors", `not json`, true},
