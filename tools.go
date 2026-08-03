@@ -1819,7 +1819,7 @@ func makeGenerateImageTool(home string) *Tool {
 			} else {
 				slog.Warn("cloudflare image gen failed, falling back to pollinations", "error", err)
 			}
-			url := "https://image.pollinations.ai/prompt/" + url.QueryEscape(prompt) + "?width=1024&height=1024&nologo=true"
+			url := "https://image.pollinations.ai/prompt/" + url.QueryEscape(prompt) + "?width=1024&height=1024&nologo=true&model=flux-realism"
 			resp, err := imageClient.Get(url)
 			if err != nil {
 				return fmt.Sprintf("Image generation failed: %v", err)
