@@ -6,6 +6,7 @@
 
 - Onboarding collects optional Cloudflare Workers AI credentials (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`) alongside the existing Telegram/Tavily fields, so image generation is configured at first setup instead of by hand-editing `mino.env`.
 - `generate_image` now renders via Cloudflare Workers AI (free tier, `MINO_IMAGE_MODEL`, default `@cf/leonardo/phoenix-1.0` — a clear quality step up from flux-1-schnell) with Pollinations.ai as automatic fallback. Keys are `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID`, dashboard-savable via `mino.env` like `TAVILY_API_KEY`; any failure (missing keys, HTTP error, bad response) logs and falls through to the existing pollinations path, which stays free and keyless. Response handling accepts both raw image bytes (phoenix family) and JSON envelopes with `image`/`images` (flux family), so switching `MINO_IMAGE_MODEL` needs no rebuild. (Why: pollinations alone is a shared free queue — inconsistent quality and random rate limiting; Cloudflare gives a dedicated free quota of ~10k neurons/day with no credit card. Google Gemini free tier was evaluated first but grants zero image-generation quota to new accounts; the paid third-party catalog — nano-banana, gpt-image-2, recraft, imagen — needs billing, so the free `@cf/` list is the ceiling for now.)
+- Operator Timeline dashboard shell: Today-first owner journal, grouped Work/Conversations/Memory/System navigation, contextual Ask, phone-specific bottom navigation, truthful freshness and health state, and redirects that preserve legacy dashboard hashes.
 
 - `mino maintain-memory` CLI subcommand runs the full maintenance pass (edge re-inference, mirrored-pair cleanup, community detection, labels) on demand.
 
@@ -43,6 +44,10 @@
 - Rebuilt playbooks around filesystem workspaces and isolated durable runs. Stage contracts now live in `stages/NN-name/CONTEXT.md`; `state.json` records per-stage attempts, outputs, failures, and resume state so a failed later stage does not replay completed work.
 
 ### Fixed
+- Dashboard polling no longer rebuilds unchanged views: Graph, Settings, Playbooks, and other interactive surfaces preserve canvas, disclosure, focus, and form state while five-second data polling continues; obsolete graph animation loops stop after navigation.
+
+- Conversation History now opens above the expanded Ask surface instead of rendering invisibly underneath it.
+
 - Distill queue no longer jams on dead rows: an artifact whose file is gone (e.g. /tmp cleaned on reboot) is tombstoned (marked distilled) so the queue advances — previously it was re-selected every pass, blocking all newer artifacts (like playbook outputs) behind it forever.
 - Deterministic maintenance steps (mirror cleanup, Louvain clustering, god nodes, labels) now run even when the edge rebuild had failed LLM batches — an empty-edge batch no longer starves communities forever; failed batches retry next cycle.
 - Facts are only marked judged when a graph rebuild completes with zero failed batches; a partial failure leaves facts eligible for the incremental judgment pass instead of trusting a rebuild that didn't write everything.
