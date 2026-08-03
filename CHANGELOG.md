@@ -21,6 +21,9 @@
 
 ### Changed
 
+- Onboarding `/api/settings` now merges into the existing `mino.env` instead of rewriting it, so unrelated keys (`CLOUDFLARE_*`, `THREADS_*`, `MINO_OPENROUTER_KEY`, ...) survive a re-onboard; keys are written sorted for diffable files. (Why: the old rewrite silently wiped every key not in the onboarding form.)
+
+
 - schema v6: session_artifacts.distilled queue flag.
 
 - **MCP flattening**: the bridge now detects nested-executor wrapper tools (schema with a `tools[]` array carrying `tool_slug` + `arguments`, e.g. Composio's `COMPOSIO_MULTI_EXECUTE_TOOL`) and re-exposes their inner toolkit tools as first-class flat tools (`MCP_composio_INSTAGRAM_POST_IG_USER_MEDIA(caption, image_url, ig_user_id)`). The model never sees the nesting; the bridge re-wraps flat args into the executor internally. Deprecated tools are skipped. (Why: models like gpt-5.6-luna reliably emit empty `arguments: {}` for deeply nested tool-call schemas while believing they supplied them — the root cause of the Instagram/Gmail Composio failures. Flat tools work on every model, as `search_web`/`threads_post` proved.)
