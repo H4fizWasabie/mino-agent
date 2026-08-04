@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+- `generate_image` now falls back to OpenRouter (`google/gemini-3.1-flash-lite-image`, ~3.4¢/1024²) between Cloudflare and Pollinations when `MINO_OPENROUTER_KEY` is set, so image generation keeps working when the Cloudflare free neuron quota is exhausted. (Why: the free Cloudflare tier caps at 10k neurons/day; OpenRouter needs no new account — the existing key works — and quality beats the keyless Pollinations fallback.) Model overridable via `MINO_OPENROUTER_IMAGE_MODEL`.
 
 ## [v2.1.0] — Operator Timeline & Image Generation
 

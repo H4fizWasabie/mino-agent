@@ -1801,7 +1801,7 @@ func makeViewImageTool() *Tool {
 func makeGenerateImageTool(home string) *Tool {
 	return &Tool{
 		Name:        "generate_image",
-		Description: "Generate an image or picture from a text prompt using Cloudflare Workers AI (free tier, model from MINO_IMAGE_MODEL); falls back to Pollinations.ai (free, no key). Use when user asks to: generate image, create picture, draw, make art, visualize, illustrate, render.",
+		Description: "Generate an image or picture from a text prompt using Cloudflare Workers AI (free tier, model from MINO_IMAGE_MODEL); falls back to OpenRouter (google/gemini-3.1-flash-lite-image, needs MINO_OPENROUTER_KEY), then Pollinations.ai (free, no key). Use when user asks to: generate image, create picture, draw, make art, visualize, illustrate, render.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -1817,7 +1817,12 @@ func makeGenerateImageTool(home string) *Tool {
 			if out, err := generateWithCloudflare(prompt); err == nil {
 				return out
 			} else {
-				slog.Warn("cloudflare image gen failed, falling back to pollinations", "error", err)
+				slog.Warn("cloudflare image gen failed, falling back to openrouter", "error", err)
+			}
+			if out, err := generateWithOpenRouter(prompt); err == nil {
+				return out
+			} else {
+				slog.Warn("openrouter image gen failed, falling back to pollinations", "error", err)
 			}
 			url := "https://image.pollinations.ai/prompt/" + url.QueryEscape(prompt) + "?width=1024&height=1024&nologo=true&model=flux-realism"
 			resp, err := imageClient.Get(url)
@@ -1905,6 +1910,151 @@ func generateWithCloudflare(prompt string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("Image saved to %s (via Cloudflare Workers AI %s)", path, model), nil
+}
+
+// generateWithOpenRouter renders the prompt via OpenRouter's Gemini image
+// model (google/gemini-3.1-flash-lite-image, ~0.15¢ per 1024² image, model
+// overridable via MINO_OPENROUTER_IMAGE_MODEL) and saves it. Requires
+// MINO_OPENROUTER_KEY; returns an error otherwise so callers can fall back.
+func generateWithOpenRouter(prompt string) (string, error) {
+	key := os.Getenv("MINO_OPENROUTER_KEY")
+	if key == "" {
+		key = readEnvFile("MINO_OPENROUTER_KEY")
+	}
+	if key == "" {
+		return "", errors.New("MINO_OPENROUTER_KEY not set")
+	}
+	model := os.Getenv("MINO_OPENROUTER_IMAGE_MODEL")
+	if model == "" {
+		model = readEnvFile("MINO_OPENROUTER_IMAGE_MODEL")
+	}
+	if model == "" {
+		model = "google/gemini-3.1-flash-lite-image"
+	}
+	body, _ := json.Marshal(map[string]any{
+		"model":             model,
+		"messages":          []map[string]any{{"role": "user", "content": prompt}},
+		"modalities":        []string{"image", "text"},
+		"output_modalities": []string{"image"},
+	})
+	req, _ := http.NewRequest("POST", "https://openrouter.ai/api/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := imageClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("openrouter %d: %s", resp.StatusCode, strings.TrimSpace(string(data))[:min(200, len(data))])
+	}
+	img, ext, err := parseORImage(data)
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join("/tmp/mino/results", "images")
+	os.MkdirAll(dir, 0700)
+	path := filepath.Join(dir, fmt.Sprintf("%d%s", time.Now().UnixNano(), ext))
+	if err := os.WriteFile(path, img, 0600); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Image saved to %s (via OpenRouter %s)", path, model), nil
+}
+
+// parseORImage extracts the first image from an OpenRouter chat completion
+// response: message.images entries (data-URI image_url), content parts with
+// image_url/b64_json, or top-level b64_json. Returns decoded bytes + ext.
+func parseORImage(data []byte) ([]byte, string, error) {
+	var out struct {
+		Choices []struct {
+			Message struct {
+				Content json.RawMessage `json:"content"`
+				Images  []struct {
+					ImageURL struct {
+						URL string `json:"url"`
+					} `json:"image_url"`
+				} `json:"images"`
+		} `json:"message"`
+	} `json:"choices"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, "", err
+	}
+	for _, c := range out.Choices {
+		for _, im := range c.Message.Images {
+			if img, ext, err := fetchImage(im.ImageURL.URL); err == nil {
+				return img, ext, nil
+			}
+		}
+		var parts []struct {
+			ImageURL struct {
+				URL string `json:"url"`
+			} `json:"image_url"`
+			B64JSON string `json:"b64_json"`
+		}
+		if err := json.Unmarshal(c.Message.Content, &parts); err != nil {
+			continue // string content, no image
+		}
+		for _, p := range parts {
+			if p.B64JSON != "" {
+				img, err := base64.StdEncoding.DecodeString(p.B64JSON)
+				if err != nil {
+					return nil, "", err
+				}
+				return img, ".png", nil
+			}
+			if img, ext, err := fetchImage(p.ImageURL.URL); err == nil {
+				return img, ext, nil
+			}
+		}
+	}
+	return nil, "", errors.New("openrouter: no image in response")
+}
+
+// fetchImage resolves an image reference: data URIs decode inline, http(s)
+// URLs are downloaded. Returns bytes and a mime-derived extension.
+func fetchImage(ref string) ([]byte, string, error) {
+	if img, ext, err := decodeDataURI(ref); err == nil {
+		return img, ext, nil
+	}
+	if !strings.HasPrefix(ref, "http://") && !strings.HasPrefix(ref, "https://") {
+		return nil, "", errors.New("openrouter: unsupported image reference")
+	}
+	resp, err := imageClient.Get(ref)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return nil, "", fmt.Errorf("openrouter: image fetch %d", resp.StatusCode)
+	}
+	return data, extFor(resp.Header.Get("Content-Type")), nil
+}
+
+// decodeDataURI decodes a data:image/...;base64,... URI, returning the bytes
+// and a file extension derived from the mime type.
+func decodeDataURI(uri string) ([]byte, string, error) {
+	rest, ok := strings.CutPrefix(uri, "data:")
+	if !ok {
+		return nil, "", errors.New("openrouter: not a data uri")
+	}
+	mime, b64, ok := strings.Cut(rest, ";base64,")
+	if !ok {
+		return nil, "", errors.New("openrouter: not base64")
+	}
+	img, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return nil, "", err
+	}
+	ext := ".png"
+	if strings.Contains(mime, "jpeg") || strings.Contains(mime, "jpg") {
+		ext = ".jpg"
+	} else if strings.Contains(mime, "webp") {
+		ext = ".webp"
+	}
+	return img, ext, nil
 }
 
 // extFor maps an image content type to a file extension.
