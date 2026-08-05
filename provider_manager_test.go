@@ -259,20 +259,12 @@ func TestReasoningForRoleKeepsSmallModelIndependent(t *testing.T) {
 	}
 }
 
-func TestOpenRouterSessionIDIsOpaqueAndScoped(t *testing.T) {
-	got := openRouterSessionID("https://openrouter.ai/api/v1", "telegram:123", MainModel, "model-a")
-	if got == "" || len(got) != len("mino-")+32 {
-		t.Fatalf("session id = %q, want opaque 16-byte hash", got)
-	}
-	if got == openRouterSessionID("https://openrouter.ai/api/v1", "telegram:123", MainModel, "model-b") {
-		t.Fatal("model change reused the same session id")
-	}
-	if openRouterSessionID("https://api.openai.com/v1", "telegram:123", MainModel, "model-a") != "" {
-		t.Fatal("non-OpenRouter provider received a session id")
-	}
-}
-
-func TestOpenRouterSessionIDIsSentInRequest(t *testing.T) {
+func TestNoSessionIDSentToOpenRouter(t *testing.T) {
+	// session_id was removed: empirically it makes DeepInfra prompt-cache hits
+	// unreliable (alternating hit/miss on identical prefixes; OpenRouter's
+	// session pinning spreads requests across upstream replicas). Without it,
+	// OpenRouter's default conversation-hash stickiness keeps the cache warm
+	// (verified: 100% hits on repeated prefixes, 5x cheaper cached reads).
 	var payload map[string]any
 	c := NewClient("key", "https://openrouter.ai/api/v1")
 	c.client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -281,12 +273,11 @@ func TestOpenRouterSessionIDIsSentInRequest(t *testing.T) {
 		}
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{}}`)), Header: make(http.Header)}, nil
 	})}
-	sessionID := openRouterSessionID(c.baseURL, "telegram:123", MainModel, "model-a")
-	if _, err := c.createWithRouting(context.Background(), "model-a", "", nil, 10, "system", nil, false, false, nil, nil, sessionID); err != nil {
+	if _, err := c.createWithRouting(context.Background(), "model-a", "", nil, 10, "system", nil, false, false, nil, nil, ""); err != nil {
 		t.Fatal(err)
 	}
-	if payload["session_id"] != sessionID {
-		t.Fatalf("session_id = %#v, want %q", payload["session_id"], sessionID)
+	if _, ok := payload["session_id"]; ok {
+		t.Fatalf("session_id = %#v, want absent (it breaks DeepInfra prompt caching)", payload["session_id"])
 	}
 }
 

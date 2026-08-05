@@ -8,7 +8,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -194,14 +193,6 @@ func (c *Client) createWithRouting(ctx context.Context, model, reasoning string,
 		}
 	}
 	return send(false)
-}
-
-func openRouterSessionID(baseURL string, session string, role ModelRole, model string) string {
-	if session == "" || !strings.Contains(strings.ToLower(baseURL), "openrouter.ai") {
-		return ""
-	}
-	hash := sha256.Sum256([]byte(string(role) + "\x00" + model + "\x00" + session))
-	return "mino-" + fmt.Sprintf("%x", hash[:16])
 }
 
 func parseResponse(r io.Reader) (*LLMResponse, error) {
