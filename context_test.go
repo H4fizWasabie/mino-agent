@@ -191,6 +191,29 @@ func TestFormatToolResultsFeedsObservation(t *testing.T) {
 	}
 }
 
+func TestLoopHardStopsAfterThreeDetections(t *testing.T) {
+	tools := NewRegistry()
+	tools.Register(&Tool{
+		Name: "probe", Schema: map[string]any{"type": "object", "properties": map[string]any{}},
+		Fn:   func(map[string]any) string { return "observed" },
+	})
+	// Varying args exercise the same-name loop path (identical-args repeats
+	// trigger earlier); 8 scripted probe calls > loopNameThreshold(6) so the
+	// third consecutive detection fires at iteration 8 and must hard-stop.
+	script := make([]*LLMResponse, 8)
+	for i := range script {
+		script[i] = scriptedResp([]ContentBlock{toolBlock("probe", map[string]any{"n": i})}, "tool_use")
+	}
+	client := &fakeClient{script: script}
+	result := RunLoopContext(context.Background(), client, "loop-stop", "", []Message{{Role: "user", Content: "go"}}, tools, 20, 100, nil, false, "", nil)
+	if result.Status != "loop" {
+		t.Fatalf("status = %q, want loop (reply=%q)", result.Status, result.Reply)
+	}
+	if !strings.Contains(result.Reply, "repeated loop detected") {
+		t.Fatalf("reply should explain the stop, got %q", result.Reply)
+	}
+}
+
 func TestLoopExecutesModelRequestedToolsWithoutDedupState(t *testing.T) {
 	executions := 0
 	tools := NewRegistry()

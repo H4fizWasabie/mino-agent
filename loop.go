@@ -124,6 +124,7 @@ func RunLoopContext(
 	}()
 
 	var lastLoopDetected string
+	loopDetections := 0
 
 	for i := 1; i <= maxIter; i++ {
 		if ctx.Err() != nil {
@@ -247,6 +248,7 @@ func RunLoopContext(
 			}
 			if loop, msg := detectLoop(history); loop && msg != lastLoopDetected {
 				lastLoopDetected = msg
+				loopDetections++
 				// Push to dashboard event stream
 				pushDashEvent(map[string]any{
 					"type": "loop_detected", "session_id": sessionID,
@@ -257,6 +259,15 @@ func RunLoopContext(
 					audit("loop_detected", msg, i)
 				}
 				trace("loop_detected", map[string]any{"message": msg, "iteration": i})
+				notify(obs, "loop", map[string]any{"message": msg})
+				// Advisory prompts alone don't stop a stuck agent (observed: 8+ prompts
+				// ignored, ~200k tokens burned on a dead-end investigation). Hard-stop
+				// after three consecutive detections and hand back to the user.
+				if loopDetections >= 3 {
+					result.Status = "loop"
+					result.Reply = "Stopped: repeated loop detected (" + msg + "). Ask the user for guidance."
+					return result
+				}
 				messages = append(messages, Message{
 					Role:    "user",
 					Content: fmt.Sprintf("[System: loop detected — %s. Try a different approach or ask the user for guidance.]", msg),

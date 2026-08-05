@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+- Loop detection now hard-stops the turn after 3 consecutive detections (status `loop`, reply hands back to the user) instead of only injecting advisory prompts. (Why: 2026-08-05 mino ignored 8+ "try a different approach" prompts while investigating a dead-end Threads extension lead and burned ~200k tokens; advisory prompts alone don't stop a stuck agent, and an iteration-limit stop is worse because it reports the wrong status.)
+
 ### Fixed
 - Threads extension: `threads_publish` now retries once (fresh container, 5s) when Meta answers "The requested resource does not exist" on a freshly-created container (Meta-side propagation race — hit twice on 2026-08-05, breaking both scheduled Threads playbooks), and container creation now fails loudly on non-200/empty-ID responses instead of silently publishing with an empty `creation_id` (which produced the same misleading Meta error). (Why: the playbook contract forbids agent-level retry, so the tool must absorb the transient race; a bounded retry is safe because Meta only returns that error when it never saw the container, so no duplicate posts.)
 
