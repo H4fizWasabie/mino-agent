@@ -1,6 +1,7 @@
 # Changelog
 
-## [Unreleased]
+## [v2.2.0] — Cache Fixes, Loop Hard-Stop & Threads Reliability (2026-08-05)
+
 ### Changed
 - OpenRouter requests no longer send `session_id`; it was empirically breaking DeepInfra prompt caching for `deepseek/deepseek-v4-flash-0731` (identical prefixes alternated hit/miss with a session id, 100% hits without it — OpenRouter's session pinning spreads requests across upstream replicas and defeats the prefix cache). Cache reads bill at $0.018/M vs $0.09/M prompt (~5x). (Why: only 10% of input tokens were cached; verified via live API tests that removing `provider_routing` (already done) plus dropping `session_id` yields reliable cache hits on repeated prefixes.)
 - Loop detection now hard-stops the turn after 3 consecutive detections (status `loop`, reply hands back to the user) instead of only injecting advisory prompts. (Why: 2026-08-05 mino ignored 8+ "try a different approach" prompts while investigating a dead-end Threads extension lead and burned ~200k tokens; advisory prompts alone don't stop a stuck agent, and an iteration-limit stop is worse because it reports the wrong status.)
@@ -10,6 +11,7 @@
 
 ### Added
 - `generate_image` now falls back to OpenRouter (`google/gemini-3.1-flash-lite-image`, ~3.4¢/1024²) between Cloudflare and Pollinations when `MINO_OPENROUTER_KEY` is set, so image generation keeps working when the Cloudflare free neuron quota is exhausted. (Why: the free Cloudflare tier caps at 10k neurons/day; OpenRouter needs no new account — the existing key works — and quality beats the keyless Pollinations fallback.) Model overridable via `MINO_OPENROUTER_IMAGE_MODEL`.
+- Pollinations fallback (last-resort image path) now requests the `flux-realism` model for better quality.
 
 ## [v2.1.0] — Operator Timeline & Image Generation
 
