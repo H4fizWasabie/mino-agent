@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+- Threads extension: `threads_publish` now retries once (fresh container, 5s) when Meta answers "The requested resource does not exist" on a freshly-created container (Meta-side propagation race — hit twice on 2026-08-05, breaking both scheduled Threads playbooks), and container creation now fails loudly on non-200/empty-ID responses instead of silently publishing with an empty `creation_id` (which produced the same misleading Meta error). (Why: the playbook contract forbids agent-level retry, so the tool must absorb the transient race; a bounded retry is safe because Meta only returns that error when it never saw the container, so no duplicate posts.)
+
 ### Added
 - `generate_image` now falls back to OpenRouter (`google/gemini-3.1-flash-lite-image`, ~3.4¢/1024²) between Cloudflare and Pollinations when `MINO_OPENROUTER_KEY` is set, so image generation keeps working when the Cloudflare free neuron quota is exhausted. (Why: the free Cloudflare tier caps at 10k neurons/day; OpenRouter needs no new account — the existing key works — and quality beats the keyless Pollinations fallback.) Model overridable via `MINO_OPENROUTER_IMAGE_MODEL`.
 

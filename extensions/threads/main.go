@@ -26,6 +26,8 @@ import (
 // ─── config (env vars, no config file) ────────────────────────────
 
 var (
+	graphBase     = "https://graph.threads.net" // overridden in tests
+	retryDelay    = 5 * time.Second               // Meta container propagation race
 	port          = envOr("THREADS_PORT", "9200")
 	appID         = os.Getenv("THREADS_APP_ID")         // Meta app ID
 	appSecret     = os.Getenv("THREADS_APP_SECRET")     // Meta app secret
@@ -260,26 +262,29 @@ func threadsPost(tok tokenData, args map[string]any) string {
 		return "Error: text is required"
 	}
 
-	var mediaID string
-
-	if imageURL != "" {
-		// Step 1: create media container with image
-		container := createMediaContainer(tok, "IMAGE", text, imageURL, replyToID)
+	// Freshly created containers occasionally aren't visible to threads_publish
+	// for a few seconds (Meta-side propagation); Meta answers "The requested
+	// resource does not exist". One bounded retry with a fresh container is
+	// safe: that error only fires when Meta never saw the container, so the
+	// first publish can't have landed and there is no duplicate-post risk.
+	for attempt := 0; attempt < 2; attempt++ {
+		mediaType := "TEXT"
+		if imageURL != "" {
+			mediaType = "IMAGE"
+		}
+		container := createMediaContainer(tok, mediaType, text, imageURL, replyToID)
 		if strings.HasPrefix(container, "Error") {
 			return container
 		}
-		mediaID = container
-	} else {
-		// Text-only: create media container
-		container := createMediaContainer(tok, "TEXT", text, "", replyToID)
-		if strings.HasPrefix(container, "Error") {
-			return container
+		res := publishMedia(tok, container)
+		if strings.Contains(res, "does not exist") && attempt == 0 {
+			slog.Warn("threads publish: container not found by Meta, retrying", "container", container)
+			time.Sleep(retryDelay)
+			continue
 		}
-		mediaID = container
+		return res
 	}
-
-	// Step 2: publish
-	return publishMedia(tok, mediaID)
+	panic("unreachable")
 }
 
 func createMediaContainer(tok tokenData, mediaType, text, imageURL, replyToID string) string {
@@ -295,8 +300,8 @@ func createMediaContainer(tok tokenData, mediaType, text, imageURL, replyToID st
 		params.Set("reply_to_id", replyToID)
 	}
 
-	apiURL := fmt.Sprintf("https://graph.threads.net/v1.0/%s/threads?%s",
-		tok.ThreadsUserID, params.Encode())
+	apiURL := fmt.Sprintf("%s/v1.0/%s/threads?%s",
+		graphBase, tok.ThreadsUserID, params.Encode())
 
 	resp, err := http.Post(apiURL, "application/x-www-form-urlencoded", nil)
 	if err != nil {
@@ -305,6 +310,9 @@ func createMediaContainer(tok tokenData, mediaType, text, imageURL, replyToID st
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Sprintf("Error creating container: HTTP %d: %s", resp.StatusCode, string(body))
+	}
 	var result struct {
 		ID    string `json:"id"`
 		Error struct {
@@ -316,6 +324,9 @@ func createMediaContainer(tok tokenData, mediaType, text, imageURL, replyToID st
 	if result.Error.Message != "" {
 		return fmt.Sprintf("Error creating container: %s", result.Error.Message)
 	}
+	if result.ID == "" {
+		return "Error creating container: empty container id"
+	}
 	return result.ID
 }
 
@@ -324,8 +335,8 @@ func publishMedia(tok tokenData, containerID string) string {
 		"creation_id":  {containerID},
 		"access_token": {tok.AccessToken},
 	}
-	apiURL := fmt.Sprintf("https://graph.threads.net/v1.0/%s/threads_publish?%s",
-		tok.ThreadsUserID, params.Encode())
+	apiURL := fmt.Sprintf("%s/v1.0/%s/threads_publish?%s",
+		graphBase, tok.ThreadsUserID, params.Encode())
 
 	resp, err := http.Post(apiURL, "application/x-www-form-urlencoded", nil)
 	if err != nil {
@@ -343,7 +354,11 @@ func publishMedia(tok tokenData, containerID string) string {
 	json.Unmarshal(body, &result)
 
 	if result.Error.Message != "" {
+		slog.Error("threads publish failed", "container", containerID, "error", result.Error.Message)
 		return fmt.Sprintf("Error publishing: %s", result.Error.Message)
+	}
+	if result.ID == "" {
+		return fmt.Sprintf("Error publishing: HTTP %d: %s", resp.StatusCode, string(body))
 	}
 	return fmt.Sprintf("Posted to Threads! ID: %s", result.ID)
 }
