@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- Dashboard: failed playbook runs now list under each playbook with a delete button (`/api/memory` `delete_run`). (Why: 2026-08-06 the malaysian-news-daily and ai-news-daily runs failed with iteration_limit; there was no way to remove the failed runs from the UI.)
+
 ### Changed
 - Raised playbook stage iteration cap from 15 to 50 (`maxStageIterations`). (Why: 2026-08-06 the malaysian-news-daily and ai-news-daily playbooks failed their scheduled runs with `iteration_limit` — the stage's legit work (research + publish + telegram + image-gen steps) needs more than 15 tool calls, and the cap kept marking completed runs as failed.)
 

@@ -173,6 +173,11 @@ async function delMem(action, id){
   await postJSON("/api/memory", {action, id});
   refresh();
 }
+async function delRun(playbook, run){
+  if(!confirm("Delete failed run "+run.slice(0,17)+"?")) return;
+  await postJSON("/api/memory", {action:"delete_run", playbook, run});
+  refresh();
+}
 // dirty-state: a Save button stays muted until its editor actually changes
 function dirty(btnId){ editing = true; const b = document.getElementById(btnId); if (b) b.disabled = false; }
 async function saveSoul(){
@@ -716,6 +721,7 @@ function memPlaybooks(d){
       <div class="playbook-meta"><span>${stages.length} stage${stages.length===1?"":"s"}</span>${pb.schedule?`<span>schedule · ${esc(pb.schedule)}</span>`:""}${pb.notify?`<span>Telegram delivery</span>`:""}</div>
       <div class="playbook-stages">${stages.map((stage,i)=>`<details class="playbook-stage" ${i===0?"open":""}><summary><b>${String(stage.number||i+1).padStart(2,"0")}</b><span>${esc(stage.name||"stage")}</span>${(stage.tools||[]).length?`<small>${stage.tools.map(t=>esc(t)).join(" · ")}</small>`:""}</summary>${stage.context?`<pre class="playbook-contract">${esc(stage.context)}</pre>`:`<div class="meta">No contract text</div>`}</details>`).join("")}</div>
       ${outputs.length?`<div class="playbook-outputs"><span>OUTPUT</span>${outputs.map(path=>`<code>${esc(path)}</code>`).join("")}</div>`:`<div class="meta playbook-empty-output">No output recorded yet</div>`}
+      ${(pb.runs||[]).length?`<div class="playbook-runs"><span>RUNS</span>${(pb.runs||[]).map(r=>`<div class="playbook-run ${esc(r.status)}"><code>${esc((r.id||"").slice(0,17))}</code><span class="srcpill ${r.status==="complete"?"good":"warn"}">${esc(r.status)}</span>${r.status==="failed"?`<a class="reveal del" onclick="delRun('${esc(pb.name)}','${esc(r.id)}')">delete</a>`:""}</div>`).join("")}</div>`:""}
       <div class="memory-editor-actions"><span class="meta">${esc(pb.path||"")}</span>${reveal(pb.path||"","open folder")}</div></article>`;
   }).join("")}</div>`;
   return h;

@@ -352,10 +352,35 @@ func handleMemoryAPI(w http.ResponseWriter, r *http.Request) {
 			ID      any    `json:"id"`
 			Path    string `json:"path"`
 			Content string `json:"content"`
+			Playbook string `json:"playbook"`
+			Run      string `json:"run"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 
 		switch body.Action {
+		case "delete_run":
+			if body.Playbook == "" || body.Run == "" {
+				http.Error(w, "playbook and run required", http.StatusBadRequest)
+				return
+			}
+			runDir := playbookRunDir(dashCore.Settings.Home, body.Playbook, body.Run)
+			if runDir == "" {
+				http.Error(w, "invalid playbook run path", http.StatusBadRequest)
+				return
+			}
+			if data, err := os.ReadFile(filepath.Join(runDir, "state.json")); err == nil {
+				var run PlaybookRun
+				if json.Unmarshal(data, &run) == nil && run.Status == "running" {
+					http.Error(w, "run is still running", http.StatusBadRequest)
+					return
+				}
+			}
+			if err := os.RemoveAll(runDir); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			return
 		case "update_fact":
 			if graphID, ok := body.ID.(string); ok {
 				if dashCore.Memory == nil || dashCore.Memory.graph == nil {
@@ -658,6 +683,21 @@ func playbookCatalog(home string) []map[string]any {
 	return value
 }
 
+// playbookRunDir returns the validated run directory for a playbook+run ID,
+// or "" when the path would escape the playbooks tree.
+func playbookRunDir(home, playbook, run string) string {
+	if playbook == "" || run == "" || strings.ContainsAny(playbook, "/\\") || strings.ContainsAny(run, "/\\") {
+		return ""
+	}
+	dir := filepath.Join(home, "playbooks", playbook, "runs", run)
+	base := filepath.Join(home, "playbooks")
+	rel, err := filepath.Rel(base, dir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return ""
+	}
+	return dir
+}
+
 func loadPlaybookCatalog(home string) []map[string]any {
 	var out []map[string]any
 	for _, name := range ListPlaybooks(home) {
@@ -686,13 +726,45 @@ func loadPlaybookCatalog(home string) []map[string]any {
 		out = append(out, map[string]any{
 			"name": name, "path": filepath.Join("playbooks", name), "description": pb.Description,
 			"schedule": pb.Schedule, "status": pb.Status, "notify": pb.Config["notify"] == "true",
-			"stages": stages, "outputs": outputs,
+			"stages": stages, "outputs": outputs, "runs": playbookRunList(home, name),
 		})
 	}
 	if out == nil {
 		return []map[string]any{}
 	}
 	return out
+}
+
+// playbookRunList returns recent run ids + status for a playbook (newest first).
+func playbookRunList(home, name string) []map[string]any {
+	dir := filepath.Join(home, "playbooks", name, "runs")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var ids []string
+	for _, e := range entries {
+		if e.IsDir() {
+			ids = append(ids, e.Name())
+		}
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(ids)))
+	var runs []map[string]any
+	for _, id := range ids {
+		data, err := os.ReadFile(filepath.Join(dir, id, "state.json"))
+		if err != nil {
+			continue
+		}
+		var run PlaybookRun
+		if json.Unmarshal(data, &run) != nil {
+			continue
+		}
+		runs = append(runs, map[string]any{
+			"id": run.ID, "status": run.Status,
+			"created": run.CreatedAt.Format(time.RFC3339),
+		})
+	}
+	return runs
 }
 
 func sortedFiles(pattern string) []string {
