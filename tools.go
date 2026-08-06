@@ -77,6 +77,14 @@ type Registry struct {
 	searchDB       *sql.DB    // optional: FTS5 index for context-conditioned tool selection
 	searchMu       sync.Mutex
 	toolEmbeddings map[string][]float32
+
+	// Monotonic per-session tool set: once a tool is selected for a session it
+	// stays selected, so the `tools` array in the request payload stabilizes
+	// across turns and the provider's prompt-prefix cache stays warm. Without
+	// this, selection re-runs against each new user message, the array drifts
+	// (e.g. 28 schemas turn 1, 27 turn 2), and the whole prefix misses.
+	schemaMu       sync.Mutex
+	sessionSchemas map[string]map[string]bool
 }
 
 // SetLogDB enables tool-call logging to the tool_calls table.
@@ -221,7 +229,7 @@ var toolFamilies = [][]string{
 // oneTurnText is the last user message + last assistant reply — used for semantic
 // embedding and MCP keyword gating so the signal is task-specific, not diluted by
 // full history and system prompt noise.
-func (r *Registry) SchemasForContext(fullCtx string, oneTurnText string, es *EmbeddingStore) []ToolDef {
+func (r *Registry) SchemasForContext(sessionID string, fullCtx string, oneTurnText string, es *EmbeddingStore) []ToolDef {
 	if r.searchDB == nil {
 		return r.Schemas()
 	}
@@ -283,6 +291,28 @@ func (r *Registry) SchemasForContext(fullCtx string, oneTurnText string, es *Emb
 			}
 		}
 	}
+	// Monotonic per-session union: merge this turn's selection into the
+	// session's set so the tools array only grows, never shrinks. The array
+	// must be byte-stable across turns for the provider prefix cache; a fresh
+	// selection per message would drift it (cache miss every turn). The union
+	// converges after a few turns and stays stable thereafter.
+	if sessionID != "" {
+		r.schemaMu.Lock()
+		if r.sessionSchemas == nil {
+			r.sessionSchemas = make(map[string]map[string]bool)
+		}
+		sess := r.sessionSchemas[sessionID]
+		if sess == nil {
+			sess = make(map[string]bool)
+			r.sessionSchemas[sessionID] = sess
+		}
+		for name := range selected {
+			sess[name] = true
+		}
+		selected = sess
+		r.schemaMu.Unlock()
+	}
+
 	var schemas []ToolDef
 	for name := range selected {
 		if tool, ok := r.tools[name]; ok {

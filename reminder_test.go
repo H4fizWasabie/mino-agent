@@ -121,7 +121,7 @@ func TestSchemasForContextKeepsCoreAndRetrievesSpecialist(t *testing.T) {
 	r.Register(&Tool{Name: "image_transform", Description: "Transform and generate raster images", Schema: map[string]any{"type": "object"}})
 
 	ctx := "The procurement skill says to analyze supplier purchase orders and produce the weekly audit."
-	got := r.SchemasForContext(ctx, ctx, nil)
+	got := r.SchemasForContext("", ctx, ctx, nil)
 	names := make(map[string]bool, len(got))
 	for _, schema := range got {
 		names[schema.Name] = true
@@ -152,7 +152,7 @@ func TestSchemasForContextIncludesExplicitExtensionCapabilityAcrossChannels(t *t
 		"Telegram request: use the Threads post extension to publish today's update.",
 		"Dashboard request: use the Threads post extension to publish today's update.",
 	} {
-		got := r.SchemasForContext("generic runtime context with unrelated history", prompt, nil)
+		got := r.SchemasForContext("", "generic runtime context with unrelated history", prompt, nil)
 		names := make(map[string]bool, len(got))
 		for _, schema := range got {
 			names[schema.Name] = true
@@ -184,7 +184,7 @@ func TestMCPGateCapsAtFiveInRelevanceOrder(t *testing.T) {
 	r.Register(&Tool{Name: "MCP_composio_SLACK_SEND", Description: "Send a Slack message", Schema: map[string]any{"type": "object"}})
 
 	ctx := "clean up promotional emails in my gmail inbox, fetch and trash them"
-	got := r.SchemasForContext(ctx, ctx, nil)
+	got := r.SchemasForContext("", ctx, ctx, nil)
 	mcpSelected := make([]string, 0)
 	for _, s := range got {
 		if strings.HasPrefix(s.Name, "MCP_") {

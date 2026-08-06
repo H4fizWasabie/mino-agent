@@ -133,7 +133,7 @@ func RunLoopContext(
 	// cached 64/10671 tokens). Selection still happens against the full context
 	// available at turn start, so specialist tools for the task are included.
 	oneTurnText := lastTurnContext(messages)
-	schemas := tools.SchemasForContext(toolSelectionContext(system, messages), oneTurnText, es)
+	schemas := tools.SchemasForContext(sessionID, toolSelectionContext(system, messages), oneTurnText, es)
 	schemaChars := 0
 	schemaNames := make([]string, 0, len(schemas))
 	for _, s := range schemas {
