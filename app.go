@@ -341,12 +341,18 @@ func isStopMessage(message string) bool {
 	for len(words) > 0 && (words[0] == "ok" || words[0] == "okay" || words[0] == "mino") {
 		words = words[1:]
 	}
-	switch strings.Join(words, " ") {
-	case "stop", "cancel", "stop task", "cancel task", "never mind", "nevermind":
-		return true
-	default:
+	if len(words) == 0 {
 		return false
 	}
+	switch words[0] {
+	case "stop", "cancel", "halt":
+		return true
+	}
+	switch strings.Join(words, " ") {
+	case "never mind", "nevermind":
+		return true
+	}
+	return false
 }
 
 func (w *Core) Close() {

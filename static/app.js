@@ -395,7 +395,7 @@ async function sendChat(fromInput){
   syncChatLogs();
   try {
     const res = await fetch("/api/chat/stream", {method:"POST",
-      headers:{"Content-Type":"application/json"}, body:JSON.stringify({message:text})});
+      headers:{"Content-Type":"application/json"}, body:JSON.stringify({message:text, session_id:SESSION})});
     const reader = res.body.getReader(), dec = new TextDecoder();
     let buf = "";
     for (;;){

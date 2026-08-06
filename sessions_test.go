@@ -31,13 +31,16 @@ func TestSessionManagerKeepsGatewayConversationAcrossRestart(t *testing.T) {
 }
 
 func TestStopMessageVariants(t *testing.T) {
-	for _, message := range []string{"stop", "ok mino stop.", "mino, cancel!", "never mind?"} {
+	for _, message := range []string{"stop", "ok mino stop.", "mino, cancel!", "never mind?", "mino stop with the playbook.", "stop task", "stop everything"} {
 		if !isStopMessage(message) {
 			t.Errorf("isStopMessage(%q) = false", message)
 		}
 	}
 	if isStopMessage("mino are you there") {
 		t.Fatal("ordinary conversation was classified as stop")
+	}
+	if isStopMessage("stopwatch is on") {
+		t.Fatal("stopwatch was classified as stop")
 	}
 }
 

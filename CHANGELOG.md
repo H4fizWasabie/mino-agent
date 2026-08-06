@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+- Stop/cancel now matches any message beginning with "stop"/"cancel"/"halt" (e.g. "mino stop with the playbook"), not just exact phrases. (Why: 2026-08-06 the user's "mino stop with the playbook." was treated as a normal message, so mino kept re-investigating the playbook audit instead of stopping.)
+- Dashboard chat now sends `session_id`, so "New chat" actually starts a fresh conversation instead of always hitting the "default" session. (Why: the default session context was full of the playbook-audit conversation, so every new message re-triggered it.)
+
 ### Added
 - Dashboard: failed playbook runs now list under each playbook with a delete button (`/api/memory` `delete_run`). (Why: 2026-08-06 the malaysian-news-daily and ai-news-daily runs failed with iteration_limit; there was no way to remove the failed runs from the UI.)
 
