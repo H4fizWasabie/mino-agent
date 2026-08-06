@@ -155,8 +155,6 @@ func RunLoopContext(
 			update(LoopSnapshot{Iteration: i, Status: "thinking"})
 		}
 
-		schemas := tools.SchemasForContext(toolSelectionContext(system, messages), oneTurnText, es)
-
 		_, llmCancel := context.WithTimeout(ctx, 90*time.Second)
 		resp, err := client.Create(sessionID, MainModel, messages, maxTokens, system, schemas)
 		llmCancel()
