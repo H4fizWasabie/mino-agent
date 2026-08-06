@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- Loop detection no longer flags same-name tool streaks whose args differ substantially (enumeration = progress). (Why: 2026-08-06 an audit of all 7 playbooks called `manage_playbook` 7 times with different playbook names and was flagged "7 consecutive calls without progress". The same-name signal exists for real drift loops (composio steps, metrics) where args stay similar, so it now only counts entries whose args share a long common prefix — drifting args still trip it, distinct-entity enumeration does not.)
+
 ### Changed
 - Tool schemas are now selected ONCE per turn AND unioned monotonically per session (`SchemasForContext` takes sessionID; the selected tool set only grows within a session). (Why: even with per-turn freezing, the `tools` array drifted between turns — selection re-runs against each new user message (observed 28 schemas turn 1, 27 turn 2) — and since the provider's cache key includes the tools array, every drift invalidated the whole prefix. The monotonic union converges after a few turns and stays byte-stable, so cross-turn requests hit the cached prefix.)
 - The system prompt is now byte-stable across turns: matched skills and playbook routing moved from `BuildSystem` into the user-message tail (via `BuildContext`), next to the clock. (Why: skills/playbook matches depend on the current user message, so the system prompt changed every turn and invalidated the entire prompt-prefix cache — the first bytes of the request are the system prompt. With the routing block at the tail, only the fresh user message misses; system + history stay cached across turns. Matching still runs every turn; only its position changed. This is the same cache-stability move already applied to the clock and to playbook system prompts.)

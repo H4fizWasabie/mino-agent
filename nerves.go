@@ -212,22 +212,44 @@ func detectLoop(history []string) (bool, string) {
 	}
 	// same-name signal: the same tool over and over, args varying (the args
 	// of a stuck call often drift — composio steps, metrics — so byte-exact
-	// matching misses the loop; the tool name does not).
+	// matching misses the loop; the tool name does not). Only count entries
+	// whose args stay SIMILAR to the previous one: genuine enumeration
+	// (manage_playbook over 7 distinct playbooks) reuses the tool with
+	// meaningfully different args — that is progress, not a loop.
 	if len(history) >= loopNameThreshold {
 		lastName := toolName(history[len(history)-1])
 		count := 0
 		for i := len(history) - 1; i >= 0; i-- {
-			if toolName(history[i]) == lastName {
-				count++
-			} else {
+			if toolName(history[i]) != lastName {
 				break
 			}
+			if i < len(history)-1 && !similarArgs(history[i], history[i+1]) {
+				break // args jumped to something genuinely different: enumeration
+			}
+			count++
 		}
 		if count >= loopNameThreshold {
 			return true, fmt.Sprintf("Detected %d consecutive calls to %s without progress", count, lastName)
 		}
 	}
 	return false, ""
+}
+
+// similarArgs reports whether two history entries share a long common
+// prefix — true for drifting args ("step DISCOVERING 0/1" vs "0/2"), false
+// for enumeration ("name:ai-news-daily" vs "name:facebook-daily-ai-post").
+// ponytail: common-prefix is a lazy similarity proxy; revisit with a real
+// edit-distance if a stuck loop with reordered args ever slips through.
+func similarArgs(a, b string) bool {
+	n := 0
+	for n < len(a) && n < len(b) && a[n] == b[n] {
+		n++
+	}
+	max := len(a)
+	if len(b) > max {
+		max = len(b)
+	}
+	return max > 0 && float64(n)/float64(max) >= 0.7
 }
 
 // toolName extracts the tool name from a history entry "name(args)".

@@ -63,4 +63,19 @@ func TestDetectLoopSameNameVaryingArgs(t *testing.T) {
 	if loop, _ := detectLoop(mixed); loop {
 		t.Fatalf("interleaved names falsely flagged")
 	}
+	// enumeration over distinct entities reuses the tool but is progress:
+	// 7 manage_playbook inspections of different playbooks must stay quiet
+	// (2026-08-06 audit false positive: 7 consecutive calls flagged).
+	audit := []string{
+		"manage_playbook(map[action:inspect name:ai-news-daily])",
+		"manage_playbook(map[action:inspect name:facebook-daily-ai-post])",
+		"manage_playbook(map[action:inspect name:gmail-daily-cleanup])",
+		"manage_playbook(map[action:inspect name:instagram-daily-capability])",
+		"manage_playbook(map[action:inspect name:malaysian-news-daily])",
+		"manage_playbook(map[action:inspect name:threads-ai-learning])",
+		"manage_playbook(map[action:inspect name:threads-daily-capability])",
+	}
+	if loop, msg := detectLoop(audit); loop {
+		t.Fatalf("distinct-entity enumeration falsely flagged: %s", msg)
+	}
 }
