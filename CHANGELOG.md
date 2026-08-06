@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- Tool schemas are now selected ONCE per turn instead of every iteration, and OpenRouter is pinned to the DeepInfra upstream via `provider_routing`. (Why: usage.jsonl showed ~28-33% cache hit rate. Two causes: (1) `SchemasForContext` re-ran against the growing message history each iteration, so the `tools` array in the request drifted mid-turn and broke the provider's prompt-prefix cache (observed: iteration 2 cached 64/10671 tokens); (2) without routing, OpenRouter spread requests across upstreams (DeepInfra, Novita, Parasail, SiliconFlow, GMICloud), each with its own cold cache. DeepInfra bills cache reads at $0.018/M vs $0.09/M prompt — 5x.)
+
 ### Fixed
 - Stop/cancel now matches any message beginning with "stop"/"cancel"/"halt" (e.g. "mino stop with the playbook"), not just exact phrases. (Why: 2026-08-06 the user's "mino stop with the playbook." was treated as a normal message, so mino kept re-investigating the playbook audit instead of stopping.)
 - Dashboard chat now sends `session_id`, so "New chat" actually starts a fresh conversation instead of always hitting the "default" session. (Why: the default session context was full of the playbook-audit conversation, so every new message re-triggered it.)

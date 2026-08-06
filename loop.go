@@ -126,6 +126,22 @@ func RunLoopContext(
 	var lastLoopDetected string
 	loopDetections := 0
 
+	// Tool schemas are computed ONCE per turn, not per iteration. The selected
+	// schema set feeds the `tools` array in the request payload; recomputing it
+	// against the growing message history drifts the set mid-turn and breaks the
+	// provider's prompt-prefix cache on every iteration (observed: iteration 2
+	// cached 64/10671 tokens). Selection still happens against the full context
+	// available at turn start, so specialist tools for the task are included.
+	oneTurnText := lastTurnContext(messages)
+	schemas := tools.SchemasForContext(toolSelectionContext(system, messages), oneTurnText, es)
+	schemaChars := 0
+	schemaNames := make([]string, 0, len(schemas))
+	for _, s := range schemas {
+		schemaChars += len(s.Name) + len(s.Description) + 200 // ~params JSON
+		schemaNames = append(schemaNames, s.Name)
+	}
+	trace("context_diag", map[string]any{"system_chars": len(system), "msg_count": len(messages), "schema_count": len(schemas), "schema_names": schemaNames, "schema_est_chars": schemaChars, "one_turn_chars": len(oneTurnText)})
+
 	for i := 1; i <= maxIter; i++ {
 		if ctx.Err() != nil {
 			result.Status = "cancelled"
@@ -139,17 +155,7 @@ func RunLoopContext(
 			update(LoopSnapshot{Iteration: i, Status: "thinking"})
 		}
 
-		oneTurnText := lastTurnContext(messages)
 		schemas := tools.SchemasForContext(toolSelectionContext(system, messages), oneTurnText, es)
-		if i == 1 {
-			schemaChars := 0
-			schemaNames := make([]string, 0, len(schemas))
-			for _, s := range schemas {
-				schemaChars += len(s.Name) + len(s.Description) + 200 // ~params JSON
-				schemaNames = append(schemaNames, s.Name)
-			}
-			trace("context_diag", map[string]any{"system_chars": len(system), "msg_count": len(messages), "schema_count": len(schemas), "schema_names": schemaNames, "schema_est_chars": schemaChars, "one_turn_chars": len(oneTurnText)})
-		}
 
 		_, llmCancel := context.WithTimeout(ctx, 90*time.Second)
 		resp, err := client.Create(sessionID, MainModel, messages, maxTokens, system, schemas)
