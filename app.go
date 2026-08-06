@@ -288,15 +288,20 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 	ctx = context.WithValue(ctx, auditKey{}, func(eventType, message string, iteration int) {
 		w.auditLog(sessionID, eventType, message, iteration)
 	})
-	system := conversation.Session.BuildSystem(userMessage, source)
+	system, routing := conversation.Session.BuildContext(userMessage, source)
 	// Cache stability: keep the system prompt byte-stable across calls so the
-	// provider prefix cache stays warm. The clock is appended to the fresh user
-	// turn only — stale schedule/history text cannot override it, and the
-	// timestamp no longer forces a full cache rewrite on every call.
+	// provider prefix cache stays warm. The clock AND the per-turn routing
+	// block (matched skills + playbook routing) are appended to the fresh user
+	// turn only — they change per message, so they must live at the tail, not
+	// in the system prompt, or every turn would invalidate the cached prefix.
 	clock := authoritativeClock(time.Now(), w.Settings.Location())
 	messages, userContext := conversation.Session.ContextFor(system, userMessage)
 	if len(messages) > 0 {
-		messages[len(messages)-1].Content += "\n\n" + clock + "\nUse this clock; do not infer the current time from conversation history."
+		tail := clock + "\nUse this clock; do not infer the current time from conversation history."
+		if routing != "" {
+			tail = routing + "\n\n" + tail
+		}
+		messages[len(messages)-1].Content += "\n\n" + tail
 	}
 	msgLen := 0
 	for _, m := range messages {

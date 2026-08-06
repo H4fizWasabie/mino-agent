@@ -81,61 +81,76 @@ func loadSoul(home string) string {
 	return string(data)
 }
 
-// BuildSystem — Core's build_system():
-//
-//	SOUL.md + relevant skill and playbook matches. Time is injected as user message for cache stability.
+// BuildSystem — Core's build_system(): returns the STATIC system prompt
+// (SOUL.md + workspace + behavior rules). Per-turn matched skills and
+// playbook routing are NOT included here: they move to the user-message
+// tail (see BuildContext) so the system prompt stays byte-stable across
+// turns and the provider's prompt-prefix cache stays warm. Time is
+// injected as user message for the same reason.
 func (s *Session) BuildSystem(userMessage, source string) string {
+	static, _ := s.buildSystem(userMessage, source, true)
+	return static
+}
+
+// BuildContext returns (static system prompt, per-turn routing block). The
+// routing block (matched skills + playbook routing) is appended to the user
+// message tail by the caller; splitting it from the system prompt keeps the
+// prompt prefix cache-stable across turns.
+func (s *Session) BuildContext(userMessage, source string) (string, string) {
 	return s.buildSystem(userMessage, source, true)
 }
 
 func (s *Session) BuildPlaybookSystem(userMessage, source string) string {
-	return s.buildSystem(userMessage, source, false)
+	static, dyn := s.buildSystem(userMessage, source, false)
+	if dyn != "" {
+		return static + "\n\n" + dyn
+	}
+	return static
 }
 
-func (s *Session) buildSystem(userMessage, source string, includePlaybookRouting bool) string {
-	parts := []string{
+func (s *Session) buildSystem(userMessage, source string, includePlaybookRouting bool) (string, string) {
+	static := []string{
 		loadSoul(s.settings.Home),
 		fmt.Sprintf("\nLOCAL WORKSPACE (authoritative): %s\nThis overrides any hardcoded workspace path in a skill. Local files may be edited in place. Stage remote files here, verify locally, then sync them back once.", s.settings.Workspace),
 		"\nVerification discipline: when a question involves state that changes over time — database records (POs, orders, inventory), schedules, files on disk, service status — verify the current state with a tool (bash/sqlite3, list_playbooks, system_check, read_file) BEFORE answering. Memory may be stale; the live state is truth.",
 		"\nTool preference: prefer the purpose-built tool for a job over hand-rolling it — use convert_doc for document files (docx, pdf, xlsx, pptx) instead of parsing them with bash/python; use dedicated tools before generic workarounds.",
 	}
 	if source == "telegram" {
-		parts = append(parts, "\nYou are responding via Telegram. If you are going to call a tool, do NOT output explanatory text. Just call the tool silently. Reply to the user ONLY after all tools have completed. Never say 'Let me...' in Telegram mode.")
+		static = append(static, "\nYou are responding via Telegram. If you are going to call a tool, do NOT output explanatory text. Just call the tool silently. Reply to the user ONLY after all tools have completed. Never say 'Let me...' in Telegram mode.")
 	}
 
+	var dyn []string
 	if s.mem != nil {
 		skills := s.mem.MatchingSkills(userMessage)
 		if skills != "" {
-			parts = append(parts, "\nRelevant skill instructions:\n"+skills)
+			dyn = append(dyn, "AUTHORITATIVE SKILL INSTRUCTIONS (matched to this request):\n"+skills)
 		}
 
-		if !includePlaybookRouting {
-			return strings.Join(parts, "\n")
-		}
-
-		// Playbook routing: always keyword-match first (fast), then refine with embeddings
-		playbookName, playbookDesc, playbookScore := MatchPlaybook(s.settings.Home, userMessage, nil) // keyword first
-		if playbookName == "" && s.mem.embedder != nil {
-			playbookName, playbookDesc, playbookScore = MatchPlaybook(s.settings.Home, userMessage, s.mem.embedder)
-		}
-		if playbookName != "" && playbookScore >= 0.3 {
-			// Explicit command: the user named the playbook ("run the daily news
-			// playbook") or asked for it directly. No decision layer — the playbook
-			// IS the task. The model must run it, not improvise the work itself.
-			if explicitPlaybookCommand(userMessage, playbookName) {
-				parts = append(parts, fmt.Sprintf(
-					"\nThe user explicitly asked to run the \"%s\" playbook. Your first action MUST be run_playbook with name=\"%s\". Do NOT do the work yourself first — the playbook's stages perform the task. Run it, then report the result.",
-					playbookName, playbookName,
-				))
-			} else {
-				parts = append(parts, fmt.Sprintf(
-					"\nPOSSIBLY RELEVANT PLAYBOOK: \"%s\" — %s\nUse run_playbook with name=\"%s\" only if this repeatable procedure is the best fit for the current request. Otherwise handle the request normally.",
-					playbookName, playbookDesc, playbookName,
-				))
+		if includePlaybookRouting {
+			// Playbook routing: always keyword-match first (fast), then refine with embeddings
+			playbookName, playbookDesc, playbookScore := MatchPlaybook(s.settings.Home, userMessage, nil) // keyword first
+			if playbookName == "" && s.mem.embedder != nil {
+				playbookName, playbookDesc, playbookScore = MatchPlaybook(s.settings.Home, userMessage, s.mem.embedder)
+			}
+			if playbookName != "" && playbookScore >= 0.3 {
+				// Explicit command: the user named the playbook ("run the daily news
+				// playbook") or asked for it directly. No decision layer — the playbook
+				// IS the task. The model must run it, not improvise the work itself.
+				if explicitPlaybookCommand(userMessage, playbookName) {
+					dyn = append(dyn, fmt.Sprintf(
+						"\nThe user explicitly asked to run the \"%s\" playbook. Your first action MUST be run_playbook with name=\"%s\". Do NOT do the work yourself first — the playbook's stages perform the task. Run it, then report the result.",
+						playbookName, playbookName,
+					))
+				} else {
+					dyn = append(dyn, fmt.Sprintf(
+						"\nPOSSIBLY RELEVANT PLAYBOOK: \"%s\" — %s\nUse run_playbook with name=\"%s\" only if this repeatable procedure is the best fit for the current request. Otherwise handle the request normally.",
+						playbookName, playbookDesc, playbookName,
+					))
+				}
 			}
 		}
 	}
-	return strings.Join(parts, "\n")
+	return strings.Join(static, "\n"), strings.Join(dyn, "\n")
 }
 
 func abs(n int) int {
