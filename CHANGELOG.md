@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- Raised playbook stage iteration cap from 15 to 50 (`maxStageIterations`). (Why: 2026-08-06 the malaysian-news-daily and ai-news-daily playbooks failed their scheduled runs with `iteration_limit` — the stage's legit work (research + publish + telegram + image-gen steps) needs more than 15 tool calls, and the cap kept marking completed runs as failed.)
+
 ## [v2.2.0] — Cache Fixes, Loop Hard-Stop & Threads Reliability (2026-08-05)
 
 ### Changed

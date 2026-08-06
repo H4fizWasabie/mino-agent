@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-const maxStageIterations = 15
+const maxStageIterations = 50
 
 // maxStageAttempts bounds stage-level retries within a single run. Retry-safe
 // stages (read-only whitelist) get at most this many attempts; the failure of
