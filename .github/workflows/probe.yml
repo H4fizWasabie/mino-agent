@@ -1,0 +1,11 @@
+name: CD-Probe
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "runner outbound IP: $(curl -s https://api.ipify.org)"
+          for p in 22 80 443 7779; do
+            timeout 8 bash -c "echo > /dev/tcp/100.101.53.98/$p" 2>/dev/null && echo "port $p: OPEN" || echo "port $p: BLOCKED/timeout"
+          done
