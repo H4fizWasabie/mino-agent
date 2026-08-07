@@ -73,4 +73,10 @@ func TestDashboardViewsSurviveUnchangedPollingRefresh(t *testing.T) {
 	if !strings.Contains(app, `canvas.isConnected && graphState?.canvas === canvas`) {
 		t.Fatal("obsolete graph animation loops must stop when their canvas is replaced")
 	}
+	if !strings.Contains(app, "const layoutRadius = Math.max(160, Math.min(canvas.width, canvas.height) * 0.38)") {
+		t.Fatal("memory graph nodes must start in a spread-out deterministic layout")
+	}
+	if !strings.Contains(app, "const maxNodeSpeed = 8") {
+		t.Fatal("memory graph simulation must cap node velocity")
+	}
 }

@@ -1471,8 +1471,8 @@ function initGraph(raw) {
       type: f.type || "semantic",
       subject: f.subject || id,
       edges: f.edges || f.Edges || [],
-      x: (Math.random() - 0.5) * 200,
-      y: (Math.random() - 0.5) * 200,
+      x: 0,
+      y: 0,
       vx: 0, vy: 0,
       visible: true,
       color: stableGraphColor(f.id || id, f.type || "semantic"),
@@ -1511,12 +1511,21 @@ function initGraph(raw) {
   const springK = 0.02;
   const damp = 0.85;
   const centerGrav = 0.02;
+  const maxNodeSpeed = 8;
 
   function resize() {
     canvas.width = viewport.clientWidth || 800;
     canvas.height = viewport.clientHeight || 600;
   }
   resize();
+  const layoutRadius = Math.max(160, Math.min(canvas.width, canvas.height) * 0.38);
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+  nodes.forEach((node, i) => {
+    const radius = layoutRadius * Math.sqrt((i + 0.5) / nodes.length);
+    const angle = i * goldenAngle;
+    node.x = Math.cos(angle) * radius;
+    node.y = Math.sin(angle) * radius;
+  });
   window.addEventListener("resize", () => { resize(); draw(); });
 
   const ctx = canvas.getContext("2d");
@@ -1650,12 +1659,19 @@ function initGraph(raw) {
       fx += -node.x * centerGrav;
       fy += -node.y * centerGrav;
 
-      node.vx = (node.vx + fx) * damp;
-      node.vy = (node.vy + fy) * damp;
+      let nextVx = (node.vx + fx) * damp;
+      let nextVy = (node.vy + fy) * damp;
+      const speed = Math.hypot(nextVx, nextVy);
+      if (speed > maxNodeSpeed) {
+        const scale = maxNodeSpeed / speed;
+        nextVx *= scale;
+        nextVy *= scale;
+      }
+      node.vx = nextVx;
+      node.vy = nextVy;
       node.x += node.vx;
       node.y += node.vy;
-      const speed = Math.hypot(node.vx, node.vy);
-      if (speed > maxSpeed) maxSpeed = speed;
+      if (speed > maxSpeed) maxSpeed = Math.min(speed, maxNodeSpeed);
     }
     return maxSpeed;
   }
