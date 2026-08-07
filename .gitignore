@@ -4,6 +4,7 @@ mino
 /mino-*
 codegraph.json
 API_KEYS.md
+.impeccable/
 .reasonix/
 reasonix.toml
 __pycache__/
