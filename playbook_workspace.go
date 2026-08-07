@@ -576,6 +576,14 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 				"stage":    fmt.Sprintf("%02d-%s", stage.Number, stage.Name),
 				"run":      run.ID,
 			})
+			// Stage contract travels with the context: the loop refuses to declare
+			// a stage turn complete while its declared outputs are missing, and
+			// pushes the model to write them instead of ending silently.
+			outPaths := make([]string, 0, len(stage.Outputs))
+			for _, o := range stage.Outputs {
+				outPaths = append(outPaths, playbookRunOutputPath(pb, run, stage, o))
+			}
+			stageCtx = context.WithValue(stageCtx, stageOutputsKey{}, outPaths)
 			stageResult := runPlaybookStageLoop(stageCtx, core.Client, sessionID, system, messages, stageTools, maxStageIterations, core.Settings.MaxTokens, obs, core.Settings.Home)
 			result.TokensIn += stageResult.TokensIn
 			result.TokensOut += stageResult.TokensOut

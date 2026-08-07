@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -64,11 +65,28 @@ func RunLoop(
 
 type traceTagKey struct{}
 
+type stageOutputsKey struct{}
+
 // traceTagsFromCtx returns the playbook/stage tag set on the context when the
 // loop is executing inside a playbook stage (see runWorkspacePlaybook).
 func traceTagsFromCtx(ctx context.Context) map[string]string {
 	tags, _ := ctx.Value(traceTagKey{}).(map[string]string)
 	return tags
+}
+
+// missingStageOutputs returns the declared stage outputs that do not exist yet
+// or are empty. The loop consults this before declaring a stage turn complete:
+// a stage's contract is its artifacts, not the model's word.
+func missingStageOutputs(ctx context.Context) []string {
+	paths, _ := ctx.Value(stageOutputsKey{}).([]string)
+	var missing []string
+	for _, p := range paths {
+		info, err := os.Stat(p)
+		if err != nil || info.IsDir() || info.Size() == 0 {
+			missing = append(missing, p)
+		}
+	}
+	return missing
 }
 
 func RunLoopContext(
@@ -185,12 +203,40 @@ func RunLoopContext(
 		messages = append(messages, Message{Role: "assistant", Content: assembleAssistantContent(resp.Content)})
 
 		toolUses := extractToolUses(resp.Content)
+		markerFound := false
 		if len(toolUses) == 0 {
-			toolUses = extractTextToolUses(extractText(resp.Content))
+			toolUses, markerFound = extractTextToolUses(extractText(resp.Content))
 		}
 
-		// No tool calls = LLM is done
+		// No tool calls = LLM is done — unless a text tool-call marker was
+		// detected but failed to parse (the call was dropped, not absent), or
+		// the stage's declared outputs are still missing. Both get a corrective
+		// push and another iteration instead of a silent "complete".
 		if len(toolUses) == 0 {
+			if markerFound {
+				slog.Warn("unparseable tool_call marker", "session_id", sessionID, "iteration", i)
+				if audit, ok := ctx.Value(auditKey{}).(func(string, string, int)); ok {
+					audit("tool_call_parse_failed", "text marker found but args did not parse", i)
+				}
+				trace("tool_call_parse_failed", map[string]any{"iteration": i})
+				messages = append(messages, Message{
+					Role:    "user",
+					Content: "[System: your previous tool call could not be parsed — re-emit it in the exact format [tool_call: name({...})] with valid JSON, or use native function calling.]",
+				})
+				continue
+			}
+			if missing := missingStageOutputs(ctx); len(missing) > 0 {
+				slog.Warn("stage outputs missing at turn end", "session_id", sessionID, "iteration", i, "outputs", missing)
+				if audit, ok := ctx.Value(auditKey{}).(func(string, string, int)); ok {
+					audit("stage_output_missing", strings.Join(missing, ", "), i)
+				}
+				trace("stage_output_missing", map[string]any{"missing": missing, "iteration": i})
+				messages = append(messages, Message{
+					Role:    "user",
+					Content: fmt.Sprintf("[System: stage incomplete — required output(s) not written: %s. Use write_file to write them, then finish.]", strings.Join(missing, ", ")),
+				})
+				continue
+			}
 			result.Status = "complete"
 			result.Reply = extractText(resp.Content)
 			return result
@@ -380,14 +426,20 @@ func extractToolUses(blocks []ContentBlock) []ContentBlock {
 
 // extractTextToolUses parses text-embedded [tool_call: name({...})] markers.
 // Fallback for models that don't support native function calling.
-func extractTextToolUses(text string) []ContentBlock {
+// Returns the parsed uses and whether any marker was found — a marker that
+// failed to parse must be surfaced to the caller, not silently dropped
+// (2026-08-07: a bash marker with shell-style \' escapes ended a playbook
+// stage "complete" without its required output).
+func extractTextToolUses(text string) ([]ContentBlock, bool) {
 	var uses []ContentBlock
+	markerFound := false
 	marker := "[tool_call:"
 	for {
 		idx := strings.Index(text, marker)
 		if idx == -1 {
 			break
 		}
+		markerFound = true
 		text = text[idx+len(marker):]
 		paren := strings.IndexByte(text, '(')
 		if paren == -1 {
@@ -404,16 +456,33 @@ func extractTextToolUses(text string) []ContentBlock {
 		}
 		text = rest
 		var args map[string]any
-		if err := json.Unmarshal([]byte(argsJSON), &args); err == nil {
-			uses = append(uses, ContentBlock{
-				Type:  "tool_use",
-				ID:    fmt.Sprintf("txt_%d", len(uses)),
-				Name:  name,
-				Input: args,
-			})
+		// Repair common model sloppiness in hand-written JSON: shell-style
+		// escapes (devil\'s), trailing commas, and stray newlines in strings.
+		// Strict-parse first; only repair-then-parse when strict fails, so
+		// valid JSON is never touched.
+		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+			argsJSON = repairToolArgsJSON(argsJSON)
+			if err2 := json.Unmarshal([]byte(argsJSON), &args); err2 != nil {
+				continue // keep scanning for later markers; caller sees markerFound
+			}
 		}
+		uses = append(uses, ContentBlock{
+			Type:  "tool_use",
+			ID:    fmt.Sprintf("txt_%d", len(uses)),
+			Name:  name,
+			Input: args,
+		})
 	}
-	return uses
+	return uses, markerFound
+}
+
+// repairToolArgsJSON tolerates the JSON sloppiness models emit when writing
+// tool calls by hand instead of using native function calling.
+func repairToolArgsJSON(s string) string {
+	s = strings.ReplaceAll(s, `\'`, `'`)
+	s = strings.ReplaceAll(s, ",}", "}")
+	s = strings.ReplaceAll(s, ",]", "]")
+	return s
 }
 
 // extractBalancedJSON extracts a brace-balanced JSON string, handling

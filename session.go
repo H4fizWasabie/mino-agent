@@ -114,6 +114,7 @@ func (s *Session) buildSystem(userMessage, source string, includePlaybookRouting
 		fmt.Sprintf("\nLOCAL WORKSPACE (authoritative): %s\nThis overrides any hardcoded workspace path in a skill. Local files may be edited in place. Stage remote files here, verify locally, then sync them back once.", s.settings.Workspace),
 		"\nVerification discipline: when a question involves state that changes over time — database records (POs, orders, inventory), schedules, files on disk, service status — verify the current state with a tool (bash/sqlite3, list_playbooks, system_check, read_file) BEFORE answering. Memory may be stale; the live state is truth.",
 		"\nTool preference: prefer the purpose-built tool for a job over hand-rolling it — use convert_doc for document files (docx, pdf, xlsx, pptx) instead of parsing them with bash/python; use dedicated tools before generic workarounds.",
+		"\nTool calls: use native function calling when the API provides it. Do NOT write tool calls as plain text like [tool_call: ...] — text markers are a fallback that is only parsed when the JSON inside is exactly valid (no shell-style escapes like \\').",
 	}
 	if source == "telegram" {
 		static = append(static, "\nYou are responding via Telegram. If you are going to call a tool, do NOT output explanatory text. Just call the tool silently. Reply to the user ONLY after all tools have completed. Never say 'Let me...' in Telegram mode.")

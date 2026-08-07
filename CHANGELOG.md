@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Fixed
+- Playbook stages can no longer end "complete" without their declared outputs: the stage loop now pushes the model to write missing outputs (and re-emit unparseable text tool-call markers) instead of silently declaring done. (Why: 2026-08-07 the threads-ai-learning playbook's publish stage actually posted to Threads, then emitted its final tool call as a text marker with shell-style `\'` escapes inside the JSON args; `extractTextToolUses` dropped the call on `json.Unmarshal` failure with no log, the loop read "no tool calls = done", and the run failed with `required output "output/result.md" was not written` — the post succeeded but the report/record tail never ran. The parser now repairs common model JSON sloppiness (`\'` → `'`, trailing commas) before strict parse, reports found-but-unparseable markers so the loop pushes a corrective message, and the loop refuses to complete a stage turn while declared outputs are missing. The system prompt also tells models to prefer native function calling over text markers.)
+### Fixed
 - Loop detection no longer flags same-name tool streaks whose args differ substantially (enumeration = progress). (Why: 2026-08-06 an audit of all 7 playbooks called `manage_playbook` 7 times with different playbook names and was flagged "7 consecutive calls without progress". The same-name signal exists for real drift loops (composio steps, metrics) where args stay similar, so it now only counts entries whose args share a long common prefix — drifting args still trip it, distinct-entity enumeration does not.)
 
 ### Changed
