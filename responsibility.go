@@ -162,7 +162,11 @@ func validResponsibilityStatus(status string) bool {
 }
 
 func validResponsibilityTransition(kind, from, to string) bool {
-	if kind == "routine" && from == "verified" && to == "working" {
+	// Routines are recurring by nature: a routine closed with "stopped" (e.g.
+	// manual close during cleanup) must be restarted by its next scheduled
+	// fire, otherwise the schedule dies silently forever (2026-08-07: all
+	// three night playbooks stopped firing after a manual close).
+	if kind == "routine" && to == "working" && (from == "verified" || from == "stopped") {
 		return true
 	}
 	if from == "verified" || from == "stopped" {

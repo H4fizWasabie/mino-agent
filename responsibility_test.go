@@ -129,6 +129,42 @@ func TestResponsibilityStoreDoesNotReopenTerminalState(t *testing.T) {
 	}
 }
 
+func TestResponsibilityStoreReopensStoppedRoutine(t *testing.T) {
+	db := Connect(t.TempDir())
+	defer db.Close()
+	store := NewResponsibilityStore(db)
+	at := time.Date(2026, 8, 7, 9, 0, 0, 0, time.UTC)
+	if _, err := store.Record(ResponsibilityEvent{
+		ResponsibilityID: "routine:night-news", Type: "closed", Kind: "routine",
+		Title: "Scheduled run: night-news", Owner: "mino", Status: "stopped",
+		Summary: "Manually closed during cleanup.", At: at,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The next scheduled fire must be able to restart a stopped routine;
+	// otherwise a manual close kills the schedule forever.
+	if _, err := store.Record(ResponsibilityEvent{
+		ResponsibilityID: "routine:night-news", Type: "started", Status: "working",
+		Summary: "Scheduled run started.", At: at.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("stopped routine could not be restarted by its schedule: %v", err)
+	}
+	// But a closed one-off stays terminal.
+	if _, err := store.Record(ResponsibilityEvent{
+		ResponsibilityID: "one-off:report", Type: "closed", Kind: "one_off",
+		Title: "Deliver report", Owner: "mino", Status: "stopped",
+		Summary: "Closed.", At: at,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Record(ResponsibilityEvent{
+		ResponsibilityID: "one-off:report", Type: "started", Status: "working",
+		Summary: "Reopened.", At: at.Add(time.Hour),
+	}); err == nil {
+		t.Fatal("terminal one-off responsibility reopened")
+	}
+}
+
 func TestResponsibilityStoreBootstrapsCurrentStateOnce(t *testing.T) {
 	home := t.TempDir()
 	writeWorkspacePlaybook(t, home, "morning-briefing", []string{"01-send"})
