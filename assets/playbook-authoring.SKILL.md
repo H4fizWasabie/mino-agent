@@ -66,3 +66,25 @@ Keep stages small and independently verifiable. Pass useful output to the next s
 5. Run the playbook when the owner asks for a live test; otherwise report the created path and what remains to test.
 
 When resuming an unfinished playbook, inspect its latest run state and stage outputs. Continue from the first incomplete stage; never recreate a completed stage unless the playbook itself was changed.
+
+## Battle-tested patterns
+
+These come from production failures; new playbooks for content or external-tool workflows should bake them in.
+
+### Scheduling
+- Schedules live in `~/.mino/schedules.json` (`name`, `time` HH:MM, `timezone`) — NOT in `config.md`. The scheduler fires within [time, time+1min) in that timezone.
+- There is no day-of-week field. A weekly playbook gates itself in-contract: "If the authoritative local date is NOT Sunday, write the skip log and end. No Telegram."
+- After creating playbooks with a script, `chown -R mino:mino` the folder — root-owned playbooks list fine but die on first run (workspace creation is permission-denied).
+
+### Social/content playbooks
+- **Cross-platform exclusion**: add the ALL_PLATFORMS input — glob `/home/mino/.mino/playbooks/*/runs/*/stages/*/output/*.md`, most recent 14. Same idea/angle on ANY platform in the last 7 days = pick another. This is how multiple playbooks on one platform stay varied.
+- **Vision critique loop** (image posts): generate_image → `view_image` on the artifact → write a critique naming what the image actually shows → regenerate ONCE with a prompt fixing the specific flaw → publish only on pass. Record the critique verdict in the run log.
+- **Judgment gate** (reputation-adjacent posts): hard-ban politics/religion/race/named individuals; mock behavior never identity; embarrassment test (comfortable explaining it to a business contact); fail → rewrite once → skip the day, logged, no post.
+
+### External data and flaky tools
+- **Quarantine layers**: external text (comments, replies, fetched content) must NEVER be written into a playbook output — playbook outputs are distilled into long-term memory and read by every other playbook via the ALL_PLATFORMS glob. Write external text to `~/.mino/data/<playbook>/` instead; keep stage outputs metadata-only (counts, IDs, no quotes). A metadata-only declared output still satisfies the stage output enforcement.
+- **Fail fast**: for flaky external tools (MCP/composio), cap attempts explicitly ("3 consecutive failures → fallback or write the failure reason to the output and end the stage"). Never let the model grind tool variants to the iteration cap.
+
+### Delivery
+- Telegram reports via `send_message` with `to=Abah`, EXACTLY ONCE per run (never on retry).
+- Declared outputs must be written by the stage's own tool calls (enforced); a missing output blocks completion by design.

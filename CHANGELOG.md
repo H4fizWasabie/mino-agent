@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- `assets/playbook-authoring.SKILL.md`: new "Battle-tested patterns" section covering scheduling mechanics (schedules.json, day-gating, mino-user ownership), social-playbook patterns (ALL_PLATFORMS cross-exclusion, vision critique loop, judgment gates), external-data quarantine (playbook outputs distill into memory and feed the cross-playbook glob; external text belongs in `~/.mino/data/`), and fail-fast rules for flaky external tools. (Why: these patterns were hard-won from production failures on 2026-08-07 — the stopped-routine schedule death, the reddit 50-iteration grind, the spam-poisoning vector, and the root-owned playbook landmine — and the skill previously taught an outdated config.md scheduling mechanism that the runtime does not use.)
+
 ## [v2.3.1] — Routine Schedule Recovery (2026-08-07)
 
 ### Fixed
