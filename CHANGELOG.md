@@ -1,5 +1,10 @@
 # Changelog
 
+## [v2.3.1] — Routine Schedule Recovery (2026-08-07)
+
+### Fixed
+- Routines closed with status `stopped` can now be restarted by their scheduled fire. (Why: a manual close during the provider/cache migration cleanup on 2026-08-06 left three night routines in `stopped`, and `validResponsibilityTransition` treated `stopped` as terminal — every scheduled fire since died with `cannot move responsibility from "stopped" to "working"`, silently killing ai-news-daily, malaysian-news-daily, and facebook-daily-ai-post. The schedule had no recovery path. Routines are recurring by nature: closed = paused, next fire restarts. One-off responsibilities remain terminal.)
+
 ## [Unreleased]
 
 ### Added
