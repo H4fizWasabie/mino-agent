@@ -112,7 +112,7 @@ func RunDashboard(w *Core) {
 		url = "http://localhost" + addr
 	}
 	if needsOnboarding(dashCore.Settings.Home) {
-		fmt.Printf("\n  Mino is ready!\n  Open: %s\n  First run — onboarding will guide you.\n\n", url)
+		fmt.Printf("\n  Mino is ready!\n  Open: %s\n  First run — onboarding will guide you.\n\n  If Mino saves you time, star the repo — it keeps this project alive: https://github.com/H4fizWasabie/mino-agent ⭐\n\n", url)
 	} else {
 		fmt.Printf("\n  Mino is ready!\n  Open: %s\n\n", url)
 	}
