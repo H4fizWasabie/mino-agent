@@ -2,8 +2,9 @@
 
 ## [Unreleased]
 
-### Fixed
-## [Unreleased]
+### Added
+- README: new "Recommended installs", "A task failed — now what?", and "Power tuning" sections. (Why: the README covered install/config/architecture but never told a new user which helper binaries are worth installing (rtk, markitdown, composio MCP), what to do when a turn dies with `(stopped after N iterations)`, or which env knobs to raise for more power — all verified against the VPS deployment and the code defaults.)
+- `.env.example` and README config table now match the code default `MINO_MAX_TOKENS=16384`. (Why: the example shipped 4096 while `config.go` defaults to 16384, misleading users tuning output length.)
 
 ### Fixed
 - Memory graph canvas now seeds nodes in a deterministic spread and caps force-layout velocity, preventing the dashboard graph from exploding and jittering during initial render. (Why: the 224-node live graph started in a tight random cluster, producing extreme all-to-all repulsion even after the animation loop learned to cool.)

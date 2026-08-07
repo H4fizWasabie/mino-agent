@@ -86,7 +86,7 @@ mino
 | `MINO_DASHBOARD_PORT` | `7779` | Dashboard port |
 | `MINO_DASHBOARD_HOST` | (all interfaces) | Bind address |
 | `MINO_MAX_ITERATIONS` | `25` | Max tool calls per turn |
-| `MINO_MAX_TOKENS` | `2048` | Max output tokens per call |
+| `MINO_MAX_TOKENS` | `16384` | Max output tokens per call |
 | `MINO_CONTEXT_CHARS` | `100000` | Context window budget |
 | `TELEGRAM_BOT_TOKEN` | — | Optional Telegram bot token |
 | `TAVILY_API_KEY` | — | Web search (free key at tavily.com) |
@@ -167,6 +167,50 @@ Mino ships with OAuth configs for Claude, Codex (ChatGPT), GitHub Copilot, and x
 ```
 
 Empty `api_key_env` means no auth. Works with any OpenAI-compatible local server.
+
+## Recommended installs
+
+Mino runs with none of these, but a few helper binaries make it noticeably better:
+
+| Tool | What it does | Install |
+|------|--------------|---------|
+| **rtk** (Token Killer) | The `bash` tool rewrites noisy commands (`ls`, `cat`, `git log`…) through RTK to shrink tool output — fewer tokens, cheaper turns | Debian/Ubuntu: `curl -fsSL https://github.com/rtk-ai/rtk/releases/download/v0.43.0/rtk_0.43.0-1_amd64.deb -o rtk.deb && sudo dpkg -i rtk.deb` — other platforms from the [releases page](https://github.com/rtk-ai/rtk/releases) |
+| **markitdown** | URL fetch pipes HTML through markitdown for clean Markdown (tables, headings, links) instead of stripped plain text; the fileingest extension uses it too | `pip install markitdown` (make sure `markitdown` is on `PATH`) |
+| **composio** | Hosted MCP gateway: Gmail, Google Drive, Slack and many more services become `MCP_composio_*` tools — no local install, just a key | Get a key at composio.dev, then drop the config below into `~/.mino/mcp.d/` |
+
+```json
+{"name": "composio", "url": "https://connect.composio.dev/mcp", "headers": {"Authorization": "Bearer ck_..."}}
+```
+
+All three degrade gracefully — Mino works without them, but noisy commands and web pages eat more tokens.
+
+## A task failed — now what?
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `(stopped after 25 iterations)` | The turn ran out of tool-call budget mid-task | Raise `MINO_MAX_ITERATIONS` (see below), or split the request into smaller steps and send `continue` |
+| Reply cuts off mid-sentence, or Mino repeats itself | `MINO_MAX_TOKENS` too small for the output | Raise `MINO_MAX_TOKENS` (16384 works well) |
+| Mino forgets earlier context in long chats | `MINO_MAX_HISTORY_TURNS` too low | Raise it — 10 is a good ceiling |
+| Tool errors, wrong results, or a tool that exists but is never used | Missing helper binary, or the model needs a clearer instruction | Install rtk/markitdown above; check the dashboard traces page or `MINO_HOME/traces/` and `MINO_HOME/audit.jsonl`, then retry with a more specific instruction |
+| Playbook run failed | A stage didn't write its declared outputs, or hit the stage iteration cap | Look in `MINO_HOME/playbooks/<name>/runs/<timestamp>/stages/` for what the failing stage actually wrote, then ask Mino to "check the playbook run" |
+
+When in doubt: retry with a clearer instruction, check the provider key still works, and check `mino update` for a newer build.
+
+## Power tuning
+
+The defaults are deliberately conservative. If tasks keep hitting limits, raise these in your environment. The reference VPS deployment runs `MINO_MAX_ITERATIONS=30`, `MINO_CONTEXT_CHARS=1000000`, and `MINO_MAX_HISTORY_TURNS=10`.
+
+| Env | Default | What it limits | When to raise |
+|-----|---------|----------------|---------------|
+| `MINO_MAX_ITERATIONS` | 25 | Tool calls per turn — the `(stopped after N iterations)` wall | Long multi-step tasks end with the iteration message |
+| `MINO_MAX_TOKENS` | 16384 | Output tokens per model call | Replies truncate or the model stalls |
+| `MINO_CONTEXT_CHARS` | 100000 | Context window budget for history + tool output | Long sessions or playbooks lose early context |
+| `MINO_MAX_HISTORY_TURNS` | 5 | Conversation turns kept in context | Mino forgets earlier turns in long chats |
+| `MINO_BASH_TIMEOUT` | 2m | `bash` tool runs | Slow commands time out |
+| `MINO_CODING_TIMEOUT` | 2m | Coding tool runs | Big repos time out |
+| `MINO_SYNC_TIMEOUT` | 5m | File syncs | Large file transfers time out |
+
+Playbook stages have their own iteration cap (50) — if a playbook run burns through it, the fix is usually in the playbook's stage contract, not the env.
 
 ## Architecture
 
