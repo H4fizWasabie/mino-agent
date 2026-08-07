@@ -25,6 +25,10 @@ for p in "${platforms[@]}"; do
   GOOS="$GOOS" GOARCH="$GOARCH" go build -ldflags "-X main.Version=$VERSION" -o "$out" .
 done
 
+# Checksums so the VPS self-updater can verify the linux/amd64 binary
+# before swapping it in (CD via release assets).
+sha256sum mino-linux-amd64 mino-linux-arm64 mino-darwin-amd64 mino-darwin-arm64 mino-windows-amd64.exe > SHA256SUMS.txt
+
 echo ""
 echo "Done. Upload these to the GitHub release:"
-ls -lh mino-*
+ls -lh mino-* SHA256SUMS.txt
