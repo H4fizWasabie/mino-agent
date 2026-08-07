@@ -1,26 +1,21 @@
 # Changelog
 
-## [Unreleased]
+## [v2.3.0] — Stage Contract Enforcement & Prompt-Cache Stability (2026-08-07)
 
 ### Fixed
 - Playbook stages can no longer end "complete" without their declared outputs: the stage loop now pushes the model to write missing outputs (and re-emit unparseable text tool-call markers) instead of silently declaring done. (Why: 2026-08-07 the threads-ai-learning playbook's publish stage actually posted to Threads, then emitted its final tool call as a text marker with shell-style `\'` escapes inside the JSON args; `extractTextToolUses` dropped the call on `json.Unmarshal` failure with no log, the loop read "no tool calls = done", and the run failed with `required output "output/result.md" was not written` — the post succeeded but the report/record tail never ran. The parser now repairs common model JSON sloppiness (`\'` → `'`, trailing commas) before strict parse, reports found-but-unparseable markers so the loop pushes a corrective message, and the loop refuses to complete a stage turn while declared outputs are missing. The system prompt also tells models to prefer native function calling over text markers.)
-### Fixed
 - Loop detection no longer flags same-name tool streaks whose args differ substantially (enumeration = progress). (Why: 2026-08-06 an audit of all 7 playbooks called `manage_playbook` 7 times with different playbook names and was flagged "7 consecutive calls without progress". The same-name signal exists for real drift loops (composio steps, metrics) where args stay similar, so it now only counts entries whose args share a long common prefix — drifting args still trip it, distinct-entity enumeration does not.)
+- Stop/cancel now matches any message beginning with "stop"/"cancel"/"halt" (e.g. "mino stop with the playbook"), not just exact phrases. (Why: 2026-08-06 the user's "mino stop with the playbook." was treated as a normal message, so mino kept re-investigating the playbook audit instead of stopping.)
+- Dashboard chat now sends `session_id`, so "New chat" actually starts a fresh conversation instead of always hitting the "default" session. (Why: the default session context was full of the playbook-audit conversation, so every new message re-triggered it.)
 
 ### Changed
 - Tool schemas are now selected ONCE per turn AND unioned monotonically per session (`SchemasForContext` takes sessionID; the selected tool set only grows within a session). (Why: even with per-turn freezing, the `tools` array drifted between turns — selection re-runs against each new user message (observed 28 schemas turn 1, 27 turn 2) — and since the provider's cache key includes the tools array, every drift invalidated the whole prefix. The monotonic union converges after a few turns and stays byte-stable, so cross-turn requests hit the cached prefix.)
 - The system prompt is now byte-stable across turns: matched skills and playbook routing moved from `BuildSystem` into the user-message tail (via `BuildContext`), next to the clock. (Why: skills/playbook matches depend on the current user message, so the system prompt changed every turn and invalidated the entire prompt-prefix cache — the first bytes of the request are the system prompt. With the routing block at the tail, only the fresh user message misses; system + history stay cached across turns. Matching still runs every turn; only its position changed. This is the same cache-stability move already applied to the clock and to playbook system prompts.)
 - Tool schemas are now selected ONCE per turn instead of every iteration, and OpenRouter is pinned to the DeepInfra upstream via `provider_routing`. (Why: usage.jsonl showed ~28-33% cache hit rate. Two causes: (1) `SchemasForContext` re-ran against the growing message history each iteration, so the `tools` array in the request drifted mid-turn and broke the provider's prompt-prefix cache (observed: iteration 2 cached 64/10671 tokens); (2) without routing, OpenRouter spread requests across upstreams (DeepInfra, Novita, Parasail, SiliconFlow, GMICloud), each with its own cold cache. DeepInfra bills cache reads at $0.018/M vs $0.09/M prompt — 5x.)
-
-### Fixed
-- Stop/cancel now matches any message beginning with "stop"/"cancel"/"halt" (e.g. "mino stop with the playbook"), not just exact phrases. (Why: 2026-08-06 the user's "mino stop with the playbook." was treated as a normal message, so mino kept re-investigating the playbook audit instead of stopping.)
-- Dashboard chat now sends `session_id`, so "New chat" actually starts a fresh conversation instead of always hitting the "default" session. (Why: the default session context was full of the playbook-audit conversation, so every new message re-triggered it.)
+- Raised playbook stage iteration cap from 15 to 50 (`maxStageIterations`). (Why: 2026-08-06 the malaysian-news-daily and ai-news-daily playbooks failed their scheduled runs with `iteration_limit` — the stage's legit work (research + publish + telegram + image-gen steps) needs more than 15 tool calls, and the cap kept marking completed runs as failed.)
 
 ### Added
 - Dashboard: failed playbook runs now list under each playbook with a delete button (`/api/memory` `delete_run`). (Why: 2026-08-06 the malaysian-news-daily and ai-news-daily runs failed with iteration_limit; there was no way to remove the failed runs from the UI.)
-
-### Changed
-- Raised playbook stage iteration cap from 15 to 50 (`maxStageIterations`). (Why: 2026-08-06 the malaysian-news-daily and ai-news-daily playbooks failed their scheduled runs with `iteration_limit` — the stage's legit work (research + publish + telegram + image-gen steps) needs more than 15 tool calls, and the cap kept marking completed runs as failed.)
 
 ## [v2.2.0] — Cache Fixes, Loop Hard-Stop & Threads Reliability (2026-08-05)
 
