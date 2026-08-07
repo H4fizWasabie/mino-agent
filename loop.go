@@ -143,6 +143,7 @@ func RunLoopContext(
 
 	var lastLoopDetected string
 	loopDetections := 0
+	lastRewritePush := ""
 
 	// Tool schemas are computed ONCE per turn, not per iteration. The selected
 	// schema set feeds the `tools` array in the request payload; recomputing it
@@ -333,12 +334,60 @@ func RunLoopContext(
 				})
 				notify(obs, "loop", map[string]any{"message": msg})
 			}
+		} else if path := stageRewriteStreak(result.ToolCalls); path != "" && path != lastRewritePush {
+			// Stage-side tripwire: the loop detector is skipped inside stages
+			// (repeated search_web is legit there), but a same-tool streak writing
+			// the SAME output path over and over is a rewrite drift, not progress.
+			// 2026-08-07: reddit-karma-builder stage 1 rewrote candidates.md 26x
+			// because the whitelist lacked read_file (model couldn't verify its own
+			// output) — the run burned all 50 iterations and failed.
+			lastRewritePush = path
+			slog.Warn("stage rewrite streak detected", "session_id", sessionID, "iteration", i, "path", path)
+			if audit, ok := ctx.Value(auditKey{}).(func(string, string, int)); ok {
+				audit("stage_rewrite_streak", path, i)
+			}
+			trace("stage_rewrite_streak", map[string]any{"path": path, "iteration": i})
+			messages = append(messages, Message{
+				Role:    "user",
+				Content: fmt.Sprintf("[System: you have rewritten %s repeatedly. Read it back with read_file to verify its content, then either finish the stage or take a genuinely different action. Do not rewrite the same file again without reading it first.]", path),
+			})
 		}
 	}
 
 	result.Status = "iteration_limit"
 	result.Reply = "(stopped after " + fmt.Sprint(maxIter) + " iterations)"
 	return result
+}
+
+// stageRewriteStreak reports the output path being rewritten by a trailing run
+// of same-tool calls with the same path argument (e.g. write_file to the same
+// target 6+ times). Empty string means no rewrite drift.
+func stageRewriteStreak(calls []ToolCall) string {
+	if len(calls) < 6 {
+		return ""
+	}
+	last := calls[len(calls)-1]
+	path, _ := last.Args["path"].(string)
+	if path == "" {
+		return ""
+	}
+	sameTool := last.Name
+	count := 0
+	for i := len(calls) - 1; i >= 0; i-- {
+		c := calls[i]
+		if c.Name != sameTool {
+			break
+		}
+		p, _ := c.Args["path"].(string)
+		if p != path {
+			break
+		}
+		count++
+	}
+	if count >= 6 {
+		return path
+	}
+	return ""
 }
 
 func toolSelectionContext(system string, messages []Message) string {

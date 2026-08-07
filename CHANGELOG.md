@@ -5,6 +5,8 @@
 ### Fixed
 - Background goroutines (schedule dispatcher, consolidation, dedup, graph maintenance, outbox, reminders, alerts, audit pruning, graph refresh) now run under a panic guard: one panic no longer kills the whole agent. (Why: the audit found zero `recover()` in the codebase against 13+ background loops — a single panic in any dispatcher would take down in-flight sessions and today's schedule until systemd restarted mino.)
 - Malformed **native** `tool_calls` arguments are no longer executed with nil/garbage input: `provider.go` logs the raw string and injects `__raw_arguments__`, and the loop returns it to the model with a corrective message instead of running the tool. (Why: this is the sibling of the text-marker `\'` bug — a model emitting unparseable native arguments would have executed a tool with `Input: nil`, producing confusing errors. The dead `hasInvalidToolInput` guard is now superseded by this path.)
+- Playbook stages now have a rewrite-drift tripwire: the same output path rewritten 6+ times consecutively (same tool, same path) injects a corrective push ("read it back with read_file, verify, then finish") instead of letting the run burn the full iteration cap. (Why: 2026-08-07 the reddit-karma-builder stage 1 rewrote candidates.md 26× because its tool whitelist lacked read_file — the model couldn't verify its own output, so it kept regenerating it blind until the 50-iteration cap killed the run at 50 minutes. Interleaved write/read sequences are untouched; the loop detector stays skipped inside stages for legit repeated search_web.)
+- Also added `read_file` to reddit-karma-builder stage 1's whitelist (VPS config) so the model can verify its output.
 
 ## [v2.3.0] — Stage Contract Enforcement & Prompt-Cache Stability (2026-08-07)
 

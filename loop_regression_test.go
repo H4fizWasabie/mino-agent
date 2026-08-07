@@ -174,3 +174,71 @@ func TestLoopSurfacesMalformedNativeArgs(t *testing.T) {
 		t.Fatalf("raw args not surfaced to the model: %#v", result.ToolCalls)
 	}
 }
+
+// Regression: reddit-karma-builder stage 1 rewrote candidates.md 26x and
+// burned all 50 iterations. The stage-side tripwire must push a corrective
+// message when the same output path is rewritten 6+ times consecutively.
+func TestStageRewriteStreakTripwire(t *testing.T) {
+	tools := NewRegistry()
+	tools.Register(&Tool{
+		Name: "write_file", Schema: map[string]any{"type": "object", "properties": map[string]any{}},
+		Fn:   func(map[string]any) string { return "wrote" },
+	})
+	client := &fakeClient{}
+	out := "/tmp/stage-out/result.md"
+	for i := 0; i < 8; i++ {
+		client.script = append(client.script, scriptedResp([]ContentBlock{toolBlock("write_file", map[string]any{"path": out})}, "tool_use"))
+	}
+	client.script = append(client.script, scriptedResp([]ContentBlock{textBlock("done")}, "stop"))
+	ctx := context.WithValue(context.Background(), traceTagKey{}, map[string]string{"playbook": "p", "stage": "01-x"})
+	result := RunLoopContext(ctx, client, "rewrite-loop", "", []Message{{Role: "user", Content: "go"}}, tools, 20, 100, nil, false, "", nil)
+	if result.Status != "complete" {
+		t.Fatalf("status = %q, want complete", result.Status)
+	}
+	// The corrective push must have been sent after the 6th consecutive rewrite.
+	pushed := false
+	for _, msgs := range client.messages {
+		for _, m := range msgs {
+			if strings.Contains(m.Content, "rewritten "+out+" repeatedly") {
+				pushed = true
+			}
+		}
+	}
+	if !pushed {
+		t.Fatal("rewrite-streak push missing from model messages")
+	}
+}
+
+// A mixed sequence (write, read, write) is NOT drift — no push.
+func TestStageRewriteStreakAllowsInterleavedReads(t *testing.T) {
+	tools := NewRegistry()
+	tools.Register(&Tool{
+		Name: "write_file", Schema: map[string]any{"type": "object", "properties": map[string]any{}},
+		Fn:   func(map[string]any) string { return "wrote" },
+	})
+	tools.Register(&Tool{
+		Name: "read_file", Schema: map[string]any{"type": "object", "properties": map[string]any{}},
+		Fn:   func(map[string]any) string { return "content" },
+	})
+	client := &fakeClient{}
+	out := "/tmp/stage-out/result.md"
+	for i := 0; i < 6; i++ {
+		client.script = append(client.script,
+			scriptedResp([]ContentBlock{toolBlock("write_file", map[string]any{"path": out})}, "tool_use"),
+			scriptedResp([]ContentBlock{toolBlock("read_file", map[string]any{"path": out})}, "tool_use"),
+		)
+	}
+	client.script = append(client.script, scriptedResp([]ContentBlock{textBlock("done")}, "stop"))
+	ctx := context.WithValue(context.Background(), traceTagKey{}, map[string]string{"playbook": "p", "stage": "01-x"})
+	result := RunLoopContext(ctx, client, "interleaved", "", []Message{{Role: "user", Content: "go"}}, tools, 20, 100, nil, false, "", nil)
+	if result.Status != "complete" {
+		t.Fatalf("status = %q, want complete", result.Status)
+	}
+	for _, msgs := range client.messages {
+		for _, m := range msgs {
+			if strings.Contains(m.Content, "rewritten ") {
+				t.Fatalf("false-positive push for interleaved write/read: %q", m.Content)
+			}
+		}
+	}
+}
