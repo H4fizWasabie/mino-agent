@@ -100,7 +100,7 @@ The run produced these output files (path: content):
 %s
 
 Reply with ONLY this JSON:
-{"run": {"id": "snake_case_id_prefixed_ep_", "subject": "<one sentence: what was posted/produced, when, and the post/artifact ID if any>", "body": "<1-3 sentences: what happened, outcome>", "edges": [{"target": "<existing_id>", "rel": "<specific relation>", "kind": "explicit"}]}, "facts": [{"id": "snake_case_id", "subject": "<one sentence>", "content": "<optional>", "edges": []}]}
+{"run": {"id": "ep_ai_news_daily_20260805", "subject": "<one sentence: what was posted/produced, when, and the post/artifact ID if any>", "body": "<1-3 sentences: what happened, outcome>", "edges": [{"target": "<existing_id>", "rel": "<specific relation>", "kind": "explicit"}]}, "facts": [{"id": "<short_snake_case_id>", "subject": "<one sentence>", "content": "<optional>", "edges": []}]}
 
 Rules:
 - The run node is episodic: one per run, compact. Include the post/artifact ID and outcome in subject or body.
@@ -125,11 +125,31 @@ func parseDistillResponse(text string) (distilledRun, error) {
 			}
 			var out distilledRun
 			if err := json.Unmarshal([]byte(text[start:end]), &out); err == nil {
+				// Guard: reject IDs that carry the prompt template's placeholder
+				// text (observed 2026-08-07: the model copied
+				// "snake_case_id_prefixed_ep_..." verbatim as a real fact ID,
+				// polluting 7 facts and a god node). A leaked placeholder is
+				// not a durable ID — treat the whole response as invalid.
+				if templateIDLeak(out.Run.ID) || templateIDLeak(out.Run.Subject) {
+					return distilledRun{}, fmt.Errorf("distill response contains template placeholder ID")
+				}
+				for _, f := range out.Facts {
+					if templateIDLeak(f.ID) {
+						return distilledRun{}, fmt.Errorf("distill response contains template placeholder ID")
+					}
+				}
 				return out, nil
 			}
 		}
 	}
 	return distilledRun{}, fmt.Errorf("no valid distill object")
+}
+
+// templateIDLeak reports whether the string carries the distill prompt's
+// example placeholder text ("snake_case_id_prefixed_ep_") — the marker that
+// a model copied the template instead of generating a real ID.
+func templateIDLeak(s string) bool {
+	return strings.Contains(s, "snake_case_id_prefixed")
 }
 
 // DistillOutputsDue turns undistilled playbook outputs into one compact

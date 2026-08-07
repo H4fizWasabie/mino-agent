@@ -242,3 +242,20 @@ func TestStageRewriteStreakAllowsInterleavedReads(t *testing.T) {
 		}
 	}
 }
+
+// Regression: the distill prompt's template placeholder ("snake_case_id_prefixed_ep_")
+// must never become a fact ID — parseDistillResponse rejects it.
+func TestParseDistillResponseRejectsTemplateID(t *testing.T) {
+	good := `{"run": {"id": "ep_ai_news_daily_20260805", "subject": "posted report"}, "facts": []}`
+	if _, err := parseDistillResponse(good); err != nil {
+		t.Fatalf("valid distill response rejected: %v", err)
+	}
+	leaked := `{"run": {"id": "snake_case_id_prefixed_ep_ai_news_daily_20260805", "subject": "posted report"}, "facts": []}`
+	if _, err := parseDistillResponse(leaked); err == nil {
+		t.Fatal("template-leaked ID accepted; must be rejected")
+	}
+	leakedSubject := `{"run": {"id": "ep_x", "subject": "snake_case_id_prefixed_ep_ copied placeholder"}, "facts": []}`
+	if _, err := parseDistillResponse(leakedSubject); err == nil {
+		t.Fatal("template text in subject accepted; must be rejected")
+	}
+}
