@@ -1618,6 +1618,7 @@ function initGraph(raw) {
 
   function simulate() {
     const w = canvas.width, h = canvas.height;
+    let maxSpeed = 0;
 
     for (const node of nodes) {
       if (!node.visible || node === dragNode) continue;
@@ -1653,13 +1654,34 @@ function initGraph(raw) {
       node.vy = (node.vy + fy) * damp;
       node.x += node.vx;
       node.y += node.vy;
+      const speed = Math.hypot(node.vx, node.vy);
+      if (speed > maxSpeed) maxSpeed = speed;
     }
+    return maxSpeed;
   }
 
+  // Cooling: stop the animation loop once the layout settles (nothing moving
+  // faster than settleSpeed px/step). The old loop ran requestAnimationFrame
+  // forever at 180 steps/sec — with all-to-all repel that is O(n²) per step,
+  // so a 200+ node graph jitters and burns CPU indefinitely (observed: the
+  // memory graph looked "crazy" in the UI, never coming to rest).
+  const settleSpeed = 0.05;
+  let settled = false;
+  function wake() { if (settled) { settled = false; requestAnimationFrame(tick); } }
+
   function tick() {
-    for (let i = 0; i < 3; i++) simulate(); // run multiple sim steps per frame
+    let maxSpeed = 0;
+    for (let i = 0; i < 3; i++) {
+      const s = simulate();
+      if (s > maxSpeed) maxSpeed = s;
+    }
     draw();
-    if (canvas.isConnected && graphState?.canvas === canvas) requestAnimationFrame(tick);
+    if (maxSpeed > settleSpeed && canvas.isConnected && graphState?.canvas === canvas) {
+      settled = false;
+      requestAnimationFrame(tick);
+    } else {
+      settled = true;
+    }
   }
 
   // Interaction: screen-to-world helper
@@ -1698,6 +1720,7 @@ function initGraph(raw) {
   }
 
   canvas.onmousedown = (ev) => {
+    wake();
     const p = screenToWorld(ev.clientX, ev.clientY);
     const hit = nodeAt(p.x, p.y);
     if (hit) {
@@ -1740,6 +1763,7 @@ function initGraph(raw) {
     dragNode = null;
     panning = false;
     panStart = null;
+    wake(); // re-settle the layout after a drag
   };
   canvas.onmouseleave = () => {
     hoveredNode = null;
@@ -1822,6 +1846,7 @@ function initGraph(raw) {
 
   graphState = {
     canvas, nodes, nodeMap, edges, neighbors,
+    wake,
     selectNode(id) {
       const n = nodeMap[id];
       if (n) { selectedNode = n; showDetail(n); draw(); }
@@ -1833,6 +1858,7 @@ function initGraph(raw) {
     },
     setQuery(q, matches) {
       queryActive = Boolean(q);
+      wake();
       if (q && matches.length && q !== lastQuery) {
         const n = nodeMap[matches[0]];
         panX = -n.x * zoom;
