@@ -369,13 +369,13 @@ func (gm *GraphMemory) StartReconciler(interval time.Duration) {
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
-	go func() {
+	safeGo("graph-refresh", func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for range ticker.C {
 			gm.Refresh()
 		}
-	}()
+	})
 }
 
 // readFile parses a single .md file into a Fact.

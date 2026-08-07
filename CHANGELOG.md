@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- Background goroutines (schedule dispatcher, consolidation, dedup, graph maintenance, outbox, reminders, alerts, audit pruning, graph refresh) now run under a panic guard: one panic no longer kills the whole agent. (Why: the audit found zero `recover()` in the codebase against 13+ background loops — a single panic in any dispatcher would take down in-flight sessions and today's schedule until systemd restarted mino.)
+- Malformed **native** `tool_calls` arguments are no longer executed with nil/garbage input: `provider.go` logs the raw string and injects `__raw_arguments__`, and the loop returns it to the model with a corrective message instead of running the tool. (Why: this is the sibling of the text-marker `\'` bug — a model emitting unparseable native arguments would have executed a tool with `Input: nil`, producing confusing errors. The dead `hasInvalidToolInput` guard is now superseded by this path.)
+
 ## [v2.3.0] — Stage Contract Enforcement & Prompt-Cache Stability (2026-08-07)
 
 ### Fixed

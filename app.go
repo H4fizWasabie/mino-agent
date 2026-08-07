@@ -17,6 +17,20 @@ import (
 // Mino — app.py — wires everything together.
 // This is the assembly diagram in code.
 
+// safeGo runs a background loop with a panic guard: one panic in any of the
+// dispatcher/consolidation goroutines must not kill the whole agent (systemd
+// restarts it, but in-flight sessions and today's schedule die with it).
+func safeGo(name string, fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("panic in background loop", "loop", name, "panic", r)
+			}
+		}()
+		fn()
+	}()
+}
+
 type Core struct {
 	notifyMu         sync.RWMutex
 	notifyTelegram   func(result *LoopResult)
@@ -76,15 +90,15 @@ func NewCore() *Core {
 	LoadExtensions(s.Home, tools)                           // discover + register extension tools
 
 	if s.ConsolidateEvery > 0 {
-		go func() { // 6-hour full consolidation pass
+		safeGo("consolidation", func() { // 6-hour full consolidation pass
 			for {
 				time.Sleep(6 * time.Hour)
 				if n := mem.ConsolidateDue(); n > 0 {
 					slog.Info("consolidation", "new_facts", n)
 				}
 			}
-		}()
-		go func() { // dedup — 6-hour, offset +30min from consolidation
+		})
+		safeGo("dedup", func() { // dedup — 6-hour, offset +30min from consolidation
 			time.Sleep(30 * time.Minute)
 			for {
 				time.Sleep(6 * time.Hour)
@@ -92,8 +106,8 @@ func NewCore() *Core {
 					slog.Info("dedup", "merged_clusters", n)
 				}
 			}
-		}()
-		go func() { // graph maintenance — 6-hour, offset +45min from consolidation
+		})
+		safeGo("graph-maintenance", func() { // graph maintenance — 6-hour, offset +45min from consolidation
 			time.Sleep(45 * time.Minute)
 			for {
 				time.Sleep(6 * time.Hour)
@@ -104,8 +118,8 @@ func NewCore() *Core {
 					slog.Info("graph maintenance", "edges", edges, "communities", comms)
 				}
 			}
-		}()
-		go func() { // 5-minute threshold check — triggers when context nears 80% full
+		})
+		safeGo("context-threshold", func() { // 5-minute threshold check — triggers when context nears 80% full
 			for {
 				time.Sleep(5 * time.Minute)
 				if n := mem.ConsolidateIfFull(s.ContextChars); n > 0 {
@@ -118,7 +132,7 @@ func NewCore() *Core {
 					slog.Info("playbook output distillation", "written", n)
 				}
 			}
-		}()
+		})
 	}
 
 	dashHost := os.Getenv("MINO_DASHBOARD_HOST")
@@ -165,25 +179,25 @@ func NewCore() *Core {
 	}
 
 	// In-process playbook scheduler — checks schedules.json every minute
-	go runScheduleDispatcher(w)
+	safeGo("schedule-dispatcher", func() { runScheduleDispatcher(w) })
 
 	// Outbox delivery — send_message drafts to the outbox; this drains it
 	// to Telegram so scheduled reports actually arrive.
-	go runOutboxDispatcher(w)
+	safeGo("outbox-dispatcher", func() { runOutboxDispatcher(w) })
 
 	// Reminder delivery — runs in every gateway mode; no-ops without Telegram config.
-	go runReminderDispatcher(w)
+	safeGo("reminder-dispatcher", func() { runReminderDispatcher(w) })
 
 	// Alert checker (§18.1): error rate + dead man's switch, every 5 minutes
-	go checkAlerts(db, w.sendAlertMessage, 5*time.Minute, w.Settings.Location())
+	safeGo("alert-checker", func() { checkAlerts(db, w.sendAlertMessage, 5*time.Minute, w.Settings.Location()) })
 
 	// Audit pruning: remove events older than 30 days, runs daily
-	go func() {
+	safeGo("audit-prune", func() {
 		for {
 			time.Sleep(24 * time.Hour)
 			w.pruneOldAuditEvents()
 		}
-	}()
+	})
 
 	return w
 }

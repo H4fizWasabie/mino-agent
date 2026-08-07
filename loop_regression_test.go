@@ -143,3 +143,34 @@ func TestLoopNoPushOutsideStage(t *testing.T) {
 		t.Fatalf("model called %d times, want 1 (no push outside stage)", len(client.messages))
 	}
 }
+
+// Regression: malformed NATIVE tool_calls (the sibling of the text-marker \'
+// bug). provider.go injects __raw_arguments__ when the model's native
+// tool_calls JSON doesn't parse; the loop must NOT execute the tool with
+// garbage, and must return the raw string so the model can self-correct.
+func TestLoopSurfacesMalformedNativeArgs(t *testing.T) {
+	executions := 0
+	tools := NewRegistry()
+	tools.Register(&Tool{
+		Name: "probe", Schema: map[string]any{"type": "object", "properties": map[string]any{}},
+		Fn: func(map[string]any) string {
+			executions++
+			return "observed"
+		},
+	})
+	client := &fakeClient{script: []*LLMResponse{
+		// native tool_use whose args were unparseable at the provider layer
+		scriptedResp([]ContentBlock{toolBlock("probe", map[string]any{"__raw_arguments__": "{broken json"})}, "tool_use"),
+		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
+	}}
+	result := RunLoopContext(context.Background(), client, "native-args", "", []Message{{Role: "user", Content: "go"}}, tools, 5, 100, nil, false, "", nil)
+	if result.Status != "complete" {
+		t.Fatalf("status = %q, want complete", result.Status)
+	}
+	if executions != 0 {
+		t.Fatalf("tool executed %d times, want 0 (malformed args must not run the tool)", executions)
+	}
+	if len(result.ToolCalls) != 1 || !strings.Contains(result.ToolCalls[0].Output, "{broken json") {
+		t.Fatalf("raw args not surfaced to the model: %#v", result.ToolCalls)
+	}
+}

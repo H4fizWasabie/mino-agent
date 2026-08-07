@@ -244,7 +244,13 @@ func parseResponse(r io.Reader) (*LLMResponse, error) {
 	}
 	for _, tc := range choice.Message.ToolCalls {
 		var args map[string]any
-		json.Unmarshal([]byte(tc.Function.Arguments), &args)
+		if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+			// Model emitted malformed native tool_calls JSON (same failure class
+			// as the text-marker \' bug). Don't execute with nil args: hand the
+			// raw string back as a tool result so the model can self-correct.
+			slog.Warn("unparseable native tool_call arguments", "tool", tc.Function.Name, "arguments", tc.Function.Arguments)
+			args = map[string]any{"__raw_arguments__": tc.Function.Arguments}
+		}
 		blocks = append(blocks, ContentBlock{
 			Type:  "tool_use",
 			ID:    tc.ID,

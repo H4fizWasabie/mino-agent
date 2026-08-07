@@ -253,7 +253,16 @@ func RunLoopContext(
 				update(LoopSnapshot{Iteration: i, Status: "running_tool", CurrentTool: fmt.Sprintf("%s(%v)", tc.Name, args)})
 			}
 
-			raw := tools.ExecuteContext(ctx, tc.Name, args)
+			// Malformed native tool-call args (provider.go injected
+			// __raw_arguments__ and logged the raw string). Never execute a tool
+			// with garbage input: return the raw string as the result so the
+			// model sees exactly what it emitted and can re-emit valid JSON.
+			var raw string
+			if rawArgs, bad := args["__raw_arguments__"]; bad {
+				raw = fmt.Sprintf("Error: tool call arguments did not parse as JSON. Raw arguments: %v. Re-emit this call with valid JSON arguments.", rawArgs)
+			} else {
+				raw = tools.ExecuteContext(ctx, tc.Name, args)
+			}
 			if ctx.Err() != nil {
 				result.Status = "cancelled"
 				result.Reply = "Stopped."
