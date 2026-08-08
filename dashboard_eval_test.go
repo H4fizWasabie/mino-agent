@@ -80,3 +80,37 @@ func TestDashboardViewsSurviveUnchangedPollingRefresh(t *testing.T) {
 		t.Fatal("memory graph simulation must cap node velocity")
 	}
 }
+
+func TestDashboardNavigationAndLegacyHashContract(t *testing.T) {
+	index, err := staticFiles.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, route := range []string{"today", "work", "conversations", "memory", "system"} {
+		want := `href="#` + route + `" data-v="` + route + `"`
+		if !strings.Contains(string(index), want) {
+			t.Errorf("primary navigation must preserve %q", route)
+		}
+	}
+
+	script, err := staticFiles.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, redirect := range []string{
+		`if(raw==="overview") route=["today",null]`,
+		`else if(raw==="gateway"||raw==="chat") route=["conversations",null]`,
+		`else if(raw==="loop") route=["system","runtime"]`,
+		`else if(raw==="tools") route=["system",sub==="results"?"tool-results":sub==="mcp"?"mcp":"tools"]`,
+		`else if(raw==="database") route=["system",sub?` + "`database-${sub}`" + `:"database"]`,
+		`else if(raw==="files") route=["system",sub?` + "`files-${sub}`" + `:"files"]`,
+		`else if(raw==="ops") route=["system",sub&&sub!=="overview"?sub:"overview"]`,
+		`else if(raw==="settings") route=["system","settings"]`,
+		`else if(raw==="activetasks") route=["system","schedules"]`,
+		`else if(raw==="graph") route=["memory","graph"]`,
+	} {
+		if !strings.Contains(string(script), redirect) {
+			t.Errorf("dashboard must preserve legacy route redirect %q", redirect)
+		}
+	}
+}
