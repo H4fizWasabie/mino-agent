@@ -592,7 +592,16 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 			result.StagesRun++
 			state.EndedAt = time.Now().UTC()
 			outputs, verifyErr = verifyWorkspaceStageOutputs(pb, run, stage, stageResult.ToolCalls)
-			if stageResult.Status == "complete" && verifyErr == nil {
+			// A stage's contract is its verified outputs: a runtime error after
+			// the work is written (e.g. a flaked final model call) must not fail
+			// the stage — only a cancelled run or unverified outputs do.
+			// Observed 2026-08-08: the 09:30 run failed with "all vision
+			// providers failed" while the post was already published and the
+			// log written.
+			if verifyErr == nil && (stageResult.Status == "complete" || stageResult.Status == "error") {
+				if stageResult.Status == "error" {
+					result.Reply = fmt.Sprintf("(work verified complete; final model call failed: %s)", stageResult.Reply)
+				}
 				break
 			}
 			// Failed attempt. Retry only when the stage is retry-safe (read-only

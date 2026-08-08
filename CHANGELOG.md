@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- Playbook stages with verified outputs now complete even when the final model call flakes. (Why: the 09:30 threads-daily-capability run on 2026-08-08 published the post and wrote its log, then was marked failed by `all vision providers failed: empty model response` on the wrap-up call — the Telegram report was lost and the routine went blocked. A stage's contract is its verified outputs, not the model's last word. Cancelled runs and missing outputs still fail.)
+
 ### Added
 - `assets/playbook-authoring.SKILL.md`: new "Battle-tested patterns" section covering scheduling mechanics (schedules.json, day-gating, mino-user ownership), social-playbook patterns (ALL_PLATFORMS cross-exclusion, vision critique loop, judgment gates), external-data quarantine (playbook outputs distill into memory and feed the cross-playbook glob; external text belongs in `~/.mino/data/`), and fail-fast rules for flaky external tools. (Why: these patterns were hard-won from production failures on 2026-08-07 — the stopped-routine schedule death, the reddit 50-iteration grind, the spam-poisoning vector, and the root-owned playbook landmine — and the skill previously taught an outdated config.md scheduling mechanism that the runtime does not use.)
 

@@ -674,3 +674,70 @@ func TestPlaybookSystemPromptHasNoClock(t *testing.T) {
 		t.Fatalf("stage message missing clock: %s", stageMsg)
 	}
 }
+
+// A stage whose declared outputs are verified must complete even when the
+// final model call flaked (status "error") — the outputs are the contract.
+// Observed 2026-08-08: the 09:30 run failed with "all vision providers
+// failed" while the post was already published and the log written.
+func TestWorkspaceCompletesWhenOutputsVerifiedDespiteRuntimeError(t *testing.T) {
+	home := t.TempDir()
+	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect"})
+	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
+	pb, err := loadPlaybookWorkspace(home, "brief")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := loadOrCreatePlaybookRun(pb, registry, "make the briefing", "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage1, _ := workspaceStage(pb, 1)
+	path1 := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
+	oldLoop := runPlaybookStageLoop
+	defer func() { runPlaybookStageLoop = oldLoop }()
+	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
+		// The stage writes its output, then the final model call flakes.
+		if err := os.MkdirAll(filepath.Dir(path1), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path1, []byte("collected"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		return &LoopResult{Status: "error", Reply: "(error: all vision providers failed: empty model response)", ToolCalls: []ToolCall{{Name: "write_file", Args: map[string]any{"path": path1}}}}
+	}
+	result, err := RunPlaybook(context.Background(), core, "brief", "make the briefing", "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "complete" {
+		t.Fatalf("status = %q, want complete (outputs verified despite runtime error)", result.Status)
+	}
+	if !strings.Contains(result.Reply, "work verified complete") {
+		t.Fatalf("reply = %q, want the verified-complete note", result.Reply)
+	}
+}
+
+// Control: a runtime error WITHOUT verified outputs still fails the stage.
+func TestWorkspaceFailsWhenRuntimeErrorAndOutputsMissing(t *testing.T) {
+	home := t.TempDir()
+	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect"})
+	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
+	oldLoop := runPlaybookStageLoop
+	defer func() { runPlaybookStageLoop = oldLoop }()
+	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
+		return &LoopResult{Status: "error", Reply: "(error: empty model response)"}
+	}
+	result, err := RunPlaybook(context.Background(), core, "brief", "make the briefing", "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "failed" {
+		t.Fatalf("status = %q, want failed (no outputs written)", result.Status)
+	}
+}
