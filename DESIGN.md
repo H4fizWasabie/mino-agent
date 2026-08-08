@@ -223,6 +223,13 @@ maximizable. The multiline composer begins at roughly five lines, grows to a
 messages can be reviewed without accidental submission. Mobile uses a dedicated
 full-height conversation state and hides the contextual side strip.
 
+### Artifact actions
+
+Mino runs headless on a VPS, so artifact controls stay in the browser. Folder
+actions open the authorized Files view; file actions open a read-only endpoint.
+The file browser offers Copy path and Download, and every action reports missing,
+disallowed, or unsupported targets at the initiating control.
+
 ## Do's and Don'ts
 
 ### Do:

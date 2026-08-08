@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -90,6 +92,153 @@ func TestDashboardFrontendEndpointsHaveRegisteredHandlers(t *testing.T) {
 		if !seen[path] {
 			t.Errorf("known-missing endpoint %q (%s) is no longer referenced; remove the allowance", path, reason)
 		}
+	}
+}
+
+func TestDashboardArtifactActionsHaveRecoveryUI(t *testing.T) {
+	script, err := staticFiles.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{
+		"/api/reveal?action=inspect",
+		"artifactNotice(`${label} opened in Files`)",
+		"copyArtifactPath",
+		`document.execCommand("copy")`,
+		"action=download",
+		`reveal("memories","memories/")`,
+		"allow pop-ups to open it",
+	} {
+		if !strings.Contains(string(script), marker) {
+			t.Errorf("artifact action contract missing %q", marker)
+		}
+	}
+	for _, forbidden := range []string{`reveal("state.db"`, `reveal("providers.json"`, `reveal("","open folder")`} {
+		if strings.Contains(string(script), forbidden) {
+			t.Errorf("sensitive artifact affordance still present: %q", forbidden)
+		}
+	}
+}
+
+func TestDashboardArtifactActionContract(t *testing.T) {
+	home := t.TempDir()
+	playbooks := filepath.Join(home, "playbooks")
+	memories := filepath.Join(home, "semantic-memory")
+	if err := os.MkdirAll(playbooks, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(memories, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "SOUL.md"), []byte("owner preferences"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "providers.json"), []byte(`{"api_key":"secret"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "private.txt")
+	if err := os.WriteFile(outside, []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	previous := dashCore
+	dashCore = &Core{Settings: &Settings{Home: home, MemoriesDir: memories}}
+	defer func() { dashCore = previous }()
+
+	tests := []struct {
+		name, path, action string
+		status             int
+		ok                 bool
+		kind               string
+	}{
+		{name: "relative file", path: "SOUL.md", action: "inspect", status: http.StatusOK, ok: true, kind: "file"},
+		{name: "relative directory", path: "playbooks", action: "inspect", status: http.StatusOK, ok: true, kind: "directory"},
+		{name: "download directory", path: "playbooks", action: "download", status: http.StatusBadRequest},
+		{name: "missing target", path: "playbooks/missing.md", action: "inspect", status: http.StatusNotFound},
+		{name: "private config", path: "providers.json", action: "inspect", status: http.StatusForbidden},
+		{name: "outside home", path: outside, action: "inspect", status: http.StatusForbidden},
+		{name: "unsupported action", path: "SOUL.md", action: "launch", status: http.StatusBadRequest},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/reveal?path="+url.QueryEscape(tc.path)+"&action="+url.QueryEscape(tc.action), nil)
+			rr := httptest.NewRecorder()
+			handleRevealAPI(rr, req)
+			if rr.Code != tc.status {
+				t.Fatalf("status = %d, want %d; body=%s", rr.Code, tc.status, rr.Body.String())
+			}
+			if tc.status != http.StatusOK {
+				return
+			}
+			var got struct {
+				OK   bool   `json:"ok"`
+				Kind string `json:"kind"`
+			}
+			if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+				t.Fatal(err)
+			}
+			if got.OK != tc.ok || got.Kind != tc.kind {
+				t.Fatalf("response = %#v, want ok=%t kind=%q", got, tc.ok, tc.kind)
+			}
+		})
+	}
+}
+
+func TestDashboardFilesAuthorizesMinoRoots(t *testing.T) {
+	home := t.TempDir()
+	results := filepath.Join(home, "playbooks", "results")
+	if err := os.MkdirAll(results, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(results, "report.txt"), []byte("verified output"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	unsafe := filepath.Join(results, "preview.html")
+	if err := os.WriteFile(unsafe, []byte(`<svg><script>window.pwned=true</script></svg>`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "private.txt")
+	if err := os.WriteFile(outside, []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	previous := dashCore
+	dashCore = &Core{Settings: &Settings{Home: home}}
+	defer func() { dashCore = previous }()
+
+	tests := []struct {
+		name, path string
+		status     int
+		body       string
+	}{
+		{name: "valid file", path: filepath.Join(results, "report.txt"), status: http.StatusOK, body: "verified output"},
+		{name: "valid directory", path: results, status: http.StatusOK},
+		{name: "missing target", path: filepath.Join(results, "missing.txt"), status: http.StatusNotFound},
+		{name: "disallowed target", path: outside, status: http.StatusForbidden},
+		{name: "unsupported action", path: filepath.Join(results, "report.txt"), status: http.StatusBadRequest},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			action := ""
+			if tc.name == "unsupported action" {
+				action = "&action=launch"
+			}
+			req := httptest.NewRequest(http.MethodGet, "/api/files?path="+url.QueryEscape(tc.path)+action, nil)
+			rr := httptest.NewRecorder()
+			handleFilesAPI(rr, req)
+			if rr.Code != tc.status {
+				t.Fatalf("status = %d, want %d; body=%s", rr.Code, tc.status, rr.Body.String())
+			}
+			if tc.body != "" && rr.Body.String() != tc.body {
+				t.Fatalf("body = %q, want %q", rr.Body.String(), tc.body)
+			}
+		})
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/files?path="+url.QueryEscape(unsafe), nil)
+	response := httptest.NewRecorder()
+	handleFilesAPI(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "text/plain; charset=utf-8" || response.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("unsafe artifact response = status %d, content-type %q, nosniff %q", response.Code, response.Header().Get("Content-Type"), response.Header().Get("X-Content-Type-Options"))
 	}
 }
 
