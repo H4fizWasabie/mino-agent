@@ -51,6 +51,12 @@ conversation 72% of the lower width. Evidence, Actions, and Links share the
 remaining 28%. The workbench is pointer- and keyboard-resizable, collapsible,
 restorable, and maximizable.
 
+Artifact actions are browser-native and truthful. A folder action routes to the
+authorized VPS Files view; a file action opens through the read-only file
+endpoint. Files also expose Copy path and Download controls, while missing,
+disallowed, and unsupported targets return an inline status notice instead of a
+silent success.
+
 ### Truthful health
 
 The global health indicator reports runtime health rather than owner workload:

@@ -91,9 +91,55 @@ function renderMarkdown(text){
 let D = null;
 let oauthProviders = {}, oauthMessage = "";
 
-// Click a section's data to open the real local file/folder (editor or Finder).
-function revealFile(p){ fetch("/api/reveal?path=" + encodeURIComponent(p)); }
-const reveal = (path, label) => `<a class="reveal" onclick="revealFile('${path}')">${esc(label)}</a>`;
+// Artifact actions stay inside the headless dashboard: folders route to the
+// VPS browser, while files open through the authorized download endpoint.
+let artifactNoticeTimer = null;
+function artifactNotice(message, tone="ok"){
+  let el = document.getElementById("artifact-notice");
+  if(!el){
+    el = document.createElement("div"); el.id="artifact-notice"; el.setAttribute("role","status");
+    el.setAttribute("aria-live","polite"); document.body.appendChild(el);
+  }
+  el.className = "artifact-notice "+tone; el.textContent = message; el.hidden = false;
+  clearTimeout(artifactNoticeTimer); artifactNoticeTimer = setTimeout(()=>{ el.hidden=true; }, 4200);
+}
+async function revealFile(path, label="Artifact"){
+  let popup = null;
+  try {
+    const response = await fetch("/api/reveal?action=inspect&path="+encodeURIComponent(path));
+    const data = await response.json().catch(()=>({}));
+    if(!response.ok || !data.ok) throw new Error(data.error||`artifact request failed (${response.status})`);
+    if(data.kind === "directory"){
+      location.hash = "#files/"+encodeURIComponent(data.path);
+      artifactNotice(`${label} opened in Files`);
+      return;
+    }
+    popup = window.open("about:blank", "_blank", "noopener,noreferrer");
+    const url = "/api/files?path="+encodeURIComponent(data.path);
+    if(popup) popup.location.href = url;
+    else artifactNotice(`${label} is ready at ${data.path}; allow pop-ups to open it`, "warn");
+    if(popup) artifactNotice(`${label} opened in a new tab`);
+  } catch(error){
+    if(popup) popup.close();
+    artifactNotice(`${label} unavailable: ${error.message}`, "error");
+  }
+}
+async function copyArtifactPath(path, label="Artifact"){
+  try {
+    if(navigator.clipboard?.writeText) await navigator.clipboard.writeText(path);
+    else {
+      const input=document.createElement("textarea"); input.value=path; input.setAttribute("readonly","");
+      input.style.position="fixed"; input.style.opacity="0"; document.body.appendChild(input); input.select();
+      const copied=document.execCommand("copy");
+      input.remove();
+      if(!copied) throw new Error("copy unavailable");
+    }
+    artifactNotice(`${label} path copied`);
+  } catch(error){
+    artifactNotice(`Could not copy ${label.toLowerCase()} path`, "error");
+  }
+}
+const reveal = (path, label) => `<button type="button" class="reveal" onclick="revealFile(${jsArg(path)},${jsArg(label)})">${esc(label)}</button>`;
 
 // --- memory CRUD (dashboard side). `editing` pauses the 5s rebuild so an
 // in-progress edit isn't wiped (same idea as the animation guard).
@@ -792,7 +838,7 @@ function memOverview(d){
     <section class="memory-retrieval"><div class="overview-section-head"><div><span class="section-kicker">RETRIEVAL</span><h2>Memory enters only when needed</h2></div><span class="section-note">the gate protects latency and relevance</span></div>${gateSplit(s)}</section>
     <section class="memory-source"><div><span class="section-kicker">GRAPH SOURCE · SQLITE DIAGNOSTIC</span><h3>Curated in Markdown. Audited in SQLite.</h3><p>Graph claims are authoritative semantic memory. SQLite remains available for migration parity and operational history.</p></div>
       <a href="#database">Open database →</a></section>
-    <div class="memory-files"><span>FILES</span>${reveal("state.db","state.db")}${reveal("MEMORY.md","MEMORY.md")}${reveal("SOUL.md","SOUL.md")}${reveal("skills","skills/")}${reveal("playbooks","playbooks/")}</div>`;
+    <div class="memory-files"><span>FILES</span>${reveal("state.db","state.db")}${reveal("memories","memories/")}${reveal("SOUL.md","SOUL.md")}${reveal("skills","skills/")}${reveal("playbooks","playbooks/")}</div>`;
 }
 function memSemantic(d){
   const facts = d.facts || [];
@@ -855,7 +901,7 @@ function memSoul(d){
     <div class="memory-editor-card soul-editor"><textarea id="soul" class="editor" style="min-height:300px"
       oninput="dirty('soul-save')" onfocus="markEditing()">${esc(d.soul||"")}</textarea>
     <div class="memory-editor-actions"><button class="save" id="soul-save" disabled onclick="saveSoul()">Save SOUL.md</button>
-      <span class="meta" id="soul-msg"></span><span class="editor-spacer"></span>${reveal("SOUL.md","open in editor")}</div></div>`;
+      <span class="meta" id="soul-msg"></span><span class="editor-spacer"></span>${reveal("SOUL.md","open file")}</div></div>`;
 }
 function memConsolidation(d){
   const distilled = (d.facts||[]).filter(f => f.source==="consolidation");
@@ -1594,9 +1640,10 @@ function renderFileTree(tree, parent){
     const size = n.is_dir ? "" : ` <span class="fsize">${formatSize(n.size)}</span>`;
     const time = n.mod_time ? ` <span class="ftime">${n.mod_time}</span>` : "";
     const href = n.is_dir ? `#files/${encodeURIComponent(n.path)}` : `/api/files?path=${encodeURIComponent(n.path)}`;
-    const target = n.is_dir ? "" : ' target="_blank"';
-    const onclick = n.is_dir ? "" : "";
-    return `<a class="${cls}" style="padding-left:${depth*20+8}px" href="${esc(href)}"${target}>${icon} ${esc(n.name)}${size}${time}</a>`;
+    if(n.is_dir){
+      return `<a class="${cls}" style="padding-left:${depth*20+8}px" href="${href}">${icon}<span class="file-main">${esc(n.name)}</span><span class="file-action-label">Browse</span></a>`;
+    }
+    return `<div class="${cls} file-entry" style="padding-left:${depth*20+8}px">${icon}<a class="file-main" href="${href}" target="_blank" rel="noopener">${esc(n.name)}${size}${time}</a><span class="file-actions"><button type="button" onclick="copyArtifactPath(${jsArg(n.path)},${jsArg(n.name)})">Copy path</button><a href="${href}&action=download" download>Download</a></span></div>`;
   };
   return tree.map(n => item(n, 0)).join("");
 }

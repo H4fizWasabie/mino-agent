@@ -1670,27 +1670,70 @@ func countRows(db *sql.DB, table string) (int, error) {
 }
 
 func handleRevealAPI(w http.ResponseWriter, r *http.Request) {
-	w.Write([]byte("{}"))
+	if r.Method != http.MethodGet {
+		dashboardArtifactError(w, http.StatusMethodNotAllowed, "GET only")
+		return
+	}
+	if dashCore == nil || dashCore.Settings == nil {
+		dashboardArtifactError(w, http.StatusServiceUnavailable, "dashboard is not ready")
+		return
+	}
+	action := r.URL.Query().Get("action")
+	if action == "" {
+		action = "inspect"
+	}
+	if action != "inspect" && action != "download" {
+		dashboardArtifactError(w, http.StatusBadRequest, "unsupported artifact action")
+		return
+	}
+	path, info, status, message := resolveDashboardArtifact(dashCore.Settings.Home, dashCore.Settings.MemoriesDir, r.URL.Query().Get("path"))
+	if status != http.StatusOK {
+		dashboardArtifactError(w, status, message)
+		return
+	}
+	if action == "download" {
+		if info.IsDir() {
+			dashboardArtifactError(w, http.StatusBadRequest, "directories cannot be downloaded")
+			return
+		}
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(path)))
+		http.ServeFile(w, r, path)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"ok": true, "action": action, "kind": map[bool]string{true: "directory", false: "file"}[info.IsDir()],
+		"path": path, "name": info.Name(), "size": info.Size(), "mod_time": info.ModTime().Format("2006-01-02 15:04"),
+	})
 }
 
 func handleFilesAPI(w http.ResponseWriter, r *http.Request) {
-	root := "/tmp/mino/results"
-	path := r.URL.Query().Get("path")
-	if path == "" {
-		path = root
-	}
-	// prevent traversal outside root
-	abs, err := filepath.Abs(path)
-	if err != nil || !strings.HasPrefix(abs, root) {
-		http.Error(w, "bad path", 400)
+	if r.Method != http.MethodGet {
+		dashboardArtifactError(w, http.StatusMethodNotAllowed, "GET only")
 		return
 	}
-	info, err := os.Stat(abs)
-	if err != nil {
-		http.Error(w, "not found", 404)
+	if dashCore == nil || dashCore.Settings == nil {
+		dashboardArtifactError(w, http.StatusServiceUnavailable, "dashboard is not ready")
+		return
+	}
+	action := r.URL.Query().Get("action")
+	if action != "" && action != "view" && action != "download" {
+		dashboardArtifactError(w, http.StatusBadRequest, "unsupported artifact action")
+		return
+	}
+	requestedPath := r.URL.Query().Get("path")
+	if requestedPath == "" {
+		requestedPath = "/tmp/mino/results"
+	}
+	abs, info, status, message := resolveDashboardArtifact(dashCore.Settings.Home, dashCore.Settings.MemoriesDir, requestedPath)
+	if status != http.StatusOK {
+		dashboardArtifactError(w, status, message)
 		return
 	}
 	if !info.IsDir() {
+		if r.URL.Query().Get("action") == "download" {
+			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(abs)))
+		}
 		http.ServeFile(w, r, abs)
 		return
 	}
@@ -1724,6 +1767,74 @@ func handleFilesAPI(w http.ResponseWriter, r *http.Request) {
 		return tree[i].Name < tree[j].Name
 	})
 	json.NewEncoder(w).Encode(tree)
+}
+
+func dashboardArtifactError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": message})
+}
+
+// resolveDashboardArtifact limits dashboard file access to Mino's home and
+// generated result roots, including symlink targets that remain inside them.
+func resolveDashboardArtifact(home, memoriesDir, raw string) (string, os.FileInfo, int, string) {
+	if home == "" {
+		return "", nil, http.StatusServiceUnavailable, "Mino home is not configured"
+	}
+	path := strings.TrimSpace(raw)
+	if path == "" {
+		path = home
+	} else if !filepath.IsAbs(path) {
+		path = filepath.Join(home, path)
+	}
+	abs, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return "", nil, http.StatusBadRequest, "invalid artifact path"
+	}
+	roots := []string{home, "/tmp/mino/results"}
+	if memoriesDir != "" {
+		roots = append(roots, memoriesDir)
+	}
+	allowed := false
+	for _, root := range roots {
+		if artifactPathWithin(abs, root) {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return "", nil, http.StatusForbidden, "artifact path is outside Mino-authorized roots"
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil, http.StatusNotFound, "artifact was not found"
+		}
+		return "", nil, http.StatusForbidden, "artifact is unavailable"
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", nil, http.StatusForbidden, "artifact link is unavailable"
+	}
+	for _, root := range roots {
+		if artifactPathWithin(resolved, root) {
+			return resolved, info, http.StatusOK, ""
+		}
+	}
+	return "", nil, http.StatusForbidden, "artifact link leaves Mino-authorized roots"
+}
+
+func artifactPathWithin(path, root string) bool {
+	absPath, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	absRoot, err := filepath.Abs(filepath.Clean(root))
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absRoot, absPath)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }
 
 // --- Usage stats from usage.jsonl (Core-compatible) ---
