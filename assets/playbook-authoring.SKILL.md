@@ -82,7 +82,7 @@ These come from production failures; new playbooks for content or external-tool 
 - **Judgment gate** (reputation-adjacent posts): hard-ban politics/religion/race/named individuals; mock behavior never identity; embarrassment test (comfortable explaining it to a business contact); fail → rewrite once → skip the day, logged, no post.
 
 ### External data and flaky tools
-- **Quarantine layers**: external text (comments, replies, fetched content) must NEVER be written into a playbook output — playbook outputs are distilled into long-term memory and read by every other playbook via the ALL_PLATFORMS glob. Write external text to `~/.mino/data/<playbook>/` instead; keep stage outputs metadata-only (counts, IDs, no quotes). A metadata-only declared output still satisfies the stage output enforcement.
+- **Quarantine layers**: external text (comments, replies, fetched content) must NEVER be written into a playbook output — playbook outputs are distilled into long-term memory and read by every other playbook via the ALL_PLATFORMS glob. Write external text to `~/.mino/data/<playbook>/` instead; keep stage outputs metadata-only (counts, IDs, no quotes). **Quarantined outputs** (feature, issue #22): declare an absolute path in the Outputs table — it is enforced like any declared output (stage cannot complete without it) but never distilled or globbed. This gives audit files real teeth without breaking the quarantine.
 - **Fail fast**: for flaky external tools (MCP/composio), cap attempts explicitly ("3 consecutive failures → fallback or write the failure reason to the output and end the stage"). Never let the model grind tool variants to the iteration cap.
 
 ### Delivery
