@@ -114,3 +114,80 @@ func TestDashboardNavigationAndLegacyHashContract(t *testing.T) {
 		}
 	}
 }
+
+func TestDashboardNowfieldSurfaceContract(t *testing.T) {
+	index, err := staticFiles.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(index), "THESIS: Nowfield") {
+		t.Fatal("dashboard direction contract must name the approved Nowfield surface")
+	}
+	for _, shell := range []string{
+		`<div id="view"><div class="nowfield-loading"`,
+	} {
+		if !strings.Contains(string(index), shell) {
+			t.Errorf("Nowfield shell is missing %q", shell)
+		}
+	}
+	if strings.Count(string(index), `<a href="#memory" data-v="memory"`) < 2 {
+		t.Error("Memory must remain reachable in both desktop and mobile navigation")
+	}
+
+	script, err := staticFiles.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, behavior := range []string{
+		`function nowfieldView(d,mode)`,
+		`function nowfieldAttr(value)`,
+		`.replace(/"/g,"&quot;").replace(/'/g,"&#39;")`,
+		`return nowfieldView(d,"today")`,
+		`return nowfieldView(d,"work")`,
+		`function filterNowfield()`,
+		`aria-label="Search Work"`,
+		`aria-label="Filter Work by status"`,
+		`class="nowfield-axis"`,
+		`<span>Past</span><strong>Now</strong><span>Next</span>`,
+		`#responsibility/${encodeURIComponent(entry.id)}`,
+		`entry.next_action`,
+		`entry.due_at`,
+		`entry.schedule`,
+		`class="nowfield-empty"`,
+		`class="nowfield-focus"`,
+		`class="nowfield-focus-axis"`,
+		`aria-label="Past:`,
+		`aria-label="Now:`,
+		`aria-label="Next:`,
+		`class="nowfield-detail-link"`,
+		`function renderRefreshError(error)`,
+	} {
+		if !strings.Contains(string(script), behavior) {
+			t.Errorf("Nowfield browser contract is missing %q", behavior)
+		}
+	}
+
+	styles, err := staticFiles.ReadFile("static/style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rule := range []string{
+		`.nowfield{`,
+		`.nowfield-lane{`,
+		`.nowfield-axis{`,
+		`.nowfield-controls{`,
+		`.nowfield-focus{`,
+		`.nowfield-focus-axis{`,
+		`.nowfield-detail-link{`,
+		`.nowfield-loading{`,
+		`height:calc(100vh - 204px)`,
+		`body[data-view="today"] main,body[data-view="work"] main`,
+		`body[data-view="responsibility"] main{width:100%`,
+		`.nowfield-lanes{min-height:0`,
+		`.nowfield-lane{grid-template-columns:1fr`,
+	} {
+		if !strings.Contains(string(styles), rule) {
+			t.Errorf("Nowfield layout contract is missing %q", rule)
+		}
+	}
+}

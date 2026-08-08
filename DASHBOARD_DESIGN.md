@@ -1,6 +1,6 @@
 # Mino Dashboard Design
 
-Status: agreed product direction; not yet an implementation specification.
+Status: agreed product direction and implementation contract.
 
 ## Purpose
 
@@ -8,21 +8,22 @@ The dashboard should present Mino as a responsible, auditable personal
 operator. It should lead with changes in responsibility and outcome while
 keeping runtime machinery available for inspection.
 
-The selected visual direction is prototype **B — Operator Timeline**. Its
-editorial hierarchy, chronological journal, compact navigation, and
-non-dominant conversation composer form the redesign foundation.
+The selected visual direction is **Nowfield**. Its stable Past / Now / Next
+geometry, compact navigation, full-width Responsibility lanes, and reserved
+conversation-workbench region form the redesign foundation. The workbench is a
+separate implementation issue.
 
 ## Visual language
 
-B uses an editorial-operational typography system:
+Nowfield uses a direct operational typography system:
 
-- Editorial serif for page titles and meaningful journal outcomes
-- Neutral sans-serif for summaries, navigation, actions, and controls
+- Strong system sans-serif for page titles and Responsibility names
+- Neutral system sans-serif for summaries, navigation, actions, and controls
 - Restrained monospace only for timestamps, identifiers, and Evidence
   references
 
-The palette stays quiet: a warm off-white background, near-black text, and
-subtle rules provide most structure. Mino blue is reserved for Working state
+The palette stays quiet: a crisp mineral background, white surfaces, near-black
+text, and subtle rules provide most structure. Mino blue anchors the Now axis
 and primary actions, amber for Needs you, red for genuine blocks or failures,
 and green for Verified outcomes. Decorative card shadows and technical
 monospace styling do not define the main interface.
@@ -34,9 +35,9 @@ Desktop uses a compact sticky top navigation:
 **Mino**, **Today**, **Work**, **Conversations**, **Memory**, **System**, and a
 truthful runtime-health indicator.
 
-There is no permanent sidebar, command-centre heading, or chat dock. The
-journal stays within one readable central column and wide-screen space remains
-intentionally quiet.
+There is no permanent sidebar or command-centre heading. Today and Work use the
+available viewport as one ruled time field; wide-screen space carries Past and
+Next context instead of becoming empty margins.
 
 System uses local tabs for Overview, Runtime, Tools, Database, Files, and
 Settings. Memory uses local tabs for Search, Knowledge, Episodes, and Graph.
@@ -44,9 +45,8 @@ Provider and model identity belong in System rather than global chrome; a
 provider problem appears in Today only when it materially affects
 responsibility or outcome.
 
-Desktop keeps a restrained, fixed, single-line conversation composer at the
-bottom centre. It expands on focus or during conversation, replacing the
-former permanent chat dock without turning Today into a chat page.
+The lower region is reserved for the conversation workbench. Its implementation
+must reflow the time field rather than covering Responsibility rows.
 
 ### Truthful health
 
@@ -177,26 +177,17 @@ Journal search does not search general Memory or raw Conversations. Those
 surfaces retain their own search boundaries so an audit query does not become
 an unstructured global search.
 
-## Work owns responsibility
+## Work owns responsibility in time
 
-Work is not another chronological feed. It is the canonical portfolio of open
-Responsibility grouped by current owner-oriented status, with recently closed
-items available for continuity.
+Work is the canonical portfolio of Responsibility expressed as horizontal
+threads. Past records the latest meaningful event, Now names current truth, and
+Next shows the recorded next action, owner, schedule, or deadline.
 
-Work uses three scopes:
-
-- **Current** contains active one-off Responsibilities grouped vertically as
-  Needs you, Blocked, Working, and Waiting.
-- **Routines** contains standing recurring Responsibilities. Each row leads
-  with its next run and most recent verified outcome.
-- **Closed** contains the complete searchable Responsibility archive.
-
-Work does not use a kanban board. The vertical portfolio preserves B's
-editorial character and remains usable on narrow screens.
-
-Current may include a compact **Recently verified** section for the previous
-seven days. Older closed Responsibilities leave the default workspace but
-remain accessible through Closed and journal search.
+Work does not use a kanban board or generic cards. Needs you and Blocked sort
+first, followed by active and closed states; recency resolves order within a
+state. Search and status filtering operate on the same real Responsibility
+payload. On narrow screens, every lane becomes a labelled Past / Now / Next
+stack rather than squeezing the horizontal geometry.
 
 Filters remain limited to owner-oriented status, due or overdue state,
 one-off or recurring kind, and outcome or Responsibility search. Channel is
@@ -218,17 +209,15 @@ A Responsibility records:
 
 ### Responsibility detail
 
-Selecting a Journal Entry title or Work row opens a dedicated Responsibility
-page. The dashboard does not use a modal or permanent side drawer for complete
-Responsibility inspection.
+Selecting a Responsibility title in Today or Work opens a dedicated full-width
+focus. The dashboard does not use a modal or permanent side drawer.
 
-The detail page uses:
+The focus uses:
 
-- A main column for current state, next action, and immutable Responsibility
-  History
-- A narrower column for policy, schedule, Evidence summary, artifacts, and
-  controls
-- A contextual composer labelled with the current Responsibility
+- A Past / Now / Next axis for the latest event summary, current outcome, and next action
+- A main history region for immutable Responsibility events and evidence
+- A narrower policy region for kind, schedule, deadline, last run, and
+  verification condition
 
 A small inline disclosure may reveal the latest Journal Entry summary, but
 complete history and Evidence remain on the dedicated page. Browser back
@@ -383,7 +372,7 @@ Implementation proceeds through ordered, separately reviewable milestones:
 3. **One-off Responsibility** adds the conversational acceptance boundary,
    owner-oriented transitions, carry-forward, controls, and contextual
    Conversation.
-4. **Complete B information architecture** installs the compact frame,
+4. **Complete Nowfield information architecture** installs the compact frame,
    Conversations library, Memory and System regrouping, truthful health, and
    retires the obsolete Overview, Gateway, Loop, and Active Tasks
    destinations.

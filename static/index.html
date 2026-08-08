@@ -4,11 +4,11 @@
 <link rel="icon" type="image/png" href="/static/assets/logo-mark.png">
 <link rel="stylesheet" href="/static/style.css"></head><body class="app-shell" data-view="today">
 <!--
-THESIS: Mino is an owner journal for accepted responsibility, not a command-center map of its implementation.
-OWN-WORLD: quiet paper surfaces, ink-first hierarchy, semantic state color, editorial outcomes, and precise evidence.
-STORY: see what changed, resolve what needs you, inspect verified outcomes, then pull runtime detail only when needed.
-FIRST VIEWPORT: compact navigation above one readable journal; truthful health at the edge; Ask rests at the bottom.
-FORM: B — Operator Timeline, the accepted product direction recorded in DASHBOARD_DESIGN.md.
+THESIS: Nowfield turns accepted Responsibility into one Past / Now / Next field and refuses the centered dashboard ledger.
+OWN-WORLD: crisp mineral surfaces, black sans-serif hierarchy, ultramarine current state, and ruled time geometry.
+STORY: scan what happened, act on what Mino owns now, and see the next truthful action without losing context.
+FIRST VIEWPORT: compact navigation above a full-width time field; the Now axis anchors vertically scrolling Responsibility lanes.
+FORM: Nowfield, the owner-selected replacement direction; seed f4f1d80b.
 FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
 -->
 <header class="operator-nav">
@@ -42,7 +42,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
     <h1 id="title">Today</h1>
     <p class="sub" id="sub" aria-live="polite">Connecting to current state…</p>
   </header>
-  <div id="view"></div>
+  <div id="view"><div class="nowfield-loading" role="status"><span></span><strong>Loading current Responsibility…</strong><p>Reading the latest Past, Now, and Next state.</p></div></div>
 </main>
 
 <aside id="dock" aria-label="Conversation with Mino">
@@ -72,6 +72,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
   <a href="#today" data-v="today"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M7 3v4M17 3v4M5 11h4v4H5zM12 11h7M12 15h5M5 19h14"/></svg><span>Today</span><b id="mobile-n-today"></b></a>
   <a href="#work" data-v="work"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16v13H4zM8 7V4h8v3M8 12h8M8 16h5"/></svg><span>Work</span></a>
   <a href="#conversations" data-v="conversations"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v12H9l-5 3V5zM8 9h8M8 13h5"/></svg><span>Inbox</span></a>
+  <a href="#memory" data-v="memory"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v14H5zM8 9h8M8 13h5M8 17h7"/></svg><span>Memory</span></a>
   <button id="ask-mobile" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18"/></svg><span>Ask</span></button>
   <a href="#system" data-v="system"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg><span>More</span></a>
 </nav>
