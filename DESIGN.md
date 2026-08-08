@@ -1,34 +1,34 @@
 ---
-name: Mino Operator Timeline
-description: A quiet owner journal where outcomes, attention, and evidence outrank machinery.
+name: Mino Nowfield
+description: A full-width Past, Now, and Next field where responsibility, attention, and evidence remain connected.
 colors:
-  paper: "#e7e5de"
-  surface: "#f0eee8"
-  rule: "#c9c8c1"
-  rule-strong: "#babbb6"
-  ink: "#26313a"
-  ink-muted: "#5f6870"
-  ink-faint: "#7b8388"
-  indigo: "#5264b8"
-  indigo-soft: "#dde2f5"
-  indigo-deep: "#3f509e"
-  verified: "#21845b"
-  verified-soft: "#e8f6ef"
-  blocked: "#c0392b"
-  blocked-soft: "#faeceb"
+  paper: "#f3f4f2"
+  surface: "#ffffff"
+  rule: "#d9dcde"
+  rule-strong: "#bcc2c6"
+  ink: "#171b1e"
+  ink-muted: "#505960"
+  ink-faint: "#737c82"
+  indigo: "#1557d6"
+  indigo-soft: "#e8efff"
+  indigo-deep: "#0c43b3"
+  verified: "#237d52"
+  verified-soft: "#e7f4ec"
+  blocked: "#c53a32"
+  blocked-soft: "#fae9e7"
 typography:
   headline:
-    fontFamily: "Iowan Old Style, Palatino Linotype, Palatino, Georgia, serif"
-    fontSize: "clamp(31px, 4.2vw, 52px)"
-    fontWeight: 600
-    lineHeight: 1.04
-    letterSpacing: "-0.025em"
+    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+    fontSize: "clamp(26px, 3vw, 38px)"
+    fontWeight: 700
+    lineHeight: 1
+    letterSpacing: "-0.035em"
   title:
-    fontFamily: "Iowan Old Style, Palatino Linotype, Palatino, Georgia, serif"
-    fontSize: "18px"
-    fontWeight: 600
-    lineHeight: 1.25
-    letterSpacing: "-0.012em"
+    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+    fontSize: "14px"
+    fontWeight: 700
+    lineHeight: 1.3
+    letterSpacing: "0"
   body:
     fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
     fontSize: "14px"
@@ -69,16 +69,16 @@ components:
     padding: "10px 13px"
 ---
 
-# Design System: Mino Operator Timeline
+# Design System: Mino Nowfield
 
 ## Overview
 
-**Creative North Star: "The Operator's Field Journal"**
+**Creative North Star: "Responsibility has a position in time"**
 
-Mino should feel like a calm, precise journal kept by a capable operator. The
-owner arrives to understand what changed, what needs a decision, and what proof
-exists. The interface therefore uses quiet paper surfaces, ink-led hierarchy,
-editorial outcome typography, and thin rules instead of command-center theater.
+Mino should feel like a calm operational field, not a stack of dashboard cards.
+The owner arrives to understand what happened, what is true now, and what comes
+next. Past, Now, and Next therefore remain visible as one horizontal
+Responsibility thread, anchored by a stable ultramarine Now axis.
 
 The system is deliberately restrained, but not passive. Semantic status color
 appears where it changes the owner's decision; contextual Ask actions and
@@ -88,14 +88,14 @@ available under System without competing with the owner story.
 **Key Characteristics:**
 
 - Owner outcomes lead; implementation detail recedes.
-- Editorial headlines sit above practical sans-serif body copy.
-- Thin rules and tonal layers organize content without card grids.
+- Direct sans-serif hierarchy keeps dense Responsibility lanes scannable.
+- Thin rules and aligned time columns organize content without card grids.
 - Status is stated in words and reinforced, never replaced, by color.
 - Evidence and diagnostics are pull-based.
 
 ## Colors
 
-The palette pairs warm mineral neutrals with one measured indigo action color
+The palette pairs crisp mineral neutrals with one measured ultramarine action color
 and explicit semantic colors for verified, attention, and blocked states.
 
 ### Primary
@@ -105,8 +105,8 @@ and explicit semantic colors for verified, attention, and blocked states.
 
 ### Neutral
 
-- **Warm Paper:** The uninterrupted application field.
-- **Raised Paper:** Controls, popovers, and contained diagnostic surfaces.
+- **Mineral Field:** The quiet application surround.
+- **White Surface:** The Responsibility field, controls, and diagnostics.
 - **Graphite Ink:** Primary reading and outcome text.
 - **Quiet Ink:** Supporting explanations and metadata.
 - **Hairline Rule:** Separates journal entries and regions without boxing them.
@@ -121,44 +121,47 @@ fresh operational or verified state. Stale or failed reads revoke it.
 
 ## Typography
 
-**Display Font:** Iowan Old Style (with Palatino and Georgia fallbacks)  
-**Body Font:** system sans-serif  
+**Display Font:** system sans-serif
+
+**Body Font:** system sans-serif
 **Label/Mono Font:** system monospace
 
-**Character:** Editorial type gives owner outcomes gravity. Neutral sans-serif
-copy keeps actions readable, while monospace is reserved for evidence,
-timestamps, and machine identity.
+**Character:** Direct sans-serif type keeps the time field compact and legible,
+while monospace is reserved for evidence, timestamps, and machine identity.
 
 ### Hierarchy
 
-- **Headline:** Responsive, semibold serif for the day's owner-facing outcome.
-- **Title:** Semibold serif for Responsibility names and meaningful results.
+- **Headline:** Responsive bold sans-serif for the current owner surface.
+- **Title:** Bold sans-serif for Responsibility names and meaningful results.
 - **Body:** Regular system sans-serif with a comfortable reading measure of
   roughly 66–72 characters.
 - **Label:** Compact, bold monospace for status, freshness, and evidence metadata.
 
 ### Named Rules
 
-**The Outcome Type Rule.** Serif type belongs to outcomes and Responsibility
-titles, never to telemetry labels or controls.
+**The Time Label Rule.** Monospace belongs to timestamps, status, and evidence
+metadata, never to narrative outcomes or controls.
 
 ## Layout
 
-The desktop shell uses a compact sticky header, a centered reading column up to
-1040px, and a bottom-anchored Ask composer. Memory and System may widen to
-1240px because their diagnostic material benefits from space. The journal is a
-single ruled stream rather than a dashboard grid.
+The desktop shell uses a compact sticky header and a full-width Work and Today
+field. Past, Now, and Next use a 32/36/32 split; the vertical Now rule stays
+stable while Responsibility lanes scroll. Memory and System retain bounded
+reading widths where their diagnostic material benefits from them. The
+collapsed composer is a 64px shell row, not an overlay. Opening it reflows the
+field into a roughly 55/45 vertical split; conversation receives 72% of the
+workbench and Evidence, Actions, and Links receive 28%.
 
-Below 720px, the header reduces to identity and health, the journal becomes a
-single column, and a five-destination bottom navigation provides Today, Work,
-Inbox, Ask, and More. Ask opens as a full-screen conversation. Touch actions are
-at least 44px high and content remains ahead of navigation in the first viewport.
+Below 720px, each horizontal thread becomes one ordered Past, Now, Next stack,
+with every section labelled in place. The header reduces to identity and health,
+and a six-destination bottom navigation provides Today, Work, Inbox, Memory,
+Ask, and More. Touch actions are at least 44px high.
 
 ## Elevation & Depth
 
 The system is flat by default. Boundaries come from paper tone and hairline
-rules. Shadows are reserved for floating layers—the health popover and expanded
-Ask surface—so elevation consistently means temporary content above the journal.
+rules. Shadows are reserved for temporary popovers such as health; the
+conversation workbench remains part of shell layout at every desktop size.
 
 ### Named Rules
 
@@ -202,13 +205,30 @@ and are shaped by horizontal rules, preserving the field-journal rhythm.
 
 Desktop navigation is one short row of owner concepts. Active destinations use
 a soft indigo field; counts appear only when actionable. Mobile navigation is a
-fixed five-item bar with authored line icons, labels, and the same active color.
+fixed six-item bar with authored line icons, labels, and the same active color.
 
-### Responsibility Journal
+### Responsibility Field
 
-Each entry moves from time to named state, outcome, next action, contextual
-owner controls, and disclosed evidence. Needs-you and blocked entries gain more
-space and direct action; verified entries remain compact.
+Each lane connects the latest meaningful Past event summary to current state and
+the real next action. Needs-you and blocked lanes sort first. Its title opens a
+full-width focus state with the same time grammar above immutable history and
+policy evidence.
+
+### Conversation Workbench
+
+The desktop workbench opens from the bottom shell row and never covers the
+surface above it. Its height is pointer- and keyboard-resizable, restorable, and
+maximizable. The multiline composer begins at roughly five lines, grows to a
+180px cap, and uses Ctrl/Command+Enter to send; Enter remains a newline so long
+messages can be reviewed without accidental submission. Mobile uses a dedicated
+full-height conversation state and hides the contextual side strip.
+
+### Artifact actions
+
+Mino runs headless on a VPS, so artifact controls stay in the browser. Folder
+actions open the authorized Files view; file actions open a read-only endpoint.
+The file browser offers Copy path and Download, and every action reports missing,
+disallowed, or unsupported targets at the initiating control.
 
 ## Do's and Don'ts
 
@@ -226,5 +246,5 @@ space and direct action; verified entries remain compact.
 - **Don't** fabricate activity, proof, health, or reassuring empty states.
 - **Don't** turn the journal into a grid of interchangeable metric cards.
 - **Don't** use color, tiny glyphs, or motion as the only status signal.
-- **Don't** make the secondary dashboard conversation permanently dominate the
-  desktop workspace.
+- **Don't** center Work inside a narrow reading column or disconnect current
+  state from its Past evidence and Next action.

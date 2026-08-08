@@ -91,9 +91,55 @@ function renderMarkdown(text){
 let D = null;
 let oauthProviders = {}, oauthMessage = "";
 
-// Click a section's data to open the real local file/folder (editor or Finder).
-function revealFile(p){ fetch("/api/reveal?path=" + encodeURIComponent(p)); }
-const reveal = (path, label) => `<a class="reveal" onclick="revealFile('${path}')">${esc(label)}</a>`;
+// Artifact actions stay inside the headless dashboard: folders route to the
+// VPS browser, while files open through the authorized download endpoint.
+let artifactNoticeTimer = null;
+function artifactNotice(message, tone="ok"){
+  let el = document.getElementById("artifact-notice");
+  if(!el){
+    el = document.createElement("div"); el.id="artifact-notice"; el.setAttribute("role","status");
+    el.setAttribute("aria-live","polite"); document.body.appendChild(el);
+  }
+  el.className = "artifact-notice "+tone; el.textContent = message; el.hidden = false;
+  clearTimeout(artifactNoticeTimer); artifactNoticeTimer = setTimeout(()=>{ el.hidden=true; }, 4200);
+}
+async function revealFile(path, label="Artifact"){
+  let popup = null;
+  try {
+    const response = await fetch("/api/reveal?action=inspect&path="+encodeURIComponent(path));
+    const data = await response.json().catch(()=>({}));
+    if(!response.ok || !data.ok) throw new Error(data.error||`artifact request failed (${response.status})`);
+    if(data.kind === "directory"){
+      location.hash = "#files/"+encodeURIComponent(data.path);
+      artifactNotice(`${label} opened in Files`);
+      return;
+    }
+    popup = window.open("about:blank", "_blank", "noopener,noreferrer");
+    const url = "/api/files?path="+encodeURIComponent(data.path);
+    if(popup) popup.location.href = url;
+    else artifactNotice(`${label} is ready at ${data.path}; allow pop-ups to open it`, "warn");
+    if(popup) artifactNotice(`${label} opened in a new tab`);
+  } catch(error){
+    if(popup) popup.close();
+    artifactNotice(`${label} unavailable: ${error.message}`, "error");
+  }
+}
+async function copyArtifactPath(path, label="Artifact"){
+  try {
+    if(navigator.clipboard?.writeText) await navigator.clipboard.writeText(path);
+    else {
+      const input=document.createElement("textarea"); input.value=path; input.setAttribute("readonly","");
+      input.style.position="fixed"; input.style.opacity="0"; document.body.appendChild(input); input.select();
+      const copied=document.execCommand("copy");
+      input.remove();
+      if(!copied) throw new Error("copy unavailable");
+    }
+    artifactNotice(`${label} path copied`);
+  } catch(error){
+    artifactNotice(`Could not copy ${label.toLowerCase()} path`, "error");
+  }
+}
+const reveal = (path, label) => `<button type="button" class="reveal" onclick="revealFile(${jsArg(path)},${jsArg(label)})">${esc(label)}</button>`;
 
 // --- memory CRUD (dashboard side). `editing` pauses the 5s rebuild so an
 // in-progress edit isn't wiped (same idea as the animation guard).
@@ -303,11 +349,12 @@ const gateSplit = s => {
 
 // --- Chat gateway: type here, watch the harness run (turns kept in memory)
 const CHAT = [];
-const chatTurnCard = t => `<div class="card">
+const chatTurnCard = t => `<div class="card ${t.error?"chat-error":""}">
   ${t.gate?`<div class="stages"><span class="stage done">gate · ${esc(t.gate.decision)}</span>${(t.tools||[]).map(x=>`<span class="stage done">tool · ${esc(x.tool)}</span>`).join("")}<span class="stage done">reply</span></div>
     <div class="meta" style="margin:0 0 6px">${esc(t.gate.reason||"")}</div>`:""}
   ${(t.tools||[]).map(toolRow).join("")}
   <div class="r" style="margin-top:8px">${renderCardBody(stripTools(t.reply))}</div>
+  ${t.error&&t.request?`<button class="chat-retry" type="button" onclick="retryChat(${jsArg(t.request)})">Review and retry</button>`:""}
   <div class="meta">${secs(t.latency_ms)} · ${t.iterations??"?"} iter${t.consolidation?` · consolidated ${t.consolidation.new_facts} fact(s)`:""}</div>
 </div>`;
 
@@ -344,7 +391,7 @@ function renderCardBody(text) {
 
 function renderChatLog(){
   if (!CHAT.length)
-    return `<div class="empty" style="padding:6px 2px">Message Mino here from any tab. Open Overview to watch it flow through the harness, or the Gateway tab to see every channel's messages together.</div>`;
+    return `<div class="empty" style="padding:6px 2px">Message Mino from any surface. Streaming replies, tool evidence, and conversation context stay together here.</div>`;
   return CHAT.map(m => m.role==="user"
       ? `<div class="bubble">${esc(m.text)}</div>`
       : m.pending ? streamingCard(m)
@@ -352,12 +399,52 @@ function renderChatLog(){
       : chatTurnCard(m)).join("");
 }
 
-function syncChatLogs(){
+function shouldStickChat(scrollHeight,scrollTop,clientHeight){
+  return scrollHeight-scrollTop-clientHeight<=48;
+}
+function syncChatLogs(force=false){
   // one conversation, two surfaces: the Chat & watch tab and the side dock
   document.querySelectorAll(".chatlog").forEach(el => {
+    const stick=force||shouldStickChat(el.scrollHeight,el.scrollTop,el.clientHeight), top=el.scrollTop;
     el.innerHTML = renderChatLog();
-    el.scrollTop = el.scrollHeight;      // dock scrolls its own container
+    el.scrollTop = stick?el.scrollHeight:top;
   });
+  const busy=CHAT.some(message=>message.pending), send=document.getElementById("dsend"), dock=document.getElementById("dock");
+  if(send) send.disabled=busy;
+  if(dock) dock.setAttribute("aria-busy",busy?"true":"false");
+  renderWorkbenchContext();
+}
+
+let workbenchTab="evidence";
+function renderWorkbenchContext(){
+  const target=document.getElementById("workbench-context-body");
+  if(!target) return;
+  if(workbenchTab==="actions"){
+    target.innerHTML=`<div class="workbench-action-list"><button type="button" onclick="newChat()">New conversation</button><button type="button" onclick="toggleSessMenu(event)">Open history</button></div>`;
+    return;
+  }
+  if(workbenchTab==="links"){
+    target.innerHTML=`<div class="workbench-link-list"><a href="#conversations">Conversation library <span>→</span></a><a href="#work">Responsibility field <span>→</span></a><a href="#system/traces">Runtime traces <span>→</span></a></div>`;
+    return;
+  }
+  const message=[...CHAT].reverse().find(item=>item.role==="mino"), tools=message&&message.tools||[];
+  if(tools.length){
+    target.innerHTML=`<div class="workbench-evidence-scope"><span>Latest live turn</span><strong>${esc(message.request||"Current request")}</strong></div><div class="workbench-evidence-list">${tools.map(tool=>`<article><strong>${esc(tool.tool||"Tool")}</strong><p>${esc(tool.summary||tool.output||"Recorded tool result")}</p></article>`).join("")}</div>`;
+  }else if(message&&message.historical){
+    target.innerHTML=`<div class="workbench-context-empty"><strong>Historical tool evidence is not included here.</strong><p>Open Runtime traces for the stored execution record.</p></div>`;
+  }else{
+    target.innerHTML=`<div class="workbench-context-empty"><strong>No live tool evidence for the current turn.</strong><p>Tool results appear here if Mino uses them.</p></div>`;
+  }
+}
+function setWorkbenchTab(tab){
+  if(!["evidence","actions","links"].includes(tab)) return;
+  workbenchTab=tab;
+  document.querySelectorAll("[data-workbench-tab]").forEach(button=>{
+    const selected=button.dataset.workbenchTab===tab;
+    button.classList.toggle("on",selected);
+    button.setAttribute("aria-selected",selected?"true":"false");
+  });
+  renderWorkbenchContext();
 }
 
 // One streamed harness event updates the live card in place.
@@ -375,27 +462,35 @@ function applyStreamEvent(pending, ev){
     pending.pending = false;
     pending.reply = (ev.reply || "");
     pending.status = ev.status;
+    pending.error = chatStatusFailed(ev.status);
     pending.stream = "";
   } else if (ev.kind === "done"){
     pending.pending = false;
-    if (ev.error) pending.reply = "Error: " + ev.error;
+    pending.status = ev.status||pending.status;
+    if(ev.error||chatStatusFailed(pending.status)){ pending.reply = ev.error?"Error: "+ev.error:(ev.reply||pending.reply); pending.error=true; }
     else if (!pending.reply) Object.assign(pending, ev);
     pending.stream = "";
   }
+}
+function chatStatusFailed(status){
+  return ["error","loop","iteration_limit","cancelled"].includes(status);
 }
 
 async function sendChat(fromInput){
   const input = fromInput || document.getElementById("msg") || document.getElementById("dmsg");
   const text = (input && input.value || "").trim();
-  if (!text) return;
+  if (!text || CHAT.some(message=>message.pending)) return;
   input.value = "";
+  resizeComposer();
   CHAT.push({role:"user", text});
   const pending = {role:"mino", pending:true, stream:""};
+  pending.request=text;
   CHAT.push(pending);
-  syncChatLogs();
+  syncChatLogs(true);
   try {
     const res = await fetch("/api/chat/stream", {method:"POST",
       headers:{"Content-Type":"application/json"}, body:JSON.stringify({message:text, session_id:SESSION})});
+    if(!res.ok) throw new Error(`chat returned ${res.status}`);
     const reader = res.body.getReader(), dec = new TextDecoder();
     let buf = "";
     for (;;){
@@ -410,36 +505,116 @@ async function sendChat(fromInput){
         syncChatLogs();
       }
     }
-  } catch(e){ Object.assign(pending, {pending:false, reply:"Error: "+e}); }
-  if (pending.pending) pending.pending = false;   // stream ended without a 'done'
+  } catch(e){ Object.assign(pending, {pending:false, error:true, reply:"Error: "+e}); }
+  if(pending.pending) Object.assign(pending,{pending:false,error:true,reply:"Connection ended before Mino completed the reply."});
   syncChatLogs();
   input.focus();
+}
+function retryChat(text){
+  const input=document.getElementById("dmsg");
+  if(!input) return;
+  setAskOpen(true);
+  input.value=text;
+  resizeComposer();
+  input.focus();
+}
+function composerHeight(scrollHeight,open){
+  return Math.min(open?180:44,Math.max(open?112:44,scrollHeight));
+}
+function shouldSubmitComposer(event){
+  return event.key==="Enter"&&(event.ctrlKey||event.metaKey);
+}
+function resizeComposer(){
+  const input=document.getElementById("dmsg");
+  if(!input) return;
+  const open=document.body.classList.contains("ask-open");
+  input.style.height="auto";
+  input.style.height=composerHeight(input.scrollHeight,open)+"px";
+}
+function workbenchHeightForKey(current,key,viewport){
+  const min=280,max=Math.max(min,Math.round(viewport*.8));
+  const next=key==="Home"?min:key==="End"?max:current+(key==="ArrowUp"?24:key==="ArrowDown"?-24:0);
+  return Math.max(min,Math.min(max,Math.round(next)));
+}
+function setWorkbenchHeight(height){
+  const min=280, max=Math.max(min,Math.round(window.innerHeight*.8)), next=Math.max(min,Math.min(max,Math.round(height)));
+  document.documentElement.style.setProperty("--workbench-h",next+"px");
+  localStorage.setItem("workbenchHeight",next);
+  const handle=document.getElementById("workbench-resizer");
+  if(handle){ handle.setAttribute("aria-valuemin",min); handle.setAttribute("aria-valuemax",max); handle.setAttribute("aria-valuenow",next); }
+}
+function toggleWorkbenchMaximize(){
+  const on=document.body.classList.toggle("workbench-max"), button=document.getElementById("workbench-maximize");
+  if(button){ button.setAttribute("aria-pressed",on?"true":"false"); button.setAttribute("aria-label",on?"Restore conversation workbench":"Maximize conversation workbench"); }
+  resizeComposer();
+}
+function wireWorkbench(){
+  const dock=document.getElementById("dock"), handle=document.getElementById("workbench-resizer"), saved=Number(localStorage.getItem("workbenchHeight"));
+  setWorkbenchHeight(saved||window.innerHeight*.45);
+  handle?.addEventListener("pointerdown",event=>{
+    if(!document.body.classList.contains("ask-open")||document.body.classList.contains("workbench-max")) return;
+    const startY=event.clientY, startHeight=dock.getBoundingClientRect().height;
+    handle.setPointerCapture(event.pointerId);
+    handle.onpointermove=move=>setWorkbenchHeight(startHeight+startY-move.clientY);
+    handle.onpointerup=()=>{ handle.onpointermove=null; handle.onpointerup=null; };
+  });
+  handle?.addEventListener("keydown",event=>{
+    if(!["ArrowUp","ArrowDown","Home","End"].includes(event.key)) return;
+    event.preventDefault();
+    setWorkbenchHeight(workbenchHeightForKey(dock.getBoundingClientRect().height,event.key,window.innerHeight));
+  });
+  document.getElementById("workbench-maximize")?.addEventListener("click",toggleWorkbenchMaximize);
+  document.querySelectorAll("[data-workbench-tab]").forEach(button=>button.addEventListener("click",()=>setWorkbenchTab(button.dataset.workbenchTab)));
+  renderWorkbenchContext();
 }
 function wireDock(){
   const b = document.getElementById("dsend"), i = document.getElementById("dmsg");
   if (b) b.onclick = () => sendChat(i);
   if (i) {
-    i.onkeydown = e => { if (e.key==="Enter") sendChat(i); };
-    i.onfocus = () => setAskOpen(true);
+    i.onkeydown = e => { if(shouldSubmitComposer(e)){ e.preventDefault(); sendChat(i); } };
+    i.oninput = resizeComposer;
+    i.onfocus = () => { setAskOpen(true); resizeComposer(); };
   }
   document.getElementById("dock-close")?.addEventListener("click", () => setAskOpen(false));
   document.getElementById("ask-expand")?.addEventListener("click", () => setAskOpen(true));
+  document.getElementById("dock-reopen")?.addEventListener("click", () => setAskOpen(true));
   document.getElementById("ask-top")?.addEventListener("click", () => setAskOpen(true));
   document.getElementById("ask-mobile")?.addEventListener("click", () => setAskOpen(true));
+  wireWorkbench();
   syncChatLogs();
+  resizeComposer();
 }
 
+let workbenchOpener=null;
+function workbenchFocusTarget(opener,fallback){
+  return opener&&opener.isConnected?opener:fallback;
+}
+function workbenchMinimizeOnClose(wasOpen,open){
+  return wasOpen&&!open;
+}
 function setAskOpen(open){
+  const wasOpen=document.body.classList.contains("ask-open");
+  if(open&&!wasOpen) workbenchOpener=document.activeElement;
   document.body.classList.toggle("ask-open", open);
+  document.body.classList.toggle("workbench-minimized", workbenchMinimizeOnClose(wasOpen,open));
+  if(!open) document.body.classList.remove("workbench-max");
   const expand=document.getElementById("ask-expand");
   if(expand) expand.setAttribute("aria-expanded", open?"true":"false");
-  if(open) setTimeout(()=>document.getElementById("dmsg")?.focus(), 20);
+  const maximize=document.getElementById("workbench-maximize");
+  if(maximize&&!open){ maximize.setAttribute("aria-pressed","false"); maximize.setAttribute("aria-label","Maximize conversation workbench"); }
+  resizeComposer();
+  if(open) setTimeout(()=>{ document.getElementById("dmsg")?.focus(); resizeComposer(); }, 20);
+  else if(wasOpen) setTimeout(()=>{
+    const fallback=window.matchMedia("(max-width:719px)").matches?document.getElementById("ask-mobile"):document.getElementById("ask-expand");
+    const target=document.body.classList.contains("workbench-minimized")?document.getElementById("dock-reopen"):workbenchFocusTarget(workbenchOpener,fallback);
+    target?.focus();
+  },0);
 }
 
 function askAboutResponsibility(title){
   setAskOpen(true);
   const input=document.getElementById("dmsg");
-  if(input){ input.value=`Help me resolve “${title}”`; input.setSelectionRange(input.value.length,input.value.length); }
+  if(input){ input.value=`Help me resolve “${title}”`; input.setSelectionRange(input.value.length,input.value.length); resizeComposer(); }
 }
 
 function wireOperatorShell(){
@@ -576,7 +751,7 @@ function dbQueryView(){
 let SESSION = "default";
 async function newChat(){
   const r = await postJSON("/api/session", {action:"new"});
-  if (r.session_id){ liveView = null; SESSION = r.session_id; CHAT.length = 0; syncChatLogs(); }
+  if (r.session_id){ liveView = null; SESSION = r.session_id; CHAT.length = 0; syncChatLogs(true); }
   closeSessMenu();
 }
 async function switchSession(id){
@@ -585,12 +760,12 @@ async function switchSession(id){
     SESSION = r.session_id; CHAT.length = 0;
     (r.history||[]).forEach(m => CHAT.push(m.role==="user"
       ? {role:"user", text:m.content} : {role:"mino", reply:m.content, historical:true}));
-    syncChatLogs();
+    syncChatLogs(true);
   }
   closeSessMenu();
 }
 // Open a conversation from the Gateway inbox: load it into the dock (the active
-// thread), keep it live-synced (so new Telegram/voice messages appear), and make
+// thread), keep it live-synced (so new Telegram messages appear), and make
 // sure the dock is visible.
 let liveView = null;   // a conversation opened from the inbox, kept live-updated
 async function openConversation(id){
@@ -669,7 +844,7 @@ function memOverview(d){
     <section class="memory-retrieval"><div class="overview-section-head"><div><span class="section-kicker">RETRIEVAL</span><h2>Memory enters only when needed</h2></div><span class="section-note">the gate protects latency and relevance</span></div>${gateSplit(s)}</section>
     <section class="memory-source"><div><span class="section-kicker">GRAPH SOURCE · SQLITE DIAGNOSTIC</span><h3>Curated in Markdown. Audited in SQLite.</h3><p>Graph claims are authoritative semantic memory. SQLite remains available for migration parity and operational history.</p></div>
       <a href="#database">Open database →</a></section>
-    <div class="memory-files"><span>FILES</span>${reveal("state.db","state.db")}${reveal("MEMORY.md","MEMORY.md")}${reveal("SOUL.md","SOUL.md")}${reveal("skills","skills/")}${reveal("playbooks","playbooks/")}</div>`;
+    <div class="memory-files"><span>FILES</span>${reveal("memories","memories/")}${reveal("SOUL.md","SOUL.md")}${reveal("skills","skills/")}${reveal("playbooks","playbooks/")}</div>`;
 }
 function memSemantic(d){
   const facts = d.facts || [];
@@ -732,7 +907,7 @@ function memSoul(d){
     <div class="memory-editor-card soul-editor"><textarea id="soul" class="editor" style="min-height:300px"
       oninput="dirty('soul-save')" onfocus="markEditing()">${esc(d.soul||"")}</textarea>
     <div class="memory-editor-actions"><button class="save" id="soul-save" disabled onclick="saveSoul()">Save SOUL.md</button>
-      <span class="meta" id="soul-msg"></span><span class="editor-spacer"></span>${reveal("SOUL.md","open in editor")}</div></div>`;
+      <span class="meta" id="soul-msg"></span><span class="editor-spacer"></span>${reveal("SOUL.md","open file")}</div></div>`;
 }
 function memConsolidation(d){
   const distilled = (d.facts||[]).filter(f => f.source==="consolidation");
@@ -877,7 +1052,7 @@ function settingsView(d){
     <form id="add-provider-form" class="add-provider-form" hidden onsubmit="event.preventDefault();addProvider()"><input id="provider-name" placeholder="Name" required><input id="provider-base-url" type="url" placeholder="Base URL" required><input id="provider-model" placeholder="Model" required><input id="provider-small-model" placeholder="Small model"><input id="provider-api-key" type="password" placeholder="API key (optional)"><input id="provider-priority" type="number" min="1" value="10" placeholder="Priority"><button type="submit">Add</button><span id="provider-form-status" aria-live="polite"></span></form>
     ${providers.length?`<div class="provider-stack">${providers.map((p,i)=>{ const name=encodeURIComponent(p.name).replace(/'/g,"%27"); return `<article><span class="provider-priority">${p.priority}</span><div class="provider-main"><div><strong>${esc(p.name)}</strong><span class="status-chip ${p.key_set?"good":"warn"}">${p.key_set?"key set":"key missing"}</span></div><p>${esc(p.model)}${p.small_model?` · small ${esc(p.small_model)}`:""}</p><small>${esc(p.base_url)}</small></div><button class="provider-remove" title="Remove provider" aria-label="Remove provider" onclick="removeProvider(decodeURIComponent('${name}'))">✕</button>${i<providers.length-1?`<span class="fallback-arrow">↓ fallback</span>`:""}</article>`; }).join("")}</div>`:`<div class="surface-empty"><span>◇</span><strong>No provider snapshot available</strong><p>Add a provider to providers.json.</p></div>`}
     <div class="overview-section-head"><div><span class="section-kicker">OAUTH</span><h2>Connected accounts</h2></div><span id="oauth-status" class="section-note" aria-live="polite">${esc(oauthMessage)}</span></div><div id="oauth-providers" class="oauth-providers"><div class="surface-empty compact"><strong>Loading OAuth providers…</strong></div></div>
-    <div class="settings-grid"><section><span class="settings-icon">⌘</span><div><span class="section-kicker">CONFIG FILE</span><strong>providers.json</strong><p>${esc(cfg.config_file||"")}</p></div>${reveal("providers.json","open file")}</section><section><span class="settings-icon">▦</span><div><span class="section-kicker">STATE HOME</span><strong>Mino home</strong><p>${esc(d.home)}</p></div>${reveal("","open folder")}</section><section><span class="settings-icon">✦</span><div><span class="section-kicker">PERSONALITY</span><strong>SOUL.md</strong><p>Editable safely from Memory.</p></div><a href="#memory/soul">Open SOUL →</a></section></div>`;
+    <div class="settings-grid"><section><span class="settings-icon">⌘</span><div><span class="section-kicker">CONFIG FILE</span><strong>providers.json</strong><p>${esc(cfg.config_file||"")}</p><small class="meta">Credentials stay server-side.</small></div></section><section><span class="settings-icon">▦</span><div><span class="section-kicker">STATE HOME</span><strong>Mino home</strong><p>${esc(d.home)}</p><small class="meta">Private runtime state; scoped artifacts remain available in Files.</small></div></section><section><span class="settings-icon">✦</span><div><span class="section-kicker">PERSONALITY</span><strong>SOUL.md</strong><p>Editable safely from Memory.</p></div><a href="#memory/soul">Open SOUL →</a></section></div>`;
 }
 
 function activeTasksView(d){
@@ -932,21 +1107,70 @@ function responsibilityEntry(entry){
     <a class="responsibility-open" href="#responsibility/${encodeURIComponent(entry.id)}" aria-label="Open Responsibility">→</a>
   </article>`;
 }
-function todayView(d){
-  const state=d.responsibilities||{}, entries=state.today||[];
+const NOWFIELD_STATUS_ORDER = ["needs_you","blocked","working","waiting","verified","stopped"];
+function nowfieldUpdated(entry){
+  return entry.latest?.at||entry.updated_at||entry.last_run_at||entry.created_at||"";
+}
+function nowfieldEntries(entries){
+  return [...entries].sort((a,b)=>{
+    const status=NOWFIELD_STATUS_ORDER.indexOf(a.status)-NOWFIELD_STATUS_ORDER.indexOf(b.status);
+    if(status) return status;
+    return (Date.parse(nowfieldUpdated(b))||0)-(Date.parse(nowfieldUpdated(a))||0);
+  });
+}
+function nowfieldWhen(value){
+  return value?responsibilityTime(value,true):"No recorded time";
+}
+function nowfieldAttr(value){
+  return esc(value).replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
+function nowfieldLane(entry){
+  const latest=entry.latest||{}, status=entry.status||"waiting";
+  const search=nowfieldAttr([entry.title,entry.outcome,latest.summary,entry.next_action,entry.next_owner,status].filter(Boolean).join(" "));
+  const next=entry.next_action||"No next action recorded";
+  const due=entry.due_at?`Due ${responsibilityTime(entry.due_at,true)}`:entry.schedule||"Unscheduled";
+  const past=latest.summary||entry.outcome||"No meaningful update recorded.";
+  return `<article class="nowfield-lane status-${esc(status)}" role="listitem" data-nowfield-status="${esc(status)}" data-nowfield-search="${search}">
+    <div class="nowfield-past" aria-label="Past: ${nowfieldAttr(past)}"><time>${esc(nowfieldWhen(nowfieldUpdated(entry)))}</time><p>${esc(past)}</p></div>
+    <div class="nowfield-now" aria-label="Now: ${nowfieldAttr(responsibilityStatus(status))}, ${nowfieldAttr(entry.title)}"><span class="nowfield-state">${esc(responsibilityStatus(status))}</span><a class="nowfield-detail-link" href="#responsibility/${encodeURIComponent(entry.id)}" aria-label="Open Responsibility: ${nowfieldAttr(entry.title)}">${esc(entry.title)}</a><small>${esc(entry.owner||"mino")}</small></div>
+    <div class="nowfield-next" aria-label="Next: ${nowfieldAttr(next)}"><strong>${esc(next)}</strong><span>${esc(entry.next_owner||entry.owner||"mino")}</span><time>${esc(due)}</time></div>
+  </article>`;
+}
+function nowfieldView(d,mode){
+  const state=d.responsibilities||{}, raw=mode==="today"?(state.today||[]):(state.work||[]);
   if(state.error) return `<div class="responsibility-empty"><span>!</span><strong>Responsibility state is unavailable.</strong><p>${esc(state.error)}</p></div>`;
-  const needs=entries.filter(x=>x.status==="needs_you"||x.status==="blocked").length;
-  const date=new Intl.DateTimeFormat("en-MY",{timeZone:d.timezone||"Asia/Kuala_Lumpur",weekday:"long",day:"numeric",month:"long"}).format(new Date());
-  return `<section class="responsibility-hero"><div><h2>${esc(date)}</h2><p>Meaningful changes in work Mino has accepted—not raw runtime activity.</p></div><p class="responsibility-summary ${needs?"attention":""}"><strong>${needs?`${needs} need${needs===1?"s":""} you`:"Nothing needs you"}</strong><span>${entries.length} meaningful update${entries.length===1?"":"s"} today</span></p></section>
-    ${entries.length?`<div class="today-journal">${entries.map(responsibilityEntry).join("")}</div>`:`<div class="responsibility-empty"><span>◉</span><strong>Nothing needs attention today.</strong><p>Mino has not recorded a meaningful Responsibility change yet.</p><a href="#work">Review current Work →</a></div>`}`;
+  const entries=nowfieldEntries(raw), attention=entries.filter(x=>x.status==="needs_you"||x.status==="blocked").length;
+  const title=mode==="today"?"Today":"Work Mino owns";
+  const summary=mode==="today"?"Meaningful Responsibility changes for this local day.":"Every durable outcome Mino currently owns.";
+  return `<section class="nowfield" data-nowfield-mode="${mode}">
+    <header class="nowfield-head"><div><h2>${title}</h2><p>${summary}</p></div><div class="nowfield-controls">
+      <label><span class="sr-only">Search Work</span><input id="nowfield-search" type="search" aria-label="Search Work" placeholder="Search responsibilities" oninput="filterNowfield()"></label>
+      <label><span class="sr-only">Filter Work by status</span><select id="nowfield-status" aria-label="Filter Work by status" onchange="filterNowfield()"><option value="">All states</option>${NOWFIELD_STATUS_ORDER.map(status=>`<option value="${status}">${responsibilityStatus(status)}</option>`).join("")}</select></label>
+    </div></header>
+    <div class="nowfield-summary"><span><strong id="nowfield-visible">${entries.length}</strong> of ${entries.length} visible</span><span class="${attention?"attention":""}">${attention?`${attention} need${attention===1?"s":""} you`:"Nothing needs you"}</span></div>
+    <div class="nowfield-axis" aria-hidden="true"><span>Past</span><strong>Now</strong><span>Next</span></div>
+    <div class="nowfield-lanes" role="list">${entries.length?entries.map(nowfieldLane).join(""):`<div class="nowfield-empty"><strong>${mode==="today"?"No meaningful change today.":"Mino owns no Responsibility yet."}</strong><p>${mode==="today"?"Verified work and material state changes will appear here.":"Accepted outcomes will appear here with their current truth and next action."}</p></div>`}</div>
+    <div class="nowfield-filter-empty" id="nowfield-filter-empty" hidden><strong>No matching Responsibility.</strong><p>Clear the search or choose another state.</p></div>
+  </section>`;
+}
+function filterNowfield(){
+  const q=(document.getElementById("nowfield-search")?.value||"").trim().toLowerCase();
+  const status=document.getElementById("nowfield-status")?.value||"";
+  let visible=0;
+  document.querySelectorAll(".nowfield-lane").forEach(lane=>{
+    const show=(!q||lane.dataset.nowfieldSearch.toLowerCase().includes(q))&&(!status||lane.dataset.nowfieldStatus===status);
+    lane.hidden=!show;
+    if(show) visible++;
+  });
+  const count=document.getElementById("nowfield-visible"), empty=document.getElementById("nowfield-filter-empty");
+  if(count) count.textContent=visible;
+  if(empty) empty.hidden=visible!==0;
+}
+function todayView(d){
+  return nowfieldView(d,"today");
 }
 function workView(d){
-  const state=d.responsibilities||{}, entries=state.work||[];
-  if(state.error) return `<div class="responsibility-empty"><span>!</span><strong>Responsibility state is unavailable.</strong><p>${esc(state.error)}</p></div>`;
-  const groups=["needs_you","blocked","working","waiting","verified","stopped"];
-  const open=entries.filter(x=>!["verified","stopped"].includes(x.status)).length;
-  return `<section class="responsibility-hero"><div><h2>Work Mino owns.</h2><p>Standing Routines and durable outcomes, grouped by their truthful current state.</p></div><p class="responsibility-summary"><strong>${open} open</strong><span>${entries.length} Responsibilities in total</span></p></section>
-    ${entries.length?groups.map(status=>{const items=entries.filter(x=>x.status===status);return items.length?`<section class="work-group"><header><h3>${esc(responsibilityStatus(status))}</h3><span>${items.length}</span></header><div>${items.map(responsibilityEntry).join("")}</div></section>`:""}).join(""):`<div class="responsibility-empty"><span>□</span><strong>Mino owns no Work yet.</strong><p>A request appears here when it must survive a turn, dependency, deadline, or future verification.</p></div>`}`;
+  return nowfieldView(d,"work");
 }
 function overviewResponsibility(d){
   const state=d.responsibilities||{}, entries=state.work||[];
@@ -961,10 +1185,17 @@ function overviewResponsibility(d){
 }
 function responsibilityDetailView(detail){
   const history=detail.history||[];
-  return `<div class="responsibility-detail-head"><a href="#work">← Work</a><span class="responsibility-status ${esc(detail.status)}">${esc(responsibilityStatus(detail.status))}</span><h2>${esc(detail.title)}</h2><p>${esc(detail.outcome)}</p></div>
-    <div class="responsibility-detail-grid"><div><section class="responsibility-current"><span class="section-kicker">CURRENT STATE</span><div><span>Owner</span><strong>${esc(detail.owner||"—")}</strong></div><div><span>Next action</span><strong>${esc(detail.next_action||"No next action recorded")}</strong><small>${esc(detail.next_owner||detail.owner||"")}</small></div></section>
-      <section class="responsibility-history"><header><span class="section-kicker">IMMUTABLE HISTORY</span><strong>${history.length} event${history.length===1?"":"s"}</strong></header>${history.map(event=>`<article><time>${esc(responsibilityTime(event.at,true))}</time><i class="${esc(event.status)}"></i><div><div><strong>${esc(responsibilityStatus(event.status))}</strong><span>${esc(event.type)}</span></div><p>${esc(event.summary)}</p>${responsibilityEvidence(event.evidence)}</div></article>`).join("")}</section></div>
-      <aside class="responsibility-policy"><span class="section-kicker">POLICY &amp; EVIDENCE</span><div><span>Kind</span><strong>${esc(detail.kind)}</strong></div><div><span>Schedule</span><strong>${esc(detail.schedule||"Not scheduled")}</strong></div><div><span>Due</span><strong>${esc(detail.due_at?responsibilityTime(detail.due_at,true):"No deadline")}</strong></div><div><span>Last run</span><strong>${esc(detail.last_run_at?responsibilityTime(detail.last_run_at,true):"Never")}</strong></div><div><span>Verification</span><strong>${esc(detail.verification||"No condition recorded")}</strong></div></aside></div>`;
+  const latest=history[history.length-1]||{};
+  return `<section class="nowfield-focus">
+    <header><a href="#work">← Work</a><span class="responsibility-status ${esc(detail.status)}">${esc(responsibilityStatus(detail.status))}</span></header>
+    <div class="nowfield-focus-axis" aria-label="Responsibility timeline">
+      <div><span>Past</span><time>${esc(nowfieldWhen(latest.at||detail.updated_at))}</time><p>${esc(latest.summary||detail.outcome||"No meaningful update recorded.")}</p></div>
+      <div><span>Now</span><h2>${esc(detail.title)}</h2><p>${esc(detail.outcome||"No outcome recorded.")}</p><small>${esc(detail.owner||"mino")}</small></div>
+      <div><span>Next</span><strong>${esc(detail.next_action||"No next action recorded")}</strong><p>${esc(detail.next_owner||detail.owner||"mino")}</p><time>${esc(detail.due_at?`Due ${responsibilityTime(detail.due_at,true)}`:detail.schedule||"Unscheduled")}</time></div>
+    </div>
+    <div class="responsibility-detail-grid"><section class="responsibility-history"><header><strong>History</strong><span>${history.length} event${history.length===1?"":"s"}</span></header>${history.length?history.map(event=>`<article><time>${esc(responsibilityTime(event.at,true))}</time><i class="${esc(event.status)}"></i><div><div><strong>${esc(responsibilityStatus(event.status))}</strong><span>${esc(event.type)}</span></div><p>${esc(event.summary)}</p>${responsibilityEvidence(event.evidence)}</div></article>`).join(""):`<div class="nowfield-empty"><strong>No history recorded.</strong><p>This Responsibility has no event trail yet.</p></div>`}</section>
+      <aside class="responsibility-policy"><header><strong>Policy &amp; evidence</strong></header><div><span>Kind</span><strong>${esc(detail.kind||"Not recorded")}</strong></div><div><span>Schedule</span><strong>${esc(detail.schedule||"Not scheduled")}</strong></div><div><span>Due</span><strong>${esc(detail.due_at?responsibilityTime(detail.due_at,true):"No deadline")}</strong></div><div><span>Last run</span><strong>${esc(detail.last_run_at?responsibilityTime(detail.last_run_at,true):"Never")}</strong></div><div><span>Verification</span><strong>${esc(detail.verification||"No condition recorded")}</strong></div></aside></div>
+  </section>`;
 }
 async function loadResponsibilityDetail(id){
   const target=document.getElementById("responsibility-detail");
@@ -1005,8 +1236,8 @@ const VIEWS = {
   responsibility(d, id){
     return `<div id="responsibility-detail">${spinner()}</div>`;
   },
-  // Gateway: ONE unified conversation across every channel (dashboard, telegram,
-  // voice, cli) — the same loop + memory answer all of them. Each message is
+  // Gateway: ONE unified conversation across dashboard, Telegram, and CLI — the
+  // same loop + memory answer all of them. Each message is
   // tagged with where it came in, Hermes-style. You type in the dock on the right.
   // Gateway = an INBOX of conversations (like Slack/Intercom): one row per
   // conversation, tagged with its channel(s). Click one to open it in the chat
@@ -1031,7 +1262,7 @@ const VIEWS = {
     }).join("");
     h += `</div><aside class="gateway-side"><div class="gateway-current"><span class="section-kicker">OPEN THREAD</span><strong>${active?esc(active.title||active.id):"No thread selected"}</strong>
       <p>${active?"This is the conversation currently loaded in the chat dock.":"Choose a conversation to load it into the dock."}</p><a href="#overview">Watch the live system →</a></div>
-      <div class="gateway-principle"><span class="principle-icon">✦</span><strong>One brain, every channel</strong><p>Dashboard, Telegram, voice, and terminal messages share Mino’s runtime and memory.</p><div class="channel-list"><span>dashboard</span><span>telegram</span><span>voice</span><span>terminal</span></div></div></aside></section>`;
+      <div class="gateway-principle"><span class="principle-icon">✦</span><strong>One brain, every channel</strong><p>Dashboard, Telegram, and terminal messages share Mino’s runtime and memory.</p><div class="channel-list"><span>dashboard</span><span>telegram</span><span>terminal</span></div></div></aside></section>`;
     return h;
   },
   conversations(d){ return VIEWS.gateway(d); },
@@ -1300,7 +1531,12 @@ async function refresh(){
     D = await response.json(); lastFetch = Date.now(); refreshFailed=false;
     render(); tickLive();
     syncLiveView();   // live-update an opened conversation (e.g. new phone messages)
-  } catch(e){ refreshFailed=true; tickLive(); }
+  } catch(e){ refreshFailed=true; if(!D) renderRefreshError(e); tickLive(); }
+}
+function renderRefreshError(error){
+  const target=document.getElementById("view");
+  if(!target) return;
+  target.innerHTML=`<div class="nowfield-loading error" role="alert"><span>!</span><strong>Current Responsibility is unavailable.</strong><p>${esc(error&&error.message||"Mino could not load dashboard state.")}</p><button type="button" onclick="refresh()">Try again</button></div>`;
 }
 // --- resizable columns: drag the thin handle between nav|main and main|dock.
 // Width lives in a CSS var + localStorage, so it survives refreshes.
@@ -1336,71 +1572,6 @@ function wireChrome(){
   setNav(localStorage.getItem("navHidden") === "1");
 }
 
-// --- voice on the dashboard: record in the browser, transcribe on the server
-// with the SAME local Whisper `make voice` uses. Text lands in the input for
-// you to review, then Send — nothing leaves the machine.
-// Voice capture records WAV (uncompressed PCM) via the Web Audio API — NOT
-// MediaRecorder's WebM/Opus, which faster-whisper/PyAV often can't decode
-// ("transcription failed [Errno …]"). WAV is trivially decodable server-side.
-let micCtx = null, micStream = null, micNode = null, micBuf = [], micOn = false;
-const micHint = (msg) => { const i = document.getElementById("dmsg");
-  if (i){ i.placeholder = msg; setTimeout(()=>{ i.placeholder = "Hi Mino! What can you do?"; }, 8000); } };
-
-async function toggleMic(){
-  const btn = document.getElementById("mic");
-  if (micOn){ await stopMic(); return; }
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
-    micHint("voice needs a normal browser tab at localhost:7777 — not the IDE preview pane");
-    return;
-  }
-  try {
-    micStream = await navigator.mediaDevices.getUserMedia({audio:true});
-    micCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const source = micCtx.createMediaStreamSource(micStream);
-    micNode = micCtx.createScriptProcessor(4096, 1, 1);
-    micBuf = [];
-    micNode.onaudioprocess = e => micBuf.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-    source.connect(micNode); micNode.connect(micCtx.destination);
-    micOn = true; btn.classList.add("rec");
-  } catch(e){
-    console.warn("mic error:", e);
-    micHint(e && e.name === "NotAllowedError"
-      ? "mic blocked — click the lock icon in the address bar → allow Microphone → reload (macOS: also System Settings ▸ Privacy ▸ Microphone ▸ your browser)"
-      : "mic unavailable: " + (e && e.message || e));
-  }
-}
-
-async function stopMic(){
-  const btn = document.getElementById("mic"), input = document.getElementById("dmsg");
-  micOn = false; btn.classList.remove("rec");
-  try { micNode.disconnect(); } catch(e){}
-  micStream.getTracks().forEach(t => t.stop());
-  const rate = micCtx.sampleRate;
-  micCtx.close();
-  const wav = encodeWAV(micBuf, rate);
-  const hold = input.placeholder; input.placeholder = "transcribing…";
-  let r; try { r = await (await fetch("/api/voice", {method:"POST", body:wav})).json(); }
-  catch(e){ r = {error:String(e)}; }
-  input.placeholder = hold;
-  if (r.error){ input.value = ""; micHint("voice: " + r.error); return; }
-  if (r.text){ input.value = r.text; input.focus(); }
-}
-
-// float32 chunks → 16-bit PCM mono WAV blob
-function encodeWAV(chunks, rate){
-  let n = 0; chunks.forEach(c => n += c.length);
-  const pcm = new Float32Array(n); let off = 0; chunks.forEach(c => { pcm.set(c, off); off += c.length; });
-  const buf = new ArrayBuffer(44 + pcm.length * 2), view = new DataView(buf);
-  const str = (o, s) => { for (let i=0;i<s.length;i++) view.setUint8(o+i, s.charCodeAt(i)); };
-  str(0,"RIFF"); view.setUint32(4, 36 + pcm.length*2, true); str(8,"WAVE"); str(12,"fmt ");
-  view.setUint32(16,16,true); view.setUint16(20,1,true); view.setUint16(22,1,true);
-  view.setUint32(24,rate,true); view.setUint32(28,rate*2,true); view.setUint16(32,2,true); view.setUint16(34,16,true);
-  str(36,"data"); view.setUint32(40, pcm.length*2, true);
-  let o = 44; for (let i=0;i<pcm.length;i++){ const s = Math.max(-1, Math.min(1, pcm[i])); view.setInt16(o, s<0 ? s*0x8000 : s*0x7FFF, true); o += 2; }
-  return new Blob([view], {type:"audio/wav"});
-}
-function wireMic(){ const b = document.getElementById("mic"); if (b) b.onclick = toggleMic; }
-
 function spinner(){ return `<div class="files-loading"><span class="spinner"></span> Loading...</div>`; }
 function renderFileTree(tree, parent){
   if (!tree.length) return `<span class="files-empty">No files in this directory.</span>`;
@@ -1410,9 +1581,10 @@ function renderFileTree(tree, parent){
     const size = n.is_dir ? "" : ` <span class="fsize">${formatSize(n.size)}</span>`;
     const time = n.mod_time ? ` <span class="ftime">${n.mod_time}</span>` : "";
     const href = n.is_dir ? `#files/${encodeURIComponent(n.path)}` : `/api/files?path=${encodeURIComponent(n.path)}`;
-    const target = n.is_dir ? "" : ' target="_blank"';
-    const onclick = n.is_dir ? "" : "";
-    return `<a class="${cls}" style="padding-left:${depth*20+8}px" href="${esc(href)}"${target}>${icon} ${esc(n.name)}${size}${time}</a>`;
+    if(n.is_dir){
+      return `<a class="${cls}" style="padding-left:${depth*20+8}px" href="${href}">${icon}<span class="file-main">${esc(n.name)}</span><span class="file-action-label">Browse</span></a>`;
+    }
+    return `<div class="${cls} file-entry" style="padding-left:${depth*20+8}px">${icon}<a class="file-main" href="${href}" target="_blank" rel="noopener">${esc(n.name)}${size}${time}</a><span class="file-actions"><button type="button" onclick="copyArtifactPath(${jsArg(n.path)},${jsArg(n.name)})">Copy path</button><a href="${href}&action=download" download>Download</a></span></div>`;
   };
   return tree.map(n => item(n, 0)).join("");
 }
@@ -1974,6 +2146,6 @@ window.addEventListener("resize", () => {
   if (D && activeView === "overview") document.getElementById("view").innerHTML = VIEWS.overview(D);
 });
 window.__hold = (v)=>{ animating = v; };   // test hook: freeze the diagram
-wireDock(); wireOperatorShell(); wireMic();
+wireDock(); wireOperatorShell();
 refresh(); setInterval(refresh, 5000); setInterval(tickLive, 1000);
 pollEvents(); setInterval(pollEvents, 450);   // live harness animation
