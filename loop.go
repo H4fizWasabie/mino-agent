@@ -89,6 +89,70 @@ func missingStageOutputs(ctx context.Context) []string {
 	return missing
 }
 
+// --- Mutation-claim verification (chat turns) ---
+// Issue #16 sibling: the model claimed "Consider it deleted" with zero tool
+// calls. When the owner asks for a state change and the model declares
+// success without executing anything, the loop pushes back once.
+
+var mutationObjectWords = []string{
+	"memory", "note", "notes", "file", "files", "post", "posts", "message",
+	"playbook", "schedule", "reminder", "record", "entry", "task", "history",
+	"data", "backup", "snapshot", "log", "chat",
+}
+
+// isMutationRequest reports whether the owner asked for a state change on a
+// concrete object (verb + object), e.g. "delete the file mino.db".
+func isMutationRequest(text string) bool {
+	lower := strings.ToLower(text)
+	hasVerb := false
+	for _, v := range []string{"delete", "remove", "forget", "erase", "cancel", "clear", "rename", "move"} {
+		if strings.Contains(lower, v) {
+			hasVerb = true
+			break
+		}
+	}
+	if !hasVerb {
+		return false
+	}
+	for _, o := range mutationObjectWords {
+		if strings.Contains(lower, o) {
+			return true
+		}
+	}
+	for _, tok := range strings.Fields(lower) {
+		if strings.Contains(tok, ".") && strings.ContainsAny(tok, "abcdefghijklmnopqrstuvwxyz0123456789") {
+			return true // filename-ish token
+		}
+	}
+	return false
+}
+
+// claimsMutationDone reports whether the model's reply declares the change
+// complete. "done"/"sorted" alone are too loose; the strong claims are the
+// completion forms of the mutation verbs.
+func claimsMutationDone(text string) bool {
+	lower := strings.ToLower(text)
+	for _, c := range []string{
+		"deleted", "removed", "forgotten", "erased", "gone", "cleared",
+		"cancelled", "canceled", "consider it", "all set", "taken care",
+		"handled", "sorted", "done",
+	} {
+		if strings.Contains(lower, c) {
+			return true
+		}
+	}
+	return false
+}
+
+func lastUserText(messages []Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			return messages[i].Content
+		}
+	}
+	return ""
+}
+
 func RunLoopContext(
 	ctx context.Context,
 	client LLMClient,
@@ -160,6 +224,8 @@ func RunLoopContext(
 		schemaNames = append(schemaNames, s.Name)
 	}
 	trace("context_diag", map[string]any{"system_chars": len(system), "msg_count": len(messages), "schema_count": len(schemas), "schema_names": schemaNames, "schema_est_chars": schemaChars, "one_turn_chars": len(oneTurnText)})
+
+	mutationChecked := false // push the unverified-mutation-claim correction at most once per turn
 
 	for i := 1; i <= maxIter; i++ {
 		if ctx.Err() != nil {
@@ -237,6 +303,26 @@ func RunLoopContext(
 					Content: fmt.Sprintf("[System: stage incomplete — required output(s) not written: %s. Use write_file to write them, then finish.]", strings.Join(missing, ", ")),
 				})
 				continue
+			}
+			// A claimed state change with zero tool calls is a lie, not a reply:
+			// the owner asked to delete/remove something and the model declared
+			// success without executing anything (observed 2026-08-08:
+			// "Consider it deleted from my notes" — no tool was called). Push
+			// back once. Chat turns only; stages are governed by their output
+			// contract above.
+			if !mutationChecked && len(result.ToolCalls) == 0 {
+				if _, inStage := ctx.Value(stageOutputsKey{}).([]string); !inStage {
+					replyText := extractText(resp.Content)
+					if isMutationRequest(lastUserText(messages)) && claimsMutationDone(replyText) {
+						mutationChecked = true
+						trace("mutation_claim_unverified", map[string]any{"iteration": i})
+						messages = append(messages, Message{
+							Role:    "user",
+							Content: "[System: you were asked to change or delete something, but no tool was executed this turn. Either perform the change with the appropriate tool now, or tell the owner explicitly that you cannot. Do not claim it is done.]",
+						})
+						continue
+					}
+				}
 			}
 			result.Status = "complete"
 			result.Reply = extractText(resp.Content)

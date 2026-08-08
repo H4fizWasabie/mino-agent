@@ -259,3 +259,65 @@ func TestParseDistillResponseRejectsTemplateID(t *testing.T) {
 		t.Fatal("template text in subject accepted; must be rejected")
 	}
 }
+
+// The model claims a deletion it never executed ("Consider it deleted") with
+// zero tool calls. The loop must push back once instead of completing.
+func TestLoopPushesOnUnverifiedMutationClaim(t *testing.T) {
+	tools := NewRegistry()
+	client := &fakeClient{script: []*LLMResponse{
+		scriptedResp([]ContentBlock{textBlock("Consider it deleted from my notes.")}, "stop"),
+		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
+	}}
+	msgs := []Message{{Role: "user", Content: "remove that from your memory"}}
+	result := RunLoopContext(context.Background(), client, "mutation-loop", "", msgs, tools, 5, 100, nil, false, "", nil)
+	if result.Status != "complete" {
+		t.Fatalf("status = %q, want complete", result.Status)
+	}
+	if len(client.messages) < 2 {
+		t.Fatalf("model called %d times, want 2 (push then done)", len(client.messages))
+	}
+	pushed := false
+	for _, m := range client.messages[1] {
+		if strings.Contains(m.Content, "no tool was executed this turn") {
+			pushed = true
+		}
+	}
+	if !pushed {
+		t.Fatal("mutation-claim push missing from second call's messages")
+	}
+}
+
+// Control: a plain conversational completion without a mutation request must
+// not trigger the push.
+func TestLoopNoPushOnPlainCompletion(t *testing.T) {
+	tools := NewRegistry()
+	client := &fakeClient{script: []*LLMResponse{
+		scriptedResp([]ContentBlock{textBlock("Good morning! How can I help?")}, "stop"),
+	}}
+	msgs := []Message{{Role: "user", Content: "hello mino"}}
+	result := RunLoopContext(context.Background(), client, "plain-loop", "", msgs, tools, 5, 100, nil, false, "", nil)
+	if result.Status != "complete" {
+		t.Fatalf("status = %q, want complete", result.Status)
+	}
+	if len(client.messages) != 1 {
+		t.Fatalf("model called %d times, want 1 (no push)", len(client.messages))
+	}
+}
+
+// Control: in a stage context the output contract governs; a final summary
+// containing "removed" must not trigger the chat push.
+func TestLoopNoMutationPushInsideStage(t *testing.T) {
+	tools := NewRegistry()
+	client := &fakeClient{script: []*LLMResponse{
+		scriptedResp([]ContentBlock{textBlock("all removed, stage complete")}, "stop"),
+	}}
+	msgs := []Message{{Role: "user", Content: "run stage"}}
+	ctx := context.WithValue(context.Background(), stageOutputsKey{}, []string{})
+	result := RunLoopContext(ctx, client, "stage-mutation", "", msgs, tools, 5, 100, nil, false, "", nil)
+	if result.Status != "complete" {
+		t.Fatalf("status = %q, want complete", result.Status)
+	}
+	if len(client.messages) != 1 {
+		t.Fatalf("model called %d times, want 1 (stage: no chat push)", len(client.messages))
+	}
+}
