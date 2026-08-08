@@ -932,21 +932,70 @@ function responsibilityEntry(entry){
     <a class="responsibility-open" href="#responsibility/${encodeURIComponent(entry.id)}" aria-label="Open Responsibility">→</a>
   </article>`;
 }
-function todayView(d){
-  const state=d.responsibilities||{}, entries=state.today||[];
+const NOWFIELD_STATUS_ORDER = ["needs_you","blocked","working","waiting","verified","stopped"];
+function nowfieldUpdated(entry){
+  return entry.latest?.at||entry.updated_at||entry.last_run_at||entry.created_at||"";
+}
+function nowfieldEntries(entries){
+  return [...entries].sort((a,b)=>{
+    const status=NOWFIELD_STATUS_ORDER.indexOf(a.status)-NOWFIELD_STATUS_ORDER.indexOf(b.status);
+    if(status) return status;
+    return (Date.parse(nowfieldUpdated(b))||0)-(Date.parse(nowfieldUpdated(a))||0);
+  });
+}
+function nowfieldWhen(value){
+  return value?responsibilityTime(value,true):"No recorded time";
+}
+function nowfieldAttr(value){
+  return esc(value).replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
+function nowfieldLane(entry){
+  const latest=entry.latest||{}, status=entry.status||"waiting";
+  const search=nowfieldAttr([entry.title,entry.outcome,latest.summary,entry.next_action,entry.next_owner,status].filter(Boolean).join(" "));
+  const next=entry.next_action||"No next action recorded";
+  const due=entry.due_at?`Due ${responsibilityTime(entry.due_at,true)}`:entry.schedule||"Unscheduled";
+  const past=latest.summary||entry.outcome||"No meaningful update recorded.";
+  return `<article class="nowfield-lane status-${esc(status)}" role="listitem" data-nowfield-status="${esc(status)}" data-nowfield-search="${search}">
+    <div class="nowfield-past" aria-label="Past: ${nowfieldAttr(past)}"><time>${esc(nowfieldWhen(nowfieldUpdated(entry)))}</time><p>${esc(past)}</p></div>
+    <div class="nowfield-now" aria-label="Now: ${nowfieldAttr(responsibilityStatus(status))}, ${nowfieldAttr(entry.title)}"><span class="nowfield-state">${esc(responsibilityStatus(status))}</span><a class="nowfield-detail-link" href="#responsibility/${encodeURIComponent(entry.id)}" aria-label="Open Responsibility: ${nowfieldAttr(entry.title)}">${esc(entry.title)}</a><small>${esc(entry.owner||"mino")}</small></div>
+    <div class="nowfield-next" aria-label="Next: ${nowfieldAttr(next)}"><strong>${esc(next)}</strong><span>${esc(entry.next_owner||entry.owner||"mino")}</span><time>${esc(due)}</time></div>
+  </article>`;
+}
+function nowfieldView(d,mode){
+  const state=d.responsibilities||{}, raw=mode==="today"?(state.today||[]):(state.work||[]);
   if(state.error) return `<div class="responsibility-empty"><span>!</span><strong>Responsibility state is unavailable.</strong><p>${esc(state.error)}</p></div>`;
-  const needs=entries.filter(x=>x.status==="needs_you"||x.status==="blocked").length;
-  const date=new Intl.DateTimeFormat("en-MY",{timeZone:d.timezone||"Asia/Kuala_Lumpur",weekday:"long",day:"numeric",month:"long"}).format(new Date());
-  return `<section class="responsibility-hero"><div><h2>${esc(date)}</h2><p>Meaningful changes in work Mino has accepted—not raw runtime activity.</p></div><p class="responsibility-summary ${needs?"attention":""}"><strong>${needs?`${needs} need${needs===1?"s":""} you`:"Nothing needs you"}</strong><span>${entries.length} meaningful update${entries.length===1?"":"s"} today</span></p></section>
-    ${entries.length?`<div class="today-journal">${entries.map(responsibilityEntry).join("")}</div>`:`<div class="responsibility-empty"><span>◉</span><strong>Nothing needs attention today.</strong><p>Mino has not recorded a meaningful Responsibility change yet.</p><a href="#work">Review current Work →</a></div>`}`;
+  const entries=nowfieldEntries(raw), attention=entries.filter(x=>x.status==="needs_you"||x.status==="blocked").length;
+  const title=mode==="today"?"Today":"Work Mino owns";
+  const summary=mode==="today"?"Meaningful Responsibility changes for this local day.":"Every durable outcome Mino currently owns.";
+  return `<section class="nowfield" data-nowfield-mode="${mode}">
+    <header class="nowfield-head"><div><h2>${title}</h2><p>${summary}</p></div><div class="nowfield-controls">
+      <label><span class="sr-only">Search Work</span><input id="nowfield-search" type="search" aria-label="Search Work" placeholder="Search responsibilities" oninput="filterNowfield()"></label>
+      <label><span class="sr-only">Filter Work by status</span><select id="nowfield-status" aria-label="Filter Work by status" onchange="filterNowfield()"><option value="">All states</option>${NOWFIELD_STATUS_ORDER.map(status=>`<option value="${status}">${responsibilityStatus(status)}</option>`).join("")}</select></label>
+    </div></header>
+    <div class="nowfield-summary"><span><strong id="nowfield-visible">${entries.length}</strong> of ${entries.length} visible</span><span class="${attention?"attention":""}">${attention?`${attention} need${attention===1?"s":""} you`:"Nothing needs you"}</span></div>
+    <div class="nowfield-axis" aria-hidden="true"><span>Past</span><strong>Now</strong><span>Next</span></div>
+    <div class="nowfield-lanes" role="list">${entries.length?entries.map(nowfieldLane).join(""):`<div class="nowfield-empty"><strong>${mode==="today"?"No meaningful change today.":"Mino owns no Responsibility yet."}</strong><p>${mode==="today"?"Verified work and material state changes will appear here.":"Accepted outcomes will appear here with their current truth and next action."}</p></div>`}</div>
+    <div class="nowfield-filter-empty" id="nowfield-filter-empty" hidden><strong>No matching Responsibility.</strong><p>Clear the search or choose another state.</p></div>
+  </section>`;
+}
+function filterNowfield(){
+  const q=(document.getElementById("nowfield-search")?.value||"").trim().toLowerCase();
+  const status=document.getElementById("nowfield-status")?.value||"";
+  let visible=0;
+  document.querySelectorAll(".nowfield-lane").forEach(lane=>{
+    const show=(!q||lane.dataset.nowfieldSearch.toLowerCase().includes(q))&&(!status||lane.dataset.nowfieldStatus===status);
+    lane.hidden=!show;
+    if(show) visible++;
+  });
+  const count=document.getElementById("nowfield-visible"), empty=document.getElementById("nowfield-filter-empty");
+  if(count) count.textContent=visible;
+  if(empty) empty.hidden=visible!==0;
+}
+function todayView(d){
+  return nowfieldView(d,"today");
 }
 function workView(d){
-  const state=d.responsibilities||{}, entries=state.work||[];
-  if(state.error) return `<div class="responsibility-empty"><span>!</span><strong>Responsibility state is unavailable.</strong><p>${esc(state.error)}</p></div>`;
-  const groups=["needs_you","blocked","working","waiting","verified","stopped"];
-  const open=entries.filter(x=>!["verified","stopped"].includes(x.status)).length;
-  return `<section class="responsibility-hero"><div><h2>Work Mino owns.</h2><p>Standing Routines and durable outcomes, grouped by their truthful current state.</p></div><p class="responsibility-summary"><strong>${open} open</strong><span>${entries.length} Responsibilities in total</span></p></section>
-    ${entries.length?groups.map(status=>{const items=entries.filter(x=>x.status===status);return items.length?`<section class="work-group"><header><h3>${esc(responsibilityStatus(status))}</h3><span>${items.length}</span></header><div>${items.map(responsibilityEntry).join("")}</div></section>`:""}).join(""):`<div class="responsibility-empty"><span>□</span><strong>Mino owns no Work yet.</strong><p>A request appears here when it must survive a turn, dependency, deadline, or future verification.</p></div>`}`;
+  return nowfieldView(d,"work");
 }
 function overviewResponsibility(d){
   const state=d.responsibilities||{}, entries=state.work||[];
@@ -961,10 +1010,17 @@ function overviewResponsibility(d){
 }
 function responsibilityDetailView(detail){
   const history=detail.history||[];
-  return `<div class="responsibility-detail-head"><a href="#work">← Work</a><span class="responsibility-status ${esc(detail.status)}">${esc(responsibilityStatus(detail.status))}</span><h2>${esc(detail.title)}</h2><p>${esc(detail.outcome)}</p></div>
-    <div class="responsibility-detail-grid"><div><section class="responsibility-current"><span class="section-kicker">CURRENT STATE</span><div><span>Owner</span><strong>${esc(detail.owner||"—")}</strong></div><div><span>Next action</span><strong>${esc(detail.next_action||"No next action recorded")}</strong><small>${esc(detail.next_owner||detail.owner||"")}</small></div></section>
-      <section class="responsibility-history"><header><span class="section-kicker">IMMUTABLE HISTORY</span><strong>${history.length} event${history.length===1?"":"s"}</strong></header>${history.map(event=>`<article><time>${esc(responsibilityTime(event.at,true))}</time><i class="${esc(event.status)}"></i><div><div><strong>${esc(responsibilityStatus(event.status))}</strong><span>${esc(event.type)}</span></div><p>${esc(event.summary)}</p>${responsibilityEvidence(event.evidence)}</div></article>`).join("")}</section></div>
-      <aside class="responsibility-policy"><span class="section-kicker">POLICY &amp; EVIDENCE</span><div><span>Kind</span><strong>${esc(detail.kind)}</strong></div><div><span>Schedule</span><strong>${esc(detail.schedule||"Not scheduled")}</strong></div><div><span>Due</span><strong>${esc(detail.due_at?responsibilityTime(detail.due_at,true):"No deadline")}</strong></div><div><span>Last run</span><strong>${esc(detail.last_run_at?responsibilityTime(detail.last_run_at,true):"Never")}</strong></div><div><span>Verification</span><strong>${esc(detail.verification||"No condition recorded")}</strong></div></aside></div>`;
+  const latest=history[history.length-1]||{};
+  return `<section class="nowfield-focus">
+    <header><a href="#work">← Work</a><span class="responsibility-status ${esc(detail.status)}">${esc(responsibilityStatus(detail.status))}</span></header>
+    <div class="nowfield-focus-axis" aria-label="Responsibility timeline">
+      <div><span>Past</span><time>${esc(nowfieldWhen(latest.at||detail.updated_at))}</time><p>${esc(latest.summary||detail.outcome||"No meaningful update recorded.")}</p></div>
+      <div><span>Now</span><h2>${esc(detail.title)}</h2><p>${esc(detail.outcome||"No outcome recorded.")}</p><small>${esc(detail.owner||"mino")}</small></div>
+      <div><span>Next</span><strong>${esc(detail.next_action||"No next action recorded")}</strong><p>${esc(detail.next_owner||detail.owner||"mino")}</p><time>${esc(detail.due_at?`Due ${responsibilityTime(detail.due_at,true)}`:detail.schedule||"Unscheduled")}</time></div>
+    </div>
+    <div class="responsibility-detail-grid"><section class="responsibility-history"><header><strong>History</strong><span>${history.length} event${history.length===1?"":"s"}</span></header>${history.length?history.map(event=>`<article><time>${esc(responsibilityTime(event.at,true))}</time><i class="${esc(event.status)}"></i><div><div><strong>${esc(responsibilityStatus(event.status))}</strong><span>${esc(event.type)}</span></div><p>${esc(event.summary)}</p>${responsibilityEvidence(event.evidence)}</div></article>`).join(""):`<div class="nowfield-empty"><strong>No history recorded.</strong><p>This Responsibility has no event trail yet.</p></div>`}</section>
+      <aside class="responsibility-policy"><header><strong>Policy &amp; evidence</strong></header><div><span>Kind</span><strong>${esc(detail.kind||"Not recorded")}</strong></div><div><span>Schedule</span><strong>${esc(detail.schedule||"Not scheduled")}</strong></div><div><span>Due</span><strong>${esc(detail.due_at?responsibilityTime(detail.due_at,true):"No deadline")}</strong></div><div><span>Last run</span><strong>${esc(detail.last_run_at?responsibilityTime(detail.last_run_at,true):"Never")}</strong></div><div><span>Verification</span><strong>${esc(detail.verification||"No condition recorded")}</strong></div></aside></div>
+  </section>`;
 }
 async function loadResponsibilityDetail(id){
   const target=document.getElementById("responsibility-detail");
@@ -1300,7 +1356,12 @@ async function refresh(){
     D = await response.json(); lastFetch = Date.now(); refreshFailed=false;
     render(); tickLive();
     syncLiveView();   // live-update an opened conversation (e.g. new phone messages)
-  } catch(e){ refreshFailed=true; tickLive(); }
+  } catch(e){ refreshFailed=true; if(!D) renderRefreshError(e); tickLive(); }
+}
+function renderRefreshError(error){
+  const target=document.getElementById("view");
+  if(!target) return;
+  target.innerHTML=`<div class="nowfield-loading error" role="alert"><span>!</span><strong>Current Responsibility is unavailable.</strong><p>${esc(error&&error.message||"Mino could not load dashboard state.")}</p><button type="button" onclick="refresh()">Try again</button></div>`;
 }
 // --- resizable columns: drag the thin handle between nav|main and main|dock.
 // Width lives in a CSS var + localStorage, so it survives refreshes.
