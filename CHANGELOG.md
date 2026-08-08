@@ -34,6 +34,7 @@
 
 ### Changed
 - Today and Work now render as the full-width Nowfield surface: real Responsibility events form Past, current status forms Now, and recorded action, owner, deadline, or schedule forms Next; each Responsibility title opens the same time geometry above immutable history and evidence. (Why: the former centered editorial stream wasted wide-screen space and disconnected current ownership from its proof and next action.)
+- Dashboard conversation now opens as a resizable 72/28 workbench that reflows the surface above it, with a five-line auto-growing composer, explicit Ctrl/Command+Enter submission, contextual Evidence/Actions/Links, maximize and collapse controls, and a dedicated mobile state. (Why: the former floating chat covered live content and its single-line field made long messages hard to compose, reread, and safely submit.)
 
 ### Fixed
 - Memory graph canvas now seeds nodes in a deterministic spread and caps force-layout velocity, preventing the dashboard graph from exploding and jittering during initial render. (Why: the 224-node live graph started in a tight random cluster, producing extreme all-to-all repulsion even after the animation loop learned to cool.)

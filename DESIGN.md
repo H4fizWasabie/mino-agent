@@ -147,18 +147,21 @@ metadata, never to narrative outcomes or controls.
 The desktop shell uses a compact sticky header and a full-width Work and Today
 field. Past, Now, and Next use a 32/36/32 split; the vertical Now rule stays
 stable while Responsibility lanes scroll. Memory and System retain bounded
-reading widths where their diagnostic material benefits from them.
+reading widths where their diagnostic material benefits from them. The
+collapsed composer is a 64px shell row, not an overlay. Opening it reflows the
+field into a roughly 55/45 vertical split; conversation receives 72% of the
+workbench and Evidence, Actions, and Links receive 28%.
 
 Below 720px, each horizontal thread becomes one ordered Past, Now, Next stack,
 with every section labelled in place. The header reduces to identity and health,
-and a five-destination bottom navigation provides Today, Work, Inbox, Ask, and
-More. Touch actions are at least 44px high.
+and a six-destination bottom navigation provides Today, Work, Inbox, Memory,
+Ask, and More. Touch actions are at least 44px high.
 
 ## Elevation & Depth
 
 The system is flat by default. Boundaries come from paper tone and hairline
-rules. Shadows are reserved for floating layers—the health popover and expanded
-Ask surface—so elevation consistently means temporary content above the journal.
+rules. Shadows are reserved for temporary popovers such as health; the
+conversation workbench remains part of shell layout at every desktop size.
 
 ### Named Rules
 
@@ -202,7 +205,7 @@ and are shaped by horizontal rules, preserving the field-journal rhythm.
 
 Desktop navigation is one short row of owner concepts. Active destinations use
 a soft indigo field; counts appear only when actionable. Mobile navigation is a
-fixed five-item bar with authored line icons, labels, and the same active color.
+fixed six-item bar with authored line icons, labels, and the same active color.
 
 ### Responsibility Field
 
@@ -210,6 +213,15 @@ Each lane connects the latest meaningful Past event summary to current state and
 the real next action. Needs-you and blocked lanes sort first. Its title opens a
 full-width focus state with the same time grammar above immutable history and
 policy evidence.
+
+### Conversation Workbench
+
+The desktop workbench opens from the bottom shell row and never covers the
+surface above it. Its height is pointer- and keyboard-resizable, restorable, and
+maximizable. The multiline composer begins at roughly five lines, grows to a
+180px cap, and uses Ctrl/Command+Enter to send; Enter remains a newline so long
+messages can be reviewed without accidental submission. Mobile uses a dedicated
+full-height conversation state and hides the contextual side strip.
 
 ## Do's and Don'ts
 

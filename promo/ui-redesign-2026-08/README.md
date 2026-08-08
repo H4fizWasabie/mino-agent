@@ -13,12 +13,17 @@ comparison or process material.
 ## Implementation captures
 
 `captures/` contains browser renders against real VPS payloads, named by route
-and viewport. They represent the issue #31 branch before deployment and are not
-proof of a production release.
+and viewport. They represent the issue #31 and #30 branches before deployment
+and are not proof of a production release.
 
 - `nowfield-work-desktop-1440x1000.png`
 - `nowfield-work-tablet-820x1100.png`
 - `nowfield-work-mobile-390x844.png`
 - `nowfield-responsibility-desktop-1440x1000.png`
+- `nowfield-workbench-collapsed-desktop-1440x1000.png`
+- `nowfield-workbench-open-desktop-1440x1000.png`
+- `nowfield-workbench-maximized-desktop-1440x1000.png`
+- `nowfield-workbench-open-mobile-390x844.png`
 
-Conversation-workbench captures are added when that surface finishes.
+The workbench captures use a long draft message to demonstrate wrapping and
+composer growth without sending it to the live runtime.
