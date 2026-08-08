@@ -27,9 +27,14 @@ and are not proof of a production release.
 - `nowfield-artifacts-browser-desktop-1440x1000.png`
 - `nowfield-artifacts-browser-mobile-390x844.png`
 - `nowfield-artifact-actions-playbooks-desktop-1440x1000.png`
+- `nowfield-composer-without-microphone-desktop-1440x1000.png`
+- `nowfield-composer-without-microphone-mobile-390x844.png`
 
 The workbench captures use a long draft message to demonstrate wrapping and
 composer growth without sending it to the live runtime.
 
 The artifact-action captures show the browser-native Files view and Playbooks
 controls using a local preview fixture; they do not represent a VPS deployment.
+
+The composer captures document the intentionally text-only input after the
+unsupported microphone was removed.

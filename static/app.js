@@ -759,7 +759,7 @@ async function switchSession(id){
   closeSessMenu();
 }
 // Open a conversation from the Gateway inbox: load it into the dock (the active
-// thread), keep it live-synced (so new Telegram/voice messages appear), and make
+// thread), keep it live-synced (so new Telegram messages appear), and make
 // sure the dock is visible.
 let liveView = null;   // a conversation opened from the inbox, kept live-updated
 async function openConversation(id){
@@ -1230,8 +1230,8 @@ const VIEWS = {
   responsibility(d, id){
     return `<div id="responsibility-detail">${spinner()}</div>`;
   },
-  // Gateway: ONE unified conversation across every channel (dashboard, telegram,
-  // voice, cli) — the same loop + memory answer all of them. Each message is
+  // Gateway: ONE unified conversation across dashboard, Telegram, and CLI — the
+  // same loop + memory answer all of them. Each message is
   // tagged with where it came in, Hermes-style. You type in the dock on the right.
   // Gateway = an INBOX of conversations (like Slack/Intercom): one row per
   // conversation, tagged with its channel(s). Click one to open it in the chat
@@ -1256,7 +1256,7 @@ const VIEWS = {
     }).join("");
     h += `</div><aside class="gateway-side"><div class="gateway-current"><span class="section-kicker">OPEN THREAD</span><strong>${active?esc(active.title||active.id):"No thread selected"}</strong>
       <p>${active?"This is the conversation currently loaded in the chat dock.":"Choose a conversation to load it into the dock."}</p><a href="#overview">Watch the live system →</a></div>
-      <div class="gateway-principle"><span class="principle-icon">✦</span><strong>One brain, every channel</strong><p>Dashboard, Telegram, voice, and terminal messages share Mino’s runtime and memory.</p><div class="channel-list"><span>dashboard</span><span>telegram</span><span>voice</span><span>terminal</span></div></div></aside></section>`;
+      <div class="gateway-principle"><span class="principle-icon">✦</span><strong>One brain, every channel</strong><p>Dashboard, Telegram, and terminal messages share Mino’s runtime and memory.</p><div class="channel-list"><span>dashboard</span><span>telegram</span><span>terminal</span></div></div></aside></section>`;
     return h;
   },
   conversations(d){ return VIEWS.gateway(d); },
@@ -1565,71 +1565,6 @@ function wireChrome(){
   if (nr) nr.onclick = () => setNav(false);
   setNav(localStorage.getItem("navHidden") === "1");
 }
-
-// --- voice on the dashboard: record in the browser, transcribe on the server
-// with the SAME local Whisper `make voice` uses. Text lands in the input for
-// you to review, then Send — nothing leaves the machine.
-// Voice capture records WAV (uncompressed PCM) via the Web Audio API — NOT
-// MediaRecorder's WebM/Opus, which faster-whisper/PyAV often can't decode
-// ("transcription failed [Errno …]"). WAV is trivially decodable server-side.
-let micCtx = null, micStream = null, micNode = null, micBuf = [], micOn = false;
-const micHint = (msg) => { const i = document.getElementById("dmsg");
-  if (i){ i.placeholder = msg; setTimeout(()=>{ i.placeholder = "Hi Mino! What can you do?"; }, 8000); } };
-
-async function toggleMic(){
-  const btn = document.getElementById("mic");
-  if (micOn){ await stopMic(); return; }
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
-    micHint("voice needs a normal browser tab at localhost:7777 — not the IDE preview pane");
-    return;
-  }
-  try {
-    micStream = await navigator.mediaDevices.getUserMedia({audio:true});
-    micCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const source = micCtx.createMediaStreamSource(micStream);
-    micNode = micCtx.createScriptProcessor(4096, 1, 1);
-    micBuf = [];
-    micNode.onaudioprocess = e => micBuf.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-    source.connect(micNode); micNode.connect(micCtx.destination);
-    micOn = true; btn.classList.add("rec");
-  } catch(e){
-    console.warn("mic error:", e);
-    micHint(e && e.name === "NotAllowedError"
-      ? "mic blocked — click the lock icon in the address bar → allow Microphone → reload (macOS: also System Settings ▸ Privacy ▸ Microphone ▸ your browser)"
-      : "mic unavailable: " + (e && e.message || e));
-  }
-}
-
-async function stopMic(){
-  const btn = document.getElementById("mic"), input = document.getElementById("dmsg");
-  micOn = false; btn.classList.remove("rec");
-  try { micNode.disconnect(); } catch(e){}
-  micStream.getTracks().forEach(t => t.stop());
-  const rate = micCtx.sampleRate;
-  micCtx.close();
-  const wav = encodeWAV(micBuf, rate);
-  const hold = input.placeholder; input.placeholder = "transcribing…";
-  let r; try { r = await (await fetch("/api/voice", {method:"POST", body:wav})).json(); }
-  catch(e){ r = {error:String(e)}; }
-  input.placeholder = hold;
-  if (r.error){ input.value = ""; micHint("voice: " + r.error); return; }
-  if (r.text){ input.value = r.text; input.focus(); }
-}
-
-// float32 chunks → 16-bit PCM mono WAV blob
-function encodeWAV(chunks, rate){
-  let n = 0; chunks.forEach(c => n += c.length);
-  const pcm = new Float32Array(n); let off = 0; chunks.forEach(c => { pcm.set(c, off); off += c.length; });
-  const buf = new ArrayBuffer(44 + pcm.length * 2), view = new DataView(buf);
-  const str = (o, s) => { for (let i=0;i<s.length;i++) view.setUint8(o+i, s.charCodeAt(i)); };
-  str(0,"RIFF"); view.setUint32(4, 36 + pcm.length*2, true); str(8,"WAVE"); str(12,"fmt ");
-  view.setUint32(16,16,true); view.setUint16(20,1,true); view.setUint16(22,1,true);
-  view.setUint32(24,rate,true); view.setUint32(28,rate*2,true); view.setUint16(32,2,true); view.setUint16(34,16,true);
-  str(36,"data"); view.setUint32(40, pcm.length*2, true);
-  let o = 44; for (let i=0;i<pcm.length;i++){ const s = Math.max(-1, Math.min(1, pcm[i])); view.setInt16(o, s<0 ? s*0x8000 : s*0x7FFF, true); o += 2; }
-  return new Blob([view], {type:"audio/wav"});
-}
-function wireMic(){ const b = document.getElementById("mic"); if (b) b.onclick = toggleMic; }
 
 function spinner(){ return `<div class="files-loading"><span class="spinner"></span> Loading...</div>`; }
 function renderFileTree(tree, parent){
@@ -2205,6 +2140,6 @@ window.addEventListener("resize", () => {
   if (D && activeView === "overview") document.getElementById("view").innerHTML = VIEWS.overview(D);
 });
 window.__hold = (v)=>{ animating = v; };   // test hook: freeze the diagram
-wireDock(); wireOperatorShell(); wireMic();
+wireDock(); wireOperatorShell();
 refresh(); setInterval(refresh, 5000); setInterval(tickLive, 1000);
 pollEvents(); setInterval(pollEvents, 450);   // live harness animation
