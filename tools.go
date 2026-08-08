@@ -1027,7 +1027,15 @@ func makeBashToolFor(home string, timeout time.Duration) *Tool {
 		}
 		out, err := runBashContext(ctx, timeout, rewriteBashWithRTK(ctx, cmd))
 		if err != nil {
-			return fmt.Sprintf("Error: %v\nOutput: %s", err, out)
+			// A non-zero exit with stdout is a PARTIAL failure, not a negative
+			// result: the output often contains the actual answer (e.g. find
+			// exits 1 on unreadable dirs while still printing matches). Put the
+			// output first and the exit status second, or agents read
+			// "Error: exit status 1" as proof of absence (issue #16).
+			if out != "" {
+				return fmt.Sprintf("PARTIAL: command exited with error %v but produced output — read it before concluding anything:\n%s", err, out)
+			}
+			return fmt.Sprintf("Command failed: %v (no output)", err)
 		}
 		if len(out) > 1<<20 {
 			out = out[:1<<20] + fmt.Sprintf("\n... (truncated at 1 MiB, %d bytes total)", len(out))
