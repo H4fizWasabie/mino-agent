@@ -27,6 +27,7 @@
 ## [Unreleased]
 
 ### Added
+- Dashboard route-parity coverage now inventories the registered HTTP surface, primary and legacy hash navigation, polling-preservation behavior, and the one known missing voice endpoint before the Nowfield replacement. (Why: a full shell redesign must fail tests when a route, endpoint binding, deep link, or interactive state silently disappears.)
 - README: new "Recommended installs", "A task failed — now what?", and "Power tuning" sections. (Why: the README covered install/config/architecture but never told a new user which helper binaries are worth installing (rtk, markitdown, composio MCP), what to do when a turn dies with `(stopped after N iterations)`, or which env knobs to raise for more power — all verified against the VPS deployment and the code defaults.)
 - `.env.example` and README config table now match the code default `MINO_MAX_TOKENS=16384`. (Why: the example shipped 4096 while `config.go` defaults to 16384, misleading users tuning output length.)
 

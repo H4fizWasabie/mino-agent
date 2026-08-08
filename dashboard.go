@@ -56,47 +56,7 @@ func pushDashEvent(e map[string]any) {
 
 func RunDashboard(w *Core) {
 	dashCore = w
-
-	static, _ := fs.Sub(staticFiles, "static")
-	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(static))))
-
-	// Serve graph memory .md files so the frontend can fetch fact bodies on click
-	memDir := w.Settings.MemoriesDir
-	http.Handle("/memories/", http.StripPrefix("/memories/", http.FileServer(http.Dir(memDir))))
-
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
-		data, _ := staticFiles.ReadFile("static/index.html")
-		w.Header().Set("Content-Type", "text/html")
-		w.Write(data)
-	})
-	http.HandleFunc("/api/chat/stream", handleChatStream)
-	http.HandleFunc("/api/chat", handleChat)
-	http.HandleFunc("/api/session", handleSession)
-	http.HandleFunc("/api/memory", handleMemoryAPI)
-	http.HandleFunc("/api/query", handleQueryAPI)
-	http.HandleFunc("/api/events", handleEventsAPI)
-	http.HandleFunc("/api/nerves", handleNervesAPI)
-	http.HandleFunc("/api/data", handleDataAPI)
-	http.HandleFunc("/api/responsibilities", handleResponsibilitiesAPI)
-	http.HandleFunc("/api/responsibility-evidence", handleResponsibilityEvidence)
-	http.HandleFunc("/api/reveal", handleRevealAPI)
-	http.HandleFunc("/api/files", handleFilesAPI)
-	http.HandleFunc("/api/active-tasks", handleActiveTasks)
-	http.HandleFunc("/api/settings", handleSettingsAPI)
-	http.HandleFunc("/callback", handleOAuthCallback)
-	http.HandleFunc("/api/auth", handleAuthAPI)
-	http.HandleFunc("/api/switch", handleSwitchAPI)
-	http.HandleFunc("/api/providers", handleProvidersAPI)
-	http.HandleFunc("/api/oauth/providers", handleOAuthProviders)
-	http.HandleFunc("/api/oauth/login/", handleOAuthLogin)
-	http.HandleFunc("/api/oauth/device/", handleOAuthDevice)
-	http.HandleFunc("/health", handleHealth)
-	http.HandleFunc("/metrics", handleMetrics)
-	http.HandleFunc("/api/eval/thumbs-up", handleEvalThumbsUp)
+	registerDashboardRoutes(http.DefaultServeMux, w.Settings.MemoriesDir)
 
 	// Telegram runs in main — don't double-start here
 
@@ -117,6 +77,48 @@ func RunDashboard(w *Core) {
 		fmt.Printf("\n  Mino is ready!\n  Open: %s\n\n", url)
 	}
 	http.ListenAndServe(addr, nil)
+}
+
+func registerDashboardRoutes(mux *http.ServeMux, memDir string) {
+	static, _ := fs.Sub(staticFiles, "static")
+	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(static))))
+
+	// Serve graph memory .md files so the frontend can fetch fact bodies on click
+	mux.Handle("/memories/", http.StripPrefix("/memories/", http.FileServer(http.Dir(memDir))))
+
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		data, _ := staticFiles.ReadFile("static/index.html")
+		w.Header().Set("Content-Type", "text/html")
+		w.Write(data)
+	})
+	mux.HandleFunc("/api/chat/stream", handleChatStream)
+	mux.HandleFunc("/api/chat", handleChat)
+	mux.HandleFunc("/api/session", handleSession)
+	mux.HandleFunc("/api/memory", handleMemoryAPI)
+	mux.HandleFunc("/api/query", handleQueryAPI)
+	mux.HandleFunc("/api/events", handleEventsAPI)
+	mux.HandleFunc("/api/nerves", handleNervesAPI)
+	mux.HandleFunc("/api/data", handleDataAPI)
+	mux.HandleFunc("/api/responsibilities", handleResponsibilitiesAPI)
+	mux.HandleFunc("/api/responsibility-evidence", handleResponsibilityEvidence)
+	mux.HandleFunc("/api/reveal", handleRevealAPI)
+	mux.HandleFunc("/api/files", handleFilesAPI)
+	mux.HandleFunc("/api/active-tasks", handleActiveTasks)
+	mux.HandleFunc("/api/settings", handleSettingsAPI)
+	mux.HandleFunc("/callback", handleOAuthCallback)
+	mux.HandleFunc("/api/auth", handleAuthAPI)
+	mux.HandleFunc("/api/switch", handleSwitchAPI)
+	mux.HandleFunc("/api/providers", handleProvidersAPI)
+	mux.HandleFunc("/api/oauth/providers", handleOAuthProviders)
+	mux.HandleFunc("/api/oauth/login/", handleOAuthLogin)
+	mux.HandleFunc("/api/oauth/device/", handleOAuthDevice)
+	mux.HandleFunc("/health", handleHealth)
+	mux.HandleFunc("/metrics", handleMetrics)
+	mux.HandleFunc("/api/eval/thumbs-up", handleEvalThumbsUp)
 }
 
 // --- API: Chat (non-stream, for dashboard load) ---
