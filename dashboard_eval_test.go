@@ -201,6 +201,8 @@ func TestDashboardConversationWorkbenchContract(t *testing.T) {
 	for _, control := range []string{
 		`id="workbench-resizer" role="separator" tabindex="0"`,
 		`id="workbench-maximize"`,
+		`id="dock-reopen"`,
+		`aria-label="Open conversation workbench"`,
 		`aria-label="Maximize conversation workbench"`,
 		`<textarea id="dmsg"`,
 		`aria-keyshortcuts="Control+Enter Meta+Enter"`,
@@ -224,6 +226,7 @@ func TestDashboardConversationWorkbenchContract(t *testing.T) {
 		`function resizeComposer()`,
 		`function setWorkbenchHeight(height)`,
 		`function toggleWorkbenchMaximize()`,
+		`function workbenchMinimizeOnClose(wasOpen,open)`,
 		`function setWorkbenchTab(tab)`,
 		`if(shouldSubmitComposer(e))`,
 		`pending.request=text`,
@@ -245,6 +248,7 @@ func TestDashboardConversationWorkbenchContract(t *testing.T) {
 		`#dmsg{resize:none`,
 		`max-height:180px`,
 		`body.workbench-max #dock`,
+		`body.workbench-minimized #dock`,
 		`body.ask-open #dock{inset:0;display:flex;width:100%;height:100dvh`,
 	} {
 		if !strings.Contains(string(styles), rule) {
@@ -270,7 +274,7 @@ function extract(name){
   }
   throw new Error("unterminated "+name);
 }
-const names=["composerHeight","shouldSubmitComposer","chatStatusFailed","shouldStickChat","workbenchHeightForKey","workbenchFocusTarget"];
+const names=["composerHeight","shouldSubmitComposer","chatStatusFailed","shouldStickChat","workbenchHeightForKey","workbenchFocusTarget","workbenchMinimizeOnClose"];
 const box={}; vm.runInNewContext(names.map(extract).join("\n"),box);
 function equal(got,want,label){if(got!==want) throw new Error(label+": got "+got+", want "+want)}
 equal(box.composerHeight(40,false),44,"collapsed composer");
@@ -291,6 +295,9 @@ equal(box.workbenchHeightForKey(400,"End",1000),800,"keyboard maximum");
 const opener={isConnected:true},fallback={isConnected:true};
 equal(box.workbenchFocusTarget(opener,fallback),opener,"restore opener focus");
 equal(box.workbenchFocusTarget({isConnected:false},fallback),fallback,"fallback focus");
+equal(box.workbenchMinimizeOnClose(true,false),true,"close open workbench");
+equal(box.workbenchMinimizeOnClose(false,false),false,"close collapsed workbench");
+equal(box.workbenchMinimizeOnClose(true,true),false,"open workbench");
 `
 	cmd := exec.Command(node, "-e", harness, filepath.Join("static", "app.js"))
 	if out, err := cmd.CombinedOutput(); err != nil {

@@ -52,7 +52,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
       <div><strong>Conversation</strong><span class="arch-status" aria-live="polite"></span></div>
       <div class="workbench-controls">
         <button id="workbench-maximize" type="button" aria-label="Maximize conversation workbench" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9V5h4M15 5h4v4M19 15v4h-4M9 19H5v-4"/></svg></button>
-        <button id="dock-close" type="button" aria-label="Collapse conversation workbench"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9l7 7 7-7"/></svg></button>
+        <button id="dock-close" type="button" aria-label="Minimize conversation workbench"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9l7 7 7-7"/></svg></button>
       </div>
     </div>
     <div class="sesshead">
@@ -80,6 +80,8 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
     <div id="workbench-context-body"></div>
   </aside>
 </aside>
+
+<button id="dock-reopen" type="button" aria-label="Open conversation workbench">Open conversation</button>
 
 <nav class="mobile-nav" aria-label="Mobile navigation">
   <a href="#today" data-v="today"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M7 3v4M17 3v4M5 11h4v4H5zM12 11h7M12 15h5M5 19h14"/></svg><span>Today</span><b id="mobile-n-today"></b></a>
