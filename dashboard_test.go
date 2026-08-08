@@ -66,9 +66,7 @@ func TestDashboardFrontendEndpointsHaveRegisteredHandlers(t *testing.T) {
 	registerDashboardRoutes(mux, t.TempDir())
 
 	endpointPattern := regexp.MustCompile(`"/api/[A-Za-z0-9/_-]+`)
-	knownMissing := map[string]string{
-		"/api/voice": "tracked by #32",
-	}
+	knownMissing := map[string]string{}
 	seen := make(map[string]bool)
 	for _, match := range endpointPattern.FindAllString(string(script), -1) {
 		path := strings.TrimPrefix(match, `"`)
@@ -116,6 +114,22 @@ func TestDashboardArtifactActionsHaveRecoveryUI(t *testing.T) {
 	for _, forbidden := range []string{`reveal("state.db"`, `reveal("providers.json"`, `reveal("","open folder")`} {
 		if strings.Contains(string(script), forbidden) {
 			t.Errorf("sensitive artifact affordance still present: %q", forbidden)
+		}
+	}
+}
+
+func TestDashboardVoiceAffordanceRemoved(t *testing.T) {
+	script, err := staticFiles.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := staticFiles.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{"/api/voice", "getUserMedia", "wireMic", `id="mic"`} {
+		if strings.Contains(string(script), marker) || strings.Contains(string(index), marker) {
+			t.Errorf("unsupported voice affordance remains: %q", marker)
 		}
 	}
 }
