@@ -46,26 +46,40 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
 </main>
 
 <aside id="dock" aria-label="Conversation with Mino">
-  <div class="dockhead">
-    <div><strong>Conversation</strong><span class="arch-status" aria-live="polite"></span></div>
-    <button id="dock-close" type="button" aria-label="Close conversation">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
-    </button>
-  </div>
-  <div class="sesshead">
-    <button class="sessbtn" type="button" onclick="newChat()">New conversation</button>
-    <button class="sessbtn" type="button" onclick="toggleSessMenu(event)">History <span aria-hidden="true">⌄</span></button>
-  </div>
-  <div class="chatlog" id="docklog" role="log" aria-live="polite" aria-relevant="additions text"></div>
-  <div class="chatbar">
-    <button id="ask-expand" class="ask-expand" type="button" aria-label="Open conversation" aria-expanded="false">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14v10H9l-4 3V6z"/></svg>
-    </button>
-    <label class="sr-only" for="dmsg">Message Mino</label>
-    <input id="dmsg" placeholder="Ask Mino…" autocomplete="off">
-    <button id="mic" type="button" aria-label="Record a voice message"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
-    <button id="dsend" type="button">Send</button>
-  </div>
+  <div id="workbench-resizer" role="separator" tabindex="0" aria-orientation="horizontal" aria-label="Resize conversation workbench"></div>
+  <section class="workbench-conversation">
+    <div class="dockhead">
+      <div><strong>Conversation</strong><span class="arch-status" aria-live="polite"></span></div>
+      <div class="workbench-controls">
+        <button id="workbench-maximize" type="button" aria-label="Maximize conversation workbench" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9V5h4M15 5h4v4M19 15v4h-4M9 19H5v-4"/></svg></button>
+        <button id="dock-close" type="button" aria-label="Collapse conversation workbench"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9l7 7 7-7"/></svg></button>
+      </div>
+    </div>
+    <div class="sesshead">
+      <button class="sessbtn" type="button" onclick="newChat()">New conversation</button>
+      <button class="sessbtn" type="button" onclick="toggleSessMenu(event)">History <span aria-hidden="true">⌄</span></button>
+    </div>
+    <div class="chatlog" id="docklog" role="log" aria-live="polite" aria-relevant="additions text"></div>
+    <div class="chatbar">
+      <button id="ask-expand" class="ask-expand" type="button" aria-label="Open conversation" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14v10H9l-4 3V6z"/></svg></button>
+      <div class="composer-shell">
+        <label class="sr-only" for="dmsg">Message Mino</label>
+        <textarea id="dmsg" rows="1" placeholder="Ask Mino…" autocomplete="off" aria-keyshortcuts="Control+Enter Meta+Enter"></textarea>
+        <div class="composer-footer"><span>Enter for a new line · Ctrl/⌘ Enter to send</span><div>
+          <button id="mic" type="button" aria-label="Record a voice message"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+          <button id="dsend" type="button">Send</button>
+        </div></div>
+      </div>
+    </div>
+  </section>
+  <aside class="workbench-context" aria-label="Conversation context">
+    <nav class="workbench-tabs" role="tablist" aria-label="Conversation context tabs">
+      <button type="button" role="tab" class="on" data-workbench-tab="evidence" aria-selected="true">Evidence</button>
+      <button type="button" role="tab" data-workbench-tab="actions" aria-selected="false">Actions</button>
+      <button type="button" role="tab" data-workbench-tab="links" aria-selected="false">Links</button>
+    </nav>
+    <div id="workbench-context-body"></div>
+  </aside>
 </aside>
 
 <nav class="mobile-nav" aria-label="Mobile navigation">

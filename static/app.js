@@ -303,11 +303,12 @@ const gateSplit = s => {
 
 // --- Chat gateway: type here, watch the harness run (turns kept in memory)
 const CHAT = [];
-const chatTurnCard = t => `<div class="card">
+const chatTurnCard = t => `<div class="card ${t.error?"chat-error":""}">
   ${t.gate?`<div class="stages"><span class="stage done">gate · ${esc(t.gate.decision)}</span>${(t.tools||[]).map(x=>`<span class="stage done">tool · ${esc(x.tool)}</span>`).join("")}<span class="stage done">reply</span></div>
     <div class="meta" style="margin:0 0 6px">${esc(t.gate.reason||"")}</div>`:""}
   ${(t.tools||[]).map(toolRow).join("")}
   <div class="r" style="margin-top:8px">${renderCardBody(stripTools(t.reply))}</div>
+  ${t.error&&t.request?`<button class="chat-retry" type="button" onclick="retryChat(${jsArg(t.request)})">Review and retry</button>`:""}
   <div class="meta">${secs(t.latency_ms)} · ${t.iterations??"?"} iter${t.consolidation?` · consolidated ${t.consolidation.new_facts} fact(s)`:""}</div>
 </div>`;
 
@@ -344,7 +345,7 @@ function renderCardBody(text) {
 
 function renderChatLog(){
   if (!CHAT.length)
-    return `<div class="empty" style="padding:6px 2px">Message Mino here from any tab. Open Overview to watch it flow through the harness, or the Gateway tab to see every channel's messages together.</div>`;
+    return `<div class="empty" style="padding:6px 2px">Message Mino from any surface. Streaming replies, tool evidence, and conversation context stay together here.</div>`;
   return CHAT.map(m => m.role==="user"
       ? `<div class="bubble">${esc(m.text)}</div>`
       : m.pending ? streamingCard(m)
@@ -352,12 +353,52 @@ function renderChatLog(){
       : chatTurnCard(m)).join("");
 }
 
-function syncChatLogs(){
+function shouldStickChat(scrollHeight,scrollTop,clientHeight){
+  return scrollHeight-scrollTop-clientHeight<=48;
+}
+function syncChatLogs(force=false){
   // one conversation, two surfaces: the Chat & watch tab and the side dock
   document.querySelectorAll(".chatlog").forEach(el => {
+    const stick=force||shouldStickChat(el.scrollHeight,el.scrollTop,el.clientHeight), top=el.scrollTop;
     el.innerHTML = renderChatLog();
-    el.scrollTop = el.scrollHeight;      // dock scrolls its own container
+    el.scrollTop = stick?el.scrollHeight:top;
   });
+  const busy=CHAT.some(message=>message.pending), send=document.getElementById("dsend"), dock=document.getElementById("dock");
+  if(send) send.disabled=busy;
+  if(dock) dock.setAttribute("aria-busy",busy?"true":"false");
+  renderWorkbenchContext();
+}
+
+let workbenchTab="evidence";
+function renderWorkbenchContext(){
+  const target=document.getElementById("workbench-context-body");
+  if(!target) return;
+  if(workbenchTab==="actions"){
+    target.innerHTML=`<div class="workbench-action-list"><button type="button" onclick="newChat()">New conversation</button><button type="button" onclick="toggleSessMenu(event)">Open history</button></div>`;
+    return;
+  }
+  if(workbenchTab==="links"){
+    target.innerHTML=`<div class="workbench-link-list"><a href="#conversations">Conversation library <span>→</span></a><a href="#work">Responsibility field <span>→</span></a><a href="#system/traces">Runtime traces <span>→</span></a></div>`;
+    return;
+  }
+  const message=[...CHAT].reverse().find(item=>item.role==="mino"), tools=message&&message.tools||[];
+  if(tools.length){
+    target.innerHTML=`<div class="workbench-evidence-scope"><span>Latest live turn</span><strong>${esc(message.request||"Current request")}</strong></div><div class="workbench-evidence-list">${tools.map(tool=>`<article><strong>${esc(tool.tool||"Tool")}</strong><p>${esc(tool.summary||tool.output||"Recorded tool result")}</p></article>`).join("")}</div>`;
+  }else if(message&&message.historical){
+    target.innerHTML=`<div class="workbench-context-empty"><strong>Historical tool evidence is not included here.</strong><p>Open Runtime traces for the stored execution record.</p></div>`;
+  }else{
+    target.innerHTML=`<div class="workbench-context-empty"><strong>No live tool evidence for the current turn.</strong><p>Tool results appear here if Mino uses them.</p></div>`;
+  }
+}
+function setWorkbenchTab(tab){
+  if(!["evidence","actions","links"].includes(tab)) return;
+  workbenchTab=tab;
+  document.querySelectorAll("[data-workbench-tab]").forEach(button=>{
+    const selected=button.dataset.workbenchTab===tab;
+    button.classList.toggle("on",selected);
+    button.setAttribute("aria-selected",selected?"true":"false");
+  });
+  renderWorkbenchContext();
 }
 
 // One streamed harness event updates the live card in place.
@@ -375,27 +416,35 @@ function applyStreamEvent(pending, ev){
     pending.pending = false;
     pending.reply = (ev.reply || "");
     pending.status = ev.status;
+    pending.error = chatStatusFailed(ev.status);
     pending.stream = "";
   } else if (ev.kind === "done"){
     pending.pending = false;
-    if (ev.error) pending.reply = "Error: " + ev.error;
+    pending.status = ev.status||pending.status;
+    if(ev.error||chatStatusFailed(pending.status)){ pending.reply = ev.error?"Error: "+ev.error:(ev.reply||pending.reply); pending.error=true; }
     else if (!pending.reply) Object.assign(pending, ev);
     pending.stream = "";
   }
+}
+function chatStatusFailed(status){
+  return ["error","loop","iteration_limit","cancelled"].includes(status);
 }
 
 async function sendChat(fromInput){
   const input = fromInput || document.getElementById("msg") || document.getElementById("dmsg");
   const text = (input && input.value || "").trim();
-  if (!text) return;
+  if (!text || CHAT.some(message=>message.pending)) return;
   input.value = "";
+  resizeComposer();
   CHAT.push({role:"user", text});
   const pending = {role:"mino", pending:true, stream:""};
+  pending.request=text;
   CHAT.push(pending);
-  syncChatLogs();
+  syncChatLogs(true);
   try {
     const res = await fetch("/api/chat/stream", {method:"POST",
       headers:{"Content-Type":"application/json"}, body:JSON.stringify({message:text, session_id:SESSION})});
+    if(!res.ok) throw new Error(`chat returned ${res.status}`);
     const reader = res.body.getReader(), dec = new TextDecoder();
     let buf = "";
     for (;;){
@@ -410,36 +459,110 @@ async function sendChat(fromInput){
         syncChatLogs();
       }
     }
-  } catch(e){ Object.assign(pending, {pending:false, reply:"Error: "+e}); }
-  if (pending.pending) pending.pending = false;   // stream ended without a 'done'
+  } catch(e){ Object.assign(pending, {pending:false, error:true, reply:"Error: "+e}); }
+  if(pending.pending) Object.assign(pending,{pending:false,error:true,reply:"Connection ended before Mino completed the reply."});
   syncChatLogs();
   input.focus();
+}
+function retryChat(text){
+  const input=document.getElementById("dmsg");
+  if(!input) return;
+  setAskOpen(true);
+  input.value=text;
+  resizeComposer();
+  input.focus();
+}
+function composerHeight(scrollHeight,open){
+  return Math.min(open?180:44,Math.max(open?112:44,scrollHeight));
+}
+function shouldSubmitComposer(event){
+  return event.key==="Enter"&&(event.ctrlKey||event.metaKey);
+}
+function resizeComposer(){
+  const input=document.getElementById("dmsg");
+  if(!input) return;
+  const open=document.body.classList.contains("ask-open");
+  input.style.height="auto";
+  input.style.height=composerHeight(input.scrollHeight,open)+"px";
+}
+function workbenchHeightForKey(current,key,viewport){
+  const min=280,max=Math.max(min,Math.round(viewport*.8));
+  const next=key==="Home"?min:key==="End"?max:current+(key==="ArrowUp"?24:key==="ArrowDown"?-24:0);
+  return Math.max(min,Math.min(max,Math.round(next)));
+}
+function setWorkbenchHeight(height){
+  const min=280, max=Math.max(min,Math.round(window.innerHeight*.8)), next=Math.max(min,Math.min(max,Math.round(height)));
+  document.documentElement.style.setProperty("--workbench-h",next+"px");
+  localStorage.setItem("workbenchHeight",next);
+  const handle=document.getElementById("workbench-resizer");
+  if(handle){ handle.setAttribute("aria-valuemin",min); handle.setAttribute("aria-valuemax",max); handle.setAttribute("aria-valuenow",next); }
+}
+function toggleWorkbenchMaximize(){
+  const on=document.body.classList.toggle("workbench-max"), button=document.getElementById("workbench-maximize");
+  if(button){ button.setAttribute("aria-pressed",on?"true":"false"); button.setAttribute("aria-label",on?"Restore conversation workbench":"Maximize conversation workbench"); }
+  resizeComposer();
+}
+function wireWorkbench(){
+  const dock=document.getElementById("dock"), handle=document.getElementById("workbench-resizer"), saved=Number(localStorage.getItem("workbenchHeight"));
+  setWorkbenchHeight(saved||window.innerHeight*.45);
+  handle?.addEventListener("pointerdown",event=>{
+    if(!document.body.classList.contains("ask-open")||document.body.classList.contains("workbench-max")) return;
+    const startY=event.clientY, startHeight=dock.getBoundingClientRect().height;
+    handle.setPointerCapture(event.pointerId);
+    handle.onpointermove=move=>setWorkbenchHeight(startHeight+startY-move.clientY);
+    handle.onpointerup=()=>{ handle.onpointermove=null; handle.onpointerup=null; };
+  });
+  handle?.addEventListener("keydown",event=>{
+    if(!["ArrowUp","ArrowDown","Home","End"].includes(event.key)) return;
+    event.preventDefault();
+    setWorkbenchHeight(workbenchHeightForKey(dock.getBoundingClientRect().height,event.key,window.innerHeight));
+  });
+  document.getElementById("workbench-maximize")?.addEventListener("click",toggleWorkbenchMaximize);
+  document.querySelectorAll("[data-workbench-tab]").forEach(button=>button.addEventListener("click",()=>setWorkbenchTab(button.dataset.workbenchTab)));
+  renderWorkbenchContext();
 }
 function wireDock(){
   const b = document.getElementById("dsend"), i = document.getElementById("dmsg");
   if (b) b.onclick = () => sendChat(i);
   if (i) {
-    i.onkeydown = e => { if (e.key==="Enter") sendChat(i); };
-    i.onfocus = () => setAskOpen(true);
+    i.onkeydown = e => { if(shouldSubmitComposer(e)){ e.preventDefault(); sendChat(i); } };
+    i.oninput = resizeComposer;
+    i.onfocus = () => { setAskOpen(true); resizeComposer(); };
   }
   document.getElementById("dock-close")?.addEventListener("click", () => setAskOpen(false));
   document.getElementById("ask-expand")?.addEventListener("click", () => setAskOpen(true));
   document.getElementById("ask-top")?.addEventListener("click", () => setAskOpen(true));
   document.getElementById("ask-mobile")?.addEventListener("click", () => setAskOpen(true));
+  wireWorkbench();
   syncChatLogs();
+  resizeComposer();
 }
 
+let workbenchOpener=null;
+function workbenchFocusTarget(opener,fallback){
+  return opener&&opener.isConnected?opener:fallback;
+}
 function setAskOpen(open){
+  const wasOpen=document.body.classList.contains("ask-open");
+  if(open&&!wasOpen) workbenchOpener=document.activeElement;
   document.body.classList.toggle("ask-open", open);
+  if(!open) document.body.classList.remove("workbench-max");
   const expand=document.getElementById("ask-expand");
   if(expand) expand.setAttribute("aria-expanded", open?"true":"false");
-  if(open) setTimeout(()=>document.getElementById("dmsg")?.focus(), 20);
+  const maximize=document.getElementById("workbench-maximize");
+  if(maximize&&!open){ maximize.setAttribute("aria-pressed","false"); maximize.setAttribute("aria-label","Maximize conversation workbench"); }
+  resizeComposer();
+  if(open) setTimeout(()=>{ document.getElementById("dmsg")?.focus(); resizeComposer(); }, 20);
+  else if(wasOpen) setTimeout(()=>{
+    const fallback=window.matchMedia("(max-width:719px)").matches?document.getElementById("ask-mobile"):document.getElementById("ask-expand");
+    workbenchFocusTarget(workbenchOpener,fallback)?.focus();
+  },0);
 }
 
 function askAboutResponsibility(title){
   setAskOpen(true);
   const input=document.getElementById("dmsg");
-  if(input){ input.value=`Help me resolve “${title}”`; input.setSelectionRange(input.value.length,input.value.length); }
+  if(input){ input.value=`Help me resolve “${title}”`; input.setSelectionRange(input.value.length,input.value.length); resizeComposer(); }
 }
 
 function wireOperatorShell(){
@@ -576,7 +699,7 @@ function dbQueryView(){
 let SESSION = "default";
 async function newChat(){
   const r = await postJSON("/api/session", {action:"new"});
-  if (r.session_id){ liveView = null; SESSION = r.session_id; CHAT.length = 0; syncChatLogs(); }
+  if (r.session_id){ liveView = null; SESSION = r.session_id; CHAT.length = 0; syncChatLogs(true); }
   closeSessMenu();
 }
 async function switchSession(id){
@@ -585,7 +708,7 @@ async function switchSession(id){
     SESSION = r.session_id; CHAT.length = 0;
     (r.history||[]).forEach(m => CHAT.push(m.role==="user"
       ? {role:"user", text:m.content} : {role:"mino", reply:m.content, historical:true}));
-    syncChatLogs();
+    syncChatLogs(true);
   }
   closeSessMenu();
 }

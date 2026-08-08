@@ -45,8 +45,11 @@ Provider and model identity belong in System rather than global chrome; a
 provider problem appears in Today only when it materially affects
 responsibility or outcome.
 
-The lower region is reserved for the conversation workbench. Its implementation
-must reflow the time field rather than covering Responsibility rows.
+The lower region is the conversation workbench. Its collapsed composer occupies
+a shell row; opening it reflows the time field to roughly 55% height and gives
+conversation 72% of the lower width. Evidence, Actions, and Links share the
+remaining 28%. The workbench is pointer- and keyboard-resizable, collapsible,
+restorable, and maximizable.
 
 ### Truthful health
 
@@ -262,16 +265,16 @@ records the receipt.
 Mobile preserves the same Responsibility and journal model through
 phone-specific navigation rather than shrinking the desktop layout.
 
-The bottom navigation is **Today**, **Work**, **Inbox**, **Ask**, and **More**.
-Inbox is the mobile label for Conversations; More contains Memory and System.
-Only Needs-you items receive a navigation count badge.
+The bottom navigation is **Today**, **Work**, **Inbox**, **Memory**, **Ask**, and
+**More**. Inbox is the mobile label for Conversations; More opens System. Only
+Needs-you items receive a navigation count badge.
 
 Today is a single-column adaptive journal. Selecting an entry opens a
 full-screen detail surface, not a side panel. Needs-you and Blocked details may
 keep their primary action near the bottom while Responsibility History and
 Evidence remain expandable.
 
-Ask opens a full-screen composer rather than a persistent chat dock. From a
+Ask opens a full-screen workbench rather than a cramped split layout. From a
 Responsibility detail it carries that Responsibility as visible context; from
 global navigation it starts without a Work scope. Returning from conversation
 restores the previous journal date and scroll position.
