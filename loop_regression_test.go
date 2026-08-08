@@ -321,3 +321,88 @@ func TestLoopNoMutationPushInsideStage(t *testing.T) {
 		t.Fatalf("model called %d times, want 1 (stage: no chat push)", len(client.messages))
 	}
 }
+
+// Issue #24: repeated unparseable markers escalate, then abort with a
+// diagnosis instead of burning to the iteration cap.
+func TestLoopAbortsAfterSixConsecutiveParseFailures(t *testing.T) {
+	tools := NewRegistry()
+	script := make([]*LLMResponse, 0, 8)
+	for i := 0; i < 8; i++ {
+		script = append(script, scriptedResp([]ContentBlock{textBlock("[tool_call: bash({broken)")}, "stop"))
+	}
+	client := &fakeClient{script: script}
+	result := RunLoopContext(context.Background(), client, "parse-loop", "", []Message{{Role: "user", Content: "go"}}, tools, 10, 100, nil, false, "", nil)
+	if result.Status != "error" {
+		t.Fatalf("status = %q, want error", result.Status)
+	}
+	if !strings.Contains(result.Reply, "repeatedly emitted unparseable tool calls") {
+		t.Fatalf("reply = %q, want the parse-abort diagnosis", result.Reply)
+	}
+	if result.Iterations != 6 {
+		t.Fatalf("iterations = %d, want 6 (abort before the cap)", result.Iterations)
+	}
+}
+
+// Escalation: the third consecutive failure gets a different push message.
+func TestLoopEscalatesParsePushAfterThreeFailures(t *testing.T) {
+	tools := NewRegistry()
+	client := &fakeClient{script: []*LLMResponse{
+		scriptedResp([]ContentBlock{textBlock("[tool_call: bash({broken)")}, "stop"),
+		scriptedResp([]ContentBlock{textBlock("[tool_call: bash({broken)")}, "stop"),
+		scriptedResp([]ContentBlock{textBlock("[tool_call: bash({broken)")}, "stop"),
+		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
+	}}
+	result := RunLoopContext(context.Background(), client, "parse-escalate", "", []Message{{Role: "user", Content: "go"}}, tools, 10, 100, nil, false, "", nil)
+	if result.Status != "complete" {
+		t.Fatalf("status = %q, want complete", result.Status)
+	}
+	escalated := false
+	for _, m := range client.messages[3] { // the 4th call sees the escalated push
+		if strings.Contains(m.Content, "STOP re-emitting the same shape") {
+			escalated = true
+		}
+	}
+	if !escalated {
+		t.Fatal("escalated push missing after 3 consecutive failures")
+	}
+}
+
+// A successfully executed tool call between failures resets the counter.
+func TestLoopParseCounterResetsOnSuccess(t *testing.T) {
+	tools := NewRegistry()
+	tools.Register(&Tool{Name: "ping", Description: "p", Schema: map[string]any{"type": "object", "properties": map[string]any{}}, Fn: func(map[string]any) string { return "pong" }})
+	client := &fakeClient{script: []*LLMResponse{
+		scriptedResp([]ContentBlock{textBlock("[tool_call: bash({broken)")}, "stop"),
+		scriptedResp([]ContentBlock{textBlock("[tool_call: bash({broken)")}, "stop"),
+		scriptedResp([]ContentBlock{toolBlock("ping", map[string]any{})}, "tool_use"),
+		scriptedResp([]ContentBlock{textBlock("[tool_call: bash({broken)")}, "stop"),
+		scriptedResp([]ContentBlock{textBlock("[tool_call: bash({broken)")}, "stop"),
+		scriptedResp([]ContentBlock{textBlock("[tool_call: bash({broken)")}, "stop"),
+		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
+	}}
+	result := RunLoopContext(context.Background(), client, "parse-reset", "", []Message{{Role: "user", Content: "go"}}, tools, 10, 100, nil, false, "", nil)
+	if result.Status != "complete" {
+		t.Fatalf("status = %q, want complete (counter reset by the executed tool)", result.Status)
+	}
+	// The 3rd call (before the tool executed) must NOT carry the escalated push
+	// — only 2 consecutive failures at that point.
+	escalatedEarly := false
+	for _, m := range client.messages[2] {
+		if strings.Contains(m.Content, "STOP re-emitting") {
+			escalatedEarly = true
+		}
+	}
+	if escalatedEarly {
+		t.Fatal("counter did not reset — escalation appeared before 3 consecutive failures")
+	}
+	// The 7th call (3 failures after the reset) must carry it.
+	escalatedLate := false
+	for _, m := range client.messages[6] {
+		if strings.Contains(m.Content, "STOP re-emitting") {
+			escalatedLate = true
+		}
+	}
+	if !escalatedLate {
+		t.Fatal("escalated push missing after 3 consecutive failures post-reset")
+	}
+}

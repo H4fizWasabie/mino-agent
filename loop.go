@@ -226,6 +226,7 @@ func RunLoopContext(
 	trace("context_diag", map[string]any{"system_chars": len(system), "msg_count": len(messages), "schema_count": len(schemas), "schema_names": schemaNames, "schema_est_chars": schemaChars, "one_turn_chars": len(oneTurnText)})
 
 	mutationChecked := false // push the unverified-mutation-claim correction at most once per turn
+	parseFailures := 0       // consecutive unparseable text-marker calls (issue #24)
 
 	for i := 1; i <= maxIter; i++ {
 		if ctx.Err() != nil {
@@ -281,15 +282,35 @@ func RunLoopContext(
 		// push and another iteration instead of a silent "complete".
 		if len(toolUses) == 0 {
 			if markerFound {
-				slog.Warn("unparseable tool_call marker", "session_id", sessionID, "iteration", i)
-				if audit, ok := ctx.Value(auditKey{}).(func(string, string, int)); ok {
-					audit("tool_call_parse_failed", "text marker found but args did not parse", i)
+				parseFailures++
+				// Circuit breaker (issue #24): a model stuck in a broken marker
+				// shape repeats the same failure — the identical push does not
+				// help, so escalate, then abort with a diagnosis instead of
+				// burning to the iteration cap (observed 2026-08-08: 16
+				// consecutive failures on the facebook run, iters 35-50).
+				if parseFailures >= 6 {
+					slog.Error("repeated unparseable tool markers", "session_id", sessionID, "iteration", i, "failures", parseFailures)
+					trace("tool_call_parse_aborted", map[string]any{"iteration": i, "failures": parseFailures})
+					result.Status = "error"
+					result.Reply = fmt.Sprintf("(error: repeatedly emitted unparseable tool calls after %d attempts)", parseFailures)
+					return result
 				}
-				trace("tool_call_parse_failed", map[string]any{"iteration": i})
-				messages = append(messages, Message{
-					Role:    "user",
-					Content: "[System: your previous tool call could not be parsed — re-emit it in the exact format [tool_call: name({...})] with valid JSON, or use native function calling.]",
-				})
+				slog.Warn("unparseable tool_call marker", "session_id", sessionID, "iteration", i, "failures", parseFailures)
+				if audit, ok := ctx.Value(auditKey{}).(func(string, string, int)); ok {
+					audit("tool_call_parse_failed", fmt.Sprintf("text marker found but args did not parse (failure %d)", parseFailures), i)
+				}
+				trace("tool_call_parse_failed", map[string]any{"iteration": i, "failures": parseFailures})
+				if parseFailures >= 3 {
+					messages = append(messages, Message{
+						Role:    "user",
+						Content: "[System: your last " + fmt.Sprint(parseFailures) + " tool calls failed to parse. STOP re-emitting the same shape — use native function calling, or call the _FLAT variant of the tool with arguments as a JSON string. Inspect the tool schema before retrying.]",
+					})
+				} else {
+					messages = append(messages, Message{
+						Role:    "user",
+						Content: "[System: your previous tool call could not be parsed — re-emit it in the exact format [tool_call: name({...})] with valid JSON, or use native function calling.]",
+					})
+				}
 				continue
 			}
 			if missing := missingStageOutputs(ctx); len(missing) > 0 {
@@ -330,6 +351,7 @@ func RunLoopContext(
 		}
 
 		// Execute tools and feed results back
+		parseFailures = 0 // a successfully parsed + executed call breaks the streak (issue #24)
 		toolResults := make([]map[string]any, 0)
 		var turnImages []string
 		for _, tc := range toolUses {
