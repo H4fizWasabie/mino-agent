@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Playbook stages with verified outputs now complete even when the final model call flakes. (Why: the 09:30 threads-daily-capability run on 2026-08-08 published the post and wrote its log, then was marked failed by `all vision providers failed: empty model response` on the wrap-up call — the Telegram report was lost and the routine went blocked. A stage's contract is its verified outputs, not the model's last word. Cancelled runs and missing outputs still fail.)
 - Chat loop pushes back once when the agent claims a state change it never executed. (Why: on 2026-08-08, asked to remove a memory fact, the agent replied "Consider it deleted" with zero tool calls — the file still existed, and it doubled down when confronted. The loop now detects mutation requests (delete/remove/forget + object) answered with completion claims but no tool calls, and injects one corrective push. Chat turns only; stages stay governed by their output contract.)
 - Bash tool results for non-zero exits now lead with the output. (Why: three behavioral probes on 2026-08-08 showed the agent reading `Error: exit status 1` as proof of absence while the file path sat in the Output field — `find` exits 1 on unreadable dirs while still printing matches. Error results now read `PARTIAL: command exited with error N but produced output — read it before concluding anything: <output>`.)
 
