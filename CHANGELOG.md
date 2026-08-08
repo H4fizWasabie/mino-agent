@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+### Added
+- Quarantined outputs: stage contracts may declare absolute output paths — enforced like any declared output, but resolved outside the playbook tree so they never enter the ALL_PLATFORMS glob or the distill queue. (Why: the threads-replies digest — the audit trail of what the agent replied publicly — was skipped 2/2 runs because prompt-level steps have no teeth, yet declaring it as a normal output would have distilled external comment text into memory. Absolute declared paths = enforced + quarantined.)
 ### Fixed
 - Playbook stages with verified outputs now complete even when the final model call flakes. (Why: the 09:30 threads-daily-capability run on 2026-08-08 published the post and wrote its log, then was marked failed by `all vision providers failed: empty model response` on the wrap-up call — the Telegram report was lost and the routine went blocked. A stage's contract is its verified outputs, not the model's last word. Cancelled runs and missing outputs still fail.)
 - Chat loop pushes back once when the agent claims a state change it never executed. (Why: on 2026-08-08, asked to remove a memory fact, the agent replied "Consider it deleted" with zero tool calls — the file still existed, and it doubled down when confronted. The loop now detects mutation requests (delete/remove/forget + object) answered with completion claims but no tool calls, and injects one corrective push. Chat turns only; stages stay governed by their output contract.)

@@ -741,3 +741,144 @@ func TestWorkspaceFailsWhenRuntimeErrorAndOutputsMissing(t *testing.T) {
 		t.Fatalf("status = %q, want failed (no outputs written)", result.Status)
 	}
 }
+
+// Issue #22: absolute output paths are quarantined outputs — enforced like
+// any declared output, but resolved as-is (outside the run workspace).
+func TestPlaybookRunOutputPathResolvesAbsoluteAsQuarantined(t *testing.T) {
+	home := t.TempDir()
+	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect"})
+	pb, err := loadPlaybookWorkspace(home, "brief")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, _ := workspaceStage(pb, 1)
+	run, _ := loadOrCreatePlaybookRun(pb, NewRegistry(), "x", "test", time.Now())
+	rel := playbookRunOutputPath(pb, run, stage, stage.Outputs[0])
+	if filepath.IsAbs(rel) == false || !strings.Contains(rel, "runs") {
+		t.Fatalf("relative output path not joined under run dir: %q", rel)
+	}
+	abs := playbookRunOutputPath(pb, run, stage, StageOutput{Name: "quarantined", Path: "/home/mino/.mino/data/threads-replies/digest.md"})
+	if abs != "/home/mino/.mino/data/threads-replies/digest.md" {
+		t.Fatalf("absolute output path not preserved: %q", abs)
+	}
+}
+
+// appendQuarantinedOutput declares an absolute-path output on disk — the
+// way the contract author would write it.
+func appendQuarantinedOutput(t *testing.T, home, stage, absPath string) {
+	t.Helper()
+	p := filepath.Join(home, "playbooks", "brief", "stages", stage, "CONTEXT.md")
+	s, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s = append(s, []byte("| Digest | `"+absPath+"` | Markdown |\n")...)
+	if err := os.WriteFile(p, s, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A stage declaring a quarantined (absolute) output cannot complete until it
+// is written; once written, the stage completes with it.
+func TestWorkspaceQuarantinedOutputEnforced(t *testing.T) {
+	home := t.TempDir()
+	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect"})
+	qpath := filepath.Join(home, "data", "digest.md")
+	appendQuarantinedOutput(t, home, "01-collect", qpath)
+	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
+	pb, err := loadPlaybookWorkspace(home, "brief")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage1, _ := workspaceStage(pb, 1)
+	run, err := loadOrCreatePlaybookRun(pb, registry, "x", "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path1 := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
+	if got := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[1]); got != qpath {
+		t.Fatalf("quarantined path = %q, want %q", got, qpath)
+	}
+	oldLoop := runPlaybookStageLoop
+	defer func() { runPlaybookStageLoop = oldLoop }()
+	// First attempt: only the normal output written — the quarantined one is
+	// missing, so the stage must not complete; the injected loop gets a second
+	// call, writes both, and the run completes.
+	attempts := 0
+	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
+		attempts++
+		if attempts == 1 {
+			os.MkdirAll(filepath.Dir(path1), 0700)
+			os.WriteFile(path1, []byte("x"), 0600)
+			return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{{Name: "write_file", Args: map[string]any{"path": path1}}}}
+		}
+		os.MkdirAll(filepath.Dir(qpath), 0700)
+		os.WriteFile(qpath, []byte("digest"), 0600)
+		return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{{Name: "write_file", Args: map[string]any{"path": path1}}, {Name: "write_file", Args: map[string]any{"path": qpath}}}}
+	}
+	result, err := RunPlaybook(context.Background(), core, "brief", "x", "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "complete" {
+		t.Fatalf("status = %q, want complete after quarantined output written (reply: %q)", result.Status, result.Reply)
+	}
+	if attempts < 2 {
+		t.Fatalf("stage loop ran %d times, want 2 (first attempt must be blocked by the missing quarantined output)", attempts)
+	}
+}
+
+// Quarantined outputs are never recorded as artifacts (no distill), while
+// normal outputs are.
+func TestQuarantinedOutputsSkippedFromArtifacts(t *testing.T) {
+	home := t.TempDir()
+	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect"})
+	qpath := filepath.Join(home, "data", "digest.md")
+	appendQuarantinedOutput(t, home, "01-collect", qpath)
+	db := Connect(t.TempDir())
+	defer db.Close()
+	mem := NewMemory(db, nil, &Settings{Home: home, TopK: 4, ConsolidateEvery: 0})
+	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil), Memory: mem}
+	pb, err := loadPlaybookWorkspace(home, "brief")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage1, _ := workspaceStage(pb, 1)
+	run, err := loadOrCreatePlaybookRun(pb, registry, "x", "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path1 := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
+	oldLoop := runPlaybookStageLoop
+	defer func() { runPlaybookStageLoop = oldLoop }()
+	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
+		os.MkdirAll(filepath.Dir(path1), 0700)
+		os.WriteFile(path1, []byte("x"), 0600)
+		os.MkdirAll(filepath.Dir(qpath), 0700)
+		os.WriteFile(qpath, []byte("digest"), 0600)
+		return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{{Name: "write_file", Args: map[string]any{"path": path1}}, {Name: "write_file", Args: map[string]any{"path": qpath}}}}
+	}
+	if _, err := RunPlaybook(context.Background(), core, "brief", "x", "test", nil); err != nil {
+		t.Fatal(err)
+	}
+	var artifacts []string
+	rows, err := db.Query("SELECT path FROM session_artifacts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p string
+		rows.Scan(&p)
+		artifacts = append(artifacts, p)
+	}
+	if len(artifacts) != 1 || artifacts[0] != path1 {
+		t.Fatalf("artifacts = %v, want only the normal output %q (quarantined must not distill)", artifacts, path1)
+	}
+}
