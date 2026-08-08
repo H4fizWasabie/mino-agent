@@ -29,6 +29,8 @@ and are not proof of a production release.
 - `nowfield-artifact-actions-playbooks-desktop-1440x1000.png`
 - `nowfield-composer-without-microphone-desktop-1440x1000.png`
 - `nowfield-composer-without-microphone-mobile-390x844.png`
+- `nowfield-workbench-minimized-live-desktop-1200x800.png`
+- `nowfield-workbench-minimized-live-mobile-390x844.png`
 
 The workbench captures use a long draft message to demonstrate wrapping and
 composer growth without sending it to the live runtime.
@@ -38,3 +40,7 @@ controls using a local preview fixture; they do not represent a VPS deployment.
 
 The composer captures document the intentionally text-only input after the
 unsupported microphone was removed.
+
+The two `*-live-*` captures were taken from the deployed master build after
+issue #38: the workbench is fully hidden after minimize and the reopen control
+remains visible on desktop and mobile.
