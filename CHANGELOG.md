@@ -5,7 +5,7 @@
 ### Added
 - Quarantined outputs: stage contracts may declare absolute output paths — enforced like any declared output, but resolved outside the playbook tree so they never enter the ALL_PLATFORMS glob or the distill queue. (Why: the threads-replies digest — the audit trail of what the agent replied publicly — was skipped 2/2 runs because prompt-level steps have no teeth, yet declaring it as a normal output would have distilled external comment text into memory. Absolute declared paths = enforced + quarantined.)
 
-## [Unreleased]
+## [v2.4.1] — Parse-Failure Circuit Breaker (2026-08-08)
 
 ### Fixed
 - Loop circuit-breaker for repeated unparseable tool calls: 3 consecutive parse failures escalate the corrective push (FLAT variant / native calls only), 6 abort with a clear diagnosis instead of burning to the iteration cap. (Why: the 13:00 facebook run on 2026-08-08 burned 16 consecutive iterations on the same broken text-marker JSON — the identical push never helped, and the run died with a useless `iteration_limit`, no post, routine blocked. A success between failures resets the counter.)
