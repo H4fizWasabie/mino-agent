@@ -219,6 +219,15 @@ func parseStageOutputs(section string) []StageOutput {
 			continue
 		}
 		path := strings.Trim(cells[1], "`")
+		// Absolute paths are quarantined outputs (issue #22): enforced like
+		// declared outputs but resolved outside the run workspace, so they
+		// never enter the ALL_PLATFORMS glob or the distill queue.
+		if filepath.IsAbs(path) {
+			if !strings.Contains(filepath.ToSlash(path), "../") {
+				outputs = append(outputs, StageOutput{Name: cells[0], Path: filepath.Clean(path)})
+			}
+			continue
+		}
 		clean := filepath.ToSlash(filepath.Clean(path))
 		if !strings.HasPrefix(clean, "output/") || strings.Contains(clean, "../") || clean == "output" {
 			continue
@@ -360,6 +369,13 @@ func nextPlaybookStage(run *PlaybookRun) *PlaybookRunStage {
 }
 
 func playbookRunOutputPath(pb *PlaybookWorkspace, run *PlaybookRun, stage WorkspaceStage, output StageOutput) string {
+	// Absolute output paths are quarantined outputs (issue #22): they are
+	// enforced like any declared output but live OUTSIDE the run workspace
+	// (e.g. ~/.mino/data/...), so they never enter the ALL_PLATFORMS glob or
+	// the distill queue. Run-workspace paths are joined as before.
+	if filepath.IsAbs(output.Path) {
+		return output.Path
+	}
 	return filepath.Join(playbookRunsDir(pb), run.ID, "stages", fmt.Sprintf("%02d-%s", stage.Number, stage.Name), filepath.FromSlash(output.Path))
 }
 

@@ -44,6 +44,13 @@ func RunPlaybook(ctx context.Context, core *Core, name, request, sessionID strin
 		return nil, err
 	}
 	for _, output := range result.Outputs {
+		// Quarantined outputs (absolute declared paths, issue #22) are enforced
+		// but never distilled: they carry external text that must not reach
+		// long-term memory. Rule: anything OUTSIDE the playbooks tree is
+		// quarantined — resolved run paths always live under playbooks/.
+		if !strings.HasPrefix(filepath.Clean(output), filepath.Clean(filepath.Join(core.Settings.Home, "playbooks"))+string(os.PathSeparator)) {
+			continue
+		}
 		if info, statErr := os.Stat(output); statErr == nil && core.Memory != nil {
 			core.Memory.RecordArtifact(sessionID, name+" output", output, int(info.Size()))
 		}
