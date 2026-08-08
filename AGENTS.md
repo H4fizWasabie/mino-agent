@@ -84,6 +84,21 @@ services managed by systemd.
 - **Push after commit.** Don't let commits accumulate locally.
 - **Branch naming:** `feat/short-description`, `fix/short-description`, `refactor/short-description`
 
+### Issue-first (tickets)
+- **No code change without a GitHub issue.** Create the issue with `gh issue create` BEFORE touching code — context, evidence, expected behavior, acceptance criteria. A ticket is the contract the work is held to.
+- Reference the issue number in EVERY step: branch `fix/issue-<N>-short-name`, commit `fix: ... (closes #<N>)`, PR body `Closes #<N>`.
+- One issue per branch. One task per PR.
+- An agent that changes code without an issue has violated the process — stop and create the ticket, even if the work is already done.
+
+### Release gating
+- **Releases are manual and deliberate — never automatic.** Committing/pushing code does NOT ship it. A release is: tag `vX.Y.Z` → `./build-release.sh vX.Y.Z` → `gh release create` + upload assets. The VPS self-update only moves when a release exists.
+- **The `[Unreleased]` CHANGELOG section is the release queue.** Release when it is significant enough:
+  - 🔴 **Urgent** — a bug actively breaking something (e.g. schedules dying) → release immediately, alone.
+  - 🟡 **Batched** — 3+ accumulated fixes, or any feature, or a week has passed → cut a release.
+  - 🟢 **Trivial** — docs, comments, typos → commit only; they ride along with the next batch.
+- Versioning: patch `v2.3.x` = bug fixes; minor `v2.4.x` = features; major `v3.0.0` = breaking.
+- Do not propose a release for a single trivial fix; accumulate instead.
+
 ### Testing
 - **Tests pass before push.** `go test ./...` must succeed.
 - **If you fix a bug, add a test for it.** No exceptions.
