@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
+	"strings"
+	"time"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -95,5 +97,27 @@ func TestParseCFImage(t *testing.T) {
 				t.Fatalf("decoded %v, want %v", img, png)
 			}
 		})
+	}
+}
+
+// Issue #16: a non-zero exit with stdout is a PARTIAL failure — the output
+// often contains the answer (find exits 1 on unreadable dirs while still
+// printing matches). Agents must see the output first, not "Error: exit 1".
+func TestBashPartialFailureCarriesOutput(t *testing.T) {
+	tool := makeBashToolFor("", 2*time.Minute)
+	out := tool.Fn(map[string]any{"command": "echo /home/mino/.mino/mino.db; exit 1"})
+	if !strings.Contains(out, "PARTIAL: command exited with error") {
+		t.Fatalf("partial-failure marker missing: %q", out)
+	}
+	if !strings.Contains(out, "/home/mino/.mino/mino.db") {
+		t.Fatalf("output not carried in result: %q", out)
+	}
+}
+
+func TestBashHardFailureNoOutput(t *testing.T) {
+	tool := makeBashToolFor("", 2*time.Minute)
+	out := tool.Fn(map[string]any{"command": "exit 3"})
+	if !strings.Contains(out, "Command failed:") || !strings.Contains(out, "no output") {
+		t.Fatalf("hard-failure format wrong: %q", out)
 	}
 }
