@@ -113,6 +113,11 @@ func TestDashboardArtifactActionsHaveRecoveryUI(t *testing.T) {
 			t.Errorf("artifact action contract missing %q", marker)
 		}
 	}
+	for _, forbidden := range []string{`reveal("state.db"`, `reveal("providers.json"`, `reveal("","open folder")`} {
+		if strings.Contains(string(script), forbidden) {
+			t.Errorf("sensitive artifact affordance still present: %q", forbidden)
+		}
+	}
 }
 
 func TestDashboardArtifactActionContract(t *testing.T) {
@@ -126,6 +131,9 @@ func TestDashboardArtifactActionContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(home, "SOUL.md"), []byte("owner preferences"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "providers.json"), []byte(`{"api_key":"secret"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	outside := filepath.Join(t.TempDir(), "private.txt")
@@ -146,7 +154,8 @@ func TestDashboardArtifactActionContract(t *testing.T) {
 		{name: "relative file", path: "SOUL.md", action: "inspect", status: http.StatusOK, ok: true, kind: "file"},
 		{name: "relative directory", path: "playbooks", action: "inspect", status: http.StatusOK, ok: true, kind: "directory"},
 		{name: "download directory", path: "playbooks", action: "download", status: http.StatusBadRequest},
-		{name: "missing target", path: "missing.md", action: "inspect", status: http.StatusNotFound},
+		{name: "missing target", path: "playbooks/missing.md", action: "inspect", status: http.StatusNotFound},
+		{name: "private config", path: "providers.json", action: "inspect", status: http.StatusForbidden},
 		{name: "outside home", path: outside, action: "inspect", status: http.StatusForbidden},
 		{name: "unsupported action", path: "SOUL.md", action: "launch", status: http.StatusBadRequest},
 	}
@@ -177,11 +186,15 @@ func TestDashboardArtifactActionContract(t *testing.T) {
 
 func TestDashboardFilesAuthorizesMinoRoots(t *testing.T) {
 	home := t.TempDir()
-	results := filepath.Join(home, "results")
+	results := filepath.Join(home, "playbooks", "results")
 	if err := os.MkdirAll(results, 0700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(results, "report.txt"), []byte("verified output"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	unsafe := filepath.Join(results, "preview.html")
+	if err := os.WriteFile(unsafe, []byte(`<svg><script>window.pwned=true</script></svg>`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	outside := filepath.Join(t.TempDir(), "private.txt")
@@ -220,6 +233,12 @@ func TestDashboardFilesAuthorizesMinoRoots(t *testing.T) {
 				t.Fatalf("body = %q, want %q", rr.Body.String(), tc.body)
 			}
 		})
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/files?path="+url.QueryEscape(unsafe), nil)
+	response := httptest.NewRecorder()
+	handleFilesAPI(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "text/plain; charset=utf-8" || response.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("unsafe artifact response = status %d, content-type %q, nosniff %q", response.Code, response.Header().Get("Content-Type"), response.Header().Get("X-Content-Type-Options"))
 	}
 }
 

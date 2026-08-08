@@ -1696,8 +1696,7 @@ func handleRevealAPI(w http.ResponseWriter, r *http.Request) {
 			dashboardArtifactError(w, http.StatusBadRequest, "directories cannot be downloaded")
 			return
 		}
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(path)))
-		http.ServeFile(w, r, path)
+		serveDashboardArtifactFile(w, r, path, true)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -1731,10 +1730,7 @@ func handleFilesAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !info.IsDir() {
-		if r.URL.Query().Get("action") == "download" {
-			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(abs)))
-		}
-		http.ServeFile(w, r, abs)
+		serveDashboardArtifactFile(w, r, abs, action == "download")
 		return
 	}
 	entries, _ := os.ReadDir(abs)
@@ -1775,6 +1771,17 @@ func dashboardArtifactError(w http.ResponseWriter, status int, message string) {
 	json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": message})
 }
 
+func serveDashboardArtifactFile(w http.ResponseWriter, r *http.Request, path string, download bool) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if download {
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(path)))
+	} else {
+		w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", filepath.Base(path)))
+	}
+	http.ServeFile(w, r, path)
+}
+
 // resolveDashboardArtifact limits dashboard file access to Mino's home and
 // generated result roots, including symlink targets that remain inside them.
 func resolveDashboardArtifact(home, memoriesDir, raw string) (string, os.FileInfo, int, string) {
@@ -1783,26 +1790,44 @@ func resolveDashboardArtifact(home, memoriesDir, raw string) (string, os.FileInf
 	}
 	path := strings.TrimSpace(raw)
 	if path == "" {
-		path = home
+		return "", nil, http.StatusBadRequest, "an artifact path is required"
 	} else if !filepath.IsAbs(path) {
-		path = filepath.Join(home, path)
+		if memoriesDir != "" && (path == "memories" || strings.HasPrefix(path, "memories"+string(os.PathSeparator))) {
+			suffix := strings.TrimPrefix(path, "memories")
+			suffix = strings.TrimPrefix(suffix, string(os.PathSeparator))
+			path = filepath.Join(memoriesDir, suffix)
+		} else {
+			path = filepath.Join(home, path)
+		}
 	}
 	abs, err := filepath.Abs(filepath.Clean(path))
 	if err != nil {
 		return "", nil, http.StatusBadRequest, "invalid artifact path"
 	}
-	roots := []string{home, "/tmp/mino/results"}
+	roots := []string{
+		filepath.Join(home, "playbooks"),
+		filepath.Join(home, "skills"),
+		filepath.Join(home, "traces"),
+		filepath.Join(home, "outbox"),
+		"/tmp/mino/results",
+	}
 	if memoriesDir != "" {
 		roots = append(roots, memoriesDir)
 	}
-	allowed := false
-	for _, root := range roots {
-		if artifactPathWithin(abs, root) {
-			allowed = true
-			break
+	allowedArtifactPath := func(candidate string) bool {
+		if artifactPathWithin(candidate, filepath.Join(home, "SOUL.md")) ||
+			artifactPathWithin(candidate, filepath.Join(home, "calendar.ics")) ||
+			artifactPathWithin(candidate, filepath.Join(home, "usage.jsonl")) {
+			return true
 		}
+		for _, root := range roots {
+			if artifactPathWithin(candidate, root) {
+				return true
+			}
+		}
+		return false
 	}
-	if !allowed {
+	if !allowedArtifactPath(abs) {
 		return "", nil, http.StatusForbidden, "artifact path is outside Mino-authorized roots"
 	}
 	info, err := os.Stat(abs)
@@ -1816,10 +1841,8 @@ func resolveDashboardArtifact(home, memoriesDir, raw string) (string, os.FileInf
 	if err != nil {
 		return "", nil, http.StatusForbidden, "artifact link is unavailable"
 	}
-	for _, root := range roots {
-		if artifactPathWithin(resolved, root) {
-			return resolved, info, http.StatusOK, ""
-		}
+	if allowedArtifactPath(resolved) {
+		return resolved, info, http.StatusOK, ""
 	}
 	return "", nil, http.StatusForbidden, "artifact link leaves Mino-authorized roots"
 }
