@@ -1,5 +1,10 @@
 # Changelog
 
+## [v2.4.0] — Quarantined Outputs (2026-08-08)
+
+### Added
+- Quarantined outputs: stage contracts may declare absolute output paths — enforced like any declared output, but resolved outside the playbook tree so they never enter the ALL_PLATFORMS glob or the distill queue. (Why: the threads-replies digest — the audit trail of what the agent replied publicly — was skipped 2/2 runs because prompt-level steps have no teeth, yet declaring it as a normal output would have distilled external comment text into memory. Absolute declared paths = enforced + quarantined.)
+
 ## [Unreleased]
 
 ### Added
