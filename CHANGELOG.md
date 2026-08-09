@@ -27,7 +27,7 @@
 ## [Unreleased]
 
 ### Fixed
-- write_file/edit_file reject stray relative `.mino` prefixes with the corrected absolute path. (Why: the VPS reddit karma-log run on 2026-08-09 wrote to a relative `.mino/playbooks/...` path — it resolved via CWD to the right location, but the recorded arg path never matched the declared output, so stage-output attribution failed and the run went blocked. The doubled-`.mino` guard already existed; this closes the relative-prefix escape hatch — the fourth occurrence of the model mangling `.mino`-prefixed paths.)
+- `run_playbook` rejects re-running the playbook it is already inside (corrective error, no recursion). (Why: 2026-08-09 the threads-community stage skipped itself with "run_playbook was unavailable" — the model tried to re-run the playbook from inside its own stage and treated the blocked tool as a skip reason. Stages with no tool whitelist would have allowed the recursion outright; the guard closes it. Cross-playbook delegation and chat calls are unchanged.)
 
 ### Added
 - Dashboard route-parity coverage now inventories the registered HTTP surface, primary and legacy hash navigation, and polling-preservation behavior before the Nowfield replacement. (Why: a full shell redesign must fail tests when a route, endpoint binding, deep link, or interactive state silently disappears.)
