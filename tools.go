@@ -1349,10 +1349,8 @@ func makeMessagesTool(home string) *Tool {
 		Fn: func(args map[string]any) string {
 			to, _ := args["to"].(string)
 			msg, _ := args["message"].(string)
-			outboxDir := filepath.Join(home, "outbox")
-			os.MkdirAll(outboxDir, 0700)
-			path := filepath.Join(outboxDir, fmt.Sprintf("msg_%s.txt", to))
-			os.WriteFile(path, []byte(msg), 0644)
+			queueOutbox(home, to, msg)
+			path := filepath.Join(home, "outbox", fmt.Sprintf("msg_%s.txt", to))
 			return fmt.Sprintf("Message to %s drafted at %s", to, path)
 		},
 	}

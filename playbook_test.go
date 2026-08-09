@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -924,5 +926,310 @@ func TestRunPlaybookRejectsSamePlaybookRecursion(t *testing.T) {
 				t.Fatalf("allowed path wrongly rejected: %q", out)
 			}
 		}()
+	}
+}
+
+// --- Schedule reliability (issue #74): serial dispatcher, 1-minute window,
+// no catch-up and no missed-run record made due-but-never-fired schedules
+// invisible. Tests cover the classify seam, parallel dispatch, boot catch-up
+// and missed-run notification. ---
+
+type callRecorder struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (r *callRecorder) record(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, name)
+}
+
+func (r *callRecorder) has(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, c := range r.calls {
+		if c == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *callRecorder) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.calls)
+}
+
+func (r *callRecorder) all() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.calls...)
+}
+
+func runnerRecording(rec *callRecorder) scheduledPlaybookRunner {
+	return func(ctx context.Context, core *Core, name, purpose, sessionID string, obs Observer) (*PlaybookResult, error) {
+		rec.record(name)
+		return &PlaybookResult{Status: "completed"}, nil
+	}
+}
+
+func waitForCall(t *testing.T, rec *callRecorder, name string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if rec.has(name) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("runner was not called for %q (calls: %v)", name, rec.all())
+}
+
+// waitForRows waits until the responsibility table has at least want rows, so
+// no spawned run is still writing when the temp dir is torn down.
+func waitForRows(t *testing.T, db *sql.DB, want int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		var n int
+		if err := db.QueryRow("SELECT COUNT(*) FROM responsibility_events").Scan(&n); err == nil && n >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("expected >= %d responsibility rows, saw fewer", want)
+}
+
+func newScheduleTestCore(t *testing.T) (*Core, string) {
+	t.Helper()
+	home := t.TempDir()
+	db := Connect(home)
+	t.Cleanup(func() { db.Close() })
+	return &Core{
+		Settings:         &Settings{Home: home},
+		DB:               db,
+		Responsibilities: NewResponsibilityStore(db),
+	}, home
+}
+
+func mustKL(t *testing.T) *time.Location {
+	t.Helper()
+	loc, err := time.LoadLocation("Asia/Kuala_Lumpur")
+	if err != nil {
+		t.Fatalf("load KL timezone: %v", err)
+	}
+	return loc
+}
+
+func TestClassifySchedule(t *testing.T) {
+	loc := mustKL(t)
+	at := func(d, h, m int) time.Time { return time.Date(2026, 8, d, h, m, 0, 0, loc) }
+	const tz = "Asia/Kuala_Lumpur"
+	today1300 := "2026-08-10T05:00:00Z"  // today 13:00 KL
+	today1305 := "2026-08-10T05:00:05Z"  // today 13:00:05 KL
+	yesterday09 := "2026-08-09T01:00:00Z" // yesterday 09:00 KL
+	future := "2026-08-11T05:00:00Z"
+
+	tests := []struct {
+		name      string
+		s         PlaybookSchedule
+		now       time.Time
+		allowLate bool
+		want      scheduleAction
+	}{
+		{"in window fires", PlaybookSchedule{Time: "13:00", Timezone: tz}, at(10, 13, 0), false, scheduleFire},
+		{"in window fires in catch-up mode too", PlaybookSchedule{Time: "13:00", Timezone: tz}, at(10, 13, 0), true, scheduleFire},
+		{"before window skips", PlaybookSchedule{Time: "13:00", Timezone: tz}, at(10, 12, 59), false, scheduleSkip},
+		{"before window: catch-up sees yesterday's occurrence missed", PlaybookSchedule{Time: "13:00", Timezone: tz, LastRun: yesterday09}, at(10, 12, 59), true, scheduleMissed},
+		{"after window skips in tick mode", PlaybookSchedule{Time: "13:00", Timezone: tz}, at(10, 13, 2), false, scheduleSkip},
+		{"after window same day fires late in catch-up mode", PlaybookSchedule{Time: "13:00", Timezone: tz}, at(10, 13, 2), true, scheduleFire},
+		{"covered by today's run skips", PlaybookSchedule{Time: "13:00", Timezone: tz, LastRun: today1305}, at(10, 13, 0), false, scheduleSkip},
+		{"covered by today's run skips catch-up too", PlaybookSchedule{Time: "13:00", Timezone: tz, LastRun: today1305}, at(10, 14, 0), true, scheduleSkip},
+		{"run exactly at occurrence covers", PlaybookSchedule{Time: "13:00", Timezone: tz, LastRun: today1300}, at(10, 13, 0), false, scheduleSkip},
+		{"yesterday's run does not cover today's occurrence", PlaybookSchedule{Time: "13:00", Timezone: tz, LastRun: yesterday09}, at(10, 13, 0), false, scheduleFire},
+		{"next-day old miss is missed", PlaybookSchedule{Time: "13:00", Timezone: tz, LastRun: yesterday09}, at(11, 8, 0), true, scheduleMissed},
+		{"never-run old occurrence is missed at classify level", PlaybookSchedule{Time: "13:00", Timezone: tz}, at(11, 8, 0), true, scheduleMissed},
+		{"future LastRun covers", PlaybookSchedule{Time: "13:00", Timezone: tz, LastRun: future}, at(10, 13, 0), false, scheduleSkip},
+		{"invalid timezone skips", PlaybookSchedule{Time: "13:00", Timezone: "Mars/Olympus"}, at(10, 13, 0), false, scheduleSkip},
+		{"invalid time skips", PlaybookSchedule{Time: "25:99", Timezone: tz}, at(10, 13, 0), false, scheduleSkip},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := classifySchedule(tt.s, tt.now, tt.allowLate); got != tt.want {
+				t.Fatalf("classifySchedule(%+v, %v, allowLate=%v) = %v, want %v", tt.s, tt.now, tt.allowLate, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDispatchSlowRunDoesNotStarveSibling(t *testing.T) {
+	core, home := newScheduleTestCore(t)
+	loc := mustKL(t)
+	rec := &callRecorder{}
+	release := make(chan struct{})
+	run := func(ctx context.Context, core *Core, name, purpose, sessionID string, obs Observer) (*PlaybookResult, error) {
+		rec.record(name)
+		if name == "slow" {
+			<-release // block the slow run until the test releases it
+		}
+		return &PlaybookResult{Status: "completed"}, nil
+	}
+	base := time.Date(2026, 8, 10, 13, 0, 0, 0, loc)
+	if err := saveSchedules(home, []PlaybookSchedule{
+		{Name: "slow", Time: "13:00", Timezone: "Asia/Kuala_Lumpur"},
+		{Name: "fast", Time: "13:01", Timezone: "Asia/Kuala_Lumpur"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pass 1: slow is due and blocks inside the runner.
+	dispatchDueSchedulesAt(core, base.Add(30*time.Second), run)
+	waitForCall(t, rec, "slow")
+
+	// Pass 2 one minute later: fast is due. Under the old serial dispatcher
+	// this pass could not even start while slow blocked.
+	dispatchDueSchedulesAt(core, base.Add(90*time.Second), run)
+	waitForCall(t, rec, "fast")
+
+	close(release)
+	waitForRows(t, core.DB, 4) // both runs fully recorded before teardown
+}
+
+func TestDispatchAlreadyRanTodaySkips(t *testing.T) {
+	core, home := newScheduleTestCore(t)
+	loc := mustKL(t)
+	rec := &callRecorder{}
+	if err := saveSchedules(home, []PlaybookSchedule{{
+		Name: "daily", Time: "13:00", Timezone: "Asia/Kuala_Lumpur",
+		LastRun: "2026-08-10T05:00:05Z", // today's 13:00:05 KL
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	dispatchDueSchedulesAt(core, time.Date(2026, 8, 10, 13, 0, 30, 0, loc), runnerRecording(rec))
+	if rec.count() != 0 {
+		t.Fatalf("already-ran schedule fired: %v", rec.all())
+	}
+}
+
+func TestDispatchFiresInWindowAndClaimsSlot(t *testing.T) {
+	core, home := newScheduleTestCore(t)
+	loc := mustKL(t)
+	rec := &callRecorder{}
+	if err := saveSchedules(home, []PlaybookSchedule{{
+		Name: "daily", Time: "13:00", Timezone: "Asia/Kuala_Lumpur",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 10, 13, 0, 30, 0, loc)
+	dispatchDueSchedulesAt(core, now, runnerRecording(rec))
+	waitForCall(t, rec, "daily")
+	got, err := loadSchedules(home)
+	if err != nil || len(got) != 1 || got[0].LastRun == "" {
+		t.Fatalf("LastRun not claimed synchronously: %+v (err %v)", got, err)
+	}
+	// A second pass inside the same window must not double-fire.
+	dispatchDueSchedulesAt(core, now.Add(20*time.Second), runnerRecording(rec))
+	if rec.count() != 1 {
+		t.Fatalf("schedule fired %d times, want 1", rec.count())
+	}
+	waitForRows(t, core.DB, 2)
+}
+
+func TestDuplicateScheduleNameFiresOnce(t *testing.T) {
+	core, home := newScheduleTestCore(t)
+	loc := mustKL(t)
+	rec := &callRecorder{}
+	if err := saveSchedules(home, []PlaybookSchedule{
+		{Name: "daily", Time: "13:00", Timezone: "Asia/Kuala_Lumpur"},
+		{Name: "daily", Time: "13:00", Timezone: "Asia/Kuala_Lumpur"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dispatchDueSchedulesAt(core, time.Date(2026, 8, 10, 13, 0, 30, 0, loc), runnerRecording(rec))
+	waitForCall(t, rec, "daily")
+	if rec.count() != 1 {
+		t.Fatalf("duplicate schedule entries fired %d times, want 1", rec.count())
+	}
+	waitForRows(t, core.DB, 2)
+}
+
+func TestCatchUpFiresLateSameDay(t *testing.T) {
+	core, home := newScheduleTestCore(t)
+	loc := mustKL(t)
+	rec := &callRecorder{}
+	if err := saveSchedules(home, []PlaybookSchedule{{
+		Name: "daily", Time: "13:00", Timezone: "Asia/Kuala_Lumpur",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	catchUpSchedulesAt(core, time.Date(2026, 8, 10, 14, 0, 0, 0, loc), runnerRecording(rec))
+	waitForCall(t, rec, "daily")
+	got, err := loadSchedules(home)
+	if err != nil || len(got) != 1 || got[0].LastRun == "" {
+		t.Fatalf("catch-up run not claimed: %+v (err %v)", got, err)
+	}
+	if got[0].MissedAt != "" {
+		t.Fatalf("caught-up run must not be marked missed: %+v", got[0])
+	}
+	waitForRows(t, core.DB, 2)
+}
+
+func TestCatchUpRecordsMissedRunAndNotifiesOnce(t *testing.T) {
+	core, home := newScheduleTestCore(t)
+	loc := mustKL(t)
+	rec := &callRecorder{}
+	if err := saveSchedules(home, []PlaybookSchedule{{
+		Name: "daily", Time: "13:00", Timezone: "Asia/Kuala_Lumpur",
+		LastRun: "2026-08-09T01:00:00Z", // ran yesterday 09:00 KL; yesterday 13:00 missed
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	nextDay8AM := time.Date(2026, 8, 11, 8, 0, 0, 0, loc)
+	catchUpSchedulesAt(core, nextDay8AM, runnerRecording(rec))
+	if rec.count() != 0 {
+		t.Fatalf("old miss must not fire: %v", rec.all())
+	}
+	got, err := loadSchedules(home)
+	if err != nil || len(got) != 1 || got[0].MissedAt == "" {
+		t.Fatalf("missed run not recorded: %+v (err %v)", got, err)
+	}
+	outbox := filepath.Join(home, "outbox", "msg_owner.txt")
+	data, err := os.ReadFile(outbox)
+	if err != nil {
+		t.Fatalf("no missed-run notice in outbox: %v", err)
+	}
+	if !strings.Contains(string(data), "daily") {
+		t.Fatalf("missed-run notice missing schedule name: %s", data)
+	}
+
+	// A second boot must not notify again.
+	catchUpSchedulesAt(core, nextDay8AM.Add(time.Minute), runnerRecording(rec))
+	entries, err := os.ReadDir(filepath.Join(home, "outbox"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("miss notified more than once: %v (err %v)", entries, err)
+	}
+}
+
+func TestCatchUpNeverRunScheduleIsNotAMiss(t *testing.T) {
+	core, home := newScheduleTestCore(t)
+	loc := mustKL(t)
+	rec := &callRecorder{}
+	if err := saveSchedules(home, []PlaybookSchedule{{
+		Name: "daily", Time: "13:00", Timezone: "Asia/Kuala_Lumpur",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	catchUpSchedulesAt(core, time.Date(2026, 8, 11, 8, 0, 0, 0, loc), runnerRecording(rec))
+	if rec.count() != 0 {
+		t.Fatalf("never-run schedule fired: %v", rec.all())
+	}
+	got, err := loadSchedules(home)
+	if err != nil || len(got) != 1 || got[0].MissedAt != "" {
+		t.Fatalf("never-run schedule marked missed: %+v (err %v)", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "outbox", "msg_owner.txt")); !os.IsNotExist(err) {
+		t.Fatalf("never-run schedule notified: %v", err)
 	}
 }
