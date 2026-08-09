@@ -33,6 +33,15 @@ func runOutboxDispatcher(core *Core) {
 	}
 }
 
+// queueOutbox drafts a message to the outbox; the outbox dispatcher delivers
+// it to the owner's Telegram. Same path send_message uses.
+func queueOutbox(home, to, msg string) {
+	outboxDir := filepath.Join(home, "outbox")
+	os.MkdirAll(outboxDir, 0700)
+	path := filepath.Join(outboxDir, fmt.Sprintf("msg_%s.txt", to))
+	os.WriteFile(path, []byte(msg), 0644)
+}
+
 // deliverOutboxOnce sends every outbox draft to the configured Telegram chat
 // and removes the file on success. Returns the number delivered.
 func deliverOutboxOnce(s *Settings) int {

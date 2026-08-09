@@ -776,6 +776,7 @@ type PlaybookSchedule struct {
 	Timezone  string `json:"timezone"`             // IANA timezone
 	LastRun   string `json:"last_run"`             // RFC3339 of last execution, empty if never
 	LastError string `json:"last_error,omitempty"` // last fire failure, empty when healthy
+	MissedAt  string `json:"missed_at,omitempty"`  // when a due run was skipped without firing (downtime); cleared on next fire
 }
 
 // schedulesMu serializes read-modify-write of schedules.json: the dispatch
@@ -895,10 +896,14 @@ func makeListSchedulesTool(home string) *Tool {
 				if s.LastRun != "" {
 					last = s.LastRun
 				}
+				missed := ""
+				if s.MissedAt != "" {
+					missed = fmt.Sprintf(" ⚠ missed on %s", s.MissedAt)
+				}
 				if s.LastError != "" {
-					b.WriteString(fmt.Sprintf("- %s: daily at %s %s (last run: %s) ⚠ last fire FAILED: %s\n", s.Name, s.Time, s.Timezone, last, s.LastError))
+					b.WriteString(fmt.Sprintf("- %s: daily at %s %s (last run: %s) ⚠ last fire FAILED: %s%s\n", s.Name, s.Time, s.Timezone, last, s.LastError, missed))
 				} else {
-					b.WriteString(fmt.Sprintf("- %s: daily at %s %s (last run: %s)\n", s.Name, s.Time, s.Timezone, last))
+					b.WriteString(fmt.Sprintf("- %s: daily at %s %s (last run: %s)%s\n", s.Name, s.Time, s.Timezone, last, missed))
 				}
 			}
 			return b.String()
@@ -1048,7 +1053,12 @@ func listActiveTasksPlaybook(home string) []map[string]any {
 }
 
 // runScheduleDispatcher checks schedules.json every minute and fires due playbooks.
+// runScheduleDispatcher owns the in-process schedule loop. It runs a boot
+// catch-up pass (same-day misses fire late, older misses are recorded and
+// notified), then checks schedules.json every minute.
 func runScheduleDispatcher(core *Core) {
+	catchUpSchedulesAt(core, time.Now(), RunPlaybook)
+
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for range ticker.C {
@@ -1062,6 +1072,62 @@ func dispatchDueSchedules(core *Core) {
 
 type scheduledPlaybookRunner func(context.Context, *Core, string, string, string, Observer) (*PlaybookResult, error)
 
+// scheduleAction is what to do with one schedule at a given instant.
+type scheduleAction int
+
+const (
+	scheduleSkip    scheduleAction = iota // not due, already covered by a run, or invalid
+	scheduleFire                          // fire now: on time, or same-day late catch-up
+	scheduleMissed                        // an occurrence passed without a run and catch-up is not allowed
+)
+
+// classifySchedule decides the action for one schedule at instant now.
+// allowLate=false is the tick path (fire only inside the 1-minute window);
+// allowLate=true is the boot path (same-day misses fire late, older misses
+// are scheduleMissed). A completed LastRun at or after the most recent
+// occurrence covers it.
+func classifySchedule(s PlaybookSchedule, now time.Time, allowLate bool) scheduleAction {
+	loc, err := time.LoadLocation(s.Timezone)
+	if err != nil {
+		return scheduleSkip
+	}
+	schedTime, err := time.ParseInLocation("15:04", s.Time, loc)
+	if err != nil {
+		return scheduleSkip
+	}
+	nowInLoc := now.In(loc)
+	todayOcc := time.Date(nowInLoc.Year(), nowInLoc.Month(), nowInLoc.Day(), schedTime.Hour(), schedTime.Minute(), 0, 0, loc)
+	lastOcc := todayOcc
+	if nowInLoc.Before(todayOcc) {
+		lastOcc = todayOcc.AddDate(0, 0, -1) // most recent occurrence is yesterday's
+	}
+	if s.LastRun != "" {
+		if last, err := time.Parse(time.RFC3339, s.LastRun); err == nil && !last.Before(lastOcc) {
+			return scheduleSkip
+		}
+	}
+	if !allowLate {
+		// tick path: fire only within [occurrence, occurrence+1min)
+		if nowInLoc.Before(todayOcc) || nowInLoc.After(todayOcc.Add(time.Minute)) {
+			return scheduleSkip
+		}
+		return scheduleFire
+	}
+	if sameDayIn(loc, lastOcc, now) {
+		return scheduleFire
+	}
+	return scheduleMissed
+}
+
+func sameDayIn(loc *time.Location, a, b time.Time) bool {
+	ai, bi := a.In(loc), b.In(loc)
+	return ai.Year() == bi.Year() && ai.YearDay() == bi.YearDay()
+}
+
+// dispatchDueSchedulesAt fires every schedule due in its window. The slot is
+// claimed synchronously (LastRun set before spawning) so the next tick cannot
+// double-fire; the playbook itself runs in its own goroutine so one slow run
+// can never starve sibling schedules.
 func dispatchDueSchedulesAt(core *Core, now time.Time, run scheduledPlaybookRunner) {
 	scheds, err := loadSchedules(core.Settings.Home)
 	if err != nil || len(scheds) == 0 {
@@ -1069,64 +1135,140 @@ func dispatchDueSchedulesAt(core *Core, now time.Time, run scheduledPlaybookRunn
 	}
 	updated := false
 	for i, s := range scheds {
-		loc, err := time.LoadLocation(s.Timezone)
-		if err != nil {
+		if classifySchedule(s, now, false) != scheduleFire {
 			continue
 		}
-		// parse scheduled time in the target timezone
-		schedTime, err := time.ParseInLocation("15:04", s.Time, loc)
-		if err != nil {
-			continue
-		}
-		// rebase to today in that timezone
-		nowInLoc := now.In(loc)
-		today := time.Date(nowInLoc.Year(), nowInLoc.Month(), nowInLoc.Day(), schedTime.Hour(), schedTime.Minute(), 0, 0, loc)
-		// schedule window: current time is within [scheduled, scheduled+1min)
-		if nowInLoc.Before(today) || nowInLoc.After(today.Add(time.Minute)) {
-			continue
-		}
-		// already ran today?
-		if s.LastRun != "" {
-			last, err := time.Parse(time.RFC3339, s.LastRun)
-			if err == nil {
-				lastInLoc := last.In(loc)
-				if lastInLoc.Year() == today.Year() && lastInLoc.YearDay() == today.YearDay() {
-					continue
-				}
-			}
-		}
-		slog.Info("schedule firing playbook", "name", s.Name, "time", s.Time)
-		sessionID := "scheduled-" + s.Name
-		if err := core.Responsibilities.startRoutine(s, now); err != nil {
-			slog.Error("schedule responsibility start failed", "name", s.Name, "error", err)
-			// Never fail silently: the incident that broke every schedule was
-			// exactly this error landing only in journald. Surface it in the
-			// trace, the audit log, and schedules.json so the LLM and the user
-			// can both see it.
-			logTrace(core.Settings.Home, "schedule_fire_failed", map[string]any{"name": s.Name, "time": s.Time, "error": err.Error()})
-			core.auditLog(sessionID, "schedule_fire_failed", err.Error(), 0)
-			scheds[i].LastError = err.Error()
-			updated = true
-			continue
-		}
+		scheds[i].LastRun = now.Format(time.RFC3339)
 		scheds[i].LastError = ""
-		result, err := run(context.Background(), core, s.Name, "Scheduled run", sessionID, nil)
-		if err != nil {
-			slog.Error("schedule playbook failed", "name", s.Name, "error", err)
-		}
-		if result != nil {
-			slog.Info("schedule playbook result", "name", s.Name, "status", result.Status, "stages", result.StagesRun)
-		}
-		finishedAt := time.Now().UTC()
-		if recordErr := core.Responsibilities.finishRoutine(core.Settings.Home, sessionID, s, result, err, finishedAt); recordErr != nil {
-			slog.Error("schedule responsibility finish failed", "name", s.Name, "error", recordErr)
-		}
-		scheds[i].LastRun = finishedAt.Format(time.RFC3339)
+		scheds[i].MissedAt = ""
 		updated = true
+		spawnScheduleRun(core, s, now, run)
 	}
 	if updated {
 		saveSchedules(core.Settings.Home, scheds)
 	}
+}
+
+// catchUpSchedulesAt runs once at startup: schedules whose occurrence passed
+// while Mino was down fire late (same-day only); older misses are recorded
+// with missed_at plus a Telegram notice so they are visible instead of silent.
+func catchUpSchedulesAt(core *Core, now time.Time, run scheduledPlaybookRunner) {
+	scheds, err := loadSchedules(core.Settings.Home)
+	if err != nil || len(scheds) == 0 {
+		return
+	}
+	updated := false
+	for i, s := range scheds {
+		switch classifySchedule(s, now, true) {
+		case scheduleFire:
+			slog.Info("schedule catch-up firing playbook", "name", s.Name, "time", s.Time)
+			scheds[i].LastRun = now.Format(time.RFC3339)
+			scheds[i].LastError = ""
+			scheds[i].MissedAt = ""
+			updated = true
+			spawnScheduleRun(core, s, now, run)
+		case scheduleMissed:
+			// A never-run schedule has no operational history to miss; a
+			// recorded miss notifies once, not on every boot.
+			if s.LastRun == "" || s.MissedAt != "" {
+				continue
+			}
+			scheds[i].MissedAt = now.Format(time.RFC3339)
+			updated = true
+			notifyMissedSchedule(core, s, now)
+		}
+	}
+	if updated {
+		saveSchedules(core.Settings.Home, scheds)
+	}
+}
+
+// inflight prevents two schedule entries naming the same playbook from firing
+// it concurrently (duplicate rows are user error, but a concurrent run would
+// corrupt the shared playbook workspace).
+var inflightMu sync.Mutex
+var inflight = map[string]bool{}
+
+func claimInflight(name string) bool {
+	inflightMu.Lock()
+	defer inflightMu.Unlock()
+	if inflight[name] {
+		return false
+	}
+	inflight[name] = true
+	return true
+}
+
+func releaseInflight(name string) {
+	inflightMu.Lock()
+	delete(inflight, name)
+	inflightMu.Unlock()
+}
+
+func spawnScheduleRun(core *Core, s PlaybookSchedule, at time.Time, run scheduledPlaybookRunner) {
+	if !claimInflight(s.Name) {
+		return
+	}
+	slog.Info("schedule firing playbook", "name", s.Name, "time", s.Time)
+	go func() {
+		defer releaseInflight(s.Name)
+		fireSchedule(core, s, at, run)
+	}()
+}
+
+// fireSchedule runs one scheduled playbook and records the outcome. It runs
+// in its own goroutine; LastRun was already claimed synchronously by the
+// dispatcher before spawning.
+func fireSchedule(core *Core, s PlaybookSchedule, at time.Time, run scheduledPlaybookRunner) {
+	sessionID := "scheduled-" + s.Name
+	if err := core.Responsibilities.startRoutine(s, at); err != nil {
+		slog.Error("schedule responsibility start failed", "name", s.Name, "error", err)
+		// Never fail silently: the incident that broke every schedule was
+		// exactly this error landing only in journald. Surface it in the
+		// trace, the audit log, and schedules.json so the LLM and the user
+		// can both see it.
+		logTrace(core.Settings.Home, "schedule_fire_failed", map[string]any{"name": s.Name, "time": s.Time, "error": err.Error()})
+		core.auditLog(sessionID, "schedule_fire_failed", err.Error(), 0)
+		recordScheduleError(core.Settings.Home, s.Name, err.Error())
+		return
+	}
+	result, err := run(context.Background(), core, s.Name, "Scheduled run", sessionID, nil)
+	if err != nil {
+		slog.Error("schedule playbook failed", "name", s.Name, "error", err)
+	}
+	if result != nil {
+		slog.Info("schedule playbook result", "name", s.Name, "status", result.Status, "stages", result.StagesRun)
+	}
+	finishedAt := time.Now().UTC()
+	if recordErr := core.Responsibilities.finishRoutine(core.Settings.Home, sessionID, s, result, err, finishedAt); recordErr != nil {
+		slog.Error("schedule responsibility finish failed", "name", s.Name, "error", recordErr)
+	}
+}
+
+// recordScheduleError writes LastError for a schedule by name; used when a
+// run could not even be started.
+func recordScheduleError(home, name, errMsg string) {
+	scheds, err := loadSchedules(home)
+	if err != nil || len(scheds) == 0 {
+		return
+	}
+	for i := range scheds {
+		if scheds[i].Name == name {
+			scheds[i].LastError = errMsg
+			saveSchedules(home, scheds)
+			return
+		}
+	}
+}
+
+// notifyMissedSchedule makes a missed run visible: one Telegram notice via
+// the outbox (delivered by the outbox dispatcher), plus trace and audit
+// entries so the dashboard surfaces it too.
+func notifyMissedSchedule(core *Core, s PlaybookSchedule, now time.Time) {
+	msg := fmt.Sprintf("⚠️ Scheduled run missed: *%s* (%s %s) was due while Mino was offline and will not be run late.", s.Name, s.Time, s.Timezone)
+	queueOutbox(core.Settings.Home, "owner", msg)
+	logTrace(core.Settings.Home, "schedule_missed", map[string]any{"name": s.Name, "time": s.Time, "missed_at": now.Format(time.RFC3339)})
+	core.auditLog("scheduled-"+s.Name, "schedule_missed", msg, 0)
 }
 
 // ensure playbook types are compatible with existing interfaces

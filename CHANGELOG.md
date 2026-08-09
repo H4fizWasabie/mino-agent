@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+### Fixed
+- Scheduled playbook runs could disappear without a trace (closes #74): the dispatcher was one serial goroutine, so a slow run starved every sibling's 1-minute fire window, and a run missed while the process was down was never caught up or recorded — no trace, no audit entry, no `LastError`. Each due schedule now fires in its own goroutine with the slot claimed synchronously (no double-fires; duplicate schedule rows cannot run the same playbook concurrently); a boot pass fires same-day misses late; older misses get `missed_at` in schedules.json, one Telegram notice via the outbox, a `schedule_missed` trace, and an audit entry. `list_schedules` renders the miss. Never-run schedules are not flagged (a fresh schedule is not a miss). (Why: a schedule that never fires and never reports it is the worst failure class — the work silently does not happen; the loop already surfaced fired-but-failed runs, the never-fired case had no representation.)
+
 ## [v2.6.2] — Operation-State Visibility (2026-08-09)
 ### Added
 - OSV-04 validation cases (closes #70): table-driven "right store, right answer" suite — (a) a reminder question ("When was my last Arachem meeting?") is answered from the reminder store with zero calendar tool calls; (b) every mutating tool result carries destination + state (9-tool table, OSV-01 pattern); (c) outcome claims contradicted by this turn's tool results are corrected (9-case table over the OSV-03 claim surface). (Why: the map's measurable — "a reminder question never triggers a calendar search; what happened to the information is answerable from the tool result" — now proven by tests, not asserted.)

@@ -1,5 +1,7 @@
 # Schedule Reliability — Validation
 
+Status: **RESOLVED** (2026-08-09, 28 schedule tests landed)
+
 ## Question
 
 How do we prove a schedule can no longer die silently?
@@ -20,6 +22,19 @@ Schedules: S1 at 13:00, S2 at 13:05. Runner for S1 blocks (or sleeps past the wi
 
 ### Test 3 — Missed bookkeeping (fix C)
 Advance `now` past a schedule's window with the runner never invoked (simulating downtime); assert `schedules.json` gains `"missed": true` + `MissedAt` and the outbox gained one notice per missed schedule.
+
+## What landed (playbook_test.go)
+
+- `TestClassifySchedule` — 15-case table over the pure seam: window semantics, catch-up fire, covered-by-run skip (today's run, future LastRun), next-day miss, never-run miss, invalid timezone/time.
+- `TestDispatchSlowRunDoesNotStarveSibling` — slow run blocks in the runner; the next minute's pass still fires the sibling. Fails on the old serial dispatcher (it could not even enter pass 2).
+- `TestDispatchAlreadyRanTodaySkips` — existing already-ran behavior locked in.
+- `TestDispatchFiresInWindowAndClaimsSlot` — in-window fire persists `LastRun`; a second pass in the same window does not double-fire.
+- `TestDuplicateScheduleNameFiresOnce` — duplicate rows cannot run the same playbook concurrently.
+- `TestCatchUpFiresLateSameDay` — downtime miss fires late on boot, claimed, not marked missed.
+- `TestCatchUpRecordsMissedRunAndNotifiesOnce` — old miss: no fire, `missed_at` persisted, one outbox notice containing the schedule name, no duplicate notice on second boot.
+- `TestCatchUpNeverRunScheduleIsNotAMiss` — never-run schedule: no fire, no flag, no notice.
+
+Result: `go test ./...` 355 passed; `-race` clean; `go vet` clean. Tests use a real temp SQLite DB (responsibility recording included) with an injected fake runner at the existing `dispatchDueSchedulesAt(core, now, run)` seam.
 
 ## Production observation
 

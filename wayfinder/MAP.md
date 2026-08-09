@@ -48,8 +48,8 @@ Measurable: a schedule whose window passes without a run appears in `schedules.j
 ## Decisions so far
 
 - [SCH-001 — Root cause](tickets/sch-001-root-cause.md) — **confirmed** against playbook.go: serial dispatcher, 1-min window, no catch-up, `LastError` only on fire-and-fail. "Due but never fired" has no representation.
-- [SCH-002 — Harness fix](tickets/sch-002-harness-fix.md) — per-schedule goroutine (fixes starvation), boot catch-up (fixes downtime), missed flag + notify (fixes silence).
-- [SCH-003 — Validation](tickets/sch-003-validation.md) — table-driven tests at the existing `dispatchDueSchedulesAt(core, now, run)` seam + production trace observation.
+- [SCH-002 — Harness fix](tickets/sch-002-harness-fix.md) — **resolved**: per-schedule goroutine + synchronous slot claim (starvation), boot catch-up same-day-only (downtime), `missed_at` + one outbox notice + trace + audit (silence). Never-run schedules are not flagged.
+- [SCH-003 — Validation](tickets/sch-003-validation.md) — **resolved**: 8 tests / 15-case classify table at the `dispatchDueSchedulesAt(core, now, run)` seam; 355 total pass, `-race` clean.
 
 ## Out of scope
 
@@ -59,4 +59,4 @@ Measurable: a schedule whose window passes without a run appears in `schedules.j
 
 ## Not yet specified
 
-- Whether catch-up should be bounded by age (fire only same-day misses?) and whether owners can opt a schedule out of catch-up.
+- Production observation (sch-003): confirm missed runs surface in dashboard traces/audit after deploy.
