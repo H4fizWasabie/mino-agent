@@ -986,13 +986,15 @@ func matchedWords(words map[string]bool, text string) []string {
 	return out
 }
 
-// memoryTokenize splits text into lowercase word keys: len>=2, punctuation
-// stripped, common filler dropped (reuses the tool-selection stopword set).
+// memoryTokenize splits text into lowercase word keys: len>=3 (2-letter words
+// like "me"/"is" match inside longer words — "home", "memory", "misbehaves" —
+// and only add noise), punctuation stripped, common filler dropped (reuses the
+// tool-selection stopword set).
 func memoryTokenize(s string) map[string]bool {
 	words := make(map[string]bool)
 	for _, w := range strings.Fields(strings.ToLower(s)) {
 		w = strings.Trim(w, ".,!?;:'\"()[]-—")
-		if len(w) >= 2 && !toolSearchStopWords[w] {
+		if len(w) >= 3 && !toolSearchStopWords[w] {
 			words[w] = true
 		}
 	}
