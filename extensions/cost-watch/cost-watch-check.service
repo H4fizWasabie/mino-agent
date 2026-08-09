@@ -4,4 +4,4 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 /opt/mino-cost-watch/cost_watch.py --check
+ExecStart=/opt/mino-cost-watch/cost-watch --check
