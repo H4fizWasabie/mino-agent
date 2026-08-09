@@ -1,0 +1,1113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Mino Living Field — Prototype</title>
+  <style>
+    :root {
+      --field: #f7f8f6;
+      --paper: #ffffff;
+      --paper-soft: #f0f2ef;
+      --ink: #192026;
+      --ink-soft: #556169;
+      --ink-faint: #7c878d;
+      --rule: #dce1de;
+      --rule-strong: #c4cbc7;
+      --blue: #2868d8;
+      --blue-soft: #e9f0fd;
+      --green: #5e9b72;
+      --violet: #8b6fc5;
+      --amber: #e4a43f;
+      --coral: #e97868;
+      --cyan: #49aeb8;
+      --danger: #c64b42;
+      --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+      --chat-height: 66px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body {
+      color: var(--ink);
+      background: var(--field);
+      font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    button, input, textarea { font: inherit; }
+    button { color: inherit; }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, canvas:focus-visible {
+      outline: 3px solid color-mix(in srgb, var(--blue) 28%, transparent);
+      outline-offset: 2px;
+    }
+    svg { display: block; }
+
+    .app {
+      display: grid;
+      grid-template-columns: 86px minmax(0, 1fr);
+      grid-template-rows: 60px minmax(0, 1fr);
+      width: 100%;
+      height: 100%;
+      background: var(--field);
+    }
+
+    .rail {
+      grid-row: 1 / 3;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      min-width: 0;
+      border-right: 1px solid var(--rule);
+      background: var(--paper);
+      z-index: 8;
+    }
+    .brand {
+      display: grid;
+      place-items: center;
+      height: 60px;
+      border-bottom: 1px solid var(--rule);
+      font-size: 19px;
+      font-weight: 760;
+      letter-spacing: -0.03em;
+    }
+    .lenses { display: grid; gap: 4px; padding: 14px 8px; }
+    .lens {
+      position: relative;
+      display: grid;
+      place-items: center;
+      gap: 5px;
+      min-height: 60px;
+      padding: 8px 3px;
+      border: 0;
+      border-radius: 11px;
+      background: transparent;
+      color: var(--ink-soft);
+      cursor: pointer;
+      font-size: 10.5px;
+    }
+    .lens svg { width: 20px; height: 20px; stroke-width: 1.75; }
+    .lens:hover { color: var(--ink); background: var(--paper-soft); }
+    .lens[aria-pressed="true"] { color: var(--blue); background: var(--blue-soft); font-weight: 680; }
+    .lens[aria-pressed="true"]::before {
+      content: "";
+      position: absolute;
+      left: -8px;
+      width: 3px;
+      height: 30px;
+      border-radius: 0 3px 3px 0;
+      background: var(--blue);
+    }
+    .rail-foot {
+      display: grid;
+      place-items: center;
+      gap: 7px;
+      margin-top: auto;
+      padding: 12px 6px 18px;
+      color: var(--ink-faint);
+      font: 9px/1.25 var(--mono);
+      text-align: center;
+    }
+    .rail-foot i { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+
+    .topbar {
+      grid-column: 2;
+      display: grid;
+      grid-template-columns: auto auto minmax(240px, 520px) 1fr auto;
+      align-items: center;
+      gap: 18px;
+      padding: 0 20px;
+      border-bottom: 1px solid var(--rule);
+      background: var(--paper);
+      z-index: 7;
+    }
+    .signal {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--ink-soft);
+      font-size: 11.5px;
+      white-space: nowrap;
+    }
+    .signal i { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+    .signal.attention i { background: var(--amber); }
+    .verified { color: var(--ink-faint); font: 10px var(--mono); white-space: nowrap; }
+    .search {
+      position: relative;
+      min-width: 0;
+    }
+    .search svg {
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      width: 16px;
+      height: 16px;
+      transform: translateY(-50%);
+      color: var(--ink-faint);
+    }
+    .search input {
+      width: 100%;
+      height: 38px;
+      padding: 0 38px;
+      border: 1px solid var(--rule-strong);
+      border-radius: 10px;
+      background: var(--field);
+      color: var(--ink);
+    }
+    .search input::placeholder { color: var(--ink-faint); opacity: 1; }
+    .top-actions { display: flex; gap: 4px; justify-self: end; }
+    .icon-button {
+      display: grid;
+      place-items: center;
+      width: 36px;
+      height: 36px;
+      padding: 0;
+      border: 0;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--ink-soft);
+      cursor: pointer;
+    }
+    .icon-button:hover { background: var(--paper-soft); color: var(--ink); }
+    .icon-button svg { width: 19px; height: 19px; }
+
+    .desk {
+      grid-column: 2;
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) var(--chat-height);
+      min-width: 0;
+      min-height: 0;
+    }
+    body.ui-ready .desk { transition: grid-template-rows 420ms cubic-bezier(.2,.75,.2,1); }
+    body[data-chat="working"] { --chat-height: clamp(310px, 40vh, 430px); }
+    body[data-chat="focused"] { --chat-height: calc(100vh - 184px); }
+
+    .field {
+      position: relative;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      background: var(--field);
+      border-bottom: 1px solid var(--rule);
+    }
+    #living-map { width: 100%; height: 100%; display: block; cursor: grab; }
+    #living-map.dragging { cursor: grabbing; }
+    .field-meta {
+      position: absolute;
+      top: 16px;
+      left: 18px;
+      pointer-events: none;
+    }
+    .field-meta strong { display: block; font-size: 13px; letter-spacing: -0.01em; }
+    .field-meta span { color: var(--ink-faint); font: 9px var(--mono); }
+    .live-key {
+      position: absolute;
+      top: 16px;
+      right: 18px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--blue);
+      font: 700 9px var(--mono);
+      letter-spacing: 0.08em;
+      pointer-events: none;
+    }
+    .live-key i { width: 7px; height: 7px; border-radius: 50%; background: var(--blue); }
+
+    .attention-rail {
+      position: absolute;
+      left: 18px;
+      top: 54px;
+      width: 176px;
+      padding: 12px;
+      border-radius: 13px;
+      background: var(--paper);
+      box-shadow: 0 10px 28px rgba(31, 40, 45, 0.12);
+    }
+    .attention-rail header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; }
+    .attention-rail header strong { font-size: 11px; }
+    .attention-rail header span { color: var(--ink-faint); font: 8px var(--mono); }
+    .attention-row {
+      display: grid;
+      grid-template-columns: 8px minmax(0, 1fr) auto;
+      gap: 7px;
+      align-items: center;
+      width: 100%;
+      padding: 7px 0;
+      border: 0;
+      border-top: 1px solid var(--rule);
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+    .attention-row i { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
+    .attention-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+    .attention-row small { color: var(--ink-faint); font: 8px var(--mono); }
+    .attention-row:hover span { color: var(--blue); }
+
+    .inspector {
+      position: absolute;
+      right: 18px;
+      bottom: 82px;
+      width: min(330px, calc(100% - 36px));
+      max-height: calc(100% - 114px);
+      overflow: auto;
+      padding: 15px;
+      border-radius: 14px;
+      background: var(--paper);
+      box-shadow: 0 14px 38px rgba(31, 40, 45, 0.15);
+      transition: opacity 180ms ease, transform 240ms cubic-bezier(.2,.75,.2,1);
+    }
+    body:not([data-chat="resting"]) .inspector { opacity: 0; pointer-events: none; transform: translateY(12px); }
+    .inspector-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+    .inspector-title { display: flex; gap: 10px; min-width: 0; }
+    .node-token { flex: 0 0 auto; width: 14px; height: 14px; margin-top: 3px; border: 3px solid var(--blue); border-radius: 50%; }
+    .inspector-title strong { display: block; font-size: 13px; }
+    .inspector-title span { color: var(--ink-faint); font: 8px var(--mono); }
+    .inspector section { margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--rule); }
+    .inspector h3, .context-pane h3 { margin: 0 0 7px; font-size: 10px; font-weight: 720; }
+    .inspector p, .context-pane p { margin: 0; color: var(--ink-soft); font-size: 10.5px; }
+    .detail-list { display: grid; gap: 7px; }
+    .detail-row { display: flex; justify-content: space-between; gap: 12px; font-size: 9.5px; }
+    .detail-row span { color: var(--ink-faint); }
+    .text-action {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      padding: 8px 0;
+      border: 0;
+      border-top: 1px solid var(--rule);
+      background: transparent;
+      color: var(--blue);
+      text-align: left;
+      cursor: pointer;
+      font-size: 10px;
+    }
+
+    .timeline {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 14px;
+      height: 66px;
+      padding: 8px 18px;
+      border-top: 1px solid var(--rule);
+      background: color-mix(in srgb, var(--paper) 95%, transparent);
+    }
+    .playback { display: flex; gap: 3px; }
+    .playback .icon-button { width: 32px; height: 32px; }
+    .ruler { position: relative; height: 42px; min-width: 0; }
+    .ruler-line { position: absolute; left: 0; right: 0; top: 26px; height: 1px; background: var(--rule-strong); }
+    .ruler-line::after {
+      content: "";
+      position: absolute;
+      inset: -6px 0 auto;
+      height: 7px;
+      background: repeating-linear-gradient(90deg, transparent 0 47px, var(--rule-strong) 48px 49px);
+    }
+    .dates { display: flex; justify-content: space-between; color: var(--ink-faint); font: 8px var(--mono); }
+    .timehead {
+      position: absolute;
+      left: var(--time, 86%);
+      top: 18px;
+      width: 2px;
+      height: 21px;
+      background: var(--blue);
+      transition: left 600ms ease;
+    }
+    .timehead::before { content: ""; position: absolute; left: -4px; top: -5px; width: 10px; height: 10px; border-radius: 50%; background: var(--blue); }
+    .timeline-live { color: var(--blue); font: 720 9px var(--mono); }
+
+    .workbench {
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      background: var(--paper);
+    }
+    .resting-composer {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      height: 66px;
+      padding: 10px 18px;
+    }
+    body:not([data-chat="resting"]) .resting-composer { display: none; }
+    .context-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 38px;
+      padding: 0 11px;
+      border-radius: 9px;
+      background: var(--blue-soft);
+      color: var(--blue);
+      font-size: 10px;
+      white-space: nowrap;
+    }
+    .composer-trigger {
+      height: 42px;
+      padding: 0 14px;
+      border: 1px solid var(--rule-strong);
+      border-radius: 10px;
+      background: var(--field);
+      color: var(--ink-faint);
+      cursor: text;
+      text-align: left;
+    }
+    .primary-icon {
+      display: grid;
+      place-items: center;
+      width: 38px;
+      height: 38px;
+      border: 0;
+      border-radius: 10px;
+      background: var(--blue);
+      color: white;
+      cursor: pointer;
+    }
+    .primary-icon svg { width: 18px; height: 18px; }
+
+    .working-shell {
+      display: none;
+      grid-template-columns: minmax(0, 72fr) minmax(230px, 28fr);
+      width: 100%;
+      height: 100%;
+    }
+    body:not([data-chat="resting"]) .working-shell { display: grid; }
+    .conversation {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      min-width: 0;
+      min-height: 0;
+    }
+    .conversation-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--rule);
+    }
+    .conversation-head strong { display: block; font-size: 11.5px; }
+    .conversation-head span { color: var(--ink-faint); font: 8px var(--mono); }
+    .conversation-controls { display: flex; gap: 3px; }
+    .conversation-controls .icon-button { width: 30px; height: 30px; }
+    .conversation-controls svg { width: 16px; height: 16px; }
+    .messages {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-height: 0;
+      overflow: auto;
+      padding: 14px max(18px, 8%);
+    }
+    .message { max-width: 720px; }
+    .message.user { align-self: flex-end; padding: 10px 12px; border-radius: 12px 12px 3px 12px; background: var(--blue-soft); }
+    .message.assistant { align-self: flex-start; }
+    .message span { display: block; margin-bottom: 4px; color: var(--ink-faint); font: 8px var(--mono); }
+    .message p { margin: 0; font-size: 11.5px; line-height: 1.55; }
+    .message .steps { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+    .step { padding: 3px 6px; border-radius: 6px; background: var(--paper-soft); color: var(--ink-soft); font: 8px var(--mono); }
+    .step.live { color: var(--blue); background: var(--blue-soft); }
+    .chat-form {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 9px;
+      padding: 10px 14px 12px;
+      border-top: 1px solid var(--rule);
+    }
+    .chat-form textarea {
+      min-height: 44px;
+      max-height: 104px;
+      resize: vertical;
+      padding: 11px 12px;
+      border: 1px solid var(--rule-strong);
+      border-radius: 10px;
+      background: var(--field);
+      color: var(--ink);
+    }
+    .chat-form textarea::placeholder { color: var(--ink-faint); opacity: 1; }
+    .chat-form .primary-icon { align-self: end; width: 44px; height: 44px; }
+    .context-pane {
+      min-width: 0;
+      min-height: 0;
+      overflow: auto;
+      padding: 14px;
+      border-left: 1px solid var(--rule);
+      background: var(--field);
+    }
+    .context-pane header { display: flex; align-items: center; justify-content: space-between; gap: 9px; }
+    .context-pane header span { color: var(--blue); font: 8px var(--mono); }
+    .context-block { margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--rule); }
+    .evidence-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 7px 0; border-top: 1px solid var(--rule); font-size: 9.5px; }
+    .evidence-item span { color: var(--ink-faint); font: 8px var(--mono); }
+
+    .prototype-switcher {
+      position: fixed;
+      left: 50%;
+      bottom: 8px;
+      z-index: 30;
+      display: grid;
+      grid-template-columns: 30px auto 30px;
+      align-items: center;
+      gap: 4px;
+      padding: 5px;
+      border-radius: 13px;
+      background: #192026;
+      color: white;
+      box-shadow: 0 10px 28px rgba(25, 32, 38, 0.22);
+    }
+    .prototype-switcher button { width: 30px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: white; cursor: pointer; }
+    .prototype-switcher button:hover { background: rgba(255,255,255,.12); }
+    .prototype-switcher span { min-width: 150px; text-align: center; font: 8px var(--mono); letter-spacing: .05em; text-transform: uppercase; }
+
+    .prototype-flag {
+      position: fixed;
+      right: 12px;
+      bottom: 12px;
+      z-index: 29;
+      color: var(--ink-faint);
+      font: 8px var(--mono);
+      pointer-events: none;
+    }
+
+    body[data-chat="focused"] .attention-rail,
+    body[data-chat="focused"] .field-meta,
+    body[data-chat="focused"] .live-key,
+    body[data-chat="focused"] .timeline { display: none; }
+    body[data-chat="focused"] .field::after {
+      content: "LIVE MAP CONTEXT · CAMERA AND SELECTION PRESERVED";
+      position: absolute;
+      left: 18px;
+      bottom: 12px;
+      color: var(--ink-faint);
+      font: 8px var(--mono);
+    }
+
+    @media (max-width: 900px) {
+      .topbar { grid-template-columns: auto auto minmax(180px, 1fr) auto; gap: 10px; padding: 0 12px; }
+      .verified { display: none; }
+      .working-shell { grid-template-columns: minmax(0, 1fr) 230px; }
+      .attention-rail { width: 154px; }
+    }
+
+    @media (max-width: 719px) {
+      .app { grid-template-columns: 1fr; grid-template-rows: 54px minmax(0, 1fr) 62px; }
+      .topbar { grid-column: 1; grid-row: 1; grid-template-columns: auto minmax(0, 1fr) auto; padding: 0 10px; }
+      .topbar .signal, .verified { display: none; }
+      .search input { height: 36px; }
+      .rail {
+        grid-column: 1;
+        grid-row: 3;
+        flex-direction: row;
+        border: 0;
+        border-top: 1px solid var(--rule);
+      }
+      .brand, .rail-foot { display: none; }
+      .lenses { grid-template-columns: repeat(6, 1fr); width: 100%; gap: 0; padding: 4px; }
+      .lens { min-height: 53px; gap: 2px; padding: 4px 1px; font-size: 8px; }
+      .lens svg { width: 18px; height: 18px; }
+      .lens[aria-pressed="true"]::before { left: 50%; top: -4px; width: 26px; height: 3px; transform: translateX(-50%); border-radius: 0 0 3px 3px; }
+      .desk { grid-column: 1; grid-row: 2; }
+      .attention-rail { left: 10px; top: 44px; width: 148px; }
+      .inspector { right: 10px; bottom: 74px; width: min(294px, calc(100% - 20px)); }
+      body[data-mobile-initial="true"] .inspector { display: none; }
+      .timeline { height: 58px; padding: 6px 10px; }
+      .dates span:nth-child(even) { display: none; }
+      .resting-composer { padding: 9px 10px; }
+      .context-chip { display: none; }
+      body[data-chat="working"], body[data-chat="focused"] { --chat-height: 100%; }
+      body:not([data-chat="resting"]) .desk { grid-template-rows: 1fr; }
+      body:not([data-chat="resting"]) .field { display: none; }
+      .working-shell { grid-template-columns: 1fr; }
+      .context-pane { display: none; }
+      .messages { padding: 14px 12px; }
+      .prototype-switcher { left: auto; right: 8px; top: 66px; bottom: auto; grid-template-columns: 24px auto 24px; padding: 3px; }
+      body:not([data-chat="resting"]) .prototype-switcher { top: 118px; }
+      .prototype-switcher button { width: 24px; height: 24px; }
+      .prototype-switcher span { min-width: 110px; font-size: 7px; }
+      .prototype-flag { display: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.001ms !important; animation-duration: 0.001ms !important; }
+    }
+  </style>
+</head>
+<body data-chat="resting">
+  <!--
+  THESIS: Mino is one persistent living field, not a stack of dashboard pages or a decorative graph.
+  OWN-WORLD: A light operational atlas with organic communities, chart instruments, restrained semantic color, and crisp evidence surfaces.
+  STORY: See the whole universe, select a real entity, converse without losing place, and watch verified work become durable state.
+  FIRST VIEWPORT: A narrow lens spine and low status band frame a full-universe Canvas map; timeline and collapsed Ask sit on its lower edge.
+  FORM: Survey Desk, grounded direction 3, seed 0ead2766.
+  FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
+  -->
+  <!-- PROTOTYPE ONLY: Three chat states, switchable with ?variant=resting|working|focused. Read-only live data; no persistence. -->
+  <div class="app">
+    <aside class="rail" aria-label="Living Field lenses">
+      <div class="brand">Mino</div>
+      <nav class="lenses">
+        <button class="lens" type="button" data-lens="universe" aria-pressed="true" aria-label="Show the entire universe">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 4.4 6 4.4 9S15 18 12 21c-3-3-4.4-6-4.4-9S9 6 12 3Z"/></svg><span>Universe</span>
+        </button>
+        <button class="lens" type="button" data-lens="now" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Now</span>
+        </button>
+        <button class="lens" type="button" data-lens="work" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="4" y="6" width="16" height="14" rx="2"/><path d="M9 6V4h6v2M4 11h16"/></svg><span>Work</span>
+        </button>
+        <button class="lens" type="button" data-lens="memory" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="7" cy="8" r="2.5"/><circle cx="17" cy="7" r="2.5"/><circle cx="12" cy="17" r="2.5"/><path d="m9.3 8.8 5.4-1M8.5 10l2.5 4.8M15.7 9.1 13 14.8"/></svg><span>Memory</span>
+        </button>
+        <button class="lens" type="button" data-lens="routines" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M19 8a7 7 0 1 0 0 8"/><path d="M19 4v4h-4M19 20v-4h-4"/></svg><span>Routines</span>
+        </button>
+        <button class="lens" type="button" data-lens="system" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z"/><circle cx="12" cy="12" r="2.5"/></svg><span>System</span>
+        </button>
+      </nav>
+      <div class="rail-foot"><i></i><span>PROTOTYPE<br>LIVE READ-ONLY</span></div>
+    </aside>
+
+    <header class="topbar">
+      <span class="signal attention"><i></i><span id="attention-signal">Reading attention…</span></span>
+      <span class="signal"><i></i><span id="routine-signal">Reading routines…</span></span>
+      <label class="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg>
+        <input id="field-search" type="search" placeholder="Ask or find anything" aria-label="Search the Living Field">
+      </label>
+      <span class="verified" id="snapshot-status">Connecting to Mino VPS…</span>
+      <div class="top-actions">
+        <button class="icon-button" type="button" title="Fit universe" aria-label="Fit entire universe" id="fit-map"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
+        <button class="icon-button" type="button" title="Map filters" aria-label="Map filters"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 5h16M7 12h10M10 19h4"/></svg></button>
+      </div>
+    </header>
+
+    <main class="desk">
+      <section class="field" aria-label="Complete Mino universe">
+        <canvas id="living-map" tabindex="0" aria-label="Interactive read-only map of live Mino entities. Drag to pan, wheel to zoom, and select nodes for details."></canvas>
+        <div class="field-meta"><strong>The whole field</strong><span id="field-summary">Reading the live universe…</span></div>
+        <div class="live-key"><i></i>LIVE</div>
+
+        <aside class="attention-rail" aria-label="Now and attention">
+          <header><strong>Now & attention</strong><span id="attention-count">…</span></header>
+          <div id="attention-items"></div>
+        </aside>
+
+        <aside class="inspector" id="inspector" aria-label="Selected map entity">
+          <div class="inspector-top">
+            <div class="inspector-title"><i class="node-token" id="inspector-token"></i><div><strong id="inspector-name">Live universe</strong><span id="inspector-kind">READING MINO</span></div></div>
+            <button class="icon-button" type="button" id="close-inspector" aria-label="Close inspector"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+          </div>
+          <section><h3>Current truth</h3><p id="inspector-copy">Connecting to the read-only VPS data surface.</p></section>
+          <section class="detail-list">
+            <div class="detail-row"><span>Source</span><strong id="inspector-owner">Mino VPS</strong></div>
+            <div class="detail-row"><span>Connections</span><strong id="inspector-evidence">—</strong></div>
+            <div class="detail-row"><span>Last change</span><strong id="inspector-change">—</strong></div>
+          </section>
+          <section><button class="text-action" type="button" id="ask-selected"><span>Ask Mino about this</span><span>Open →</span></button><button class="text-action" type="button"><span>Inspect evidence</span><span id="inspector-evidence-action">—</span></button></section>
+        </aside>
+
+        <div class="timeline" aria-label="Living Field timeline">
+          <div class="playback">
+            <button class="icon-button" type="button" id="play-timeline" aria-label="Play timeline"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="m8 5 11 7-11 7Z"/></svg></button>
+            <button class="icon-button" type="button" id="return-live" aria-label="Return to live"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 12a8 8 0 1 0 3-6.2"/><path d="M4 4v6h6"/></svg></button>
+          </div>
+          <div class="ruler">
+            <div class="dates"><span>May 11</span><span>May 12</span><span>May 13</span><span>May 14</span><span>May 15</span><span>May 16</span><span>Today</span></div>
+            <div class="ruler-line"></div><i class="timehead" id="timehead"></i>
+          </div>
+          <strong class="timeline-live">LIVE</strong>
+        </div>
+      </section>
+
+      <section class="workbench" aria-label="Conversation with Mino">
+        <div class="resting-composer">
+          <span class="context-chip" id="resting-context">Reading live universe…</span>
+          <button class="composer-trigger" type="button" id="open-chat">Ask Mino about this field…</button>
+          <button class="primary-icon" type="button" aria-label="Open conversation" id="open-chat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m5 12 14-7-4 14-3-6-7-1Z"/></svg></button>
+        </div>
+
+        <div class="working-shell">
+          <section class="conversation">
+            <header class="conversation-head">
+              <div><strong>Conversation with Mino</strong><span id="conversation-context">Live universe context</span></div>
+              <div class="conversation-controls">
+                <button class="icon-button" type="button" id="focus-chat" aria-label="Maximize conversation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
+                <button class="icon-button" type="button" id="collapse-chat" aria-label="Collapse conversation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m6 9 6 6 6-6"/></svg></button>
+              </div>
+            </header>
+            <div class="messages" id="messages" aria-live="polite">
+              <article class="message assistant"><span>MINO · READY</span><p>I can see the selected entity and its supporting evidence. What would you like to examine?</p></article>
+            </div>
+            <form class="chat-form" id="chat-form">
+              <textarea id="chat-input" placeholder="Ask Mino…" aria-label="Message Mino"></textarea>
+              <button class="primary-icon" type="submit" aria-label="Send message"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="m5 12 14-7-4 14-3-6-7-1Z"/></svg></button>
+            </form>
+          </section>
+          <aside class="context-pane" aria-label="Conversation context and evidence">
+            <header><strong>Context</strong><span>VISIBLE TO MINO</span></header>
+            <div class="context-block"><h3 id="context-name">Live universe</h3><p id="context-copy">Choose any memory or operational entity to make it visible to Mino.</p></div>
+            <div class="context-block"><h3>Evidence</h3><div class="evidence-item"><strong>Source</strong><span id="context-source">VPS</span></div><div class="evidence-item"><strong>Connections</strong><span id="context-connections">—</span></div><div class="evidence-item"><strong>State</strong><span id="context-state">READ-ONLY</span></div></div>
+            <div class="context-block"><h3>Map state</h3><p>Camera and selection remain unchanged while this workbench is open.</p></div>
+          </aside>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="prototype-switcher" aria-label="Prototype chat-state switcher">
+    <button type="button" id="previous-state" aria-label="Previous chat state">←</button>
+    <span id="prototype-state">Prototype · Resting</span>
+    <button type="button" id="next-state" aria-label="Next chat state">→</button>
+  </div>
+  <span class="prototype-flag">ISSUE #77 · READ-ONLY PROTOTYPE</span>
+
+  <script>
+    const palette = {
+      memory:"#8b6fc5", work:"#e4a43f", attention:"#e97868",
+      routines:"#49aeb8", system:"#6f7f88", life:"#5e9b72",
+      history:"#597fc2", runtime:"#2868d8", line:"#bfc8c4", ink:"#253038"
+    };
+
+    const clusterDefs = [
+      {id:"self",lens:"memory",label:"Self & intent",x:.13,y:.18,color:palette.life},
+      {id:"knowledge",lens:"memory",label:"Knowledge & learning",x:.39,y:.18,color:palette.memory},
+      {id:"people",lens:"memory",label:"People & organisations",x:.74,y:.17,color:palette.attention},
+      {id:"work",lens:"work",label:"Work & commitments",x:.56,y:.43,color:palette.work},
+      {id:"routines",lens:"routines",label:"Routines & operations",x:.79,y:.58,color:palette.routines},
+      {id:"history",lens:"memory",label:"History & outcomes",x:.43,y:.77,color:palette.history},
+      {id:"system",lens:"system",label:"Capabilities & system",x:.15,y:.70,color:palette.system},
+      {id:"frontier",lens:"memory",label:"Uncharted memory",x:.88,y:.79,color:palette.memory}
+    ];
+
+    const canvas = document.getElementById("living-map");
+    const ctx = canvas.getContext("2d");
+    const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let nodes = [], links = [], semanticLinks = [], clusterMap = {}, selected = null, hovered = null;
+    let camera = { x:0, y:0, zoom:1 }, dragging = false, dragStart = null;
+    let activeLens = "universe", runtimeProgress = -1, newNodeBorn = 0, liveStats = {};
+
+    function hash(text) {
+      let value=2166136261;
+      for(let i=0;i<String(text).length;i++){value^=String(text).charCodeAt(i);value=Math.imul(value,16777619);}
+      return value>>>0;
+    }
+    function seeded(value, salt=0) { return ((hash(String(value)+"|"+salt)%100000)/100000); }
+    function around(center, index, total, spread=.1, seed="") {
+      const angle=index*2.399963+seeded(seed,3)*Math.PI*2;
+      const radius=.012+Math.sqrt((index+1)/Math.max(1,total))*spread;
+      return {x:center.x+Math.cos(angle)*radius,y:center.y+Math.sin(angle)*radius*.72};
+    }
+    function uniqueBy(items, key) {
+      const seen=new Set();
+      return items.filter(item=>item&&item[key]&&!seen.has(item[key])&&seen.add(item[key]));
+    }
+    function clip(text, limit=190) {
+      text=String(text||"").replace(/\s+/g," ").trim();
+      return text.length>limit?text.slice(0,limit-1)+"…":text;
+    }
+    function formatWhen(value) {
+      if(!value||value==="Live"||value==="Unknown")return value||"Live";
+      const date=new Date(value);
+      if(Number.isNaN(date.getTime()))return clip(value,24);
+      const seconds=Math.max(0,Math.round((Date.now()-date.getTime())/1000));
+      if(seconds<60)return "just now";
+      if(seconds<3600)return Math.floor(seconds/60)+" min ago";
+      if(seconds<86400)return Math.floor(seconds/3600)+" hr ago";
+      if(seconds<604800)return Math.floor(seconds/86400)+" days ago";
+      return date.toLocaleDateString(undefined,{day:"numeric",month:"short",year:"numeric"});
+    }
+    function regionFor(text, type="semantic") {
+      text=String(text||"").toLowerCase();
+      if(/personal|preference|family|food|health|recovery|identity|owner|assistant|voice|soul/.test(text)) return "self";
+      if(/person|people|community|account|organisation|organization|supplier|customer|team/.test(text)) return "people";
+      if(/playbook|daily|post|publish|reddit|threads|facebook|instagram|gmail|schedule|routine/.test(text)) return "routines";
+      if(/procura|pims|database|purchase|project|coding|build|business|pricing|deployment|workspace/.test(text)) return "work";
+      if(type==="episodic"||/history|episode|meeting|reminder|outcome|run /.test(text)) return "history";
+      if(/system|tool|provider|mcp|security|path|config|runtime/.test(text)) return "system";
+      return "knowledge";
+    }
+    function details(kind, copy, source, evidence, changed, state="RECORDED") {
+      return {kind,copy:clip(copy),source:clip(source,42),evidence,state,changed};
+    }
+    function tableSample(data, name) {
+      return (data.db&&data.db.tables||[]).find(table=>table.name===name)?.sample||[];
+    }
+    function addNode(node, center, index, total, spread) {
+      const p=around(center,index,total,spread,node.id);
+      Object.assign(node,{nx:p.x,ny:p.y,born:0});
+      nodes.push(node);
+      return node;
+    }
+
+    async function buildField() {
+      const response=await fetch("/api/data",{cache:"no-store"});
+      if(!response.ok) throw new Error("live data returned "+response.status);
+      const data=await response.json();
+      nodes=[];links=[];semanticLinks=[];clusterMap={};
+
+      clusterDefs.forEach(region=>{
+        const anchor={
+          id:"region:"+region.id,cluster:region.id,lens:region.lens,label:region.label,
+          nx:region.x,ny:region.y,color:region.color,anchor:true,anchorKind:"region",size:10,
+          details:details("Universe region","A stable visual region joining related live Mino entities.","read-only projection","Select a nearby entity","Live","LIVE")
+        };
+        nodes.push(anchor);clusterMap[region.id]=anchor;
+      });
+
+      const facts=Object.values(data.graph?.facts||{});
+      const fullFacts=new Map((data.facts||[]).map(fact=>[fact.id,fact]));
+      const communities=data.graph?.communities||{}, labels=data.graph?.labels||{};
+      const grouped=new Map();
+      facts.forEach(fact=>{
+        const community=communities[fact.id];
+        const key=community===undefined?"frontier":String(community);
+        if(!grouped.has(key)) grouped.set(key,[]);
+        grouped.get(key).push(fact);
+      });
+
+      const regionGroups={};
+      [...grouped].forEach(([key,group])=>{
+        const named=key!=="frontier"&&labels[key];
+        const sample=group.slice(0,5).map(f=>f.subject).join(" ");
+        const region=key==="frontier"?"frontier":regionFor((named||"")+" "+sample,group[0]?.type);
+        (regionGroups[region]||(regionGroups[region]=[])).push({key,group,named});
+      });
+      const factNodes=new Map();
+      Object.entries(regionGroups).forEach(([regionId,groups])=>{
+        const region=clusterDefs.find(item=>item.id===regionId)||clusterDefs[1];
+        groups.forEach((entry,groupIndex)=>{
+          const center=around(region,groupIndex,groups.length,regionId==="frontier"?.07:.13,"community:"+entry.key);
+          const label=entry.named||"Unlabelled memory community";
+          const communityNode={
+            id:"community:"+entry.key,cluster:regionId,lens:"memory",label,
+            nx:center.x,ny:center.y,color:palette.memory,anchor:true,anchorKind:"community",
+            showLabel:Boolean(entry.named)&&entry.group.length>=5,size:Math.min(8,4+Math.sqrt(entry.group.length)),
+            details:details("Memory community",entry.group.length+" live memories share this semantic neighbourhood.","memories/index.json",entry.group.length+" memories","Live","DERIVED")
+          };
+          nodes.push(communityNode);
+          entry.group.forEach((fact,index)=>{
+            const complete=fullFacts.get(fact.id)||{};
+            const p=around(center,index,entry.group.length,.018+Math.min(.045,entry.group.length*.0025),fact.id);
+            const node={
+              id:"memory:"+fact.id,sourceId:fact.id,cluster:regionId,lens:"memory",
+              label:fact.subject||fact.id,nx:p.x,ny:p.y,color:fact.type==="episodic"?palette.history:palette.memory,
+              anchor:false,size:fact.type==="episodic"?3.2:2.6,attention:false,
+              details:details((fact.type||"semantic")+" memory",complete.content||fact.why||fact.subject,fact.source||"memories/"+fact.id+".md",(fact.edges||[]).length+" relationships",fact.at||"Unknown",fact.judged_at?"JUDGED":"RECORDED")
+            };
+            nodes.push(node);factNodes.set(fact.id,node);links.push([communityNode,node]);
+          });
+        });
+      });
+      facts.forEach(fact=>(fact.edges||[]).forEach(edge=>{
+        const a=factNodes.get(fact.id),b=factNodes.get(edge.target);
+        if(a&&b) semanticLinks.push({a,b,edge});
+      }));
+
+      const responsibilities=uniqueBy([...(data.responsibilities?.today||[]),...(data.responsibilities?.work||[])],"id");
+      const workItems=responsibilities.filter(item=>item.kind!=="routine");
+      const routineItems=responsibilities.filter(item=>item.kind==="routine");
+      const responsibilityNodes=new Map();
+      [
+        {items:workItems,region:"work",lens:"work",center:{x:.57,y:.45},spread:.13},
+        {items:routineItems,region:"routines",lens:"routines",center:{x:.79,y:.58},spread:.10}
+      ].forEach(group=>group.items.forEach((item,index)=>{
+        const attention=["working","blocked"].includes(item.status);
+        const node=addNode({
+          id:"responsibility:"+item.id,sourceId:item.id,cluster:group.region,lens:group.lens,label:item.title,
+          color:attention?palette.attention:(group.region==="routines"?palette.routines:palette.work),
+          anchor:attention,size:attention?7:3.1,attention,
+          details:details((item.kind||"responsibility")+" · "+item.status,item.next_action||item.outcome,item.source_kind||"responsibility",item.verification?"verified evidence":"recorded history",item.updated_at,item.status.toUpperCase())
+        },group.center,index,group.items.length,group.spread);
+        responsibilityNodes.set(item.id,node);links.push([clusterMap[group.region],node]);
+      }));
+
+      const playbooks=data.playbooks||[];
+      const playbookNodes=new Map();
+      playbooks.forEach((item,index)=>{
+        const node=addNode({
+          id:"playbook:"+item.name,sourceId:item.name,cluster:"routines",lens:"routines",label:item.name.replaceAll("-"," "),
+          color:palette.routines,anchor:true,anchorKind:"operation",size:5.4,
+          details:details("Playbook · "+item.status,item.description||"Operational procedure with "+(item.stages||[]).length+" stages.","playbooks/"+item.name,(item.runs||[]).length+" runs","Live",item.status.toUpperCase())
+        },{x:.78,y:.62},index,playbooks.length,.105);
+        playbookNodes.set(item.name,node);links.push([clusterMap.routines,node]);
+      });
+      responsibilities.forEach(item=>{
+        const responsibility=responsibilityNodes.get(item.id);
+        const playbook=playbookNodes.get(item.source_ref);
+        if(responsibility&&playbook) semanticLinks.push({a:responsibility,b:playbook,edge:{rel:"produced_by",kind:"explicit"}});
+      });
+
+      const skills=data.skills||[], tools=data.tools?.catalog||[];
+      skills.forEach((item,index)=>{
+        const node=addNode({
+          id:"skill:"+item.name,cluster:"system",lens:"system",label:item.name,color:palette.system,
+          anchor:true,anchorKind:"operation",size:4.8,
+          details:details("Skill · "+(item.state||"available"),item.description||item.body,"skills/"+item.name,(item.triggers||[]).length+" triggers","Live",(item.state||"AVAILABLE").toUpperCase())
+        },{x:.13,y:.66},index,skills.length,.075);
+        links.push([clusterMap.system,node]);
+      });
+      tools.forEach((item,index)=>{
+        const name=item.name||item.Name||"tool";
+        const node=addNode({
+          id:"tool:"+name+":"+index,cluster:"system",lens:"system",label:name,color:palette.system,
+          anchor:false,size:2.35,
+          details:details("Runtime tool",item.description||item.Description||"Available to the Mino runtime.","tool catalog","available schema","Live","AVAILABLE")
+        },{x:.17,y:.73},index,tools.length,.115);
+        links.push([clusterMap.system,node]);
+      });
+
+      const sessions=data.sessions||[];
+      sessions.forEach((item,index)=>{
+        const node=addNode({
+          id:"session:"+item.id,cluster:"history",lens:"memory",label:item.title||"Conversation",color:palette.history,
+          anchor:true,anchorKind:"operation",size:5,
+          details:details("Conversation session",item.last||"Recorded conversation history.",(item.sources||[]).join(", ")||"chat_log",item.messages+" messages",item.last_at,"RECORDED")
+        },{x:.37,y:.77},index,sessions.length,.07);
+        links.push([clusterMap.history,node]);
+      });
+      const artifacts=tableSample(data,"session_artifacts");
+      artifacts.forEach((item,index)=>{
+        const node=addNode({
+          id:"artifact:"+item.path,cluster:"history",lens:"memory",label:item.label||item.path.split("/").pop(),color:palette.history,
+          anchor:false,size:2.5,
+          details:details("Distilled artifact",item.path,"session_artifacts",Math.round((item.size||0)/1024)+" KB",item.created_at,item.distilled?"DISTILLED":"RECORDED")
+        },{x:.46,y:.79},index,artifacts.length,.11);
+        links.push([clusterMap.history,node]);
+      });
+
+      const reminders=tableSample(data,"reminders");
+      reminders.forEach((item,index)=>{
+        const pending=item.status==="pending";
+        const node=addNode({
+          id:"reminder:"+item.id,cluster:"work",lens:"work",label:item.message,color:pending?palette.attention:palette.work,
+          anchor:pending,size:pending?6:2.8,attention:pending,
+          details:details("Reminder · "+item.status,item.message,"system reminders (SQLite)","time-bound state",item.remind_at,item.status.toUpperCase())
+        },{x:.65,y:.34},index,reminders.length,.07);
+        links.push([clusterMap.work,node]);
+      });
+
+      liveStats={facts:facts.length,relationships:semanticLinks.length,responsibilities:responsibilities.length,playbooks:playbooks.length,tools:tools.length,skills:skills.length};
+      const attentionNodes=nodes.filter(node=>node.attention);
+      populateAttention(attentionNodes);
+      document.getElementById("attention-signal").textContent=responsibilities.filter(item=>["working","blocked"].includes(item.status)).length+" need attention";
+      document.getElementById("routine-signal").textContent=routineItems.filter(item=>item.status==="working").length+" routine running";
+      document.getElementById("snapshot-status").textContent="Read-only live VPS snapshot";
+      document.getElementById("field-summary").textContent=facts.length+" memories · "+responsibilities.length+" responsibilities · "+semanticLinks.length+" relationships";
+      selected=attentionNodes[0]||factNodes.values().next().value||clusterMap.knowledge;
+    }
+
+    function populateAttention(items) {
+      const list=document.getElementById("attention-items");
+      list.replaceChildren();
+      document.getElementById("attention-count").textContent=items.length+" ITEMS";
+      items.slice(0,5).forEach(node=>{
+        const button=document.createElement("button");
+        button.className="attention-row";button.type="button";button.dataset.select=node.id;
+        const dot=document.createElement("i"),label=document.createElement("span"),state=document.createElement("small");
+        label.textContent=node.label;state.textContent=node.details.state;
+        button.append(dot,label,state);button.onclick=()=>focusCluster(node.id);
+        list.appendChild(button);
+      });
+    }
+
+    function rgba(hex, alpha) {
+      const n = parseInt(hex.slice(1),16);
+      return `rgba(${n>>16},${(n>>8)&255},${n&255},${alpha})`;
+    }
+
+    function resize() {
+      const rect = canvas.getBoundingClientRect(), dpr = Math.min(devicePixelRatio || 1, 2);
+      canvas.width = Math.max(1, Math.round(rect.width*dpr));
+      canvas.height = Math.max(1, Math.round(rect.height*dpr));
+      ctx.setTransform(dpr,0,0,dpr,0,0);
+      draw(performance.now(), false);
+    }
+    function point(n) {
+      const w = canvas.clientWidth, h = canvas.clientHeight;
+      return { x:(n.nx-.5)*w*camera.zoom+w/2+camera.x, y:(n.ny-.5)*h*camera.zoom+h/2+camera.y };
+    }
+    function lensVisible(node) {
+      if (activeLens === "universe") return 1;
+      if (activeLens === "now") return node.attention ? 1 : .055;
+      return node.lens === activeLens ? 1 : .055;
+    }
+    function draw(now=0, schedule=true) {
+      const w=canvas.clientWidth, h=canvas.clientHeight;
+      ctx.clearRect(0,0,w,h);
+      ctx.save();
+      clusterDefs.forEach(c => {
+        const anchor=clusterMap[c.id];
+        if(!anchor)return;
+        const p=point(anchor), rx=Math.max(72,Math.min(122,w*.082))*camera.zoom, ry=rx*.62;
+        ctx.beginPath(); ctx.ellipse(p.x,p.y,rx,ry,0,0,Math.PI*2);
+        ctx.fillStyle=rgba(c.color, .034*lensVisible(anchor)); ctx.fill();
+      });
+      ctx.lineCap="round";
+      links.forEach(([a,b]) => {
+        const pa=point(a), pb=point(b), visibility=Math.min(lensVisible(a),lensVisible(b));
+        ctx.beginPath(); ctx.moveTo(pa.x,pa.y);
+        const bend=(pa.y+pb.y)/2-10; ctx.bezierCurveTo(pa.x,bend,pb.x,bend,pb.x,pb.y);
+        ctx.strokeStyle=rgba(a.cluster===b.cluster?a.color:palette.line, a.cluster===b.cluster?.17*visibility:.28*visibility);
+        ctx.lineWidth=(a.cluster===b.cluster?.72:1)*Math.min(camera.zoom,1.2); ctx.stroke();
+      });
+      const focus=hovered||selected;
+      if(focus) semanticLinks.forEach(({a,b,edge})=>{
+        if(a!==focus&&b!==focus)return;
+        const pa=point(a),pb=point(b);
+        ctx.save();
+        if(edge.kind==="inferred")ctx.setLineDash([3,4]);
+        ctx.beginPath();ctx.moveTo(pa.x,pa.y);ctx.lineTo(pb.x,pb.y);
+        ctx.strokeStyle=rgba(edge.kind==="inferred"?palette.runtime:a.color,edge.kind==="inferred"?.72:.82);
+        ctx.lineWidth=1.45;ctx.stroke();ctx.restore();
+      });
+      nodes.forEach(n => {
+        const p=point(n), visibility=lensVisible(n);
+        let scale=1;
+        if(n.born && !reduceMotion) scale=Math.min(1,Math.max(.08,(now-n.born)/650));
+        const breath = !reduceMotion && selected===n ? 1+Math.sin(now/650)*.08 : 1;
+        const r=(n.anchor?n.size:Math.max(1.7,n.size*camera.zoom))*scale*breath;
+        ctx.globalAlpha=visibility;
+        ctx.beginPath(); ctx.arc(p.x,p.y,r,0,Math.PI*2);
+        ctx.fillStyle=n.anchor?"#ffffff":n.color; ctx.fill();
+        ctx.lineWidth=n.anchor?2.4:1; ctx.strokeStyle=n.color; ctx.stroke();
+        if(n===selected || n===hovered) {
+          ctx.beginPath(); ctx.arc(p.x,p.y,r+5,0,Math.PI*2); ctx.strokeStyle=n.color; ctx.lineWidth=1; ctx.stroke();
+        }
+        if(n.anchor && camera.zoom>.68 && (n.anchorKind==="region"||n.showLabel||n===selected)) {
+          ctx.globalAlpha=visibility;
+          const labelSize=n.anchorKind==="region"?Math.max(9,10*camera.zoom):Math.max(8,8.5*camera.zoom);
+          ctx.fillStyle=palette.ink; ctx.font=`${n===selected?650:540} ${labelSize}px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif`;
+          ctx.textAlign="center"; ctx.fillText(clip(n.label,28),p.x,p.y+r+14,132);
+        }
+      });
+      ctx.globalAlpha=1;
+      if(runtimeProgress>=0) drawRuntime(now);
+      ctx.restore();
+      if(!reduceMotion && schedule) requestAnimationFrame(draw);
+    }
+    function drawRuntime(now) {
+      const route=[clusterMap.self,clusterMap.work,clusterMap.routines,clusterMap.history,clusterMap.knowledge];
+      if(route.some(node=>!node))return;
+      const total=route.length-1, pos=Math.min(total-.001,runtimeProgress*total), idx=Math.floor(pos), t=pos-idx;
+      const a=point(route[idx]),b=point(route[idx+1]);
+      ctx.setLineDash([5,5]); ctx.strokeStyle=palette.runtime; ctx.lineWidth=1.4;
+      ctx.beginPath();
+      route.slice(0,idx+1).forEach((n,i)=>{const p=point(n);i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y);});
+      ctx.lineTo(a.x+(b.x-a.x)*t,a.y+(b.y-a.y)*t);ctx.stroke();ctx.setLineDash([]);
+      const x=a.x+(b.x-a.x)*t,y=a.y+(b.y-a.y)*t;
+      ctx.beginPath();ctx.arc(x,y,5,0,Math.PI*2);ctx.fillStyle="#fff";ctx.fill();ctx.lineWidth=2.5;ctx.strokeStyle=palette.runtime;ctx.stroke();
+    }
+    function screenNode(ev) {
+      const rect=canvas.getBoundingClientRect(),x=ev.clientX-rect.left,y=ev.clientY-rect.top;
+      let best=null,dist=16;
+      nodes.forEach(n=>{const p=point(n),d=Math.hypot(p.x-x,p.y-y);if(d<dist){dist=d;best=n;}});return best;
+    }
+    function selectNode(node) {
+      if(!node) return;
+      document.body.dataset.mobileInitial="false";
+      selected=node;
+      const data=node.details||details("Recorded entity",node.label,"Mino VPS","recorded","Live");
+      document.getElementById("inspector-name").textContent=node.label;
+      document.getElementById("inspector-kind").textContent=data.kind.toUpperCase();
+      document.getElementById("inspector-copy").textContent=data.copy;
+      document.getElementById("inspector-evidence").textContent=data.evidence;
+      document.getElementById("inspector-owner").textContent=data.source;
+      document.getElementById("inspector-change").textContent=formatWhen(data.changed);
+      document.getElementById("inspector-evidence-action").textContent=data.evidence+" →";
+      document.getElementById("inspector-token").style.borderColor=node.color;
+      document.getElementById("resting-context").textContent=`Selected · ${node.label}`;
+      document.getElementById("conversation-context").textContent=`Discussing · ${node.label}`;
+      document.getElementById("context-name").textContent=node.label;
+      document.getElementById("context-copy").textContent=data.copy;
+      document.getElementById("context-source").textContent=data.source.toUpperCase();
+      document.getElementById("context-connections").textContent=String(data.evidence).toUpperCase();
+      document.getElementById("context-state").textContent=data.state;
+    }
+    function focusCluster(id) {
+      const n=nodes.find(node=>node.id===id)||clusterMap[id]||clusterMap.work;
+      camera.zoom=1.45;camera.x=(.5-n.nx)*canvas.clientWidth*camera.zoom;camera.y=(.5-n.ny)*canvas.clientHeight*camera.zoom;selectNode(n);
+    }
+    canvas.addEventListener("pointerdown",ev=>{const hit=screenNode(ev);if(hit){selectNode(hit);return;}dragging=true;dragStart={x:ev.clientX-camera.x,y:ev.clientY-camera.y};canvas.classList.add("dragging");canvas.setPointerCapture(ev.pointerId);});
+    canvas.addEventListener("pointermove",ev=>{if(dragging){camera.x=ev.clientX-dragStart.x;camera.y=ev.clientY-dragStart.y;return;}const hit=screenNode(ev);if(hit!==hovered){hovered=hit;canvas.style.cursor=hit?"pointer":"grab";}});
+    canvas.addEventListener("pointerup",()=>{dragging=false;canvas.classList.remove("dragging");});
+    canvas.addEventListener("wheel",ev=>{ev.preventDefault();camera.zoom=Math.max(.62,Math.min(2.5,camera.zoom*(ev.deltaY>0?.9:1.1)));},{passive:false});
+
+    const states=["resting","working","focused"];
+    function setChatState(state, updateUrl=true) {
+      if(!states.includes(state)) state="resting";
+      document.body.dataset.chat=state;
+      document.getElementById("prototype-state").textContent=`Prototype · ${state}`;
+      document.getElementById("focus-chat").setAttribute("aria-label",state==="focused"?"Restore conversation":"Maximize conversation");
+      if(updateUrl){const u=new URL(location.href);u.searchParams.set("variant",state);history.replaceState({},"",u);}
+      setTimeout(resize,450);
+      if(state!=="resting") setTimeout(()=>document.getElementById("chat-input").focus(),40);
+    }
+    function cycleState(delta) { const i=states.indexOf(document.body.dataset.chat); setChatState(states[(i+delta+states.length)%states.length]); }
+    document.getElementById("previous-state").onclick=()=>cycleState(-1);
+    document.getElementById("next-state").onclick=()=>cycleState(1);
+    document.getElementById("open-chat").onclick=()=>setChatState("working");
+    document.getElementById("open-chat-icon").onclick=()=>setChatState("working");
+    document.getElementById("ask-selected").onclick=()=>setChatState("working");
+    document.getElementById("collapse-chat").onclick=()=>setChatState("resting");
+    document.getElementById("focus-chat").onclick=()=>setChatState(document.body.dataset.chat==="focused"?"working":"focused");
+    document.getElementById("fit-map").onclick=()=>{camera={x:0,y:0,zoom:1};};
+    document.getElementById("close-inspector").onclick=()=>{document.getElementById("inspector").style.display="none";};
+    document.querySelectorAll(".lens").forEach(b=>b.onclick=()=>{document.querySelectorAll(".lens").forEach(x=>x.setAttribute("aria-pressed","false"));b.setAttribute("aria-pressed","true");activeLens=b.dataset.lens;});
+    document.getElementById("field-search").addEventListener("input",ev=>{const q=ev.target.value.trim().toLowerCase();if(!q)return;const hit=nodes.find(n=>n.label.toLowerCase().includes(q));if(hit)focusCluster(hit.id);});
+    document.addEventListener("keydown",ev=>{if(["INPUT","TEXTAREA"].includes(document.activeElement.tagName)||document.activeElement.isContentEditable)return;if(ev.key==="ArrowLeft")cycleState(-1);if(ev.key==="ArrowRight")cycleState(1);if(ev.key==="Escape")setChatState("resting");});
+
+    document.getElementById("play-timeline").onclick=()=>{
+      const head=document.getElementById("timehead");head.style.setProperty("--time","8%");
+      let start=performance.now();
+      function step(now){const t=Math.min(1,(now-start)/3600);head.style.setProperty("--time",`${8+t*78}%`);if(t<1)requestAnimationFrame(step);}
+      requestAnimationFrame(step);
+    };
+    document.getElementById("return-live").onclick=()=>document.getElementById("timehead").style.setProperty("--time","86%");
+
+    document.getElementById("chat-form").addEventListener("submit",ev=>{
+      ev.preventDefault();const input=document.getElementById("chat-input"),text=input.value.trim();if(!text)return;
+      const messages=document.getElementById("messages");
+      const user=document.createElement("article");user.className="message user";user.innerHTML=`<span>YOU · NOW</span><p></p>`;user.querySelector("p").textContent=text;messages.appendChild(user);input.value="";messages.scrollTop=messages.scrollHeight;
+      const working=document.createElement("article");working.className="message assistant";working.innerHTML=`<span>MINO · WORKING</span><p>Following the selected context through the runtime.</p><div class="steps"><b class="step live">context</b><b class="step">model</b><b class="step">tool</b><b class="step">verify</b></div>`;messages.appendChild(working);messages.scrollTop=messages.scrollHeight;
+      runtimeProgress=0;const started=performance.now();
+      function travel(now){runtimeProgress=Math.min(1,(now-started)/2200);if(runtimeProgress<1)requestAnimationFrame(travel);else{runtimeProgress=-1;working.querySelector("span").textContent="MINO · VERIFIED";working.querySelector("p").textContent="The result is verified. I added a synthetic outcome to the map so you can judge how new durable state should bloom.";working.querySelectorAll(".step").forEach(x=>x.classList.add("live"));bloomOutcome();}}
+      if(reduceMotion){runtimeProgress=-1;bloomOutcome();}else requestAnimationFrame(travel);
+    });
+    function bloomOutcome(){
+      const base=clusterMap.knowledge,node={
+        id:`outcome-${Date.now()}`,cluster:"knowledge",lens:"memory",label:"Verified conversation outcome",
+        nx:base.nx+.065,ny:base.ny+.055,color:palette.memory,anchor:true,anchorKind:"operation",size:7,born:performance.now(),
+        details:details("Prototype memory bloom","A non-persistent outcome showing how verified conversational state would enter the live map.","prototype only","not written","Now","PREVIEW")
+      };
+      nodes.push(node);links.push([base,node]);newNodeBorn=node.born;selectNode(node);
+      document.getElementById("field-summary").textContent=liveStats.facts+" memories · "+liveStats.responsibilities+" responsibilities · preview bloom";
+    }
+
+    new ResizeObserver(resize).observe(canvas);
+    async function boot(){
+      document.body.dataset.mobileInitial=innerWidth<720?"true":"false";
+      const initial=new URLSearchParams(location.search).get("variant")||"resting";setChatState(initial,false);
+      try{
+        await buildField();
+        selectNode(selected);
+        if(innerWidth<720)document.body.dataset.mobileInitial="true";
+      }catch(error){
+        document.getElementById("field-summary").textContent="Live snapshot unavailable · start the read-only prototype proxy";
+        document.getElementById("snapshot-status").textContent=error.message;
+        document.getElementById("attention-signal").textContent="Data unavailable";
+        document.getElementById("routine-signal").textContent="Read-only mode";
+      }
+      requestAnimationFrame(()=>document.body.classList.add("ui-ready"));
+      if(reduceMotion)draw();else requestAnimationFrame(draw);
+    }
+    boot();
+  </script>
+</body>
+</html>

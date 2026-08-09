@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+- Read-only Living Field prototype (issue #77): a map-first Survey Desk validates the complete memory universe, stable geography, contextual relationships, timeline playback, and a bottom conversation workbench against a live VPS snapshot without mutating production state. (Why: the replacement dashboard direction needed to be judged with real density and real interaction before production code inherited it.)
+
 ### Fixed
 - Scheduled playbook runs could disappear without a trace (closes #74): the dispatcher was one serial goroutine, so a slow run starved every sibling's 1-minute fire window, and a run missed while the process was down was never caught up or recorded — no trace, no audit entry, no `LastError`. Each due schedule now fires in its own goroutine with the slot claimed synchronously (no double-fires; duplicate schedule rows cannot run the same playbook concurrently); a boot pass fires same-day misses late; older misses get `missed_at` in schedules.json, one Telegram notice via the outbox, a `schedule_missed` trace, and an audit entry. `list_schedules` renders the miss. Never-run schedules are not flagged (a fresh schedule is not a miss). (Why: a schedule that never fires and never reports it is the worst failure class — the work silently does not happen; the loop already surfaced fired-but-failed runs, the never-fired case had no representation.)
 
