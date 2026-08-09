@@ -714,6 +714,7 @@ async function syncLiveView(){
 }
 function closeSessMenu(){ const m=document.getElementById("sessmenu"); if(m) m.remove(); }
 async function toggleSessMenu(ev){
+  const anchor = ev.currentTarget;
   ev.stopPropagation();
   if (document.getElementById("sessmenu")){ closeSessMenu(); return; }
   if(!fullDataLoaded) await loadDashboardData();
@@ -727,7 +728,8 @@ async function toggleSessMenu(ev){
       <div class="sm">${s.messages} msg · ${esc((s.last_at||"").slice(0,16).replace("T"," "))}</div>
     </div>`;
   }).join("") : `<div class="sessitem">no past conversations yet</div>`;
-  const r = ev.currentTarget.getBoundingClientRect();
+  if(!anchor?.getBoundingClientRect) return;
+  const r = anchor.getBoundingClientRect();
   menu.style.top = (r.bottom+6)+"px";
   menu.style.left = Math.max(8, r.right-300)+"px";
   document.body.appendChild(menu);

@@ -53,6 +53,20 @@ func TestDashboardSessionMenuStacksAboveDock(t *testing.T) {
 	}
 }
 
+func TestDashboardSessionMenuCapturesAsyncAnchor(t *testing.T) {
+	script, err := staticFiles.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := string(script)
+	if !strings.Contains(app, "const anchor = ev.currentTarget;") {
+		t.Fatal("session history menu must capture its event anchor before awaiting data")
+	}
+	if !strings.Contains(app, "anchor.getBoundingClientRect()") {
+		t.Fatal("session history menu must position from the captured anchor")
+	}
+}
+
 func TestDashboardViewsSurviveUnchangedPollingRefresh(t *testing.T) {
 	script, err := staticFiles.ReadFile("static/app.js")
 	if err != nil {
