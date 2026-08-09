@@ -26,6 +26,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- write_file/edit_file reject stray relative `.mino` prefixes with the corrected absolute path. (Why: the VPS reddit karma-log run on 2026-08-09 wrote to a relative `.mino/playbooks/...` path — it resolved via CWD to the right location, but the recorded arg path never matched the declared output, so stage-output attribution failed and the run went blocked. The doubled-`.mino` guard already existed; this closes the relative-prefix escape hatch — the fourth occurrence of the model mangling `.mino`-prefixed paths.)
+
 ### Added
 - Dashboard route-parity coverage now inventories the registered HTTP surface, primary and legacy hash navigation, and polling-preservation behavior before the Nowfield replacement. (Why: a full shell redesign must fail tests when a route, endpoint binding, deep link, or interactive state silently disappears.)
 - Promo-ready PNG archive preserves every redesign concept and the rendered Nowfield desktop, tablet, mobile, and focused-Responsibility states. (Why: the selected interface and its design exploration should remain reusable for launch material without depending on ignored scratch files.)
