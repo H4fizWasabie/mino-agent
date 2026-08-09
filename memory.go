@@ -663,6 +663,7 @@ type graphJudgmentFact struct {
 	ID      string   `json:"id"`
 	Why     string   `json:"why"`
 	UseWhen []string `json:"use_when"`
+	Expired bool     `json:"expired"` // MEM-08: why no longer holds → archive
 }
 
 type graphJudgment struct {
@@ -788,6 +789,15 @@ func (m *Memory) RebuildGraphEdges() (int, error) {
 				if len(jf.UseWhen) > 0 {
 					fact.UseWhen = jf.UseWhen
 				}
+				if jf.Expired {
+					// MEM-08: the why no longer holds — archive, never delete; the
+					// fact stays answerable via remember's archive fallback. A failed
+					// archive leaves the fact live for the next pass.
+					if _, err := m.graph.ArchiveFact(fact, "judgment: why no longer holds"); err == nil {
+						m.embedder.RemoveFact(sourceID)
+						continue
+					}
+				}
 			}
 			if err := m.graph.ReplaceFact(fact); err == nil {
 				edgesWritten += len(inferred[sourceID])
@@ -912,6 +922,11 @@ func (m *Memory) JudgeChangedFacts() int {
 		if !ok {
 			continue
 		}
+		if updated == nil {
+			// Expiry judgment archived the fact (MEM-08); it is judged now.
+			m.graph.MarkJudged(fact.ID)
+			continue
+		}
 		if m.graph.JudgedAt(fact.ID) != "" {
 			continue // 6h pass beat us to it; its edges win, skip the write
 		}
@@ -925,7 +940,9 @@ func (m *Memory) JudgeChangedFacts() int {
 // judgeFactEdges runs one small-model judgment pass for a single SOURCE fact
 // against its embedding candidates (from GraphCandidates over all facts, as in
 // RebuildGraphEdges). Returns the number of inferred edges, the fact to write,
-// and whether the judgment succeeded. The caller writes the fact only if no
+// and whether the judgment succeeded. A nil fact with ok=true means the expiry
+// judgment archived the fact (MEM-08) — the caller marks it judged without
+// writing it live. The caller writes the fact only if no
 // other pass judged it meanwhile (5-min/6h race guard). A successful pass
 // with zero edges means the LLM judged the fact and found no relationships —
 // the fact is still marked judged. Only failures (no candidates, LLM/parse/write
@@ -987,6 +1004,16 @@ func (m *Memory) judgeFactEdges(fact Fact, all []Fact) (int, *Fact, bool) {
 	for _, jf := range out.Facts {
 		if jf.ID != fact.ID {
 			continue
+		}
+		if jf.Expired {
+			// MEM-08: the judgment says the why no longer holds — archive, never
+			// delete. The caller marks the fact judged without writing it live.
+			if _, err := m.graph.ArchiveFact(fact, "judgment: why no longer holds"); err == nil {
+				if m.embedder != nil {
+					m.embedder.RemoveFact(fact.ID)
+				}
+				return 0, nil, true
+			}
 		}
 		if jf.Why != "" {
 			fact.Why = jf.Why
@@ -1331,4 +1358,34 @@ func ConsolidateMemory(s *Settings) {
 	m.embedder = NewEmbeddingStore(db, key, envOr("MINO_EMBED_MODEL", "openai/text-embedding-3-large"))
 	written := m.ConsolidateDue()
 	fmt.Printf("Consolidated %d durable graph facts\n", written)
+}
+
+// --- Archive digest (MEM-08) ---
+
+// SendArchiveDigest delivers the pending archive digest — one Telegram note of
+// everything archived since the last successful send, so the owner can dispute
+// or restore without being pinged per fact. Outbox pattern: entries survive a
+// failed send and retry next cycle. No-op without Telegram config.
+func (m *Memory) SendArchiveDigest() {
+	if m.cfg == nil || m.cfg.Telegram == "" || m.cfg.TelegramChatID <= 0 {
+		return
+	}
+	pending := m.graph.TakePendingDigest()
+	if len(pending) == 0 {
+		return
+	}
+	text := "🗄️ Archived memories:\n" + strings.Join(pending, "\n") +
+		"\n\nArchived facts still answer remember queries (tagged [archived]); say the word to restore any."
+	if !sendTelegramText(m.cfg.Telegram, m.cfg.TelegramChatID, text, false) {
+		m.graph.AppendPendingDigest(pending)
+	}
+}
+
+// runArchiveDigest is the daily dispatch loop for the archive digest.
+func runArchiveDigest(core *Core) {
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+	for range ticker.C {
+		core.Memory.SendArchiveDigest()
+	}
 }

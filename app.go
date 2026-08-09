@@ -188,6 +188,9 @@ func NewCore() *Core {
 	// Reminder delivery — runs in every gateway mode; no-ops without Telegram config.
 	safeGo("reminder-dispatcher", func() { runReminderDispatcher(w) })
 
+	// Archive digest — daily Telegram note of archived facts (MEM-08)
+	safeGo("archive-digest", func() { runArchiveDigest(w) })
+
 	// Alert checker (§18.1): error rate + dead man's switch, every 5 minutes
 	safeGo("alert-checker", func() { checkAlerts(db, w.sendAlertMessage, 5*time.Minute, w.Settings.Location()) })
 

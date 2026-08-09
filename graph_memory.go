@@ -582,6 +582,8 @@ func (gm *GraphMemory) DeleteFact(id string) (*Fact, error) {
 }
 
 // Feedback records confirmation or rejection on the graph claim itself.
+// A negative signal is active expiry (MEM-08): the fact is archived
+// immediately — no waiting for the judgment sweep.
 func (gm *GraphMemory) Feedback(id string, delta int) (*Fact, error) {
 	gm.mu.Lock()
 	defer gm.mu.Unlock()
@@ -596,6 +598,10 @@ func (gm *GraphMemory) Feedback(id string, delta int) (*Fact, error) {
 	if fact.Feedback < -5 {
 		fact.Feedback = -5
 	}
+	if fact.Feedback < 0 {
+		copy := *fact
+		return gm.archiveLocked(copy, "user rejection")
+	}
 	if err := gm.writeFile(*fact); err != nil {
 		return nil, err
 	}
@@ -603,6 +609,129 @@ func (gm *GraphMemory) Feedback(id string, delta int) (*Fact, error) {
 	gm.saveIndex()
 	copy := *fact
 	return &copy, nil
+}
+
+// --- Archive (MEM-08: why-expiry lifecycle) ---
+
+// archiveDir holds expired facts: a subdirectory of the live memory dir.
+// Every loader/reconciler skips directories, so archived .md files are
+// invisible to the live graph without extra filtering.
+func (gm *GraphMemory) archiveDir() string {
+	return filepath.Join(gm.dir, "archive")
+}
+
+// ArchiveFact moves a fact out of the live graph into the archive — the same
+// markdown-archive machinery the legacy migration uses, never deletion. The
+// archived fact stays answerable through remember's archive fallback. reason
+// names the archive cause (judgment expiry vs user rejection) for the digest.
+func (gm *GraphMemory) ArchiveFact(fact Fact, reason string) (*Fact, error) {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+	return gm.archiveLocked(fact, reason)
+}
+
+func (gm *GraphMemory) archiveLocked(fact Fact, reason string) (*Fact, error) {
+	if _, ok := gm.facts[fact.ID]; !ok {
+		return nil, fmt.Errorf("memory fact not found: %s", fact.ID)
+	}
+	dir := gm.archiveDir()
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, err
+	}
+	if err := writeMarkdownFact(filepath.Join(dir, fact.ID+".md"), fact); err != nil {
+		return nil, err
+	}
+	for _, other := range gm.facts {
+		if other.ID == fact.ID {
+			continue
+		}
+		filtered := other.Edges[:0]
+		for _, edge := range other.Edges {
+			if edge.Target != fact.ID {
+				filtered = append(filtered, edge)
+			}
+		}
+		other.Edges = filtered
+		if err := gm.writeFile(*other); err != nil {
+			return nil, err
+		}
+		gm.files[other.ID+".md"] = gm.fileStamp(other.ID)
+	}
+	if err := os.Remove(filepath.Join(gm.dir, fact.ID+".md")); err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	delete(gm.facts, fact.ID)
+	delete(gm.files, fact.ID+".md")
+	delete(gm.judgedAt, fact.ID)
+	gm.saveIndex()
+
+	copy := fact
+	gm.appendPendingDigestLocked(fmt.Sprintf("%s|%s|%s", fact.ID, oneLine(fact.Subject, 120), reason))
+	return &copy, nil
+}
+
+// appendPendingDigestLocked queues one digest line (outbox pattern: the
+// daily digest drains it; a failed send puts it back).
+func (gm *GraphMemory) appendPendingDigestLocked(line string) {
+	path := filepath.Join(gm.archiveDir(), "digest-pending.txt")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	f.WriteString(line + "\n")
+}
+
+// TakePendingDigest returns the queued archive-digest lines and clears the
+// queue. The caller delivers them; on delivery failure they must be put back
+// with AppendPendingDigest.
+func (gm *GraphMemory) TakePendingDigest() []string {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+	path := filepath.Join(gm.archiveDir(), "digest-pending.txt")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	os.Remove(path)
+	var lines []string
+	for _, l := range strings.Split(string(data), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	return lines
+}
+
+// AppendPendingDigest puts digest lines back after a failed delivery.
+func (gm *GraphMemory) AppendPendingDigest(lines []string) {
+	if len(lines) == 0 {
+		return
+	}
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+	for _, l := range lines {
+		gm.appendPendingDigestLocked(l)
+	}
+}
+
+// archiveFactsLocked loads archived facts as a scan of the archive directory.
+// Caller holds RLock.
+func (gm *GraphMemory) archiveFactsLocked() map[string]*Fact {
+	out := make(map[string]*Fact)
+	entries, err := os.ReadDir(gm.archiveDir())
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		if fact, err := gm.readFile(filepath.Join(gm.archiveDir(), e.Name())); err == nil {
+			out[fact.ID] = fact
+		}
+	}
+	return out
 }
 
 // RemoveMutualInferredEdges resolves mirrored inferred pairs (A→B and B→A,
@@ -744,6 +873,11 @@ func (gm *GraphMemory) fileStamp(id string) fileStamp {
 	return fileStamp{ID: id, Size: info.Size(), ModTime: info.ModTime().UnixNano()}
 }
 
+// thinLiveScore: live recall below this (less than one strong signal word —
+// subject/why/use_when words score 10) counts as thin and triggers the
+// archive fallback (MEM-08).
+const thinLiveScore = 10
+
 // Remember is the graph-aware recall tool. Returns an indented tree with each
 // matched fact's why, body, and match rationale, plus its graph neighborhood.
 //
@@ -757,6 +891,9 @@ func (gm *GraphMemory) fileStamp(id string) fileStamp {
 //
 // turn is the user's active turn text; its words also score against why/use_when
 // (MEM-03: the intent signals are co-authored recall triggers, not just the query).
+// When live recall comes up empty or thin, Remember falls back to the archive
+// and tags every hit [archived] (MEM-08) — expired facts stay answerable, but
+// the marker keeps the timing honest.
 func (gm *GraphMemory) Remember(query, turn string) string {
 	gm.Refresh()
 	gm.mu.RLock()
@@ -764,7 +901,18 @@ func (gm *GraphMemory) Remember(query, turn string) string {
 
 	// Step 1: merged ranking — substring + why/use_when overlap (query & turn),
 	// with embedding similarity filling thin results (see entryRanking).
-	starts := gm.entryRanking(query, turn)
+	starts := gm.entryRanking(query, turn, gm.facts, true)
+	facts := gm.facts
+	fromArchive := false
+	if len(starts) == 0 || starts[0].score < thinLiveScore {
+		if archive := gm.archiveFactsLocked(); len(archive) > 0 {
+			if hits := gm.entryRanking(query, turn, archive, false); len(hits) > 0 {
+				starts = hits
+				facts = archive
+				fromArchive = true
+			}
+		}
+	}
 	if len(starts) == 0 {
 		return fmt.Sprintf("No memories found for: %s", query)
 	}
@@ -779,13 +927,20 @@ func (gm *GraphMemory) Remember(query, turn string) string {
 	}
 	visited := make(map[string]bool)
 	var lines []string
+	if fromArchive {
+		lines = append(lines, "[archived] — no current memories matched; showing archived facts")
+	}
 
 	for _, start := range starts {
-		fact, ok := gm.facts[start.id]
+		fact, ok := facts[start.id]
 		if !ok {
 			continue
 		}
-		lines = append(lines, fact.Subject+"  # "+fact.ID)
+		label := fact.Subject
+		if fromArchive {
+			label += "  [archived]"
+		}
+		lines = append(lines, label+"  # "+fact.ID)
 		if fact.Why != "" {
 			lines = append(lines, "  why: "+oneLine(fact.Why, 160))
 		}
@@ -873,17 +1028,19 @@ func edgeTraversable(edge Edge) bool {
 	return edge.Kind != "inferred" || edge.Confidence >= 0.85
 }
 
-// entryRanking scores every fact on three free signals — substring match on
-// subject/body, why/use_when overlap with the query, and why/use_when overlap
-// with the active turn — then merges embedding similarity (20×cosine) when the
-// free ranking leaves room in the top-3. Weights: subject word 10, body word 3,
-// exact subject 100, why/use_when word 10 per signal. Returns matches best-first
-// with the per-signal breakdown (MEM-04 renders it as the match rationale).
-func (gm *GraphMemory) entryRanking(query, turn string) []rankedFact {
+// entryRanking scores every fact in the given set on three free signals —
+// substring match on subject/body, why/use_when overlap with the query, and
+// why/use_when overlap with the active turn — then merges embedding similarity
+// (20×cosine) when the free ranking leaves room in the top-3. Weights: subject
+// word 10, body word 3, exact subject 100, why/use_when word 10 per signal.
+// Returns matches best-first with the per-signal breakdown (MEM-04 renders it
+// as the match rationale). useEmbedder gates the embedding merge: it only
+// applies to the live graph (archived facts carry no vectors).
+func (gm *GraphMemory) entryRanking(query, turn string, facts map[string]*Fact, useEmbedder bool) []rankedFact {
 	queryWords := memoryTokenize(query)
 	turnWords := memoryTokenize(turn)
 	var ranked []rankedFact
-	for id, fact := range gm.facts {
+	for id, fact := range facts {
 		score := 0
 		subj := strings.ToLower(fact.Subject)
 		body := strings.ToLower(fact.Body)
@@ -927,7 +1084,7 @@ func (gm *GraphMemory) entryRanking(query, turn string) []rankedFact {
 
 	// Embedding similarity fills vocabulary gaps only when the free ranking is
 	// thin (room in the top-3) — keeps the per-remember embed API call bounded.
-	if len(ranked) < 3 && gm.embedder != nil {
+	if len(ranked) < 3 && useEmbedder && gm.embedder != nil {
 		for _, sd := range gm.embedder.SearchScored(query, 8) {
 			if sd.score < 0.5 {
 				continue
@@ -936,14 +1093,14 @@ func (gm *GraphMemory) entryRanking(query, turn string) []rankedFact {
 			if strings.HasPrefix(sd.doc.Source, "fact:") {
 				id = strings.TrimPrefix(sd.doc.Source, "fact:")
 			} else {
-				for fid, f := range gm.facts { // legacy "fact" sources: map by content
+				for fid, f := range facts { // legacy "fact" sources: map by content
 					if f.Subject+": "+f.Body == sd.doc.Content {
 						id = fid
 						break
 					}
 				}
 			}
-			if _, ok := gm.facts[id]; !ok {
+			if _, ok := facts[id]; !ok {
 				continue
 			}
 			embScore := int(20 * sd.score)

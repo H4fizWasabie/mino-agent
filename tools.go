@@ -1511,11 +1511,11 @@ func markitdownHTML(html string) string {
 func makeManageMemoryTool(mem *Memory) *Tool {
 	return &Tool{
 		Name:        "manage_memory",
-		Description: "Manage your own memory: correct, forget, confirm, or reject a stored fact — or run maintenance yourself (status, consolidate, dedup, rebuild_edges, clean_edges, maintain, judge_edges, distill_outputs). Use fact actions only after an explicit user signal; maintenance actions are yours to run when memory needs it.",
+		Description: "Manage your own memory: correct, forget, confirm, or reject a stored fact — reject archives the fact immediately as outdated (active expiry); it stays answerable via remember, tagged [archived]. Or run maintenance yourself (status, consolidate, dedup, rebuild_edges, clean_edges, maintain, judge_edges, distill_outputs). Use fact actions only after an explicit user signal; maintenance actions are yours to run when memory needs it.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"action":  map[string]any{"type": "string", "description": "'correct', 'forget', 'confirm', 'reject', 'status', 'consolidate', 'dedup', 'rebuild_edges', 'clean_edges', 'maintain', 'judge_edges', or 'distill_outputs'"},
+				"action":  map[string]any{"type": "string", "description": "'correct', 'forget', 'confirm', 'reject' (archives immediately — active expiry), 'status', 'consolidate', 'dedup', 'rebuild_edges', 'clean_edges', 'maintain', 'judge_edges', or 'distill_outputs'"},
 				"subject": map[string]any{"type": "string", "description": "Subject (fact actions only)"},
 				"content": map[string]any{"type": "string", "description": "New content (for correct)"},
 			},
@@ -1610,8 +1610,15 @@ func makeManageMemoryTool(mem *Memory) *Tool {
 				if action == "reject" {
 					delta = -1
 				}
-				if _, err := mem.graph.Feedback(fact.ID, delta); err != nil {
+				updated, err := mem.graph.Feedback(fact.ID, delta)
+				if err != nil {
 					return fmt.Sprintf("Error recording feedback: %v", err)
+				}
+				if action == "reject" {
+					if mem.embedder != nil {
+						mem.embedder.RemoveFact(fact.ID)
+					}
+					return fmt.Sprintf("Archived: %s (rejected as outdated — still answerable via remember, tagged [archived])", updated.Subject)
 				}
 				return fmt.Sprintf("Recorded %s feedback for %s", action, subject)
 			}
