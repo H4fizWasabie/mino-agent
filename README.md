@@ -277,6 +277,16 @@ External tools connect via HTTP. Create `~/.mino/extensions.json`:
 
 Mino discovers tools via `GET /tools` and proxies calls via `POST /execute`.
 
+### cost-watch — the price guardian
+
+Mino watches its own wallet. Scrapes OpenRouter model pages hourly for
+per-provider pricing, alerts on Telegram when a promotional price expires,
+and swaps `providers.json` down the model chain (backup + atomic restart,
+deferred while playbooks run). Deterministic scraper — no LLM, no API key.
+Ask mino *"how much am I paying for my models?"* and it answers with live
+scraped prices via `cost_watch_status` / `cost_watch_check` / `cost_watch_swap`.
+Install: see `extensions/cost-watch/README.md`.
+
 ### minowrap — universal tool adapter
 
 Add any CLI command as a tool in one JSON line:
