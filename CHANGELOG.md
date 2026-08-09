@@ -4,6 +4,9 @@
 ### Fixed
 - Dashboard conversation history could throw after its async session load because the event's `currentTarget` is unavailable after an `await` (#82). The menu now captures its anchor before loading and fails closed if it is no longer present. (Why: a chat control must not turn a delayed data read into an uncaught browser exception.)
 
+### Changed
+- Refined the Living Field's visual hierarchy around deterministic memory blooms, quiet ambient relationships, and a small set of responsibility anchors (#84). (Why: a complete universe needs readable structure, not an equally loud point-and-line mesh.)
+
 ## [v2.7.1] — Living Field composition correction (2026-08-09)
 ### Changed
 - Rebuilt the Living Field composition around an edge-to-edge universe canvas (#80). The map now owns the primary viewport while lenses, inspection, playback, and conversation remain lightweight overlays instead of inheriting the previous dashboard shell. (Why: the first release preserved too much of the old page hierarchy and reduced the approved living-map concept to a contained widget.)
