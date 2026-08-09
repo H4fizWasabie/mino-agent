@@ -1,0 +1,7 @@
+[Unit]
+Description=Mino cost-watch hourly check (scrape + alert)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/mino-cost-watch/cost_watch.py --check

@@ -27,6 +27,8 @@
 ## [Unreleased]
 
 ### Added
+- `extensions/cost-watch` — the price guardian: scrapes OpenRouter model pages, alerts on Telegram when a promotional price expires (best price > expected × threshold), and swaps providers.json down the model chain with backup + atomic restart. Exposes `cost_watch_status` / `cost_watch_check` / `cost_watch_swap` tools via the extension protocol. (Why: the provider stack runs on promos — GLM 5.2 at 93% off, luna-pro at 50% off — and an expired promo silently multiplies the bill 7-20×. The scraper is deterministic, no LLM, no API key; the restart defers during in-flight playbook runs.)
+### Added
 - Dashboard route-parity coverage now inventories the registered HTTP surface, primary and legacy hash navigation, and polling-preservation behavior before the Nowfield replacement. (Why: a full shell redesign must fail tests when a route, endpoint binding, deep link, or interactive state silently disappears.)
 - Promo-ready PNG archive preserves every redesign concept and the rendered Nowfield desktop, tablet, mobile, and focused-Responsibility states. (Why: the selected interface and its design exploration should remain reusable for launch material without depending on ignored scratch files.)
 - README: new "Recommended installs", "A task failed — now what?", and "Power tuning" sections. (Why: the README covered install/config/architecture but never told a new user which helper binaries are worth installing (rtk, markitdown, composio MCP), what to do when a turn dies with `(stopped after N iterations)`, or which env knobs to raise for more power — all verified against the VPS deployment and the code defaults.)

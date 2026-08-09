@@ -1,0 +1,9 @@
+[Unit]
+Description=Mino cost-watch hourly price check
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
