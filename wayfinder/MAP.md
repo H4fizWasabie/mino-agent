@@ -29,12 +29,34 @@ Measurable: the next time Mino mutates runtime state (schedule, cron, config, pl
 - [VFY-003 — Model-level interventions](tickets/vfy-003-model.md)
 - [VFY-004 — Validation approach](tickets/vfy-004-validation.md)
 
-## Not yet specified
-
-_All fog graduated to tickets._
-
 ## Out of scope
 
 - Fixing the specific incidents (surgery schedule, cron, playbook delivery) — Mino already resolved those
 - Changing the iteration cap
 - Provider/model changes
+
+---
+
+# Mino Schedule Reliability — Wayfinder Map
+
+## Destination
+
+Every scheduled playbook run either happens (on time, or caught up late) or leaves a visible record — never silent. One long routine must not starve sibling schedules; a run missed during downtime must be fired late or reported.
+
+Measurable: a schedule whose window passes without a run appears in `schedules.json` as `missed: true` and produces a Telegram notice; a sibling schedule always fires even when another routine overruns its window.
+
+## Decisions so far
+
+- [SCH-001 — Root cause](tickets/sch-001-root-cause.md) — **confirmed** against playbook.go: serial dispatcher, 1-min window, no catch-up, `LastError` only on fire-and-fail. "Due but never fired" has no representation.
+- [SCH-002 — Harness fix](tickets/sch-002-harness-fix.md) — per-schedule goroutine (fixes starvation), boot catch-up (fixes downtime), missed flag + notify (fixes silence).
+- [SCH-003 — Validation](tickets/sch-003-validation.md) — table-driven tests at the existing `dispatchDueSchedulesAt(core, now, run)` seam + production trace observation.
+
+## Out of scope
+
+- Ticker cadence / timezone semantics
+- Full cron-style job framework (roadmap: playbooks, not a job framework)
+- Missed-run alerting policies beyond always-notify
+
+## Not yet specified
+
+- Whether catch-up should be bounded by age (fire only same-day misses?) and whether owners can opt a schedule out of catch-up.
