@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+- Living Field universe contract (#78): the dashboard now has a compact read-only map of durable memories, responsibilities, routines, reminders, artifacts, conversations, skills, and tools, with chronological responsibility history and non-destructive cursor-based runtime events for playback and live activity. (Why: a map-first interface needs one truthful topology contract; runtime activity must remain ephemeral while verified state remains durable.)
+
 ### Fixed
 - Scheduled playbook runs could disappear without a trace (closes #74): the dispatcher was one serial goroutine, so a slow run starved every sibling's 1-minute fire window, and a run missed while the process was down was never caught up or recorded — no trace, no audit entry, no `LastError`. Each due schedule now fires in its own goroutine with the slot claimed synchronously (no double-fires; duplicate schedule rows cannot run the same playbook concurrently); a boot pass fires same-day misses late; older misses get `missed_at` in schedules.json, one Telegram notice via the outbox, a `schedule_missed` trace, and an audit entry. `list_schedules` renders the miss. Never-run schedules are not flagged (a fresh schedule is not a miss). (Why: a schedule that never fires and never reports it is the worst failure class — the work silently does not happen; the loop already surfaced fired-but-failed runs, the never-fired case had no representation.)
 

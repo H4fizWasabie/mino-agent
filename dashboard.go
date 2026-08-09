@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -47,7 +48,14 @@ const dashboardCatalogCacheTTL = 5 * time.Second
 
 func pushDashEvent(e map[string]any) {
 	dashEventMu.Lock()
-	dashEventQ = append(dashEventQ, e)
+	dashCursor++
+	event := make(map[string]any, len(e)+2)
+	for key, value := range e {
+		event[key] = value
+	}
+	event["cursor"] = dashCursor
+	event["at"] = time.Now().UTC().Format(time.RFC3339Nano)
+	dashEventQ = append(dashEventQ, event)
 	if len(dashEventQ) > maxDashEvents {
 		dashEventQ = dashEventQ[len(dashEventQ)-maxDashEvents:]
 	}
@@ -103,6 +111,7 @@ func registerDashboardRoutes(mux *http.ServeMux, memDir string) {
 	mux.HandleFunc("/api/events", handleEventsAPI)
 	mux.HandleFunc("/api/nerves", handleNervesAPI)
 	mux.HandleFunc("/api/data", handleDataAPI)
+	mux.HandleFunc("/api/universe", handleUniverseAPI)
 	mux.HandleFunc("/api/responsibilities", handleResponsibilitiesAPI)
 	mux.HandleFunc("/api/responsibility-evidence", handleResponsibilityEvidence)
 	mux.HandleFunc("/api/reveal", handleRevealAPI)
@@ -242,11 +251,16 @@ func handleChatStream(w http.ResponseWriter, r *http.Request) {
 		case "done":
 			stageType = "turn_end"
 		}
-		pushDashEvent(map[string]any{"type": stageType, "decision": data["decision"]})
+		event := map[string]any{"type": stageType, "session_id": sid}
+		for _, key := range []string{"decision", "status", "tool"} {
+			if value, ok := data[key]; ok {
+				event[key] = value
+			}
+		}
+		pushDashEvent(event)
 	}
 
-	// emit turn_start for architecture SVG
-	pushDashEvent(map[string]any{"type": "turn_start"})
+	pushDashEvent(map[string]any{"type": "turn_start", "session_id": sid})
 
 	result := dashCore.RespondForContext(r.Context(), sid, body.Message, "dashboard", obs, true)
 
@@ -263,7 +277,7 @@ func handleChatStream(w http.ResponseWriter, r *http.Request) {
 	doneEv["kind"] = "done"
 
 	// publish turn_end + done
-	pushDashEvent(map[string]any{"type": "turn_end"})
+	pushDashEvent(map[string]any{"type": "turn_end", "session_id": sid, "status": result.Status})
 
 	b, _ := json.Marshal(doneEv)
 	fmt.Fprintf(w, "data: %s\n\n", b)
@@ -564,16 +578,22 @@ func graphEpisodes(mem *Memory) []map[string]any {
 }
 
 func handleEventsAPI(w http.ResponseWriter, r *http.Request) {
+	requested, _ := strconv.ParseInt(r.URL.Query().Get("cursor"), 10, 64)
 	dashEventMu.Lock()
-	events := make([]map[string]any, len(dashEventQ))
-	copy(events, dashEventQ)
-	dashEventQ = nil // consumed
-	dashCursor++
+	events := make([]map[string]any, 0, len(dashEventQ))
+	for _, event := range dashEventQ {
+		cursor, _ := event["cursor"].(int64)
+		if cursor > requested {
+			events = append(events, event)
+		}
+	}
+	cursor := dashCursor
 	dashEventMu.Unlock()
 
+	w.Header().Set("Cache-Control", "no-store")
 	json.NewEncoder(w).Encode(map[string]any{
 		"events": events,
-		"cursor": fmt.Sprintf("%d", dashCursor),
+		"cursor": cursor,
 	})
 }
 
