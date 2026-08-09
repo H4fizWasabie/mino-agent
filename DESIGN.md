@@ -1,6 +1,6 @@
 ---
-name: Mino Nowfield
-description: A full-width Past, Now, and Next field where responsibility, attention, and evidence remain connected.
+name: Mino Living Field
+description: An edge-to-edge cartographic universe where Mino's durable world, live activity, and inspection context remain connected.
 colors:
   paper: "#f3f4f2"
   surface: "#ffffff"
@@ -69,16 +69,17 @@ components:
     padding: "10px 13px"
 ---
 
-# Design System: Mino Nowfield
+# Design System: Mino Living Field
 
 ## Overview
 
-**Creative North Star: "Responsibility has a position in time"**
+**Creative North Star: "The world is the interface"**
 
-Mino should feel like a calm operational field, not a stack of dashboard cards.
-The owner arrives to understand what happened, what is true now, and what comes
-next. Past, Now, and Next therefore remain visible as one horizontal
-Responsibility thread, anchored by a stable ultramarine Now axis.
+Mino should feel like a calm living map, not a stack of dashboard cards. The
+owner arrives to see the whole universe, locate a meaningful entity or path,
+rewind how it formed, and follow current work without leaving the field. Past,
+Now, and Next remain available through the timeline and inspector, but the map
+owns the first viewport.
 
 The system is deliberately restrained, but not passive. Semantic status color
 appears where it changes the owner's decision; contextual Ask actions and
@@ -87,9 +88,9 @@ available under System without competing with the owner story.
 
 **Key Characteristics:**
 
-- Owner outcomes lead; implementation detail recedes.
-- Direct sans-serif hierarchy keeps dense Responsibility lanes scannable.
-- Thin rules and aligned time columns organize content without card grids.
+- The map leads; implementation detail recedes into overlays.
+- Direct sans-serif hierarchy keeps the field readable at a glance.
+- Thin rules and restrained floating controls preserve spatial context.
 - Status is stated in words and reinforced, never replaced, by color.
 - Evidence and diagnostics are pull-based.
 
@@ -144,13 +145,12 @@ metadata, never to narrative outcomes or controls.
 
 ## Layout
 
-The desktop shell uses a compact sticky header and a full-width Work and Today
-field. Past, Now, and Next use a 32/36/32 split; the vertical Now rule stays
-stable while Responsibility lanes scroll. Memory and System retain bounded
-reading widths where their diagnostic material benefits from them. The
-collapsed composer is a 64px shell row, not an overlay. Opening it reflows the
-field into a roughly 55/45 vertical split; conversation receives 72% of the
-workbench and Evidence, Actions, and Links receive 28%.
+The desktop shell is an edge-to-edge canvas. A small floating lens spine, field
+summary, search, inspector, and historical timeline sit above the geography;
+none becomes a permanent page frame. The collapsed composer and timeline occupy
+the lower edge as separate controls. Opening conversation preserves the field
+camera and selected node while the workbench becomes the active lower surface;
+Evidence, Actions, and Links receive the remaining context space.
 
 Below 720px, each horizontal thread becomes one ordered Past, Now, Next stack,
 with every section labelled in place. The header reduces to identity and health,

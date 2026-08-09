@@ -19,7 +19,7 @@ function universeView(snapshot, lens="universe"){
   const c=snapshot?.counts||{}, meta=UNIVERSE_LENSES[lens];
   return `<section class="living-field" data-lens="${lens}">
     <header class="field-summary">
-      <div><span class="field-kicker">${meta.label} lens</span><h2>${meta.copy}</h2></div>
+      <div><h2>${lens==="universe"?"The whole field":meta.label}</h2><p>${meta.copy}</p></div>
       <dl><div><dt>Memories</dt><dd>${Number(c.memories||0).toLocaleString()}</dd></div><div><dt>Relationships</dt><dd>${Number(c.relationships||0).toLocaleString()}</dd></div><div><dt>Responsibilities</dt><dd>${Number(c.responsibilities||0).toLocaleString()}</dd></div><div><dt>Live</dt><dd id="universe-live-count">${(snapshot?.activity||[]).length}</dd></div></dl>
     </header>
     <div class="field-stage">
@@ -164,8 +164,8 @@ function initUniverse(snapshot,lens="universe"){
       const a=nodeMap[edge.source],b=nodeMap[edge.target];if(!visible(a)||!visible(b)) return;
       const pa=screen(a),pb=screen(b),hot=incident&&(a===incident||b===incident),focus=focused(a)&&focused(b),sameMemory=a.kind==="memory"&&b.kind==="memory"&&a._layoutCommunity===b._layoutCommunity;
       ctx.beginPath();ctx.moveTo(pa.x,pa.y);ctx.lineTo(pb.x,pb.y);
-      ctx.strokeStyle=hot?"rgba(42,94,180,.78)":edge.kind==="structural"?"rgba(174,104,52,.4)":sameMemory&&focus?"rgba(52,99,180,.32)":focus?"rgba(52,99,180,.1)":"rgba(82,104,125,.06)";
-      ctx.lineWidth=hot?1.8:edge.kind==="structural"?1.15:sameMemory?.82:.65;ctx.stroke();
+      ctx.strokeStyle=hot?"rgba(42,94,180,.82)":edge.kind==="structural"?"rgba(174,104,52,.5)":sameMemory&&focus?"rgba(52,99,180,.42)":focus?"rgba(52,99,180,.16)":"rgba(82,104,125,.09)";
+      ctx.lineWidth=hot?1.8:edge.kind==="structural"?1.2:sameMemory?.9:.72;ctx.stroke();
     });
     let visibleCount=0;
     nodes.forEach(node=>{
