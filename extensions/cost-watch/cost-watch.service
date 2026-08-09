@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /opt/mino-cost-watch/cost_watch.py
+ExecStart=/opt/mino-cost-watch/cost-watch
 Restart=always
 RestartSec=10
 

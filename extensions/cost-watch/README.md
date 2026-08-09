@@ -21,13 +21,15 @@ hourly (systemd timer, root)
 
 The scraper is deterministic — no LLM, no API key, just the public model
 pages. Mino itself stays untouched: cost-watch is a sidecar service using
-the standard extension protocol (DECISIONS.md §8).
+the standard extension protocol (DECISIONS.md §8). A single static Go
+binary — no python, no runtime dependencies.
 
 ## Install
 
 ```bash
+go build -o cost-watch .   # static binary, no dependencies
 sudo mkdir -p /opt/mino-cost-watch
-sudo cp cost_watch.py /opt/mino-cost-watch/
+sudo cp cost-watch /opt/mino-cost-watch/
 sudo cp cost-watch.service cost-watch-check.service cost-watch.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now cost-watch.service cost-watch.timer
@@ -77,7 +79,7 @@ mino.env (or `telegram_chat_id` in the config).
 ## Tests
 
 ```bash
-python3 test_cost_watch.py
+go test ./...
 ```
 
 No network needed — pricing fixtures are embedded.
