@@ -134,6 +134,73 @@ func TestGraphMemoryRememberBudgetsBodyAndKeepsNeighborsLean(t *testing.T) {
 	}
 }
 
+// TestRememberValidationCases is MEM-05: prove "right fact, right time, right
+// reason" against a synthetic store — topical query returns the right fact
+// with a correct rationale, irrelevant query is rejected, the co-authored
+// use_when path fires, and the active turn rescues a thin query. (Expired-why
+// rejection arrives with MEM-06 — not landed yet.)
+func TestRememberValidationCases(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), nil)
+	facts := []Fact{
+		{ID: "planet", Type: "semantic", Subject: "My planet is Mars", Body: "Red planet, fourth from the sun.",
+			Why: "because I live there", UseWhen: []string{"when user asks about where I live"}},
+		{ID: "coffee", Type: "semantic", Subject: "Coffee preference is dark roast", Body: "Strong coffee, no sugar.",
+			Why: "I like strong coffee", UseWhen: []string{"when deciding what to order"}},
+		{ID: "server", Type: "semantic", Subject: "VPS runs mino as systemd service", Body: "User mino, /home/mino/.mino store.",
+			Why: "the real memory store lives there", UseWhen: []string{"when the vps misbehaves", "when debugging deployments"}},
+	}
+	for _, f := range facts {
+		if err := gm.RecordFact(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cases := []struct {
+		name    string
+		query   string
+		turn    string
+		want    string   // fact ID expected first; "" = rejection expected
+		wantIn  []string // substrings the output must contain
+		wantOut []string // substrings the output must not contain
+	}{
+		{"topical query returns right fact", "My planet is Mars", "", "planet",
+			[]string{"exact subject", "why: because I live there"}, nil},
+		{"co-authored intent recall", "where do I live", "", "planet",
+			[]string{"use_when: live, where"}, nil},
+		{"irrelevant query rejected", "zebra migration patterns", "", "", nil, nil},
+		{"turn rescues thin query", "remind me about the thing", "the vps is down", "server",
+			[]string{"your words: vps"}, nil},
+		{"same query without turn rejected", "remind me about the thing", "", "", nil, nil},
+	}
+
+	for _, c := range cases {
+		got := gm.Remember(c.query, c.turn)
+		if c.want == "" {
+			if !strings.Contains(got, "No memories found") {
+				t.Errorf("%s: expected rejection, got:\n%s", c.name, got)
+			}
+			continue
+		}
+		fact, ok := gm.facts[c.want]
+		if !ok {
+			t.Fatalf("%s: test fact %s missing", c.name, c.want)
+		}
+		if !strings.HasPrefix(got, fact.Subject) {
+			t.Errorf("%s: %s not ranked first, got:\n%s", c.name, c.want, got)
+		}
+		for _, want := range c.wantIn {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s: missing %q in:\n%s", c.name, want, got)
+			}
+		}
+		for _, out := range c.wantOut {
+			if strings.Contains(got, out) {
+				t.Errorf("%s: unexpected %q in:\n%s", c.name, out, got)
+			}
+		}
+	}
+}
+
 func TestGraphMemoryUpdateBodyPersists(t *testing.T) {
 	dir := t.TempDir()
 	gm := NewGraphMemory(dir, nil)
