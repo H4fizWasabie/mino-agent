@@ -20,7 +20,7 @@ func TestGraphMemoryRecordAndRemember(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := gm.Remember("Owner")
+	got := gm.Remember("Owner", "")
 	if !strings.Contains(got, "Owner maintains Mino") || !strings.Contains(got, "[maintains]") {
 		t.Fatalf("remember() = %q", got)
 	}
@@ -37,12 +37,56 @@ func TestGraphMemoryRememberTraversesReverseAndSkipsAmbiguous(t *testing.T) {
 	if err := gm.RecordFact(Fact{ID: "ambiguous", Type: "semantic", Subject: "Uncertain claim", Edges: []Edge{{Target: "target", Rel: "related_to", Kind: "ambiguous", Confidence: 0.4}}}); err != nil {
 		t.Fatal(err)
 	}
-	got := gm.Remember("Apex")
+	got := gm.Remember("Apex", "")
 	if !strings.Contains(got, "Source claim") || !strings.Contains(got, "[depends_on]") {
 		t.Fatalf("reverse relationship missing: %q", got)
 	}
 	if strings.Contains(got, "Uncertain claim") {
 		t.Fatalf("ambiguous relationship leaked into recall: %q", got)
+	}
+}
+
+func TestGraphMemoryRememberRanksUseWhenOverSubjectNoise(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), nil)
+	// Fact A: no subject overlap, but use_when is written for this exact query.
+	if err := gm.RecordFact(Fact{ID: "style", Type: "semantic", Subject: "Style guide",
+		UseWhen: []string{"when user asks about programming philosophy"}}); err != nil {
+		t.Fatal(err)
+	}
+	// Fact B: one subject word overlaps, no intent signal.
+	if err := gm.RecordFact(Fact{ID: "go", Type: "semantic", Subject: "Programming language origins"}); err != nil {
+		t.Fatal(err)
+	}
+	got := gm.Remember("programming philosophy", "")
+	if strings.Index(got, "Style guide") > strings.Index(got, "Programming language origins") {
+		t.Fatalf("use_when fact should rank first:\n%s", got)
+	}
+}
+
+func TestGraphMemoryRememberUsesActiveTurnForIntent(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), nil)
+	if err := gm.RecordFact(Fact{ID: "style", Type: "semantic", Subject: "Style guide",
+		UseWhen: []string{"when user asks about programming philosophy"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gm.RecordFact(Fact{ID: "camp", Type: "semantic", Subject: "Camping guide"}); err != nil {
+		t.Fatal(err)
+	}
+	// Query "guide" matches both subjects equally; the turn's words (programming
+	// philosophy) only overlap the style fact's use_when.
+	got := gm.Remember("guide", "tell me about programming philosophy")
+	if strings.Index(got, "Style guide") > strings.Index(got, "Camping guide") {
+		t.Fatalf("turn-aware intent should rank style first:\n%s", got)
+	}
+}
+
+func TestGraphMemoryRememberNoMatch(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), nil)
+	if err := gm.RecordFact(Fact{ID: "planet", Type: "semantic", Subject: "My planet is Mars"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := gm.Remember("zebra migration", ""); !strings.Contains(got, "No memories found") {
+		t.Fatalf("expected no-match message, got %q", got)
 	}
 }
 
@@ -184,7 +228,7 @@ func TestGraphMemoryRefreshesExternalChanges(t *testing.T) {
 	if err := os.WriteFile(path, []byte("---\nid: source\ntype: semantic\nsubject: Source\nat: 2026-07-29T00:00:00Z\n---\n\nnew body\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if got := gm.Remember("new body"); !strings.Contains(got, "Source") {
+	if got := gm.Remember("new body", ""); !strings.Contains(got, "Source") {
 		t.Fatalf("external update was not visible: %q", got)
 	}
 
@@ -194,7 +238,7 @@ func TestGraphMemoryRefreshesExternalChanges(t *testing.T) {
 	if err := gm.Refresh(); err != nil {
 		t.Fatal(err)
 	}
-	if got := gm.Remember("Brand new node"); !strings.Contains(got, "Brand new node") {
+	if got := gm.Remember("Brand new node", ""); !strings.Contains(got, "Brand new node") {
 		t.Fatalf("new file was not visible: %q", got)
 	}
 
@@ -221,7 +265,7 @@ func TestGraphMemoryKeepsLastValidFactOnMalformedEdit(t *testing.T) {
 	if err := gm.Refresh(); err == nil {
 		t.Fatal("malformed edit did not report an error")
 	}
-	if got := gm.Remember("Source"); !strings.Contains(got, "Source") {
+	if got := gm.Remember("Source", ""); !strings.Contains(got, "Source") {
 		t.Fatalf("last valid fact was lost: %q", got)
 	}
 }

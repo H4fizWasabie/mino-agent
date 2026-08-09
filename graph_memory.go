@@ -751,13 +751,17 @@ func (gm *GraphMemory) fileStamp(id string) fileStamp {
 //	  → [supersedes] procurepilot_is_legacy
 //	  → [depends_on] procura_db_location
 //	    → [located_at] vps_server
-func (gm *GraphMemory) Remember(query string) string {
+//
+// turn is the user's active turn text; its words also score against why/use_when
+// (MEM-03: the intent signals are co-authored recall triggers, not just the query).
+func (gm *GraphMemory) Remember(query, turn string) string {
 	gm.Refresh()
 	gm.mu.RLock()
 	defer gm.mu.RUnlock()
 
-	// Step 1: FTS5 entry point — find start nodes
-	startIDs := gm.fts5Entry(query)
+	// Step 1: merged ranking — substring + why/use_when overlap (query & turn),
+	// with embedding similarity filling thin results (see entryRanking).
+	startIDs := gm.entryRanking(query, turn)
 	if len(startIDs) == 0 {
 		return fmt.Sprintf("No memories found for: %s", query)
 	}
@@ -843,54 +847,25 @@ func edgeTraversable(edge Edge) bool {
 	return edge.Kind != "inferred" || edge.Confidence >= 0.85
 }
 
-// fts5Entry finds matching fact IDs by substring search, with embedding fallback
-// for vocabulary gaps (e.g., "programming philosophy" matching "coding style").
-func (gm *GraphMemory) fts5Entry(query string) []string {
-	results := gm.substringMatch(query)
-
-	// If top hit is weak or no results, fall back to embedding search
-	if (len(results) == 0 || len(results) < 2) && gm.embedder != nil {
-		docs := gm.embedder.SearchScored(query, 5)
-		seen := make(map[string]bool)
-		for _, r := range results {
-			seen[r] = true
-		}
-		for _, sd := range docs {
-			if sd.score < 0.5 {
-				continue
-			}
-			// Map embedded content back to fact ID
-			for id, f := range gm.facts {
-				candidate := f.Subject + ": " + f.Body
-				if (candidate == sd.doc.Content || strings.Contains(strings.ToLower(f.Subject), strings.ToLower(query))) && !seen[id] {
-					results = append(results, id)
-					seen[id] = true
-					break
-				}
-			}
-		}
-	}
-	return results
-}
-
-// substringMatch finds fact IDs by matching individual query words against subjects.
-func (gm *GraphMemory) substringMatch(query string) []string {
+// entryRanking scores every fact on three free signals — substring match on
+// subject/body, why/use_when overlap with the query, and why/use_when overlap
+// with the active turn — then merges embedding similarity (20×cosine) when the
+// free ranking leaves room in the top-3. Weights: subject word 10, body word 3,
+// exact subject 100, why/use_when word 10 per signal. Returns IDs with score>0,
+// best first. (MEM-03: use_when is co-authored recall intent — a word there is
+// worth a subject word, and the turn supplies the query's conversational frame.)
+func (gm *GraphMemory) entryRanking(query, turn string) []string {
 	type scored struct {
 		id    string
 		score int
 	}
+	queryWords := memoryTokenize(query)
+	turnWords := memoryTokenize(turn)
 	var ranked []scored
-	// Tokenize query into individual words
-	queryWords := make(map[string]bool)
-	for _, w := range strings.Fields(strings.ToLower(query)) {
-		if len(w) >= 2 {
-			queryWords[w] = true
-		}
-	}
 	for id, fact := range gm.facts {
+		score := 0
 		subj := strings.ToLower(fact.Subject)
 		body := strings.ToLower(fact.Body)
-		score := 0
 		for w := range queryWords {
 			if strings.Contains(subj, w) {
 				score += 10
@@ -899,20 +874,84 @@ func (gm *GraphMemory) substringMatch(query string) []string {
 				score += 3
 			}
 		}
-		// Bonus for exact subject match
+		// Exact subject match bonus
 		if subj == strings.ToLower(strings.TrimSpace(query)) {
 			score += 100
+		}
+		// Intent overlap: why/use_when are written to match the questions that
+		// should recall this fact (MEM-02), so a word there is worth a subject word.
+		intent := strings.ToLower(strings.Join(fact.UseWhen, " ") + " " + fact.Why)
+		for w := range queryWords {
+			if strings.Contains(intent, w) {
+				score += 10
+			}
+		}
+		for w := range turnWords {
+			if strings.Contains(intent, w) {
+				score += 10
+			}
 		}
 		if score > 0 {
 			ranked = append(ranked, scored{id, score})
 		}
 	}
 	sort.Slice(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
+
+	// Embedding similarity fills vocabulary gaps only when the free ranking is
+	// thin (room in the top-3) — keeps the per-remember embed API call bounded.
+	if len(ranked) < 3 && gm.embedder != nil {
+		for _, sd := range gm.embedder.SearchScored(query, 8) {
+			if sd.score < 0.5 {
+				continue
+			}
+			id := ""
+			if strings.HasPrefix(sd.doc.Source, "fact:") {
+				id = strings.TrimPrefix(sd.doc.Source, "fact:")
+			} else {
+				for fid, f := range gm.facts { // legacy "fact" sources: map by content
+					if f.Subject+": "+f.Body == sd.doc.Content {
+						id = fid
+						break
+					}
+				}
+			}
+			if _, ok := gm.facts[id]; !ok {
+				continue
+			}
+			embScore := int(20 * sd.score)
+			found := false
+			for i := range ranked {
+				if ranked[i].id == id {
+					ranked[i].score += embScore
+					found = true
+					break
+				}
+			}
+			if !found {
+				ranked = append(ranked, scored{id, embScore})
+			}
+		}
+		sort.Slice(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
+	}
+
 	ids := make([]string, len(ranked))
 	for i, r := range ranked {
 		ids[i] = r.id
 	}
 	return ids
+}
+
+// memoryTokenize splits text into lowercase word keys: len>=2, punctuation
+// stripped, common filler dropped (reuses the tool-selection stopword set).
+func memoryTokenize(s string) map[string]bool {
+	words := make(map[string]bool)
+	for _, w := range strings.Fields(strings.ToLower(s)) {
+		w = strings.Trim(w, ".,!?;:'\"()[]-—")
+		if len(w) >= 2 && !toolSearchStopWords[w] {
+			words[w] = true
+		}
+	}
+	return words
 }
 
 // RememberPath finds shortest path between two facts. Returns indented path.
