@@ -34,6 +34,8 @@ Extensions are separate processes. Mino discovers tools via `GET /tools` and cal
 
 **Why:** Extensions can be written in any language. Failure isolation — a crashed extension doesn't take down the agent.
 
+**Extension vs native — the decision rule:** a capability is NATIVE when every owner needs it (loop, memory, playbooks, providers, the core tools); it is an EXTENSION when some owners want it (threads, fileingest, minowrap, cost-watch, and future capabilities like video generation or browser automation). Costly or niche capabilities never ship in the core binary — the extensions directory is the growth surface, and each extension carries its own cost profile (e.g. cost-watch's scraper, a video tool's per-second billing). Extensions stay compiled binaries with no runtime dependencies (issue #47 — the brand is "no dependencies, just download and run").
+
 **Revisit when:** Extension latency becomes a bottleneck (add Unix socket transport).
 
 ---
