@@ -441,3 +441,109 @@ func TestGraphMemoryCommunitiesPersist(t *testing.T) {
 		t.Fatalf("community lost across restart: %v", got)
 	}
 }
+
+// MEM-08 archive lifecycle: ArchiveFact moves a fact out of the live graph into
+// memories/archive/, cleans inbound edges, queues the digest line, and the
+// archived fact stays readable. Digest entries round-trip through failure.
+func TestGraphMemoryArchiveLifecycle(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), nil)
+	if err := gm.RecordFact(Fact{ID: "meeting", Type: "semantic", Subject: "Arachem meeting is Friday 7 Aug",
+		Body: "Team sync.", Why: "so I attend on time", Edges: []Edge{{Target: "person", Rel: "with"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gm.RecordFact(Fact{ID: "person", Type: "semantic", Subject: "Arachem contact is Sam",
+		Edges: []Edge{{Target: "meeting", Rel: "attends"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gm.ArchiveFact(*gm.facts["meeting"], "judgment: why no longer holds"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := gm.FindFact("meeting"); ok {
+		t.Fatal("archived fact still live")
+	}
+	if len(gm.facts["person"].Edges) != 0 {
+		t.Fatalf("inbound edge not cleaned: %#v", gm.facts["person"].Edges)
+	}
+	arch := gm.archiveFactsLocked()
+	fact, ok := arch["meeting"]
+	if !ok {
+		t.Fatal("archived fact not readable")
+	}
+	if fact.Subject != "Arachem meeting is Friday 7 Aug" || fact.Why == "" {
+		t.Fatalf("archived fact lost content: %+v", fact)
+	}
+	// digest queued once, cleared by take, restorable after a failed send
+	if pending := gm.TakePendingDigest(); len(pending) != 1 || !strings.Contains(pending[0], "meeting|") {
+		t.Fatalf("digest pending = %v", pending)
+	}
+	if gm.TakePendingDigest() != nil {
+		t.Fatal("digest not cleared")
+	}
+	gm.AppendPendingDigest([]string{"meeting|Arachem meeting|user rejection"})
+	if pending := gm.TakePendingDigest(); len(pending) != 1 || !strings.Contains(pending[0], "user rejection") {
+		t.Fatalf("digest restore = %v", pending)
+	}
+}
+
+// MEM-08 archive fallback: empty or thin live recall falls back to the archive
+// with an [archived] tag; strong live recall never leaks archived facts.
+func TestGraphMemoryRememberArchivedFallback(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), nil)
+	if err := gm.RecordFact(Fact{ID: "coffee", Type: "semantic", Subject: "Coffee preference is dark roast",
+		Body: "Strong coffee, no sugar."}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gm.RecordFact(Fact{ID: "meeting", Type: "semantic", Subject: "Arachem meeting is Friday 7 Aug",
+		Body: "Team sync.", Why: "so I attend on time"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gm.ArchiveFact(*gm.facts["meeting"], "judgment: why no longer holds"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Empty live → archive fallback, tagged, why still shown.
+	got := gm.Remember("when is the meeting", "")
+	if !strings.Contains(got, "[archived]") || !strings.Contains(got, "Arachem meeting") || !strings.Contains(got, "so I attend on time") {
+		t.Fatalf("archive fallback missing:\n%s", got)
+	}
+	// Thin live (one body word, score 3 < 10) → archive still wins.
+	if err := gm.RecordFact(Fact{ID: "note", Type: "semantic", Subject: "Random notes",
+		Body: "meeting minutes folder"}); err != nil {
+		t.Fatal(err)
+	}
+	got = gm.Remember("meeting", "")
+	if !strings.Contains(got, "[archived]") {
+		t.Fatalf("thin live recall did not fall back:\n%s", got)
+	}
+	// Strong live match → no archive fallback.
+	got = gm.Remember("coffee", "")
+	if strings.Contains(got, "[archived]") {
+		t.Fatalf("archive leaked into strong live recall:\n%s", got)
+	}
+}
+
+// MEM-08 active expiry: a negative feedback signal archives immediately.
+func TestGraphMemoryFeedbackArchivesOnReject(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), nil)
+	if err := gm.RecordFact(Fact{ID: "pref", Type: "semantic", Subject: "Preference"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gm.Feedback("pref", 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := gm.FindFact("pref"); !ok {
+		t.Fatal("positive feedback archived the fact")
+	}
+	if _, err := gm.Feedback("pref", -2); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := gm.FindFact("pref"); ok {
+		t.Fatal("reject feedback did not archive")
+	}
+	if _, ok := gm.archiveFactsLocked()["pref"]; !ok {
+		t.Fatal("rejected fact not in archive")
+	}
+	if pending := gm.TakePendingDigest(); len(pending) != 1 || !strings.Contains(pending[0], "user rejection") {
+		t.Fatalf("digest = %v", pending)
+	}
+}

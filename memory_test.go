@@ -1061,3 +1061,21 @@ func TestDistillOutputsDueTombstonesMissingFiles(t *testing.T) {
 		t.Fatalf("second pass: n=%d calls=%d (before %d), want 0/0", n, calls, before)
 	}
 }
+
+// MEM-08: the judgment response carries an optional per-fact expired flag —
+// explicit true archives, absence (or false) means the fact still matters.
+func TestGraphJudgmentParsesExpired(t *testing.T) {
+	out, err := parseGraphJudgmentResponse(`{"edges":[],"facts":[{"id":"a","why":"w","expired":true},{"id":"b","why":"w"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Facts) != 2 {
+		t.Fatalf("facts = %+v", out.Facts)
+	}
+	if !out.Facts[0].Expired {
+		t.Fatal("explicit expired:true not parsed")
+	}
+	if out.Facts[1].Expired {
+		t.Fatal("missing expired flag must default to false")
+	}
+}
