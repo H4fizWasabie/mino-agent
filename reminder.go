@@ -18,7 +18,7 @@ func makeReminderTools(db *sql.DB, location *time.Location) []*Tool {
 func makeCreateReminderTool(db *sql.DB, location *time.Location) *Tool {
 	return &Tool{
 		Name:        "create_reminder",
-		Description: "Create a one-time reminder that Mino will send to the owner's Telegram chat. Resolve relative dates using the configured timezone and provide an ISO 8601 time.",
+		Description: "Create a one-time reminder that Mino will send to the owner's Telegram chat. Resolve relative dates using the configured timezone and provide an ISO 8601 time. Use for meetings, appointments, and deadlines the owner wants to be reminded about.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -54,7 +54,7 @@ func makeCreateReminderTool(db *sql.DB, location *time.Location) *Tool {
 func makeListRemindersTool(db *sql.DB, location *time.Location) *Tool {
 	return &Tool{
 		Name:        "list_reminders",
-		Description: "List pending one-time reminders in the configured timezone.",
+		Description: "List pending one-time reminders in the configured timezone. Use when asked about a meeting, appointment, or deadline that Mino was asked to remind about — reminders are system reminders, NOT calendar events.",
 		Schema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
