@@ -24,6 +24,11 @@
 ### Fixed
 - Routines closed with status `stopped` can now be restarted by their scheduled fire. (Why: a manual close during the provider/cache migration cleanup on 2026-08-06 left three night routines in `stopped`, and `validResponsibilityTransition` treated `stopped` as terminal — every scheduled fire since died with `cannot move responsibility from "stopped" to "working"`, silently killing ai-news-daily, malaysian-news-daily, and facebook-daily-ai-post. The schedule had no recovery path. Routines are recurring by nature: closed = paused, next fire restarts. One-off responsibilities remain terminal.)
 
+## [v2.5.1] — cost-watch Go Port (2026-08-09)
+
+### Changed
+- `extensions/cost-watch` ported from python to Go — a single static binary, no runtime dependencies (issue #47). Same tools, protocol, config shape, and behavior; systemd units point at the compiled binary. This removes the only non-Go extension from the family (threads, minowrap, fileingest are all Go binaries). The parser also tolerates extra pricing keys on the luna-pro page (input_cache_write, web_search between input_cache_read and discount).
+
 ## [Unreleased]
 
 ### Changed
