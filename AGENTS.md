@@ -71,6 +71,11 @@ services managed by systemd.
 - **No frameworks.** Stdlib HTTP, stdlib SQL, stdlib templates. No gin, no echo, no gorm.
 - **Single binary.** Everything embedded via `embed.FS`. One `go build`, one deploy.
 
+### Public-facing discipline
+- **Mino is a public project.** Commits, PRs, CHANGELOG entries, and release notes are read by strangers — never reference the owner's personal use case: no names (Abah/Hafiz), no private incidents (specific meetings, personal reminders, private playbook runs), no owner-only environment details (personal VPS hostnames, personal data paths beyond the documented `~/.mino` layout).
+- **CHANGELOG why-notes describe the failure class and the mechanism, not the incident.** Write "a user's reminder" not the owner's specific reminder; "a scheduled playbook run" not the owner's 13:00 run. The generic form is also the more useful form — it states what the fix protects for everyone.
+- Personal context belongs in issues when it explains a bug — but the commit and changelog translate it to the general case.
+
 ### Version control
 - **Commit at every working milestone.** Subject says what, body says WHY.
 - **Update `CHANGELOG.md` with every commit.** No changelog = no merge. Format:
