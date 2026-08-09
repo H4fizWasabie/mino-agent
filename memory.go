@@ -280,7 +280,7 @@ func (m *Memory) availableFactIDs() string {
 // --- Semantic search (graph-backed) ---
 
 func (m *Memory) Search(query string) string {
-	return m.graph.Remember(query)
+	return m.graph.Remember(query, "")
 }
 
 // --- Skills (Core: procedural memory) ---

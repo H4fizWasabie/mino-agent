@@ -670,9 +670,13 @@ func BuildRegistry(db *sql.DB, home, workspace string, mem *Memory, location ...
 			},
 			"required": []string{"query"},
 		},
-		Fn: func(args map[string]any) string {
+		ContextFn: func(ctx context.Context, args map[string]any) string {
 			query, _ := args["query"].(string)
-			return mem.graph.Remember(query)
+			turn := ""
+			if v := ctx.Value(userMessageKey{}); v != nil {
+				turn, _ = v.(string)
+			}
+			return mem.graph.Remember(query, turn)
 		},
 	}, BehaviorObserve))
 
