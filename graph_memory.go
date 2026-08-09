@@ -53,6 +53,7 @@ type GraphMemory struct {
 	communities map[string]int
 	gods        []string
 	labels      map[string]string
+	parseWarned map[string]bool // ids already warned on (once per process run)
 	cfg         *Settings
 	embedder    *EmbeddingStore
 }
@@ -98,7 +99,7 @@ func (gm *GraphMemory) SetEmbedder(e *EmbeddingStore) {
 
 func NewGraphMemory(dir string, cfg *Settings) *GraphMemory {
 	os.MkdirAll(dir, 0755)
-	gm := &GraphMemory{dir: dir, cfg: cfg, facts: make(map[string]*Fact), files: make(map[string]fileStamp), judgedAt: make(map[string]string), communities: make(map[string]int), labels: make(map[string]string)}
+	gm := &GraphMemory{dir: dir, cfg: cfg, facts: make(map[string]*Fact), files: make(map[string]fileStamp), judgedAt: make(map[string]string), communities: make(map[string]int), labels: make(map[string]string), parseWarned: make(map[string]bool)}
 	if gm.loadIndex() {
 		return gm
 	}
@@ -416,10 +417,62 @@ func (gm *GraphMemory) parseFrontMatter(raw []byte) (*Fact, error) {
 				return &fact, nil
 			}
 		}
+		// Lenient timestamp (self-healing): a malformed `at:` must not drop the
+		// whole fact — load it with At zeroed and warn once; the rebuild pass
+		// stamps a valid timestamp on the next write (ReplaceFact sets now on
+		// zero At). A fact with a wrong clock is still a fact.
+		if strings.Contains(err.Error(), "cannot parse") {
+			if f, ok := gm.unmarshalLenientAt(fm); ok {
+				f.Body = body
+				gm.warnOnce(f.ID, fmt.Sprintf("graph memory: malformed at: timestamp on %s, loaded with zero time (self-heals on next rebuild): %v", f.ID, err))
+				return f, nil
+			}
+		}
 		return nil, err
 	}
 	fact.Body = body
 	return &fact, nil
+}
+
+// unmarshalLenientAt parses front matter with `at` read as a raw string, so a
+// malformed timestamp cannot fail the whole unmarshal. Returns false when the
+// front matter is broken in any other way (those stay strict).
+func (gm *GraphMemory) unmarshalLenientAt(fm string) (*Fact, bool) {
+	var raw struct {
+		ID       string `yaml:"id"`
+		Type     string `yaml:"type"`
+		Subject  string `yaml:"subject"`
+		At       string `yaml:"at"`
+		Why      string `yaml:"why,omitempty"`
+		Source   string `yaml:"source,omitempty"`
+		Feedback int    `yaml:"feedback,omitempty"`
+		Edges    []Edge `yaml:"edge"`
+	}
+	if err := yaml.Unmarshal([]byte(fm), &raw); err != nil {
+		return nil, false
+	}
+	var at time.Time
+	if raw.At != "" {
+		if t, err := time.Parse(time.RFC3339, raw.At); err == nil {
+			at = t
+		}
+	}
+	return &Fact{ID: raw.ID, Type: raw.Type, Subject: raw.Subject, At: at, Why: raw.Why, Source: raw.Source, Feedback: raw.Feedback, Edges: raw.Edges}, true
+}
+
+// warnOnce logs a per-fact warning only once per process run — the reconciler
+// re-parses every file every 5s, so a persistent file problem must not flood
+// the log. Callers already hold gm.mu (parseFrontMatter runs under Refresh/
+// loadAll), so this never locks.
+func (gm *GraphMemory) warnOnce(id, msg string) {
+	if gm.parseWarned == nil {
+		gm.parseWarned = make(map[string]bool)
+	}
+	if gm.parseWarned[id] {
+		return
+	}
+	gm.parseWarned[id] = true
+	slog.Warn(msg)
 }
 
 func repairFrontMatter(fm string) (string, bool) {

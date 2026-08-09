@@ -547,3 +547,40 @@ func TestGraphMemoryFeedbackArchivesOnReject(t *testing.T) {
 		t.Fatalf("digest = %v", pending)
 	}
 }
+
+func TestGraphMemoryLenientTimestampSelfHeals(t *testing.T) {
+	// A malformed at: must not drop the whole fact (issue #65): it loads with
+	// zero time, stays recallable, and the rebuild pass stamps a valid one.
+	dir := t.TempDir()
+	gm := NewGraphMemory(filepath.Join(dir, "memories"), nil)
+	path := filepath.Join(gm.dir, "bad_clock.md")
+	os.WriteFile(path, []byte("---\nid: bad_clock\ntype: semantic\nsubject: Bad clock fact\nat: 2026-08-08T045300Z\n---\n\nBody survives.\n"), 0644)
+	gm.Refresh()
+
+	f, ok := gm.FindFact("bad_clock")
+	if !ok {
+		t.Fatalf("fact dropped by malformed timestamp")
+	}
+	if !f.At.IsZero() {
+		t.Fatalf("expected zero At, got %v", f.At)
+	}
+	if f.Body != "Body survives." {
+		t.Fatalf("body lost: %q", f.Body)
+	}
+	got := gm.Remember("bad clock", "")
+	if !strings.Contains(got, "Bad clock fact") {
+		t.Fatalf("fact not recallable:\n%s", got)
+	}
+	// Self-heal: ReplaceFact (the rebuild write path) stamps now on zero At.
+	if err := gm.ReplaceFact(*f); err != nil {
+		t.Fatal(err)
+	}
+	f2, _ := gm.FindFact("bad_clock")
+	if f2.At.IsZero() {
+		t.Fatalf("rebuild did not self-heal the timestamp")
+	}
+	// Second parse of the healed file succeeds without warnings.
+	if _, err := gm.readFile(path); err != nil {
+		t.Fatalf("healed file still fails to parse: %v", err)
+	}
+}
