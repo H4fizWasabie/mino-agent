@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [v2.6.0] — Memory Intent (2026-08-09)
 ### Added
 - Why-expiry lifecycle (MEM-08, closes #63): the judgment pass (GLM 5.2, same call/bounds as MEM-02) now also judges whether a fact's why still holds — an explicit `"expired": true` per-fact flag archives the fact instead of writing it live; absence means still valid, so a partial response degrades without wrong expiries. Expired facts move to `memories/archive/` via the existing markdown-archive machinery (never deleted; inbound edges cleaned; embedding dropped) and stay answerable through `remember`'s automatic archive fallback — live results empty or thin (< 10, less than one strong signal word) trigger it, every hit is tagged `[archived]` and rendered with its why/body/rationale as usual. Active expiry: a `reject` on manage_memory archives immediately through the `Fact.Feedback` field (negative = outdated, no waiting for the sweep) and the tool says so. A daily Telegram digest lists everything archived (`id | subject | reason`) so the owner can dispute or restore without per-fact pings; a failed send keeps the queue for the next cycle (outbox pattern). (Why: a fact whose reason died is no longer a fact — but a wrong expiry call costs nothing if the fact stays answerable; the `arachem_meeting_reminder` case — meeting passed 7 Aug 2026 — is the first real archive once the VPS deploys: "when does the meeting happen" must still answer "Friday 7 Aug", marked as historical.)
 - MEM-05 validation suite: table-driven cases proving "right fact, right time, right reason" against a synthetic store — topical query returns the right fact with a correct rationale, co-authored use_when intent fires, the active turn rescues a thin query, irrelevant query is rejected (closes #55). Expired-why rejection deferred to MEM-06.
@@ -41,11 +41,6 @@
 
 ### Changed
 - `extensions/cost-watch` ported from python to Go — a single static binary, no runtime dependencies (issue #47). Same tools, protocol, config shape, and behavior; systemd units point at the compiled binary. This removes the only non-Go extension from the family (threads, minowrap, fileingest are all Go binaries). The parser also tolerates extra pricing keys on the luna-pro page (input_cache_write, web_search between input_cache_read and discount).
-
-## [Unreleased]
-
-### Changed
-- `extensions/cost-watch` ported from python to Go — a single static binary, no runtime dependencies (issue #47). Same tools, protocol, config shape, and behavior; systemd units now point at the compiled binary. This removes the only non-Go extension from the family (threads, minowrap, fileingest are all Go binaries).
 
 ## [v2.5.0] — The Price Guardian + Dashboard Redesign (2026-08-09)
 
