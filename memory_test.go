@@ -652,6 +652,8 @@ func TestGraphRebuildBackfillsMissingEmbeddings(t *testing.T) {
 	// else migrated facts are invisible to edge inference.
 	// The embedder calls the package-level httpClient (hardcoded OpenRouter
 	// URL), so swap it to route embedding requests to the local test server.
+	// Also covers MEM-02: the rebuild writes why/use_when from the judgment
+	// contract and keeps the original Source (provenance survives).
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		body, _ := io.ReadAll(r.Body)
@@ -662,7 +664,7 @@ func TestGraphRebuildBackfillsMissingEmbeddings(t *testing.T) {
 		// Non-empty edges payload: an empty one counts as a failed batch and
 		// makes RebuildGraphEdges return an error. This edge targets nobody,
 		// so it is rejected by the allowed-candidates filter and writes nothing.
-		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"edges\":[{\"source\":\"orphan\",\"target\":\"nobody\",\"rel\":\"depends_on\",\"confidence\":0.9}]}"}}]}`)
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"edges\":[{\"source\":\"orphan\",\"target\":\"nobody\",\"rel\":\"depends_on\",\"confidence\":0.9}],\"facts\":[{\"id\":\"orphan\",\"why\":\"refined why\",\"use_when\":[\"when user asks about orphans\",\"orphan talk\"]}]}"}}]}`)
 	}))
 	defer server.Close()
 	old := httpClient
@@ -682,13 +684,20 @@ func TestGraphRebuildBackfillsMissingEmbeddings(t *testing.T) {
 	}
 	dir := t.TempDir()
 	gm := NewGraphMemory(filepath.Join(dir, "memories"), nil)
-	gm.RecordFact(Fact{ID: "orphan", Type: "semantic", Subject: "Orphan fact", Body: "Body"})
+	gm.RecordFact(Fact{ID: "orphan", Type: "semantic", Subject: "Orphan fact", Body: "Body", Why: "seed why", Source: "session:test"})
 	m := &Memory{client: pm, graph: gm, embedder: NewEmbeddingStore(Connect(dir), "test-key", "openai/text-embedding-3-large")}
 	if _, err := m.RebuildGraphEdges(); err != nil {
 		t.Fatalf("rebuild failed: %v", err)
 	}
 	if !m.embedder.HasFactEmbedding("orphan") {
 		t.Fatal("fact was not embedded during rebuild")
+	}
+	fact, _ := gm.FindFact("orphan")
+	if fact.Source != "session:test" {
+		t.Fatalf("rebuild overwrote Source: %q", fact.Source)
+	}
+	if fact.Why != "refined why" || len(fact.UseWhen) != 2 || fact.UseWhen[0] != "when user asks about orphans" {
+		t.Fatalf("rebuild did not write judgment why/use_when: %+v", fact)
 	}
 }
 
@@ -726,7 +735,7 @@ func TestJudgeChangedFacts(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"edges\":[{\"source\":\"b\",\"target\":\"a\",\"rel\":\"depends_on\",\"confidence\":0.9}]}"}}]}`)
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"edges\":[{\"source\":\"b\",\"target\":\"a\",\"rel\":\"depends_on\",\"confidence\":0.9}],\"facts\":[{\"id\":\"b\",\"why\":\"B matters because it anchors A\",\"use_when\":[\"when user asks about B\",\"B mentioned in context\"]}]}"}}]}`)
 	}))
 	defer server.Close()
 	pm := &ProviderManager{
@@ -750,6 +759,9 @@ func TestJudgeChangedFacts(t *testing.T) {
 	b, _ := gm.FindFact("b")
 	if len(b.Edges) != 1 || b.Edges[0].Target != "a" || b.Edges[0].Rel != "depends_on" || b.Edges[0].Kind != "inferred" {
 		t.Fatalf("b edges = %+v", b.Edges)
+	}
+	if b.Why != "B matters because it anchors A" || len(b.UseWhen) != 2 || b.UseWhen[1] != "B mentioned in context" {
+		t.Fatalf("b why/use_when not written by judgment pass: %+v", b)
 	}
 	// Pass 2: nothing left to judge, no LLM call.
 	before := calls
@@ -776,6 +788,35 @@ func TestJudgeChangedFacts(t *testing.T) {
 	}
 	if got := gm2.UnjudgedFacts(); len(got) != 1 || got[0].ID != "c" {
 		t.Fatalf("failed pass must leave fact unjudged: %+v", got)
+	}
+}
+
+func TestJudgeChangedFactsKeepsWhyOnPartialResponse(t *testing.T) {
+	// A judgment response with edges but no facts meta must not wipe the
+	// existing why/use_when — partial success degrades, never destroys.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"edges\":[]}"}}]}`)
+	}))
+	defer server.Close()
+	pm := &ProviderManager{
+		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
+		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
+		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
+		sleep: func(time.Duration) {}, now: time.Now,
+	}
+	dir := t.TempDir()
+	gm := NewGraphMemory(filepath.Join(dir, "memories"), nil)
+	gm.RecordFact(Fact{ID: "c", Type: "semantic", Subject: "Fact C", Why: "seed why", UseWhen: []string{"old trigger"}})
+	m := &Memory{client: pm, graph: gm, embedder: &EmbeddingStore{docs: []embeddedDoc{
+		{Source: "fact:c", Embedding: []float32{1, 0}},
+	}}}
+	if n := m.JudgeChangedFacts(); n != 0 {
+		t.Fatalf("judged %d edges, want 0 (empty edges, fact still judged)", n)
+	}
+	c, _ := gm.FindFact("c")
+	if c.Why != "seed why" || len(c.UseWhen) != 1 || c.UseWhen[0] != "old trigger" {
+		t.Fatalf("partial response wiped why/use_when: %+v", c)
 	}
 }
 

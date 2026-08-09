@@ -127,7 +127,7 @@ func TestGraphMemoryWritesSchemaAndLowercaseIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := gm.RecordFact(Fact{
-		ID: "source", Type: "semantic", Subject: "Source", Why: "A useful reason", Source: "session:test",
+		ID: "source", Type: "semantic", Subject: "Source", Why: "A useful reason", UseWhen: []string{"when user asks about Source", "source mentions"}, Source: "session:test",
 		Edges: []Edge{{Target: "target", Rel: "depends_on", Kind: "explicit", Confidence: 1, Source: "session:test"}},
 	}); err != nil {
 		t.Fatal(err)
@@ -161,8 +161,14 @@ func TestGraphMemoryWritesSchemaAndLowercaseIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(md), "why: A useful reason") || !strings.Contains(string(md), "kind: explicit") {
+	if !strings.Contains(string(md), "why: A useful reason") || !strings.Contains(string(md), "kind: explicit") || !strings.Contains(string(md), "use_when:") || !strings.Contains(string(md), "when user asks about Source") {
 		t.Fatalf("fact schema missing metadata: %s", md)
+	}
+	// Reload from disk: use_when must survive the front-matter round trip.
+	gm2 := NewGraphMemory(dir, nil)
+	srcFact, ok := gm2.FindFact("source")
+	if !ok || len(srcFact.UseWhen) != 2 || srcFact.UseWhen[0] != "when user asks about Source" {
+		t.Fatalf("use_when lost on reload: %+v", srcFact)
 	}
 }
 
