@@ -38,6 +38,29 @@ func TestBuildSystemAllowsDerivedReportsFromUntrustedContent(t *testing.T) {
 	}
 }
 
+// OSV-03: the static system prompt carries the state map — where Mino's own
+// operations put things — so the model never guesses (Arachem case: reminders
+// vs calendar). Stable truths only; dynamic state stays with system_check.
+func TestBuildSystemIncludesStateMap(t *testing.T) {
+	s := NewSession(&Settings{Home: t.TempDir(), Workspace: t.TempDir()}, nil)
+	got := s.BuildSystem("hello", "cli")
+	for _, want := range []string{
+		"SYSTEM STATE MAP",
+		"Reminders → SQLite",
+		"NOT the user's calendar",
+		"memories/*.md",
+		"schedules.json",
+		"calendar_events",
+		"skills/<slug>/SKILL.md",
+		"audit.jsonl",
+		"system_check",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("state map missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestSettingsLocationFallsBackForInvalidTimezone(t *testing.T) {
 	if got := (&Settings{Timezone: "not/a-real-zone"}).Location(); got != time.Local {
 		t.Fatalf("invalid timezone location = %v, want local %v", got, time.Local)

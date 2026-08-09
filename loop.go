@@ -144,6 +144,100 @@ func claimsMutationDone(text string) bool {
 	return false
 }
 
+// --- Outcome-claim verification (OSV-03) ---
+// Sibling of the mutation guard: the model asserts an operation OUTCOME
+// ("the edit was rejected", "I fixed it") that this turn's own tool results
+// contradict (observed 2026-08-09: "the edit was rejected" while the audit
+// log showed write_file succeeded). The harness's record of the turn is the
+// tool results it already holds — bounded, no log scanning, checked only
+// when a claim is made.
+
+// operationNouns are the objects of outcome claims — the things Mino mutates.
+// Paired with the claim words below; "failed to find" (a search) is a
+// legitimate outcome, not an operation claim, and needs no noun match.
+var operationNouns = append([]string{
+	"edit", "write", "save", "update", "change", "fix", "reply", "comment",
+	"deploy", "sync", "event", "fact", "skill", "calendar",
+}, mutationObjectWords...)
+
+// successOutcomeWords are strong success assertions; failureOutcomeWords are
+// strong failure assertions. Both must pair with an operation noun.
+var successOutcomeWords = []string{
+	"fixed", "saved", "wrote", "edited", "updated", "changed", "replied",
+	"created", "added", "deleted", "removed", "cancelled", "scheduled",
+	"deployed", "applied", "landed", "completed", "went through",
+}
+var failureOutcomeWords = []string{
+	"rejected", "failed", "couldn't", "could not", "wasn't able", "was not able",
+	"refused", "denied", "not applied", "didn't work", "did not work",
+	"wasn't saved", "was not saved", "didn't land", "did not land", "not saved",
+}
+
+// outcomeContradiction returns a corrective push when the reply claims an
+// outcome this turn's tool results contradict, or "" when the claim is
+// consistent or absent. Contradiction: a failure claim against all-successful
+// tool results, or a success claim against all-errored results. Mixed tool
+// results → no push (the claim may be true).
+func outcomeContradiction(reply string, calls []ToolCall) string {
+	lower := strings.ToLower(reply)
+	failure := false
+	claim := false
+	for _, w := range successOutcomeWords {
+		if strings.Contains(lower, w) {
+			claim = true
+			break
+		}
+	}
+	for _, w := range failureOutcomeWords {
+		if strings.Contains(lower, w) {
+			failure = true
+			claim = true
+			break
+		}
+	}
+	if !claim {
+		return ""
+	}
+	noun := false
+	for _, w := range operationNouns {
+		if strings.Contains(lower, w) {
+			noun = true
+			break
+		}
+	}
+	if !noun {
+		return ""
+	}
+	failed, succeeded := 0, 0
+	var successEv, failEv string
+	for _, c := range calls {
+		if strings.HasPrefix(c.Output, "Error") {
+			failed++
+			if failEv == "" {
+				failEv = fmt.Sprintf("%s%v", c.Name, c.Args)
+			}
+		} else {
+			succeeded++
+			if successEv == "" {
+				successEv = fmt.Sprintf("%s%v", c.Name, c.Args)
+			}
+		}
+	}
+	if failure && succeeded > 0 && failed == 0 {
+		if len(successEv) > 120 {
+			successEv = successEv[:120] + "…"
+		}
+		return fmt.Sprintf("[System: your reply claims an operation failed or was rejected, but this turn's tool results show success — e.g. %s. Reconcile your claim with the tool results; verify with system_check if the current state is unclear. Do not report failure when the harness's records show success.]", successEv)
+	}
+	if !failure && failed > 0 && succeeded == 0 {
+		if len(failEv) > 120 {
+			failEv = failEv[:120] + "…"
+		}
+		return fmt.Sprintf("[System: your reply claims an operation succeeded, but this turn's tool results show errors — e.g. %s. Do not claim success; retry the operation or report the actual error.]", failEv)
+	}
+	return ""
+}
+
 func lastUserText(messages []Message) string {
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == "user" {
@@ -226,6 +320,7 @@ func RunLoopContext(
 	trace("context_diag", map[string]any{"system_chars": len(system), "msg_count": len(messages), "schema_count": len(schemas), "schema_names": schemaNames, "schema_est_chars": schemaChars, "one_turn_chars": len(oneTurnText)})
 
 	mutationChecked := false // push the unverified-mutation-claim correction at most once per turn
+	claimChecked := false   // push the contradicted-outcome-claim correction at most once per turn
 	parseFailures := 0       // consecutive unparseable text-marker calls (issue #24)
 
 	for i := 1; i <= maxIter; i++ {
@@ -341,6 +436,21 @@ func RunLoopContext(
 							Role:    "user",
 							Content: "[System: you were asked to change or delete something, but no tool was executed this turn. Either perform the change with the appropriate tool now, or tell the owner explicitly that you cannot. Do not claim it is done.]",
 						})
+						continue
+					}
+				}
+			}
+			// OSV-03: an outcome claim contradicted by this turn's own tool
+			// results ("the edit was rejected" after write_file succeeded) is
+			// corrected before it reaches the user. Bounded: only when a claim
+			// is made, only in-memory tool results — no log scanning.
+			if !claimChecked && len(result.ToolCalls) > 0 {
+				if _, inStage := ctx.Value(stageOutputsKey{}).([]string); !inStage {
+					replyText := extractText(resp.Content)
+					if push := outcomeContradiction(replyText, result.ToolCalls); push != "" {
+						claimChecked = true
+						trace("outcome_claim_contradicted", map[string]any{"iteration": i})
+						messages = append(messages, Message{Role: "user", Content: push})
 						continue
 					}
 				}

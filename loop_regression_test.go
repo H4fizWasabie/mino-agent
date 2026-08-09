@@ -287,6 +287,96 @@ func TestLoopPushesOnUnverifiedMutationClaim(t *testing.T) {
 	}
 }
 
+// OSV-03: the model claims an operation FAILED ("the edit was rejected") while
+// this turn's tool results show it succeeded. The loop must correct the claim
+// before it reaches the user — the exact 2026-08-09 threads case.
+func TestLoopCorrectsContradictedFailureClaim(t *testing.T) {
+	tools := NewRegistry()
+	tools.Register(&Tool{Name: "write_file", Schema: map[string]any{"type": "object"}, Fn: func(map[string]any) string { return "Wrote 123 bytes to /tmp/x.md" }})
+	client := &fakeClient{script: []*LLMResponse{
+		scriptedResp([]ContentBlock{toolBlock("write_file", map[string]any{"path": "/tmp/x.md"})}, "tool_use"),
+		scriptedResp([]ContentBlock{textBlock("the edit was rejected")}, "stop"),
+		scriptedResp([]ContentBlock{textBlock("Checking the result again — it did land. Done.")}, "stop"),
+	}}
+	msgs := []Message{{Role: "user", Content: "fix the file"}}
+	result := RunLoopContext(context.Background(), client, "osv03-loop", "", msgs, tools, 5, 100, nil, false, "", nil)
+	if result.Status != "complete" {
+		t.Fatalf("status = %q, want complete", result.Status)
+	}
+	if len(client.messages) < 3 {
+		t.Fatalf("model called %d times, want 3 (tool, claim, corrected)", len(client.messages))
+	}
+	pushed := false
+	for _, m := range client.messages[2] {
+		if strings.Contains(m.Content, "tool results show success") && strings.Contains(m.Content, "write_file") {
+			pushed = true
+		}
+	}
+	if !pushed {
+		t.Fatal("contradiction push missing from third call's messages")
+	}
+}
+
+// OSV-03: the reverse contradiction — a success claim ("I fixed the file")
+// while the tool result shows an error. Same bounded check, other direction.
+func TestLoopCorrectsContradictedSuccessClaim(t *testing.T) {
+	tools := NewRegistry()
+	tools.Register(&Tool{Name: "write_file", Schema: map[string]any{"type": "object"}, Fn: func(map[string]any) string { return "Error writing /tmp/x.md: permission denied" }})
+	client := &fakeClient{script: []*LLMResponse{
+		scriptedResp([]ContentBlock{toolBlock("write_file", map[string]any{"path": "/tmp/x.md"})}, "tool_use"),
+		scriptedResp([]ContentBlock{textBlock("I fixed the file")}, "stop"),
+		scriptedResp([]ContentBlock{textBlock("Retrying with the right permissions.")}, "stop"),
+	}}
+	msgs := []Message{{Role: "user", Content: "fix the file"}}
+	result := RunLoopContext(context.Background(), client, "osv03-loop2", "", msgs, tools, 5, 100, nil, false, "", nil)
+	if result.Status != "complete" {
+		t.Fatalf("status = %q, want complete", result.Status)
+	}
+	pushed := false
+	for _, m := range client.messages[2] {
+		if strings.Contains(m.Content, "tool results show errors") {
+			pushed = true
+		}
+	}
+	if !pushed {
+		t.Fatal("contradiction push missing from third call's messages")
+	}
+}
+
+// OSV-03 controls: legitimate outcomes must not trip the check — a search-style
+// "failed" without an operation noun, and a failure claim that matches a real
+// tool error, both complete without a push.
+func TestLoopNoPushOnConsistentOutcomes(t *testing.T) {
+	cases := []struct {
+		name  string
+		reply string
+		out   string // tool output; "" = no tool call
+	}{
+		{"no operation noun: search-style failure", "the search failed to find anything", "found 3 results"},
+		{"failure claim matches errored tool", "the edit was rejected", "Error writing /tmp/x.md: disk full"},
+		{"success claim matches successful tool", "I fixed the file", "Wrote 123 bytes to /tmp/x.md"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tools := NewRegistry()
+			var script []*LLMResponse
+			if tc.out != "" {
+				tools.Register(&Tool{Name: "write_file", Schema: map[string]any{"type": "object"}, Fn: func(map[string]any) string { return tc.out }})
+				script = append(script, scriptedResp([]ContentBlock{toolBlock("write_file", map[string]any{"path": "/tmp/x.md"})}, "tool_use"))
+			}
+			script = append(script, scriptedResp([]ContentBlock{textBlock(tc.reply)}, "stop"))
+			client := &fakeClient{script: script}
+			result := RunLoopContext(context.Background(), client, "osv03-ctrl", "", []Message{{Role: "user", Content: "fix the file"}}, tools, 5, 100, nil, false, "", nil)
+			if result.Status != "complete" {
+				t.Fatalf("status = %q, want complete", result.Status)
+			}
+			if len(client.messages) != len(script) {
+				t.Fatalf("model called %d times, want %d (no push for a consistent claim)", len(client.messages), len(script))
+			}
+		})
+	}
+}
+
 // Control: a plain conversational completion without a mutation request must
 // not trigger the push.
 func TestLoopNoPushOnPlainCompletion(t *testing.T) {
