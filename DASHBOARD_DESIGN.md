@@ -8,14 +8,14 @@ The dashboard should present Mino as a responsible, auditable personal
 operator. It should lead with changes in responsibility and outcome while
 keeping runtime machinery available for inspection.
 
-The selected visual direction is **Nowfield**. Its stable Past / Now / Next
-geometry, compact navigation, full-width Responsibility lanes, and reserved
-conversation-workbench region form the redesign foundation. The workbench is a
-separate implementation issue.
+The selected visual direction is **Living Field**. The complete universe map is
+the primary surface and the rest of the interface is arranged around it. The
+former Nowfield page hierarchy is retired; Past / Now / Next remains available
+through playback and inspection, but no longer owns the first viewport.
 
 ## Visual language
 
-Nowfield uses a direct operational typography system:
+Living Field uses a direct operational typography system:
 
 - Strong system sans-serif for page titles and Responsibility names
 - Neutral system sans-serif for summaries, navigation, actions, and controls
@@ -30,14 +30,15 @@ monospace styling do not define the main interface.
 
 ### Desktop frame
 
-Desktop uses a compact sticky top navigation:
+Desktop uses an edge-to-edge map with a small floating lens spine:
 
-**Mino**, **Today**, **Work**, **Conversations**, **Memory**, **System**, and a
-truthful runtime-health indicator.
+**Mino**, **Universe**, **Now**, **Work**, **Memory**, **Routines**, **System**,
+and a truthful runtime-health indicator.
 
-There is no permanent sidebar or command-centre heading. Today and Work use the
-available viewport as one ruled time field; wide-screen space carries Past and
-Next context instead of becoming empty margins.
+The field canvas owns the available viewport. Lenses, search, health, the
+contextual inspector, and the timeline are overlays that recede when the owner
+is reading the geography. There is no editorial page header, metric-card hero,
+or diagnostic shell around the map.
 
 System uses local tabs for Overview, Runtime, Tools, Database, Files, and
 Settings. Memory uses local tabs for Search, Knowledge, Episodes, and Graph.
@@ -45,11 +46,12 @@ Provider and model identity belong in System rather than global chrome; a
 provider problem appears in Today only when it materially affects
 responsibility or outcome.
 
-The lower region is the conversation workbench. Its collapsed composer occupies
-a shell row; opening it reflows the time field to roughly 55% height and gives
-conversation 72% of the lower width. Evidence, Actions, and Links share the
-remaining 28%. The workbench is pointer- and keyboard-resizable, collapsible,
-restorable, and maximizable.
+The lower edge carries a collapsed composer and the historical timeline as
+separate controls. Opening conversation preserves the map camera and selected
+context while the workbench becomes the active lower surface; Evidence,
+Actions, and Links remain available beside it on desktop and become a dedicated
+mobile conversation state on phones. The workbench is pointer- and
+keyboard-resizable, collapsible, restorable, and maximizable.
 
 Artifact actions are browser-native and truthful. A folder action routes to the
 authorized VPS Files view; a file action opens through the read-only file

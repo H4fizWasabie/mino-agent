@@ -2,13 +2,14 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Living Field · Mino</title>
 <link rel="icon" type="image/png" href="/static/assets/logo-mark.png">
-<link rel="stylesheet" href="/static/style.css"></head><body class="app-shell" data-view="universe">
+<link rel="stylesheet" href="/static/style.css"></head><body class="living-field-shell" data-view="universe">
 <!--
-THESIS: Living Field makes Mino's whole durable universe the interface; lists become focused inspection lenses around it.
-OWN-WORLD: a quiet cartographic field, mineral paper, ink-blue topology, and truthful transient activity.
+THESIS: Living Field makes Mino's whole durable universe the interface; the map is the surface, not a widget inside a dashboard.
+OWN-WORLD: a quiet cartographic field, mineral paper, ink-blue topology, and truthful transient activity with controls that recede.
 STORY: see everything Mino carries, rewind how it formed, watch current work move, then talk without losing the map.
-FIRST VIEWPORT: the complete universe, a compact lens rail, contextual inspector, and historical playback.
-FORM: Living Field, the owner-approved map-first direction from issue #78.
+FIRST VIEWPORT: an edge-to-edge universe canvas with a small lens spine, floating inspector, and timeline on the field's lower edge.
+FORM: Living Field, the replacement visual world from issue #80, grounded in the approved Survey Desk prototype.
+FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
 -->
 <header class="operator-nav field-rail">
   <a class="operator-brand" href="#universe" aria-label="Mino Living Field">
@@ -38,10 +39,7 @@ FORM: Living Field, the owner-approved map-first direction from issue #78.
 </header>
 
 <main>
-  <header class="pagehead">
-    <div><span class="field-kicker">Your Mino universe</span><h1 id="title">Living Field</h1></div>
-    <p class="sub" id="sub" aria-live="polite">Connecting to current state…</p>
-  </header>
+  <div class="field-route-status" aria-live="polite"><h1 id="title">Living Field</h1><p class="sub" id="sub">Connecting to current state…</p></div>
   <div id="view"><div class="nowfield-loading" role="status"><span></span><strong>Mapping Mino’s universe…</strong><p>Reading durable state and its relationships.</p></div></div>
 </main>
 

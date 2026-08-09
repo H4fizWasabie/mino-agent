@@ -656,3 +656,76 @@ body[data-view="universe"] #dock{grid-column:1/-1;grid-row:2}body[data-view="uni
 @media(max-width:900px) and (min-width:720px){body[data-view="universe"]{grid-template-columns:132px minmax(0,1fr)}body[data-view="universe"] .operator-nav{padding:14px 9px}.field-rail .operator-brand{margin-bottom:18px}.field-summary dl{gap:12px}.field-summary dl div:nth-child(2){display:none}.field-inspector{width:280px}}
 @media(max-width:719px){body[data-view="universe"]{display:block;height:100dvh;padding-bottom:68px;overflow:hidden}body[data-view="universe"] .operator-nav{position:relative;display:flex;width:100%;height:56px;min-height:56px;flex-direction:row;align-items:center;padding:7px 14px;border:0;border-bottom:1px solid var(--line)}.field-rail .operator-brand{margin:0}.field-rail .operator-brand small,body[data-view="universe"] .operator-nav>nav,.field-rail .ask-button{display:none}body[data-view="universe"] .operator-actions{margin:0 0 0 auto}.field-rail .health-button{width:auto}.field-rail .health-panel{inset:54px 10px auto auto}body[data-view="universe"] main{height:calc(100dvh - 124px);min-height:0;padding:0 10px 4px}.field-summary{display:block;padding:0 2px 9px}.field-summary h2{font-size:22px}.field-summary dl{margin-top:8px;gap:15px}.field-summary dl div:nth-child(2),.field-summary dl div:nth-child(3){display:none}body[data-view="universe"] .pagehead{display:none}.field-stage{min-height:0}.field-toolbar{top:8px;right:8px;left:8px}.field-search{flex:1}.field-search input{width:100%;height:44px}.field-toolbar button{height:44px}.field-toolbar .field-live{display:none}.field-region-labels span{font-size:6px}.field-inspector{top:auto;right:6px;bottom:6px;left:6px;width:auto;max-height:62%;transform:translateY(calc(100% + 16px))}.field-inspector.open{transform:translateY(0)}.field-timeline{grid-template-columns:auto minmax(80px,1fr) auto;gap:6px;min-height:50px}.field-timeline time,.field-timeline>span{display:none}.field-timeline button{min-height:44px}.field-timeline button:first-child{min-width:96px}.mobile-nav{grid-template-columns:repeat(6,1fr)}body[data-view="universe"] #dock{display:none}body[data-view="universe"].ask-open #dock{display:flex}}
 @media(prefers-reduced-motion:reduce){.field-inspector{transition:none}.living-field *{scroll-behavior:auto!important}}
+
+/* Issue #80: the field is the interface. Keep the existing runtime wiring, but
+   remove the inherited page frame from its visual hierarchy. */
+body.living-field-shell[data-view="universe"]{
+  position:relative;display:block;width:100%;height:100dvh;min-height:560px;overflow:hidden;padding:0;background:#f2f5f1;color:#17201d
+}
+body.living-field-shell[data-view="universe"] .operator-nav{
+  position:fixed;top:16px;left:16px;z-index:30;display:flex;width:142px;height:auto;min-height:0;flex-direction:column;align-items:stretch;gap:0;padding:12px 10px;border:1px solid rgba(185,195,189,.92);border-radius:14px;background:rgba(250,252,249,.93);box-shadow:0 12px 30px rgba(47,63,56,.1);backdrop-filter:blur(12px)
+}
+body.living-field-shell[data-view="universe"] .field-rail .operator-brand{margin:0 2px 12px;padding:0;gap:8px}
+body.living-field-shell[data-view="universe"] .field-rail .operator-brand strong{font-size:13px}
+body.living-field-shell[data-view="universe"] .field-rail .operator-brand small{font-size:7px}
+body.living-field-shell[data-view="universe"] .field-rail .brand-mark{width:26px;height:26px;border-radius:7px}
+body.living-field-shell[data-view="universe"] .operator-nav>nav{gap:1px;padding:0}
+body.living-field-shell[data-view="universe"] .operator-nav>nav a{min-height:32px;padding:7px 8px;border-radius:8px;font-size:10.5px}
+body.living-field-shell[data-view="universe"] .operator-nav>nav a::before{width:5px;height:5px;margin-right:8px}
+body.living-field-shell[data-view="universe"] .operator-actions{gap:5px;margin-top:12px;padding-top:9px;border-top:1px solid rgba(216,222,217,.9)}
+body.living-field-shell[data-view="universe"] .field-rail .health-button,
+body.living-field-shell[data-view="universe"] .field-rail .ask-button{min-height:32px;border-radius:8px;font-size:10px}
+body.living-field-shell[data-view="universe"] .field-rail .ask-button{background:#17201d}
+body.living-field-shell[data-view="universe"] .field-rail .health-panel{inset:16px auto auto 170px;width:280px}
+body.living-field-shell[data-view="universe"] main{position:relative;display:block;width:100%;height:100%;min-height:0;padding:0;overflow:hidden}
+body.living-field-shell[data-view="universe"] .field-route-status{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+body.living-field-shell[data-view="universe"] #view{width:100%;height:100%;min-height:0}
+body.living-field-shell[data-view="universe"] .living-field{position:relative;display:block;width:100%;height:100%;min-height:0}
+body.living-field-shell[data-view="universe"] .field-stage{position:absolute;inset:0;width:100%;height:100%;border:0;background:#f2f5f1}
+body.living-field-shell[data-view="universe"] .field-stage::before{background-image:linear-gradient(rgba(61,78,69,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(61,78,69,.025) 1px,transparent 1px);background-size:36px 36px}
+body.living-field-shell[data-view="universe"] .field-summary{position:absolute;z-index:4;top:18px;right:18px;left:176px;display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:0;pointer-events:none}
+body.living-field-shell[data-view="universe"] .field-summary h2{margin:0;color:#17201d;font:650 clamp(20px,2.4vw,32px)/1.08 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;letter-spacing:-.035em}
+body.living-field-shell[data-view="universe"] .field-summary p{max-width:430px;margin-top:5px;color:#5f6c66;font-size:11px}
+body.living-field-shell[data-view="universe"] .field-summary dl{gap:17px;padding:3px 0}
+body.living-field-shell[data-view="universe"] .field-summary dt{color:#7b8781;font-size:7px}
+body.living-field-shell[data-view="universe"] .field-summary dd{font-size:12px}
+body.living-field-shell[data-view="universe"] .field-toolbar{top:84px;left:176px}
+body.living-field-shell[data-view="universe"] .field-toolbar input,
+body.living-field-shell[data-view="universe"] .field-toolbar button{background:rgba(250,252,249,.9);box-shadow:0 5px 16px rgba(47,63,56,.06)}
+body.living-field-shell[data-view="universe"] .field-region-labels [data-region="now"]{top:17%;left:49%}
+body.living-field-shell[data-view="universe"] .field-region-labels [data-region="memory"]{top:48%;left:48%}
+body.living-field-shell[data-view="universe"] .field-inspector{top:82px;right:18px;bottom:auto;width:min(320px,calc(100% - 36px));max-height:calc(100% - 178px);border-color:rgba(185,195,189,.95);border-radius:14px;background:rgba(250,252,249,.95);box-shadow:0 16px 38px rgba(47,63,56,.13)}
+body.living-field-shell[data-view="universe"] .field-inspector:not(.open){visibility:hidden;opacity:0}
+body.living-field-shell[data-view="universe"] .field-inspector.open{visibility:visible;opacity:1}
+body.living-field-shell[data-view="universe"] .field-timeline{position:absolute;z-index:4;right:18px;bottom:92px;left:176px;min-height:52px;padding:8px 12px;border:1px solid rgba(185,195,189,.9);border-radius:13px;background:rgba(250,252,249,.92);box-shadow:0 10px 28px rgba(47,63,56,.08);backdrop-filter:blur(10px)}
+body.living-field-shell[data-view="universe"] #dock{position:fixed;z-index:32;right:18px;bottom:16px;left:176px;width:auto;height:64px;border:1px solid rgba(185,195,189,.9);border-radius:13px;background:rgba(250,252,249,.94);box-shadow:0 10px 28px rgba(47,63,56,.1);transform:none}
+body.living-field-shell[data-view="universe"] #dock .chatbar{width:min(900px,100%);padding:8px 12px}
+body.living-field-shell[data-view="universe"].ask-open #dock{right:0;bottom:0;left:0;width:100%;height:clamp(320px,42vh,460px);border-right:0;border-bottom:0;border-left:0;border-radius:16px 16px 0 0}
+body.living-field-shell[data-view="universe"].ask-open .field-timeline{bottom:calc(clamp(320px,42vh,460px) + 28px);opacity:.4;pointer-events:none}
+body.living-field-shell[data-view="universe"].workbench-max #dock{height:calc(100dvh - 16px);max-height:none}
+
+@media(max-width:719px){
+  body.living-field-shell[data-view="universe"]{height:100dvh;min-height:0;padding-bottom:68px}
+  body.living-field-shell[data-view="universe"] .operator-nav{position:fixed;top:10px;right:10px;left:10px;width:auto;height:50px;min-height:50px;flex-direction:row;align-items:center;padding:6px 10px;border-radius:12px}
+  body.living-field-shell[data-view="universe"] .field-rail .operator-brand{margin:0}
+  body.living-field-shell[data-view="universe"] .field-rail .operator-brand small,
+  body.living-field-shell[data-view="universe"] .operator-nav>nav,
+  body.living-field-shell[data-view="universe"] .field-rail .ask-button{display:none}
+  body.living-field-shell[data-view="universe"] .operator-actions{margin:0 0 0 auto;padding:0;border:0}
+  body.living-field-shell[data-view="universe"] .field-rail .health-button{width:auto;min-height:38px}
+  body.living-field-shell[data-view="universe"] .field-summary{top:76px;right:12px;left:12px;display:block}
+  body.living-field-shell[data-view="universe"] .field-summary h2{font-size:22px}
+  body.living-field-shell[data-view="universe"] .field-summary p{max-width:280px;font-size:10px}
+  body.living-field-shell[data-view="universe"] .field-summary dl{display:none}
+  body.living-field-shell[data-view="universe"] .field-toolbar{top:140px;right:12px;left:12px}
+  body.living-field-shell[data-view="universe"] .field-search{flex:1}
+  body.living-field-shell[data-view="universe"] .field-search input{width:100%;height:42px}
+  body.living-field-shell[data-view="universe"] .field-toolbar button{height:42px}
+  body.living-field-shell[data-view="universe"] .field-inspector{top:auto;right:8px;bottom:76px;left:8px;width:auto;max-height:48%;transform:translateY(calc(100% + 16px))}
+  body.living-field-shell[data-view="universe"] .field-inspector.open{transform:translateY(0)}
+  body.living-field-shell[data-view="universe"] .field-timeline{right:10px;bottom:148px;left:10px;grid-template-columns:auto minmax(80px,1fr) auto;min-height:50px;padding:5px 7px}
+  body.living-field-shell[data-view="universe"] .field-timeline time,body.living-field-shell[data-view="universe"] .field-timeline>span{display:none}
+  body.living-field-shell[data-view="universe"] #dock{right:10px;bottom:80px;left:10px;width:auto;height:58px;border-radius:12px}
+  body.living-field-shell[data-view="universe"].ask-open #dock{inset:0;width:100%;height:100dvh;border-radius:0}
+  body.living-field-shell[data-view="universe"].ask-open .field-timeline{display:none}
+}

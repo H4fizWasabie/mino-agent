@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+### Changed
+- Rebuilt the Living Field composition around an edge-to-edge universe canvas (#80). The map now owns the primary viewport while lenses, inspection, playback, and conversation remain lightweight overlays instead of inheriting the previous dashboard shell. (Why: the first release preserved too much of the old page hierarchy and reduced the approved living-map concept to a contained widget.)
+
 ## [v2.7.0] — Living Field (2026-08-09)
 ### Added
 - Living Field universe contract (#78): the dashboard now has a compact read-only map of durable memories, responsibilities, routines, reminders, artifacts, conversations, skills, and tools, with chronological responsibility history and non-destructive cursor-based runtime events for playback and live activity. (Why: a map-first interface needs one truthful topology contract; runtime activity must remain ephemeral while verified state remains durable.)
