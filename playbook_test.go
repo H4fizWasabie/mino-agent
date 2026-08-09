@@ -195,6 +195,16 @@ func TestPlaybookWriteGuard(t *testing.T) {
 		t.Fatalf("doubled-home path not rejected: %s (guard=%q)", doubled, guard)
 	}
 
+	// Issue #42: a stray relative .mino prefix must be rejected with the
+	// corrected absolute path (it resolves via CWD but breaks attribution).
+	rel := ".mino/playbooks/brief/runs/run-123/stages/01-collect/output/result.md"
+	if guard := playbookWriteGuard(home, rel, ctx); guard == "" || !strings.Contains(guard, "absolute path") {
+		t.Fatalf("relative .mino prefix not rejected: %q (guard=%q)", rel, guard)
+	}
+	if guard := playbookWriteGuard(home, rel, ctx); !strings.Contains(guard, filepath.Join(home, "playbooks")) {
+		t.Fatalf("relative .mino guard missing the corrected path: %q", guard)
+	}
+
 	// Inside a stage: only its own run directory is writable.
 	stageCtx := context.WithValue(ctx, traceTagKey{}, map[string]string{
 		"playbook": "brief",
@@ -880,5 +890,39 @@ func TestQuarantinedOutputsSkippedFromArtifacts(t *testing.T) {
 	}
 	if len(artifacts) != 1 || artifacts[0] != path1 {
 		t.Fatalf("artifacts = %v, want only the normal output %q (quarantined must not distill)", artifacts, path1)
+	}
+}
+
+// Issue #44: run_playbook from inside a stage of the SAME playbook must be
+// rejected with a corrective error (no re-run / no recursion).
+func TestRunPlaybookRejectsSamePlaybookRecursion(t *testing.T) {
+	core := &Core{}
+	tool := makeRunPlaybookTool(core)
+	// Inside a stage of "brief".
+	stageCtx := context.WithValue(context.Background(), traceTagKey{}, map[string]string{
+		"playbook": "brief",
+		"stage":    "01-collect",
+		"run":      "run-123",
+	})
+	out := tool.ContextFn(stageCtx, map[string]any{"name": "brief"})
+	if !strings.Contains(out, "already inside playbook brief") {
+		t.Fatalf("same-playbook recursion not rejected: %q", out)
+	}
+	// The guard fires before any core use; allowed paths (cross-playbook and
+	// chat) proceed unchanged — verify the guard passes them through.
+	for _, tc := range []struct {
+		ctx  context.Context
+		name string
+	}{
+		{stageCtx, "other-playbook"},          // cross-playbook delegation allowed
+		{context.Background(), "brief"},      // chat context, no stage tags
+	} {
+		func() {
+			defer func() { recover() }() // nil test Core panics past the guard — fine
+			out = tool.ContextFn(tc.ctx, map[string]any{"name": tc.name})
+			if strings.Contains(out, "already inside") {
+				t.Fatalf("allowed path wrongly rejected: %q", out)
+			}
+		}()
 	}
 }

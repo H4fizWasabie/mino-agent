@@ -26,6 +26,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- `run_playbook` rejects re-running the playbook it is already inside (corrective error, no recursion). (Why: 2026-08-09 the threads-community stage skipped itself with "run_playbook was unavailable" — the model tried to re-run the playbook from inside its own stage and treated the blocked tool as a skip reason. Stages with no tool whitelist would have allowed the recursion outright; the guard closes it. Cross-playbook delegation and chat calls are unchanged.)
+
 ### Added
 - `extensions/cost-watch` — the price guardian: scrapes OpenRouter model pages, alerts on Telegram when a promotional price expires (best price > expected × threshold), and swaps providers.json down the model chain with backup + atomic restart. Exposes `cost_watch_status` / `cost_watch_check` / `cost_watch_swap` tools via the extension protocol. (Why: the provider stack runs on promos — GLM 5.2 at 93% off, luna-pro at 50% off — and an expired promo silently multiplies the bill 7-20×. The scraper is deterministic, no LLM, no API key; the restart defers during in-flight playbook runs.)
 ### Added

@@ -244,6 +244,14 @@ func makeRunPlaybookTool(core *Core) *Tool {
 			if name == "" {
 				return "Error: playbook name is required"
 			}
+			// Recursion guard (issue #44): a stage must not re-run its own playbook.
+			// Observed 2026-08-09: the model, already inside threads-community's
+			// stage, called run_playbook for the same playbook and treated the
+			// unavailable tool as a skip reason. Stages with no tool whitelist
+			// would have allowed the recursion outright.
+			if tags := traceTagsFromCtx(ctx); tags["playbook"] == name {
+				return fmt.Sprintf("Error: you are already inside playbook %s's stage — continue the stage steps; do not re-run the playbook", name)
+			}
 			sid := ""
 			if v := ctx.Value(sessionIDKey{}); v != nil {
 				sid, _ = v.(string)

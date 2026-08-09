@@ -414,6 +414,14 @@ func playbookWriteGuard(home, path string, ctx context.Context) string {
 	if strings.Contains(clean, homeClean+string(filepath.Separator)+filepath.Base(homeClean)) {
 		return fmt.Sprintf("suspicious doubled-path: %s (home directory appears more than once; use the exact declared output path)", path)
 	}
+	// Stray relative .mino prefix (issue #42): ".mino/playbooks/..." resolves
+	// via CWD to the right location but the recorded arg path never matches
+	// the declared absolute output, so stage-output attribution fails (the
+	// VPS reddit karma-log run, 2026-08-09). Reject with the corrected path.
+	if strings.HasPrefix(clean, ".mino"+string(filepath.Separator)) {
+		corrected := filepath.Join(home, strings.TrimPrefix(clean, ".mino"+string(filepath.Separator)))
+		return fmt.Sprintf("stray relative .mino prefix: %s — use the absolute path %s", path, corrected)
+	}
 	if clean == root || !strings.HasPrefix(clean, root+string(filepath.Separator)) {
 		return ""
 	}
