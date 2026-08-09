@@ -1,6 +1,6 @@
 # Changelog
 
-## [v2.7.2] — Session menu stability (2026-08-09)
+## [Unreleased]
 ### Fixed
 - Dashboard conversation history could throw after its async session load because the event's `currentTarget` is unavailable after an `await` (#82). The menu now captures its anchor before loading and fails closed if it is no longer present. (Why: a chat control must not turn a delayed data read into an uncaught browser exception.)
 
