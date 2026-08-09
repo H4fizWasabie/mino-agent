@@ -26,6 +26,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- `run_playbook` rejects re-running the playbook it is already inside (corrective error, no recursion). (Why: 2026-08-09 the threads-community stage skipped itself with "run_playbook was unavailable" — the model tried to re-run the playbook from inside its own stage and treated the blocked tool as a skip reason. Stages with no tool whitelist would have allowed the recursion outright; the guard closes it. Cross-playbook delegation and chat calls are unchanged.)
+
 ### Added
 - Dashboard route-parity coverage now inventories the registered HTTP surface, primary and legacy hash navigation, and polling-preservation behavior before the Nowfield replacement. (Why: a full shell redesign must fail tests when a route, endpoint binding, deep link, or interactive state silently disappears.)
 - Promo-ready PNG archive preserves every redesign concept and the rendered Nowfield desktop, tablet, mobile, and focused-Responsibility states. (Why: the selected interface and its design exploration should remain reusable for launch material without depending on ignored scratch files.)

@@ -882,3 +882,37 @@ func TestQuarantinedOutputsSkippedFromArtifacts(t *testing.T) {
 		t.Fatalf("artifacts = %v, want only the normal output %q (quarantined must not distill)", artifacts, path1)
 	}
 }
+
+// Issue #44: run_playbook from inside a stage of the SAME playbook must be
+// rejected with a corrective error (no re-run / no recursion).
+func TestRunPlaybookRejectsSamePlaybookRecursion(t *testing.T) {
+	core := &Core{}
+	tool := makeRunPlaybookTool(core)
+	// Inside a stage of "brief".
+	stageCtx := context.WithValue(context.Background(), traceTagKey{}, map[string]string{
+		"playbook": "brief",
+		"stage":    "01-collect",
+		"run":      "run-123",
+	})
+	out := tool.ContextFn(stageCtx, map[string]any{"name": "brief"})
+	if !strings.Contains(out, "already inside playbook brief") {
+		t.Fatalf("same-playbook recursion not rejected: %q", out)
+	}
+	// The guard fires before any core use; allowed paths (cross-playbook and
+	// chat) proceed unchanged — verify the guard passes them through.
+	for _, tc := range []struct {
+		ctx  context.Context
+		name string
+	}{
+		{stageCtx, "other-playbook"},          // cross-playbook delegation allowed
+		{context.Background(), "brief"},      // chat context, no stage tags
+	} {
+		func() {
+			defer func() { recover() }() // nil test Core panics past the guard — fine
+			out = tool.ContextFn(tc.ctx, map[string]any{"name": tc.name})
+			if strings.Contains(out, "already inside") {
+				t.Fatalf("allowed path wrongly rejected: %q", out)
+			}
+		}()
+	}
+}
