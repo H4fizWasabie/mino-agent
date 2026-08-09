@@ -24,7 +24,15 @@
 ### Fixed
 - Routines closed with status `stopped` can now be restarted by their scheduled fire. (Why: a manual close during the provider/cache migration cleanup on 2026-08-06 left three night routines in `stopped`, and `validResponsibilityTransition` treated `stopped` as terminal — every scheduled fire since died with `cannot move responsibility from "stopped" to "working"`, silently killing ai-news-daily, malaysian-news-daily, and facebook-daily-ai-post. The schedule had no recovery path. Routines are recurring by nature: closed = paused, next fire restarts. One-off responsibilities remain terminal.)
 
-## [Unreleased]
+## [v2.5.0] — The Price Guardian + Dashboard Redesign (2026-08-09)
+
+### Added
+- `extensions/cost-watch` — the price guardian: scrapes OpenRouter model pages, alerts on Telegram when a promotional price expires (best price > expected × threshold), and swaps providers.json down the model chain with backup + atomic restart. Exposes `cost_watch_status` / `cost_watch_check` / `cost_watch_swap` tools via the extension protocol — the first extension in the mino extension ecosystem that watches mino's own wallet.
+- Dashboard redesign: Nowfield work surface, conversation workbench, truthful artifact actions (the operator-timeline direction).
+
+### Fixed
+- write_file/edit_file reject stray relative `.mino` prefixes with the corrected absolute path. (Why: the VPS reddit karma-log run on 2026-08-09 wrote to a relative `.mino/playbooks/...` path — it resolved via CWD to the right location, but the recorded arg path never matched the declared output, so stage-output attribution failed and the run went blocked. The doubled-`.mino` guard already existed; this closes the relative-prefix escape hatch — the fourth occurrence of the model mangling `.mino`-prefixed paths.)
+- `run_playbook` rejects re-running the playbook it is already inside (corrective error, no recursion). (Why: 2026-08-09 the threads-community stage skipped itself with "run_playbook was unavailable" — the model tried to re-run the playbook from inside its own stage and treated the blocked tool as a skip reason. Stages with no tool whitelist would have allowed the recursion outright; the guard closes it. Cross-playbook delegation and chat calls are unchanged.)
 
 ### Fixed
 - `run_playbook` rejects re-running the playbook it is already inside (corrective error, no recursion). (Why: 2026-08-09 the threads-community stage skipped itself with "run_playbook was unavailable" — the model tried to re-run the playbook from inside its own stage and treated the blocked tool as a skip reason. Stages with no tool whitelist would have allowed the recursion outright; the guard closes it. Cross-playbook delegation and chat calls are unchanged.)
