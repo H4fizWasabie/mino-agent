@@ -870,7 +870,7 @@ func makeSchedulePlaybookTool(home, timezone string) *Tool {
 			if err := saveSchedules(home, scheds); err != nil {
 				return fmt.Sprintf("Error saving schedule: %v", err)
 			}
-			return fmt.Sprintf("Scheduled %s daily at %s (%s). Output will appear in the dashboard under session scheduled-%s.", name, at, zone, name)
+			return fmt.Sprintf("Scheduled %s daily at %s (%s) — stored in schedules.json. Output will appear in the dashboard under session scheduled-%s.", name, at, zone, name)
 		},
 	}
 }
