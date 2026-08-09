@@ -587,7 +587,7 @@ func createManagedPlaybook(core *Core, name string, args map[string]any) string 
 		_ = os.RemoveAll(dir)
 		return fmt.Sprintf("Error: invalid playbook: %v", err)
 	}
-	return fmt.Sprintf("Created and validated playbook %s.", name)
+	return fmt.Sprintf("Created and validated playbook %s (stored in %s/playbooks/%s/).", name, core.Settings.Home, name)
 }
 
 func canonicalManagedStageName(raw string, position int) (string, error) {

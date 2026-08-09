@@ -46,7 +46,7 @@ func makeCreateReminderTool(db *sql.DB, location *time.Location) *Tool {
 				return fmt.Sprintf("Error creating reminder: %v", err)
 			}
 			id, _ := result.LastInsertId()
-			return fmt.Sprintf("Created reminder #%d for %s: %s", id, when.In(location).Format("2006-01-02 15:04 MST"), message)
+			return fmt.Sprintf("Created reminder #%d for %s: %s — stored in system reminders (SQLite), NOT your calendar", id, when.In(location).Format("2006-01-02 15:04 MST"), message)
 		},
 	}
 }
@@ -107,7 +107,7 @@ func makeCancelReminderTool(db *sql.DB) *Tool {
 			if changed == 0 {
 				return fmt.Sprintf("No pending reminder found with id %d", id)
 			}
-			return fmt.Sprintf("Cancelled reminder #%d", id)
+			return fmt.Sprintf("Cancelled reminder #%d (status: cancelled, system reminders, SQLite)", id)
 		},
 	}
 }

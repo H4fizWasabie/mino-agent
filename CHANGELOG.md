@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+### Changed
+- OSV-01 tool results report destination + state (closes #67): every mutating tool result now answers "what happened and where it went" — create_reminder says "stored in system reminders (SQLite), NOT your calendar" (the sentence that would have prevented the Arachem 166K-token calendar detour), cancel_reminder reports status: cancelled, create_event names both stores (calendar_events SQLite + calendar.ics), save_note/manage_memory name the memories/<id>.md file, update_soul/create_skill/add_working_memory/add_pattern name their files, manage_playbook create and schedule_playbook name playbooks/ and schedules.json. Uniform pattern: success + destination + state. (Why: the LLM is a stateless reasoner; the harness must translate state into context — a result that says only "Reminder set" leaves the model guessing where its own operation put the information.)
+
 ## [v2.6.1] — Lenient Timestamp Parse (2026-08-09)
 
 ### Fixed

@@ -26,12 +26,19 @@ func TestReminderToolsCreateListAndCancel(t *testing.T) {
 	if !strings.Contains(created, "Created reminder #1") {
 		t.Fatalf("create = %q", created)
 	}
+	// OSV-01: the result must answer "where did it go" — system reminders
+	// (SQLite), explicitly NOT the user's calendar.
+	for _, want := range []string{"system reminders", "SQLite", "NOT your calendar"} {
+		if !strings.Contains(created, want) {
+			t.Fatalf("create result missing %q: %q", want, created)
+		}
+	}
 	listed := tools[1].Fn(nil)
 	if !strings.Contains(listed, "#1") || !strings.Contains(listed, "check procurement") {
 		t.Fatalf("list = %q", listed)
 	}
 	cancelled := tools[2].Fn(map[string]any{"id": float64(1)})
-	if cancelled != "Cancelled reminder #1" {
+	if !strings.Contains(cancelled, "Cancelled reminder #1") || !strings.Contains(cancelled, "cancelled") {
 		t.Fatalf("cancel = %q", cancelled)
 	}
 	if got := tools[1].Fn(nil); got != "No pending reminders." {

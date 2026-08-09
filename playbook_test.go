@@ -444,7 +444,7 @@ func TestManagePlaybookLifecycle(t *testing.T) {
 	tool := makeManagePlaybookTool(core)
 	stage := "# Gather\n\n## Inputs\n\n| Source | File/Location | Section/Scope | Why |\n| --- | --- | --- | --- |\n\n## Process\n\n1. Write the report.\n\n## Tools\n\n- write_file\n\n## Outputs\n\n| Artifact | Location | Format |\n| --- | --- | --- |\n| Report | `output/report.md` | Markdown |\n"
 	create := tool.Fn(map[string]any{"action": "create", "name": "daily-report", "context": "# Daily report\n", "stages": []any{map[string]any{"name": "01-gather", "context": stage}}})
-	if create != "Created and validated playbook daily-report." {
+	if !strings.Contains(create, "Created and validated playbook daily-report") || !strings.Contains(create, "playbooks/daily-report/") {
 		t.Fatalf("create = %q", create)
 	}
 	if got := tool.Fn(map[string]any{"action": "validate", "name": "daily-report"}); got != "Playbook daily-report is valid." {
