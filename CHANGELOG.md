@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 ### Added
+- `save_note` accepts an optional `why` field carrying the user's verbatim words (MEM-07, closes #58). The seed is stored on the fact and fed verbatim to the MEM-02 judgment pass as `USER WHY:` — no asking, no paraphrase. System prompt now tells Mino to pass the user's own words as `why` on save/remember. (Why: MEM-02's judgment side already consumed a USER WHY seed, but nothing could produce one — the seed path was dead code.)
 - Judgment pass now writes `why` + `use_when` on every fact (MEM-02, closes #52). The existing graph judgment call (GLM 5.2, bounded 5/pass incremental + full ~6h rebuild) now returns per-fact `why` (refines the user's seed when present, distills from content when absent) and `use_when` trigger phrases (situations where the fact should be recalled) alongside the edges. Same model call, same bounds, same failure semantics — a partial response (edges without facts meta) degrades without wiping existing why/use_when. (Why: `Fact.Why` was a schema ghost — never written, never surfaced; the memory-intent work needs both fields populated before remember ranking can use them.)
 - Graph rebuild preserves fact `Source` provenance instead of stamping every fact `graph-rebuild`. (Why: 296/303 production facts lost their origin — the why work depends on provenance surviving.)
 - Dedup merges keep the survivor's `why`/`use_when` instead of dropping them.

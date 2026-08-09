@@ -1273,13 +1273,14 @@ func makeListCalendarTool(db *sql.DB, location *time.Location) *Tool {
 func makeNotesTool(db *sql.DB, mem *Memory) *Tool {
 	return &Tool{
 		Name:        "save_note",
-		Description: "Save a durable fact to memory as a .md file with YAML front matter. Only for facts worth remembering in a month — skip one-off tasks and transient intent. Use when user shares something about people, projects, or preferences.",
+		Description: "Save a durable fact to memory as a .md file with YAML front matter. Only for facts worth remembering in a month — skip one-off tasks and transient intent. Use when user shares something about people, projects, or preferences. Include why with the user's own words (verbatim, never paraphrased) when they gave a reason.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"id":      map[string]any{"type": "string", "description": "snake_case unique identifier"},
 				"subject": map[string]any{"type": "string", "description": "Who or what this is about, one sentence"},
 				"content": map[string]any{"type": "string", "description": "Optional body text, 1-3 sentences"},
+				"why":     map[string]any{"type": "string", "description": "The user's own words on why this matters — verbatim, never paraphrased. Only when they stated a reason; never ask for one."},
 				"edge":    map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"target": map[string]any{"type": "string"}, "rel": map[string]any{"type": "string"}}}, "description": "Related facts: [{target: id, rel: relation}]"},
 			},
 			"required": []string{"id", "subject"},
@@ -1288,6 +1289,7 @@ func makeNotesTool(db *sql.DB, mem *Memory) *Tool {
 			id, _ := args["id"].(string)
 			subject, _ := args["subject"].(string)
 			content, _ := args["content"].(string)
+			why, _ := args["why"].(string)
 
 			var edges []Edge
 			if raw, ok := args["edge"]; ok {
@@ -1308,6 +1310,7 @@ func makeNotesTool(db *sql.DB, mem *Memory) *Tool {
 				Type:    "semantic",
 				Subject: subject,
 				At:      time.Now(),
+				Why:     why,
 				Edges:   edges,
 				Body:    content,
 			}
@@ -1318,6 +1321,9 @@ func makeNotesTool(db *sql.DB, mem *Memory) *Tool {
 			// Also index for embedding similarity
 			if mem.embedder != nil {
 				mem.embedder.IndexFact(id, fact)
+			}
+			if why != "" {
+				return fmt.Sprintf("Saved: %s — %s (why: %s)", subject, content, why)
 			}
 			return fmt.Sprintf("Saved: %s — %s", subject, content)
 		},
@@ -1886,7 +1892,7 @@ func makeGenerateImageTool(home string) *Tool {
 
 // cfImageResponse is the Cloudflare Workers AI image result envelope.
 type cfImageResponse struct {
-	Success bool   `json:"success"`
+	Success bool `json:"success"`
 	Result  struct {
 		Image  string   `json:"image"`
 		Images []string `json:"images"`
@@ -2013,8 +2019,8 @@ func parseORImage(data []byte) ([]byte, string, error) {
 						URL string `json:"url"`
 					} `json:"image_url"`
 				} `json:"images"`
-		} `json:"message"`
-	} `json:"choices"`
+			} `json:"message"`
+		} `json:"choices"`
 	}
 	if err := json.Unmarshal(data, &out); err != nil {
 		return nil, "", err

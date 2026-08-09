@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
-	"strings"
-	"time"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseORImage(t *testing.T) {
@@ -111,6 +113,61 @@ func TestBashPartialFailureCarriesOutput(t *testing.T) {
 	}
 	if !strings.Contains(out, "/home/mino/.mino/mino.db") {
 		t.Fatalf("output not carried in result: %q", out)
+	}
+}
+
+// MEM-07: save_note accepts the user's verbatim words as an optional why seed,
+// stored on the fact and echoed back; the seed feeds the MEM-02 judgment pass.
+func TestSaveNoteCapturesWhy(t *testing.T) {
+	home := t.TempDir()
+	memories := filepath.Join(home, "memories")
+	mem := &Memory{db: Connect(home), cfg: &Settings{Home: home, MemoriesDir: memories}, graph: NewGraphMemory(memories, nil)}
+	defer mem.db.Close()
+	tool := makeNotesTool(mem.db, mem)
+
+	out := tool.Fn(map[string]any{
+		"id":      "planet",
+		"subject": "My planet is Mars",
+		"content": "Red planet.",
+		"why":     "because I live there",
+	})
+	if !strings.Contains(out, "why: because I live there") {
+		t.Fatalf("why not echoed in result: %q", out)
+	}
+	fact, ok := mem.graph.FindFact("planet")
+	if !ok {
+		t.Fatal("fact not saved")
+	}
+	if fact.Why != "because I live there" {
+		t.Fatalf("fact.Why = %q, want the user's verbatim words", fact.Why)
+	}
+	raw, err := os.ReadFile(filepath.Join(memories, "planet.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "why: because I live there") {
+		t.Fatalf("why missing from front matter:\n%s", raw)
+	}
+}
+
+// MEM-07: no why given -> fact saved with empty why (never invented).
+func TestSaveNoteWithoutWhy(t *testing.T) {
+	home := t.TempDir()
+	memories := filepath.Join(home, "memories")
+	mem := &Memory{db: Connect(home), cfg: &Settings{Home: home, MemoriesDir: memories}, graph: NewGraphMemory(memories, nil)}
+	defer mem.db.Close()
+	tool := makeNotesTool(mem.db, mem)
+
+	out := tool.Fn(map[string]any{"id": "plain", "subject": "Plain fact"})
+	if strings.Contains(out, "why:") {
+		t.Fatalf("invented a why: %q", out)
+	}
+	fact, ok := mem.graph.FindFact("plain")
+	if !ok {
+		t.Fatal("fact not saved")
+	}
+	if fact.Why != "" {
+		t.Fatalf("fact.Why = %q, want empty (no asking, no invention)", fact.Why)
 	}
 }
 
