@@ -111,7 +111,9 @@ func readMinoEnv(key string) string {
 
 // pricingRE matches the escaped-JSON pricing objects on the OpenRouter pages:
 // \"pricing\":{\"prompt\":\"...\",\"completion\":\"...\",\"input_cache_read\":\"...\",\"discount\":N
-var pricingRE = regexp.MustCompile(`\\?"pricing\\?":\{\\?"prompt\\?":\\?"([0-9.]+)\\?",\\?"completion\\?":\\?"([0-9.]+)\\?",\\?"input_cache_read\\?":\\?"([0-9.]+)\\?",\\?"discount\\?":([0-9.]+)`)
+// [^{}]* between fields tolerates extra keys in the pricing object (luna-pro
+// carries input_cache_write + web_search between input_cache_read and discount).
+var pricingRE = regexp.MustCompile(`\\?"pricing\\?":\{[^{}]*\\?"prompt\\?":\\?"([0-9.]+)\\?"[^{}]*\\?"completion\\?":\\?"([0-9.]+)\\?"[^{}]*\\?"input_cache_read\\?":\\?"([0-9.]+)\\?"[^{}]*\\?"discount\\?":([0-9.]+)`)
 
 var nameRE = regexp.MustCompile(`\\?"name\\?":\\?"([^\\"]{2,40})\\"`)
 

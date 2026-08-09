@@ -38,6 +38,17 @@ func TestParseLunaPricing(t *testing.T) {
 	}
 }
 
+// luna's live page carries extra pricing keys (input_cache_write, web_search)
+// between input_cache_read and discount — the parser must tolerate them.
+const fixtureLunaExtra = `<script>window.__DATA__ = "{\"name\":\"OpenAI\",\"pricing\":{\"prompt\":\"0.0000001\",\"completion\":\"0.0000006\",\"input_cache_read\":\"0.00000001\",\"input_cache_write\":\"0.000000125\",\"web_search\":\"0.005\",\"discount\":0.5}}"</script>`
+
+func TestParseLunaExtraKeys(t *testing.T) {
+	provs := parsePricing(fixtureLunaExtra)
+	if !approx(provs["OpenAI"].Input, 0.10) || !approx(provs["OpenAI"].Cache, 0.01) {
+		t.Fatalf("OpenAI = %+v", provs["OpenAI"])
+	}
+}
+
 func TestBestProvider(t *testing.T) {
 	provs := parsePricing(fixtureGLM)
 	best := ""
