@@ -27,6 +27,7 @@ type Fact struct {
 	Subject  string    `yaml:"subject"`
 	At       time.Time `yaml:"at"`
 	Why      string    `yaml:"why,omitempty"`
+	UseWhen  []string  `yaml:"use_when,omitempty"` // GLM-written trigger phrases (MEM-02)
 	Source   string    `yaml:"source,omitempty"`
 	Feedback int       `yaml:"feedback,omitempty"`
 	Edges    []Edge    `yaml:"edge"`
@@ -59,15 +60,16 @@ type GraphMemory struct {
 // --- Index cache types ---
 
 type indexEntry struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Subject  string `json:"subject"`
-	At       string `json:"at"`
-	Why      string `json:"why,omitempty"`
-	Source   string `json:"source,omitempty"`
-	Feedback int    `json:"feedback,omitempty"`
-	Edges    []Edge `json:"edges,omitempty"`
-	JudgedAt string `json:"judged_at,omitempty"`
+	ID       string   `json:"id"`
+	Type     string   `json:"type"`
+	Subject  string   `json:"subject"`
+	At       string   `json:"at"`
+	Why      string   `json:"why,omitempty"`
+	UseWhen  []string `json:"use_when,omitempty"`
+	Source   string   `json:"source,omitempty"`
+	Feedback int      `json:"feedback,omitempty"`
+	Edges    []Edge   `json:"edges,omitempty"`
+	JudgedAt string   `json:"judged_at,omitempty"`
 }
 
 type fileStamp struct {
@@ -161,6 +163,7 @@ func (gm *GraphMemory) loadIndex() bool {
 			Subject:  entry.Subject,
 			At:       at,
 			Why:      entry.Why,
+			UseWhen:  entry.UseWhen,
 			Source:   entry.Source,
 			Feedback: entry.Feedback,
 			Edges:    edges,
@@ -196,6 +199,7 @@ func (gm *GraphMemory) saveIndex() {
 			Subject:  f.Subject,
 			At:       f.At.Format(time.RFC3339),
 			Why:      f.Why,
+			UseWhen:  f.UseWhen,
 			Source:   f.Source,
 			Feedback: f.Feedback,
 			Edges:    f.Edges,
@@ -703,10 +707,11 @@ func writeMarkdownFact(path string, fact Fact) error {
 		Subject  string    `yaml:"subject"`
 		At       time.Time `yaml:"at"`
 		Why      string    `yaml:"why,omitempty"`
+		UseWhen  []string  `yaml:"use_when,omitempty"`
 		Source   string    `yaml:"source,omitempty"`
 		Feedback int       `yaml:"feedback,omitempty"`
 		Edges    []Edge    `yaml:"edge,omitempty"`
-	}{fact.ID, fact.Type, fact.Subject, fact.At, fact.Why, fact.Source, fact.Feedback, fact.Edges}
+	}{fact.ID, fact.Type, fact.Subject, fact.At, fact.Why, fact.UseWhen, fact.Source, fact.Feedback, fact.Edges}
 	fm, err := yaml.Marshal(front)
 	if err != nil {
 		return err

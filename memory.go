@@ -643,10 +643,11 @@ func (m *Memory) validInferredEdges(edges []Edge, candidates map[string]bool, so
 	return valid
 }
 
-const graphRebuildPrompt = `You are rebuilding relationships in a personal knowledge graph.
-Return only JSON: {"edges":[{"source":"claim_id","target":"candidate_id","rel":"specific_relation","confidence":0.0}]}.
-For every candidate pair, actively check whether the claim bodies establish a direct relationship. Emit an edge when the relationship is clear and useful; do not require the exact relationship words to appear verbatim.
+const graphJudgmentPrompt = `You are maintaining a personal knowledge graph.
+Return only JSON: {"edges":[{"source":"claim_id","target":"candidate_id","rel":"specific_relation","confidence":0.0}],"facts":[{"id":"claim_id","why":"...","use_when":["...","..."]}]}.
+EDGES: For every candidate pair, actively check whether the claim bodies establish a direct relationship. Emit an edge when the relationship is clear and useful; do not require the exact relationship words to appear verbatim.
 Use a specific relation such as depends_on, maintains, prefers, attributed_to, located_at, requires, supersedes, deployed_on, scheduled_at, calls, or used_in. Never use related_to. Confidence must be at least 0.85. Do not invent IDs or relationships that are merely topical.
+FACTS: For EVERY source claim, emit one facts entry. "why" is a 1-2 sentence reason the fact matters to the owner. When a source has a USER WHY line, keep its intent and refine only for clarity; never contradict it. When it has none, write the why from the claim itself. "use_when" is 2-5 short trigger phrases naming the situations or questions where this fact should be recalled.
 
 Claims and bounded candidates:
 %s`
@@ -658,7 +659,18 @@ type graphRebuildEdge struct {
 	Confidence float64 `json:"confidence"`
 }
 
-func parseGraphRebuildResponse(text string) ([]graphRebuildEdge, error) {
+type graphJudgmentFact struct {
+	ID      string   `json:"id"`
+	Why     string   `json:"why"`
+	UseWhen []string `json:"use_when"`
+}
+
+type graphJudgment struct {
+	Edges []graphRebuildEdge  `json:"edges"`
+	Facts []graphJudgmentFact `json:"facts"`
+}
+
+func parseGraphJudgmentResponse(text string) (graphJudgment, error) {
 	text = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(text, "```json"), "```"))
 	for start := 0; start < len(text); start++ {
 		if text[start] != '{' {
@@ -668,15 +680,13 @@ func parseGraphRebuildResponse(text string) ([]graphRebuildEdge, error) {
 			if text[end-1] != '}' || !json.Valid([]byte(text[start:end])) {
 				continue
 			}
-			var output struct {
-				Edges []graphRebuildEdge `json:"edges"`
-			}
-			if err := json.Unmarshal([]byte(text[start:end]), &output); err == nil {
-				return output.Edges, nil
+			var out graphJudgment
+			if err := json.Unmarshal([]byte(text[start:end]), &out); err == nil {
+				return out, nil
 			}
 		}
 	}
-	return nil, fmt.Errorf("no valid graph rebuild object")
+	return graphJudgment{}, fmt.Errorf("no valid graph judgment object")
 }
 
 func (m *Memory) RebuildGraphEdges() (int, error) {
@@ -711,13 +721,16 @@ func (m *Memory) RebuildGraphEdges() (int, error) {
 		allowed := make(map[string]map[string]bool)
 		for _, sourceID := range ids[start:end] {
 			fmt.Fprintf(&claims, "SOURCE %s: %s | %s\n", sourceID, byID[sourceID].Subject, byID[sourceID].Body)
+			if byID[sourceID].Why != "" {
+				fmt.Fprintf(&claims, "  USER WHY: %s\n", byID[sourceID].Why)
+			}
 			allowed[sourceID] = make(map[string]bool)
 			for _, candidate := range candidates[sourceID] {
 				allowed[sourceID][candidate.ID] = true
 				fmt.Fprintf(&claims, "  CANDIDATE %s (%0.2f): %s | %s\n", candidate.ID, candidate.Score, byID[candidate.ID].Subject, byID[candidate.ID].Body)
 			}
 		}
-		resp, err := m.client.CreateJSON("graph-rebuild", SmallModel, []Message{{Role: "user", Content: fmt.Sprintf(graphRebuildPrompt, claims.String())}}, 1400, "")
+		resp, err := m.client.CreateJSON("graph-rebuild", SmallModel, []Message{{Role: "user", Content: fmt.Sprintf(graphJudgmentPrompt, claims.String())}}, 1600, "")
 		if err != nil {
 			failed++
 			continue
@@ -730,19 +743,25 @@ func (m *Memory) RebuildGraphEdges() (int, error) {
 				}
 			}
 		}
-		edges, err := parseGraphRebuildResponse(text)
-		if err != nil || len(edges) == 0 {
+		out, err := parseGraphJudgmentResponse(text)
+		if err != nil || len(out.Edges) == 0 {
 			failed++
 			continue
 		}
 		inferred := make(map[string][]Edge)
-		for _, edge := range edges {
+		for _, edge := range out.Edges {
 			if !allowed[edge.Source][edge.Target] {
 				continue
 			}
 			valid := m.validInferredEdges([]Edge{{Target: edge.Target, Rel: edge.Rel, Confidence: edge.Confidence}}, allowed[edge.Source], "graph-rebuild")
 			if len(valid) > 0 {
 				inferred[edge.Source] = append(inferred[edge.Source], valid...)
+			}
+		}
+		meta := make(map[string]graphJudgmentFact, len(out.Facts))
+		for _, f := range out.Facts {
+			if f.ID != "" {
+				meta[f.ID] = f
 			}
 		}
 		for _, sourceID := range ids[start:end] {
@@ -759,7 +778,17 @@ func (m *Memory) RebuildGraphEdges() (int, error) {
 				}
 			}
 			fact.Edges = append(fact.Edges, inferred[sourceID]...)
-			fact.Source = "graph-rebuild"
+			// Why/use_when: the rebuild must keep the original Source (provenance
+			// for the why work) and only overwrite why/use_when when the model
+			// returned fresh values for this fact.
+			if jf, ok := meta[sourceID]; ok {
+				if jf.Why != "" {
+					fact.Why = jf.Why
+				}
+				if len(jf.UseWhen) > 0 {
+					fact.UseWhen = jf.UseWhen
+				}
+			}
 			if err := m.graph.ReplaceFact(fact); err == nil {
 				edgesWritten += len(inferred[sourceID])
 			}
@@ -913,6 +942,9 @@ func (m *Memory) judgeFactEdges(fact Fact, all []Fact) (int, *Fact, bool) {
 	var claims strings.Builder
 	allowed := make(map[string]bool)
 	fmt.Fprintf(&claims, "SOURCE %s: %s | %s\n", fact.ID, fact.Subject, fact.Body)
+	if fact.Why != "" {
+		fmt.Fprintf(&claims, "  USER WHY: %s\n", fact.Why)
+	}
 	for _, c := range ids {
 		allowed[c.ID] = true
 		if other, ok := m.graph.FindFact(c.ID); ok {
@@ -920,7 +952,7 @@ func (m *Memory) judgeFactEdges(fact Fact, all []Fact) (int, *Fact, bool) {
 		}
 	}
 	resp, err := m.client.CreateJSON("graph-rebuild", SmallModel,
-		[]Message{{Role: "user", Content: fmt.Sprintf(graphRebuildPrompt, claims.String())}}, 1400, "")
+		[]Message{{Role: "user", Content: fmt.Sprintf(graphJudgmentPrompt, claims.String())}}, 1600, "")
 	if err != nil {
 		return 0, nil, false
 	}
@@ -932,12 +964,12 @@ func (m *Memory) judgeFactEdges(fact Fact, all []Fact) (int, *Fact, bool) {
 			}
 		}
 	}
-	edges, err := parseGraphRebuildResponse(text)
+	out, err := parseGraphJudgmentResponse(text)
 	if err != nil {
 		return 0, nil, false
 	}
-	inferred := make([]Edge, 0, len(edges))
-	for _, edge := range edges {
+	inferred := make([]Edge, 0, len(out.Edges))
+	for _, edge := range out.Edges {
 		inferred = append(inferred, Edge{Target: edge.Target, Rel: edge.Rel, Confidence: edge.Confidence})
 	}
 	inferred = m.validInferredEdges(inferred, allowed, "graph-rebuild")
@@ -950,6 +982,19 @@ func (m *Memory) judgeFactEdges(fact Fact, all []Fact) (int, *Fact, bool) {
 		}
 	}
 	fact.Edges = append(fact.Edges, inferred...)
+	// Why/use_when: overwrite only when the model returned fresh values, so a
+	// partial response (edges only) keeps the existing why/use_when intact.
+	for _, jf := range out.Facts {
+		if jf.ID != fact.ID {
+			continue
+		}
+		if jf.Why != "" {
+			fact.Why = jf.Why
+		}
+		if len(jf.UseWhen) > 0 {
+			fact.UseWhen = jf.UseWhen
+		}
+	}
 	return len(inferred), &fact, true
 }
 
@@ -1113,7 +1158,8 @@ func (m *Memory) mergeCluster(docs []embeddedDoc) bool {
 	}
 	allEdges = filterMergedEdges(allEdges, m.graph.facts, merged.ID)
 
-	// Write merged fact
+	// Write merged fact. The survivor keeps its why/use_when so dedup never
+	// destroys provenance; the 6h rebuild refreshes both for the new body.
 	mergedFact := Fact{
 		ID:      merged.ID,
 		Type:    "semantic",
@@ -1121,6 +1167,8 @@ func (m *Memory) mergeCluster(docs []embeddedDoc) bool {
 		At:      time.Now(),
 		Edges:   allEdges,
 		Body:    merged.Content,
+		Why:     m.graph.facts[merged.ID].Why,
+		UseWhen: m.graph.facts[merged.ID].UseWhen,
 	}
 	m.graph.facts[merged.ID] = &mergedFact
 	m.graph.writeFile(mergedFact)
