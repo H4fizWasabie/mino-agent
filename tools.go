@@ -1226,7 +1226,7 @@ func makeCalendarTool(db *sql.DB, home string) *Tool {
 			)
 			calPath := filepath.Join(home, "calendar.ics")
 			appendICS(calPath, title, start, end, attendees, notes)
-			return fmt.Sprintf("Created event '%s' on your calendar at %s", title, calPath)
+			return fmt.Sprintf("Created event '%s' — stored in calendar_events (SQLite) and %s (ICS)", title, calPath)
 		},
 	}
 }
@@ -1327,9 +1327,9 @@ func makeNotesTool(db *sql.DB, mem *Memory) *Tool {
 				mem.embedder.IndexFact(id, fact)
 			}
 			if why != "" {
-				return fmt.Sprintf("Saved: %s — %s (why: %s)", subject, content, why)
+				return fmt.Sprintf("Saved: %s — %s (why: %s) — stored in memories/%s.md", subject, content, why, id)
 			}
-			return fmt.Sprintf("Saved: %s — %s", subject, content)
+			return fmt.Sprintf("Saved: %s — %s — stored in memories/%s.md", subject, content, id)
 		},
 	}
 }
@@ -1592,7 +1592,7 @@ func makeManageMemoryTool(mem *Memory) *Tool {
 				if mem.embedder != nil {
 					mem.embedder.RemoveFact(fact.ID)
 				}
-				return fmt.Sprintf("Forgot: %s", fact.Subject)
+				return fmt.Sprintf("Forgot: %s (removed from memories/%s.md)", fact.Subject, fact.ID)
 			}
 			if action == "correct" {
 				fact.Body = content
@@ -1603,7 +1603,7 @@ func makeManageMemoryTool(mem *Memory) *Tool {
 				if mem.embedder != nil {
 					mem.embedder.IndexFact(fact.ID, *fact)
 				}
-				return fmt.Sprintf("Corrected fact about %s", subject)
+				return fmt.Sprintf("Corrected fact about %s (memories/%s.md updated)", subject, fact.ID)
 			}
 			if action == "confirm" || action == "reject" {
 				delta := 1
@@ -1644,7 +1644,7 @@ func makeUpdateSoulTool(home string) *Tool {
 			existing, _ := os.ReadFile(path)
 			updated := string(existing) + "\n" + content
 			os.WriteFile(path, []byte(updated), 0644)
-			return "SOUL.md updated."
+			return fmt.Sprintf("SOUL.md updated at %s.", path)
 		},
 	}
 }
@@ -1680,7 +1680,8 @@ func makeCreateSkillTool(home string, mem *Memory) *Tool {
 			if err := mem.skills.Create(name, description, triggers, body); err != nil {
 				return fmt.Sprintf("Failed to create skill: %v", err)
 			}
-			return fmt.Sprintf("Created skill '%s'. It will trigger on: %s", name, description)
+			slug := strings.ToLower(strings.ReplaceAll(name, " ", "-"))
+			return fmt.Sprintf("Created skill '%s' at %s/skills/%s/SKILL.md. It will trigger on: %s", name, home, slug, description)
 		},
 	}
 }
@@ -1711,7 +1712,7 @@ func makeWorkingMemoryTool(home string, mem *Memory) *Tool {
 			if mem.embedder != nil {
 				mem.embedder.Index("working_memory", content)
 			}
-			return fmt.Sprintf("Added to working memory [%s]: %s", section, content)
+			return fmt.Sprintf("Added to working memory [%s]: %s (working_memory.md)", section, content)
 		},
 	}
 }
@@ -1735,7 +1736,7 @@ func makePatternTool(home string, mem *Memory) *Tool {
 			if mem.embedder != nil {
 				mem.embedder.Index("patterns", rule)
 			}
-			return fmt.Sprintf("Pattern saved: %s", rule)
+			return fmt.Sprintf("Pattern saved: %s (patterns.md)", rule)
 		},
 	}
 }
