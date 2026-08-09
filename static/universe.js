@@ -84,7 +84,8 @@ function universeNodeLink(node){
   return "#system/database-reminders";
 }
 function universeLayout(nodes,edges=[]){
-  const centers={now:[.49,.17],memory:[.48,.52],work:[.73,.29],routines:[.76,.70],system:[.23,.70],conversations:[.25,.27]};
+  const centers={now:[.49,.18],memory:[.5,.51],work:[.73,.3],routines:[.77,.71],system:[.22,.71],conversations:[.25,.28]};
+  const memoryPalette=["#84b58e","#a77bd0","#72b6c2","#e8b65d","#e47f72","#88a5d5","#d29cc6"];
   const memories=nodes.filter(node=>node.kind==="memory"),stored=[...new Set(memories.map(node=>node.community))];
   if(memories.length>24&&stored.length<=1){
     const memoryIDs=new Set(memories.map(node=>node.id)),adjacency=Object.fromEntries(memories.map(node=>[node.id,[]]));
@@ -98,19 +99,31 @@ function universeLayout(nodes,edges=[]){
     }
     memories.forEach(node=>{if(node._layoutCommunity==null)node._layoutCommunity=universeHash(node.id)%anchorCount;});
   }else memories.forEach(node=>{node._layoutCommunity=node.community;});
-  const communities=[...new Set(memories.map(node=>node._layoutCommunity))].sort((a,b)=>a-b);
+  const communities=[...new Set(memories.map(node=>node._layoutCommunity))].sort((a,b)=>String(a).localeCompare(String(b)));
   const communityCenter=new Map(communities.map((id,index)=>{
-    const angle=index*2.399963, radius=.07+.27*Math.sqrt((index+.5)/Math.max(1,communities.length));
+    const angle=index*2.399963, radius=.1+.28*Math.sqrt((index+.5)/Math.max(1,communities.length));
     return [id,[centers.memory[0]+Math.cos(angle)*radius,centers.memory[1]+Math.sin(angle)*radius*.72]];
   }));
+  const communityAnchors=new Map(communities.map(id=>[id,memories.filter(node=>node._layoutCommunity===id).sort((a,b)=>(b._degree||0)-(a._degree||0)||a.id.localeCompare(b.id))[0]?.id]));
+  const communityColors=new Map(communities.map((id,index)=>[id,memoryPalette[index%memoryPalette.length]]));
+  const responsibilities=nodes.filter(node=>node.kind==="responsibility");
+  const responsibilityAnchors=responsibilities.sort((a,b)=>(b.attention?1:0)-(a.attention?1:0)||(b._degree||0)-(a._degree||0)||a.id.localeCompare(b.id)).slice(0,Math.min(3,responsibilities.length));
+  const responsibilityAnchorIDs=new Set(responsibilityAnchors.map(node=>node.id));
   const regionCounts={};
   const communityCounts={};
+  nodes.forEach(node=>{node._layoutAnchor=false;});
   nodes.forEach(node=>{
     const region=universeRegion(node), index=regionCounts[region]||0;
     regionCounts[region]=index+1;
-    let center=centers[region]||centers.work, spread=region==="memory"?.055:.115, localIndex=index;
+    if(node.kind==="responsibility"&&responsibilityAnchorIDs.has(node.id)){
+      const anchorIndex=responsibilityAnchors.findIndex(anchor=>anchor.id===node.id),span=Math.max(1,responsibilityAnchors.length-1);
+      node.x=.34+.38*(anchorIndex/span);node.y=.46+Math.sin(anchorIndex*1.7)*.035;node._layoutAnchor=true;return;
+    }
+    let center=centers[region]||centers.work, spread=region==="memory"?.095:.105, localIndex=index;
     if(node.kind==="memory"){
       center=communityCenter.get(node._layoutCommunity)||centers.memory;
+      node._communityColor=communityColors.get(node._layoutCommunity)||memoryPalette[0];
+      if(node.id===communityAnchors.get(node._layoutCommunity)){node.x=center[0];node.y=center[1];node._layoutAnchor=true;return;}
       localIndex=communityCounts[node._layoutCommunity]||0;communityCounts[node._layoutCommunity]=localIndex+1;
     }
     const angle=localIndex*2.399963+universeRand(node.id)*.45;
@@ -120,10 +133,20 @@ function universeLayout(nodes,edges=[]){
   });
 }
 function universeNodeRadius(node){
-  if(node.kind==="memory") return node.state==="episodic"?2.8:2.2;
-  if(node.kind==="responsibility") return 5.1;
-  if(node.kind==="schedule"||node.kind==="playbook") return 4.3;
-  return 3.5;
+  if(node.kind==="memory") return node.state==="episodic"?3.3:2.5;
+  if(node.kind==="responsibility") return node._layoutAnchor?6.2:4.8;
+  if(node.kind==="schedule"||node.kind==="playbook") return 5;
+  if(node.kind==="conversation"||node.kind==="reminder") return 4.3;
+  return 3.7;
+}
+function universeNodeColor(node){
+  if(node.kind==="memory") return node._communityColor||"#3f6fba";
+  return UNIVERSE_COLORS[node.kind]||"#65727d";
+}
+function universeDegrees(nodes,edges){
+  const degrees=Object.fromEntries(nodes.map(node=>[node.id,0]));
+  edges.forEach(edge=>{if(degrees[edge.source]!=null)degrees[edge.source]++;if(degrees[edge.target]!=null)degrees[edge.target]++;});
+  return degrees;
 }
 
 function initUniverse(snapshot,lens="universe"){
@@ -132,11 +155,11 @@ function initUniverse(snapshot,lens="universe"){
   const nodes=(snapshot.nodes||[]).map(node=>({...node,_time:universeTimeValue(node),_born:0}));
   const nodeMap=Object.fromEntries(nodes.map(node=>[node.id,node]));
   const edges=(snapshot.edges||[]).filter(edge=>nodeMap[edge.source]&&nodeMap[edge.target]);
-  universeLayout(nodes,edges);
+  const degrees=universeDegrees(nodes,edges);nodes.forEach(node=>node._degree=degrees[node.id]||0);universeLayout(nodes,edges);
   const dated=nodes.map(n=>n._time).filter(Number.isFinite);
   const state={canvas,nodes,nodeMap,edges,lens:UNIVERSE_LENSES[lens]?lens:"universe",selected:null,hovered:null,
     query:"",timeline:1,playing:false,playStarted:0,earliest:dated.length?Math.min(...dated):Date.now(),latest:dated.length?Math.max(...dated):Date.now(),
-    panX:0,panY:0,zoom:1,activities:[],snapshot,raf:0,pointer:null};
+    panX:0,panY:0,zoom:1,activities:[],snapshot,raf:0,pointer:null,degrees};
   universeState=state;
   nodes.forEach(node=>universeKnown.add(node.id));
 
@@ -159,25 +182,56 @@ function initUniverse(snapshot,lens="universe"){
     const ctx=canvas.getContext("2d"),dpr=canvas.width/canvas.clientWidth;
     ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,canvas.clientWidth,canvas.clientHeight);
     ctx.fillStyle="rgba(246,247,244,.78)";ctx.fillRect(0,0,canvas.clientWidth,canvas.clientHeight);
-    const incident=state.hovered||state.selected;
+    const incident=state.hovered||state.selected,edgeLayers=[[],[],[]],communities=new Map();
+    nodes.forEach(node=>{
+      if(node.kind!=="memory"||!visible(node)) return;
+      const key=String(node._layoutCommunity),group=communities.get(key)||[];group.push(screen(node));communities.set(key,group);
+    });
+    communities.forEach((points,key)=>{
+      if(points.length<4) return;
+      const center=points.reduce((sum,point)=>({x:sum.x+point.x/points.length,y:sum.y+point.y/points.length}),{x:0,y:0});
+      const bounds=points.reduce((box,point)=>({minX:Math.min(box.minX,point.x),maxX:Math.max(box.maxX,point.x),minY:Math.min(box.minY,point.y),maxY:Math.max(box.maxY,point.y)}),{minX:Infinity,maxX:-Infinity,minY:Infinity,maxY:-Infinity});
+      const palette=["rgba(63,111,186,.035)","rgba(129,116,183,.035)","rgba(67,140,133,.032)","rgba(208,122,56,.032)"],index=universeHash(key)%palette.length;
+      ctx.beginPath();ctx.ellipse(center.x,center.y,Math.max(34,(bounds.maxX-bounds.minX)/2+24),Math.max(24,(bounds.maxY-bounds.minY)/2+18),0,0,Math.PI*2);ctx.fillStyle=palette[index];ctx.fill();ctx.strokeStyle=palette[index].replace(".035", ".11").replace(".032", ".1");ctx.lineWidth=1;ctx.stroke();
+      points.forEach(point=>{ctx.beginPath();ctx.moveTo(center.x,center.y);ctx.lineTo(point.x,point.y);ctx.strokeStyle=palette[index].replace(".035", ".18").replace(".032", ".16");ctx.lineWidth=.65;ctx.stroke();});
+    });
     state.edges.forEach(edge=>{
       const a=nodeMap[edge.source],b=nodeMap[edge.target];if(!visible(a)||!visible(b)) return;
-      const pa=screen(a),pb=screen(b),hot=incident&&(a===incident||b===incident),focus=focused(a)&&focused(b),sameMemory=a.kind==="memory"&&b.kind==="memory"&&a._layoutCommunity===b._layoutCommunity;
-      ctx.beginPath();ctx.moveTo(pa.x,pa.y);ctx.lineTo(pb.x,pb.y);
-      ctx.strokeStyle=hot?"rgba(42,94,180,.82)":edge.kind==="structural"?"rgba(174,104,52,.5)":sameMemory&&focus?"rgba(52,99,180,.42)":focus?"rgba(52,99,180,.16)":"rgba(82,104,125,.09)";
-      ctx.lineWidth=hot?1.8:edge.kind==="structural"?1.2:sameMemory?.9:.72;ctx.stroke();
+      const sameMemory=a.kind==="memory"&&b.kind==="memory"&&a._layoutCommunity===b._layoutCommunity;
+      const endpointProminent=a.kind!=="memory"||b.kind!=="memory"||sameMemory;
+      const hot=incident&&(a===incident||b===incident);
+      if(!hot&&edge.kind==="inferred"&&!sameMemory) return;
+      if(!hot&&edge.kind==="explicit"&&!endpointProminent) return;
+      const layer=hot?2:(edge.kind==="structural"||edge.kind==="explicit"?1:0);edgeLayers[layer].push({edge,a,b,hot});
     });
+    edgeLayers.forEach((layer,index)=>layer.forEach(({edge,a,b,hot})=>{
+      const pa=screen(a),pb=screen(b),focus=focused(a)&&focused(b),sameRegion=universeRegion(a)===universeRegion(b),sameMemory=a.kind==="memory"&&b.kind==="memory"&&a._layoutCommunity===b._layoutCommunity;
+      const distance=Math.max(1,Math.hypot(pb.x-pa.x,pb.y-pa.y)),bend=((universeHash(a.id+"|"+b.id)%2000)/1000-.5)*Math.min(70,distance*.2),normal={x:-(pb.y-pa.y)/distance*bend,y:(pb.x-pa.x)/distance*bend};
+      ctx.beginPath();ctx.moveTo(pa.x,pa.y);ctx.quadraticCurveTo((pa.x+pb.x)/2+normal.x,(pa.y+pb.y)/2+normal.y,pb.x,pb.y);
+      if(hot) {ctx.strokeStyle="rgba(36,98,192,.92)";ctx.lineWidth=2;}
+      else if(edge.kind==="structural") {ctx.strokeStyle=focus?"rgba(184,105,47,.64)":"rgba(184,105,47,.22)";ctx.lineWidth=1.25;}
+      else if(edge.kind==="explicit") {ctx.strokeStyle=focus?"rgba(47,101,184,.28)":"rgba(47,101,184,.08)";ctx.lineWidth=.85;}
+      else {ctx.strokeStyle=sameMemory?"rgba(63,111,186,.06)":sameRegion?"rgba(82,104,125,.035)":"rgba(82,104,125,.02)";ctx.lineWidth=sameMemory?.5:.38;}
+      ctx.setLineDash([]);ctx.stroke();
+    }));
     let visibleCount=0;
     nodes.forEach(node=>{
       if(!visible(node)) return;visibleCount++;
-      const p=screen(node),isFocused=focused(node),r=universeNodeRadius(node)*(node===state.selected?1.55:1),color=UNIVERSE_COLORS[node.kind]||"#65727d";
+      const p=screen(node),isFocused=focused(node),r=universeNodeRadius(node)*(node===state.selected?1.55:1),color=universeNodeColor(node),degree=state.degrees[node.id]||0,prominent=node.kind!=="memory"||degree>=4;
       const active=state.activities.some(a=>a.nodeID===node.id&&now-a.started<4200),born=node._born&&now-node._born<2600,reduced=matchMedia("(prefers-reduced-motion: reduce)").matches;
       if((active||born||node.attention)&&!reduced){
         const pulse=r+(active||born?5:3)+Math.sin(now/(active||born?260:620))*(active||born?2:.8);ctx.beginPath();ctx.arc(p.x,p.y,pulse,0,Math.PI*2);ctx.strokeStyle=active?"rgba(32,126,105,.42)":born?"rgba(53,104,193,.36)":"rgba(181,60,66,.2)";ctx.lineWidth=1;ctx.stroke();
       }
-      ctx.globalAlpha=isFocused?1:.25;ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();
+      ctx.globalAlpha=isFocused?1:.2;ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();
+      if(prominent){ctx.beginPath();ctx.arc(p.x,p.y,r+2.2,0,Math.PI*2);ctx.strokeStyle=`${color}66`;ctx.lineWidth=1;ctx.stroke();}
       if(node.attention){ctx.strokeStyle="#b53c42";ctx.lineWidth=1.5;ctx.stroke();}
       ctx.globalAlpha=1;
+      if(node._layoutAnchor&&node.kind!=="memory"&&!state.hovered&&!state.selected){
+        const maxLabel=canvas.clientWidth<600?17:23,label=node.label.length>maxLabel?node.label.slice(0,maxLabel-1)+"…":node.label;
+        ctx.font="650 10px ui-sans-serif,system-ui";ctx.fillStyle="#28323a";
+        const labelY=canvas.clientWidth<600&&node.x>.45&&node.x<.66?p.y+18:p.y+4;
+        if(node.x>.66){ctx.textAlign="right";ctx.fillText(label,p.x-11,labelY);}else if(node.x>.45){ctx.textAlign="center";ctx.fillText(label,p.x,labelY);}else{ctx.textAlign="left";ctx.fillText(label,p.x+11,labelY);}ctx.textAlign="start";
+      }
       if(node===state.hovered||node===state.selected){
         ctx.font="600 11px ui-sans-serif,system-ui";const label=node.label.length>42?node.label.slice(0,41)+"…":node.label;
         const width=ctx.measureText(label).width+14;ctx.fillStyle="rgba(250,251,249,.96)";ctx.strokeStyle="rgba(105,115,120,.25)";ctx.lineWidth=1;ctx.beginPath();ctx.roundRect(p.x+10,p.y-13,width,24,6);ctx.fill();ctx.stroke();ctx.fillStyle="#172028";ctx.fillText(label,p.x+17,p.y+3);
@@ -186,7 +240,7 @@ function initUniverse(snapshot,lens="universe"){
     state.activities=state.activities.filter(activity=>now-activity.started<4200);
     state.activities.forEach(activity=>{
       const node=nodeMap[activity.nodeID];if(!node||!visible(node))return;const end=screen(node),age=(now-activity.started)/1800,t=Math.min(1,age),start={x:canvas.clientWidth*.5,y:16};
-      const x=start.x+(end.x-start.x)*t,y=start.y+(end.y-start.y)*t;ctx.beginPath();ctx.moveTo(start.x,start.y);ctx.quadraticCurveTo(canvas.clientWidth*.5,end.y*.6,end.x,end.y);ctx.strokeStyle=`rgba(34,123,103,${Math.max(0,.38-age*.12)})`;ctx.lineWidth=1.4;ctx.stroke();ctx.beginPath();ctx.arc(x,y,3,0,Math.PI*2);ctx.fillStyle="#267f6b";ctx.fill();
+      const x=start.x+(end.x-start.x)*t,y=start.y+(end.y-start.y)*t;ctx.beginPath();ctx.moveTo(start.x,start.y);ctx.quadraticCurveTo(canvas.clientWidth*.5,end.y*.6,end.x,end.y);ctx.strokeStyle=`rgba(40,104,216,${Math.max(0,.52-age*.16)})`;ctx.lineWidth=1.5;ctx.setLineDash([4,5]);ctx.stroke();ctx.setLineDash([]);ctx.beginPath();ctx.arc(x,y,3,0,Math.PI*2);ctx.fillStyle="#2868d8";ctx.fill();
     });
     if(state.playing){
       state.timeline=Math.min(1,(now-state.playStarted)/24000);syncUniverseTimeline();
@@ -253,7 +307,7 @@ function universeUpdate(snapshot){
     else {const added={...fresh,_time:universeTimeValue(fresh),_born:now};state.nodes.push(added);state.nodeMap[id]=added;universeKnown.add(id);}
   });
   state.edges=(snapshot.edges||[]).filter(edge=>state.nodeMap[edge.source]&&state.nodeMap[edge.target]);
-  state.snapshot=snapshot;const dated=state.nodes.map(n=>n._time).filter(Number.isFinite);if(dated.length){state.earliest=Math.min(...dated);state.latest=Math.max(...dated);}
+  state.snapshot=snapshot;state.degrees=universeDegrees(state.nodes,state.edges);state.nodes.forEach(node=>node._degree=state.degrees[node.id]||0);const dated=state.nodes.map(n=>n._time).filter(Number.isFinite);if(dated.length){state.earliest=Math.min(...dated);state.latest=Math.max(...dated);}
   universeLayout(state.nodes,state.edges);const live=document.getElementById("universe-live-count");if(live)live.textContent=(snapshot.activity||[]).length;
   renderUniverseIndex();
 }
