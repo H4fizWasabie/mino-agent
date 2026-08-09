@@ -195,6 +195,16 @@ func TestPlaybookWriteGuard(t *testing.T) {
 		t.Fatalf("doubled-home path not rejected: %s (guard=%q)", doubled, guard)
 	}
 
+	// Issue #42: a stray relative .mino prefix must be rejected with the
+	// corrected absolute path (it resolves via CWD but breaks attribution).
+	rel := ".mino/playbooks/brief/runs/run-123/stages/01-collect/output/result.md"
+	if guard := playbookWriteGuard(home, rel, ctx); guard == "" || !strings.Contains(guard, "absolute path") {
+		t.Fatalf("relative .mino prefix not rejected: %q (guard=%q)", rel, guard)
+	}
+	if guard := playbookWriteGuard(home, rel, ctx); !strings.Contains(guard, filepath.Join(home, "playbooks")) {
+		t.Fatalf("relative .mino guard missing the corrected path: %q", guard)
+	}
+
 	// Inside a stage: only its own run directory is writable.
 	stageCtx := context.WithValue(ctx, traceTagKey{}, map[string]string{
 		"playbook": "brief",
