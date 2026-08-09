@@ -89,6 +89,7 @@ function renderMarkdown(text){
   return out.join("");
 }
 let D = null;
+let fullDataLoaded = false;
 let oauthProviders = {}, oauthMessage = "";
 
 // Artifact actions stay inside the headless dashboard: folders route to the
@@ -634,81 +635,6 @@ function wireOperatorShell(){
   });
 }
 
-// --- Mino Runtime Spine: the whole process, driven only by real dashboard data.
-function archSVG(d){
-  const s=d.stats||{}, latest=(d.turns||[])[0]||{}, active=(d.active_tasks||[])[0]||null;
-  const catalog=((d.tools||{}).catalog||[]), llms=latest.llm_calls||[], lastLLM=llms[llms.length-1]||{};
-  const count=source=>catalog.filter(t=>t.source===source).length;
-  const builtinCount=count("builtin"), mcpCount=count("mcp"), extensionCount=count("extension");
-  const toolCount=catalog.length, sessions=(d.sessions||[]).length, tables=((d.db||{}).all_tables||[]).length;
-  const records=(d.facts||[]).length+(d.episodes||[]).length+(d.skills||[]).length;
-  const providerRaw=String(d.active_provider||d.provider||"provider"), modelRaw=String(d.model||"model");
-  const iteration=Number(active&&active.round || latest.iterations || 0);
-  const selected=lastLLM.selected_tools==null?"—":Number(lastLLM.selected_tools);
-  const completion=active?"RUNNING":String(latest.status||"idle").toUpperCase();
-  const fmt=n=>Number(n||0).toLocaleString(), fmtBytes=n=>n?`${(Number(n)/1048576).toFixed(1)} MB`:"0 MB";
-  const attr=value=>esc(value).replace(/"/g,"&quot;");
-  const short=(value,max,fallback)=>{const source=String(value||"").replace(/\s+/g," ").trim()||fallback;return esc(source.length>max?source.slice(0,max-1).trim()+"…":source)};
-  const attrs=(view,nid,title,sub)=>`data-node="${nid}" tabindex="0" role="link" aria-label="${attr(`${title}: ${sub}`)}" onclick="location.hash='${view}'" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();location.hash='${view}'}"`;
-  const defs=`<defs><linearGradient id="spine-stage" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#07101e"/><stop offset=".55" stop-color="#0a1730"/><stop offset="1" stop-color="#0b1023"/></linearGradient><linearGradient id="spine-loop" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#16295a"/><stop offset="1" stop-color="#10233e"/></linearGradient><pattern id="spine-grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" fill="none" stroke="#7890bc" stroke-width=".35" opacity=".12"/></pattern><filter id="core-glow" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter><marker id="core-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10Z" class="flow-head"/></marker></defs>`;
-  const wire=(path,id,cls="")=>`<path class="flow-wire ${cls}" data-edge="${id}" d="${path}" marker-end="url(#core-arrow)"/>`;
-  const node=(x,y,w,h,kicker,title,lines,view,nid,mark,cls="")=>`<g class="node core-node ${cls}" ${attrs(view,nid,title,lines.join(" · "))}><rect class="target spine-card" x="${x}" y="${y}" width="${w}" height="${h}" rx="12"/><circle class="card-mark" cx="${x+25}" cy="${y+27}" r="12"/><text class="card-symbol" x="${x+25}" y="${y+31}" text-anchor="middle">${mark}</text><text class="card-kicker" x="${x+45}" y="${y+20}">${kicker}</text><text class="card-title" x="${x+45}" y="${y+40}">${title}</text>${lines.map((line,i)=>`<text class="card-sub" x="${x+16}" y="${y+h-18+(i-lines.length+1)*14}">${line}</text>`).join("")}</g>`;
-  const mini=(x,y,w,label,nid,view,mark)=>`<g class="node core-node gateway-node" ${attrs(view,nid,label,"gateway")}><rect class="target spine-mini" x="${x}" y="${y}" width="${w}" height="38" rx="9"/><text class="mini-mark" x="${x+13}" y="${y+24}">${mark}</text><text class="mini-title" x="${x+32}" y="${y+24}">${label}</text></g>`;
-  const step=(x,y,w,n,label,hot=false)=>`<g class="loop-step ${hot?"current":""}"><rect x="${x}" y="${y}" width="${w}" height="28" rx="7"/><text x="${x+9}" y="${y+18}"><tspan>${n}</tspan> ${label}</text></g>`;
-  const loop=(x,y,w,h)=>`<g class="node core-node runloop-node" ${attrs("loop","loop","RunLoop",`iteration ${iteration}, ${selected} tools selected`)}><rect class="target runloop-card" x="${x}" y="${y}" width="${w}" height="${h}" rx="16"/><circle class="loop-pulse" cx="${x+22}" cy="${y+23}" r="5"/><text class="loop-kicker" x="${x+36}" y="${y+27}">RUNLOOP · ITERATION ${iteration||"—"}</text><text class="loop-state" x="${x+w-16}" y="${y+27}" text-anchor="end">${completion}</text><text class="loop-title" x="${x+18}" y="${y+58}">Observe → act → verify</text>${step(x+18,y+74,(w-44)/2,"01","SELECT TOOLS")}${step(x+26+(w-44)/2,y+74,(w-44)/2,"02","CALL MODEL")}${step(x+18,y+110,(w-44)/2,"03","EXECUTE")}${step(x+26+(w-44)/2,y+110,(w-44)/2,"04","VERIFY")}${step(x+18,y+146,w-36,"05","COMPLETE_TASK",completion==="RUNNING")}<text class="loop-sub" x="${x+18}" y="${y+h-15}">${selected} action schemas selected · ${fmt(latest.tokens_in)} in / ${fmt(latest.tokens_out)} out</text></g>`;
-  const metric=(x,y,w,label,value,sub,nid="telemetry")=>`<g class="node core-node metric-node" ${attrs("ops",nid,label,`${value} ${sub}`)}><rect class="target metric-card" x="${x}" y="${y}" width="${w}" height="62" rx="9"/><text class="metric-label" x="${x+12}" y="${y+17}">${label}</text><text class="metric-value" x="${x+12}" y="${y+39}">${value}</text><text class="metric-sub" x="${x+12}" y="${y+53}">${sub}</text></g>`;
-  const header=(x,y,w)=>`<g class="node core-node runtime-node" ${attrs("settings","settings","Mino core runtime",`${providerRaw} ${modelRaw}`)}><rect class="target runtime-panel" x="${x}" y="${y}" width="${w}" height="58" rx="11"/><circle class="runtime-dot" cx="${x+18}" cy="${y+20}" r="4"/><text class="runtime-copy" x="${x+30}" y="${y+23}">MINO · CORE PROCESS</text><text class="runtime-model" x="${x+16}" y="${y+45}">${short(providerRaw,18,"provider")} · ${short(modelRaw,34,"model")} · ${esc(d.reasoning||"default")}</text><text class="runtime-copy end" x="${x+w-16}" y="${y+23}" text-anchor="end">${active?"TURN ACTIVE":"ONLINE"}</text><text class="runtime-meta" x="${x+w-16}" y="${y+45}" text-anchor="end">${sessions} SESSIONS · ${fmt(s.turns)} TRACED TURNS</text></g>`;
-  const telemetry=(x,y,w,mobile=false)=>{
-    const values=[
-      ["TOKENS",`${fmt(latest.tokens_in||s.tokens_in)} / ${fmt(latest.tokens_out||s.tokens_out)}`,latest.tokens_in?"last turn · in / out":"usage log · in / out","tokens"],
-      ["LATENCY",secs(latest.latency_ms||s.latency_avg),latest.latency_ms?"last turn":`p95 ${secs(s.latency_p95)}`,"latency"],
-      ["EVALUATION",completion,latest.status?"complete_task status":"awaiting first turn","evaluation"],
-      ["TOOL ERRORS",fmt(s.tool_errors),`${fmt(s.tool_calls)} recorded calls`,"errors"],
-      ["RETRIEVAL",`${fmt(s.gate_retrieves)} / ${fmt(s.gate_skips)}`,"retrieve / skip","retrieval"],
-      ["TRACES",fmt(s.trace_files),`${money(s.total_cost||0)} estimated`,"trace"],
-    ];
-    if(mobile){const cardW=(w-6)/2;return values.map((m,i)=>metric(x+(i%2)*(cardW+6),y+Math.floor(i/2)*70,cardW,...m)).join("");}
-    return values.map((m,i)=>metric(x+i*(w+8),y,w,...m)).join("");
-  };
-  const toolLines=[`${builtinCount} built-ins · ${mcpCount} MCP`,`${extensionCount} sidecar tools · ${toolCount} total`];
-  const sqliteLines=[`${tables} tables · ${fmtBytes((d.db||{}).size)}`,`${records} memory records · WAL state`];
-  const taskLabel=active?short(active.goal,24,"active schedule"):short(latest.user_message,24,"waiting for a turn");
-
-  if(window.innerWidth<720)return `<div class="arch-wrap core-wrap"><svg viewBox="0 0 420 1750" class="arch core-arch compact" role="img" aria-labelledby="spine-title spine-desc"><title id="spine-title">Mino Runtime Spine</title><desc id="spine-desc">A vertical live map of Mino gateways, session, context, RunLoop, provider, tools, SQLite state, verification telemetry, and external sidecars.</desc>${defs}<rect class="core-stage" x="7" y="7" width="406" height="1362" rx="22"/><rect class="core-grid" x="8" y="8" width="404" height="1360" rx="21"/>${header(24,22,372)}
-    <text class="boundary-label" x="25" y="104">REQUEST SPINE</text>${wire("M210 174V211","e-gw-session")}${wire("M210 299V408","e-session-context")}${wire("M210 493V527","e-context-loop")}${wire("M210 739V772","e-loop-provider")}${wire("M210 857V892","e-loop-tools")}${wire("M210 988V1022","e-tools-db")}${wire("M210 1107V1142","e-db-trace")}
-    <g class="node core-node gateway-stack" ${attrs("gateway","gateway","Gateways",`${sessions} sessions`)}><rect class="target spine-card" x="45" y="119" width="330" height="55" rx="12"/><text class="card-kicker" x="61" y="140">INGRESS</text><text class="gateway-list" x="61" y="160">TELEGRAM  ·  DASHBOARD  ·  SCHEDULER</text></g>
-    ${node(65,211,290,88,"TURN STATE","Session",[taskLabel,`${sessions} known threads`],"gateway","session","S")}${wire("M155 299V323","e-session-cancel","dashed")}${wire("M265 299V323","e-session-checkpoint","dashed")}
-    ${node(45,323,155,70,"CONTROL","Cancel",["context signal"],"activetasks","cancel","×","control-card")}${node(220,323,155,70,"SCHEDULER","Schedules",[`${(d.active_tasks||[]).length} scheduled`],"activetasks","checkpoint","C","control-card")}
-    ${node(65,408,290,85,"ASSEMBLY","Context",[`${fmt(d.chat_pending)} pending messages`,`${records} recall records ready`],"memory/overview","context","C")}${loop(45,527,330,212)}
-    ${node(65,772,290,85,"MODEL ROUTER","Provider",[`${short(providerRaw,18,"provider")} · ${short(modelRaw,24,"model")}`,`${esc(d.reasoning||"default")} reasoning`],"settings","provider","P")}
-    ${node(65,892,290,96,"EXECUTION","Tool Registry",toolLines,"tools","tools","⌘")}
-    ${node(65,1022,290,85,"PERSISTENCE","SQLite",sqliteLines,"database","sqlite","DB")}
-    <text class="boundary-label" x="25" y="1135">OBSERVABILITY RAIL</text>${telemetry(28,1150,364,true)}
-    <text class="external-label" x="22" y="1398">OUTSIDE CORE · NETWORK BOUNDARIES</text>${wire("M210 857V1417","e-provider-remote","external")}${wire("M210 988V1537","e-tools-sidecars","external")}
-    ${node(45,1417,330,90,"REMOTE","Model API",[`${short(providerRaw,20,"provider")} endpoint`,"request / response"],"settings","remote","↗","external-card")}
-    ${node(45,1537,330,82,"HTTP SIDECAR","minowrap",["universal tool adapter"],"tools","minowrap","M","external-card")}
-    ${node(45,1643,330,82,"HTTP SIDECAR","fileingest",["document intake service"],"tools","fileingest","F","external-card")}</svg></div>`;
-
-  return `<div class="arch-wrap core-wrap"><svg viewBox="0 0 1200 760" class="arch core-arch" role="img" aria-labelledby="spine-title spine-desc"><title id="spine-title">Mino Runtime Spine</title><desc id="spine-desc">A live overview of Mino's gateways, session, context, RunLoop, provider, tool registry, SQLite state, verification telemetry, and external sidecars.</desc>${defs}<rect class="core-stage" x="7" y="7" width="943" height="746" rx="22"/><rect class="core-grid" x="8" y="8" width="941" height="744" rx="21"/>${header(27,22,903)}
-    <text class="boundary-label" x="30" y="105">MINO REQUEST FLOW</text><text class="external-label" x="975" y="105">EXTERNAL SERVICES</text>
-    ${wire("M168 149H204V173","e-gw-session")}${wire("M168 195H204","e-gw-session")}${wire("M168 241H204V217","e-gw-session")}${wire("M344 199H379","e-session-context")}${wire("M519 199H544","e-context-loop")}${wire("M754 199H784","e-loop-provider")}${wire("M929 199H974","e-provider-remote","external")}${wire("M649 313V373","e-loop-tools")}${wire("M559 429H520V501","e-tools-db","dashed")}${wire("M449 249V291","e-context-checkpoint","dashed")}${wire("M274 249V291","e-session-cancel","dashed")}${wire("M449 353V501","e-checkpoint-db","dashed")}${wire("M749 429H974V373","e-tools-sidecars","external")}${wire("M749 449H974V487","e-tools-sidecars","external")}${wire("M464 591V617","e-db-trace","dashed")}
-    ${mini(35,130,133,"TELEGRAM","telegram","gateway","T")}${mini(35,176,133,"DASHBOARD","dashboard","gateway","D")}${mini(35,222,133,"SCHEDULER","scheduler","settings","S")}
-    ${node(204,151,140,98,"TURN STATE","Session",[taskLabel,`${sessions} known threads`],"gateway","session","S")}
-    ${node(379,151,140,98,"ASSEMBLY","Context",[`${fmt(d.chat_pending)} pending messages`,`${records} recall records`],"memory/overview","context","C")}
-    ${loop(544,96,210,217)}
-    ${node(784,151,145,98,"MODEL ROUTER","Provider",[`${short(providerRaw,15,"provider")} · ${short(modelRaw,18,"model")}`,`${esc(d.reasoning||"default")} reasoning`],"settings","provider","P")}
-    ${node(194,291,155,76,"CONTROL","Cancel",["context signal"],"activetasks","cancel","×","control-card")}
-    ${node(369,291,155,76,"SCHEDULER","Schedules",[`${(d.active_tasks||[]).length} scheduled · round ${iteration||"—"}`],"activetasks","checkpoint","C","control-card")}
-    ${node(559,373,190,112,"EXECUTION","Tool Registry",toolLines,"tools","tools","⌘")}
-    ${node(359,501,210,90,"PERSISTENCE","SQLite",sqliteLines,"database","sqlite","DB")}
-    <text class="boundary-label" x="30" y="614">OBSERVABILITY · TRACE LOGS</text>${telemetry(29,628,142)}
-    ${node(974,139,207,104,"REMOTE","Model API",[`${short(providerRaw,18,"provider")} endpoint`,"tokens · latency · response"],"settings","remote","↗","external-card")}
-    <g class="sidecar-boundary"><rect x="965" y="320" width="225" height="269" rx="16"/><text class="sidecar-label" x="983" y="344">HTTP TOOL SIDECARS · ${extensionCount} TOOLS</text></g>
-    ${node(978,359,199,98,"SIDECAR","minowrap",["universal tool adapter","tools.json · :9876"],"tools","minowrap","M","external-card")}
-    ${node(978,473,199,98,"SIDECAR","fileingest",["document intake service","HTTP · :9103"],"tools","fileingest","F","external-card")}
-    <text class="core-caption" x="600" y="742" text-anchor="middle">ONLY THE CURRENT TRACE STAGE ANIMATES · CLICK ANY NODE TO INSPECT IT</text></svg></div>`;
-}
-
 // --- sub-tabs: keep long pages short by splitting them into hash-routed tabs
 // (#memory/semantic, #database/facts). Each tab is a plain link, so it's
 // bookmarkable and the architecture cards can deep-link straight to one.
@@ -787,9 +713,10 @@ async function syncLiveView(){
   }
 }
 function closeSessMenu(){ const m=document.getElementById("sessmenu"); if(m) m.remove(); }
-function toggleSessMenu(ev){
+async function toggleSessMenu(ev){
   ev.stopPropagation();
   if (document.getElementById("sessmenu")){ closeSessMenu(); return; }
+  if(!fullDataLoaded) await loadDashboardData();
   const sessions = (D && D.sessions) || [];
   const menu = document.createElement("div");
   menu.className = "sessmenu"; menu.id = "sessmenu";
@@ -1231,6 +1158,7 @@ function systemView(d, sub){
 }
 
 const VIEWS = {
+  universe(d, lens){ return universeView(U,lens||"universe"); },
   today(d){ return todayView(d); },
   work(d){ return workView(d); },
   responsibility(d, id){
@@ -1267,10 +1195,7 @@ const VIEWS = {
   },
   conversations(d){ return VIEWS.gateway(d); },
   system(d, sub){ return systemView(d,sub); },
-  overview(d){
-    return `${overviewResponsibility(d)}<section class="overview-runtime"><div class="cover-intro"><div><span class="section-kicker">RUNTIME INSPECTION</span><h2>Follow the process, live.</h2><p>Inspect every turn from gateway to verified completion, with state, tools, sidecars, and telemetry in one map.</p></div><div class="cover-status"><span><i></i> Operational</span><span class="arch-status"></span><a href="#settings">Runtime settings →</a></div></div>
-      <section class="overview-cover">${archSVG(d)}</section></section>`;
-  },
+  overview(d){ return universeView(U,"universe"); },
   loop(d){
     const turns=d.turns||[], calls=turns.reduce((n,t)=>n+(t.llm_calls||[]).length,0), tools=turns.reduce((n,t)=>n+(t.tools||[]).length,0);
     const avg=turns.length?turns.reduce((n,t)=>n+(t.iterations||1),0)/turns.length:0;
@@ -1379,6 +1304,7 @@ async function loadFilesView(sub){
 }
 
 function activateView(view, sub){
+  if(view==="universe") setTimeout(()=>initUniverse(U,sub||"universe"),20);
   if(view==="responsibility") setTimeout(()=>loadResponsibilityDetail(decodeURIComponent(sub||"")),0);
   if(view==="memory"&&sub==="graph"&&D.graph?.facts) setTimeout(()=>initGraph(D.graph),50);
   if((view==="system"&&sub==="files")||view==="files") setTimeout(()=>loadFilesView(""),50);
@@ -1386,55 +1312,20 @@ function activateView(view, sub){
   if((view==="system"&&sub==="settings")||view==="settings") setTimeout(loadOAuthProviders,0);
 }
 
-// ---- Live Runtime Spine animation: illuminate only the active trace stage,
-// driven by the event stream so any gateway can move the same process map.
-const STAGE = {
-  turn_start: {nodes:["gateway","session","context"], edges:["e-gw-session","e-session-context"], label:"assembling turn"},
-  llm:        {nodes:["loop","provider","remote"],     edges:["e-context-loop","e-loop-provider","e-provider-remote"], label:"model pass"},
-  tool:       {nodes:["loop","tools"],                 edges:["e-loop-tools"], label:"executing tool"},
-  completion: {nodes:["loop","evaluation"],            edges:[], label:"verifying completion"},
-  gate:       {nodes:["retrieval","sqlite"],           edges:["e-tools-db"], label:"evaluating recall"},
-  turn_end:   {nodes:["evaluation","trace"],           edges:["e-db-trace"], label:"turn recorded"},
-};
-let evCursor = null, evQueue = [], playing = false, animating = false;
-
-function hot(sel, cls, ms){
-  document.querySelectorAll(sel).forEach(el => {   // every diagram copy lights up
-    el.classList.add(cls);
-    setTimeout(()=>el.classList.remove(cls), ms);
-  });
-}
-function animateStage(ev){
-  const spec = STAGE[ev.type];
-  if (!spec || !document.querySelector(".arch")) return;
-  document.querySelectorAll(".arch-status").forEach(st => st.innerHTML = `<span class="live-dot"></span>${spec.label}`);
-  spec.nodes.forEach(n => hot(`[data-node="${n}"]`, "hot", 1000));
-  spec.edges.forEach(e => hot(`[data-edge="${e}"]`, "live", 1000));
-  if (ev.type==="gate" && ev.decision==="retrieve"){
-    ["context","sqlite","retrieval"].forEach(n => hot(`[data-node="${n}"]`,"hot",1000));
-    hot(`[data-edge="e-tools-db"]`,"live",1000);
-  }
-}
-function playNext(){
-  if (!evQueue.length){ playing=false; animating=false;
-    document.querySelectorAll(".arch-status").forEach(st => st.innerHTML=""); return; }
-  playing = true; animating = true;
-  animateStage(evQueue.shift());
-  setTimeout(playNext, 620);   // stagger so stages light up in sequence
-}
+// Runtime work appears as transient paths on the Living Field. Durable nodes
+// still arrive only through /api/universe after the underlying write exists.
+let evCursor = null, animating = false;
 async function pollEvents(){
   try{
     const r = await (await fetch("/api/events" + (evCursor==null?"":"?cursor="+evCursor))).json();
-    if (evCursor != null && r.events.length){
-      evQueue.push(...r.events);
-      if (!playing) playNext();
-    }
+    if (evCursor != null) (r.events||[]).forEach(universeActivity);
     evCursor = r.cursor;
   } catch(e){ /* server busy */ }
 }
 
 let activeView = null, activeSub = null, renderedRoute = "", renderedMarkup = "";
 const TITLES = {chat:"Chat & watch", conversations:"Conversations", system:"System", ops:"System",
+                universe:"Living Field",
                 today:"Today — owner journal", work:"Work — responsibilities", responsibility:"Responsibility",
                 database:"Database — everything Mino stores (state.db)", activetasks:"Active Schedules — playbook runs",
                 files:"Files — VPS artifacts and outputs",
@@ -1442,9 +1333,11 @@ const TITLES = {chat:"Chat & watch", conversations:"Conversations", system:"Syst
                 onboarding:"Welcome — set up your Mino"};
 
 function canonicalRoute(){
-  const parts=(location.hash||"#today").slice(1).split("/"), raw=parts[0]||"today", sub=parts[1]||null;
+  const parts=(location.hash||"#universe").slice(1).split("/"), raw=parts[0]||"universe", sub=parts[1]||null;
   let route=[raw,sub];
-  if(raw==="overview") route=["today",null];
+  if(raw==="overview") route=["universe",null];
+  else if(raw==="today") route=["universe","now"];
+  else if(raw==="work") route=["universe","work"];
   else if(raw==="gateway"||raw==="chat") route=["conversations",null];
   else if(raw==="loop") route=["system","runtime"];
   else if(raw==="tools") route=["system",sub==="results"?"tool-results":sub==="mcp"?"mcp":"tools"];
@@ -1453,34 +1346,35 @@ function canonicalRoute(){
   else if(raw==="ops") route=["system",sub&&sub!=="overview"?sub:"overview"];
   else if(raw==="settings") route=["system","settings"];
   else if(raw==="activetasks") route=["system","schedules"];
-  else if(raw==="graph") route=["memory","graph"];
+  else if(raw==="graph"||(raw==="memory"&&sub==="graph")) route=["universe","memory"];
   const canonical=route[0]+(route[1]?`/${route[1]}`:"");
   if(canonical!==parts.slice(0,2).filter(Boolean).join("/")) history.replaceState(null,"","#"+canonical);
   return route;
 }
 
 function render(){
-  if (!D) return;
+  if (!D || !U) return;
   // onboarding gate: redirect if no API key configured
   if (D.needs_onboarding && !location.hash.startsWith("#onboarding")) {
     location.hash = "#onboarding"; return;
   }
   if (!D.needs_onboarding && location.hash.startsWith("#onboarding")) {
-    location.hash = "#today"; return;
+    location.hash = "#universe"; return;
   }
   const [v, sub] = canonicalRoute();
-  const view = VIEWS[v] ? v : "today";
+  const view = VIEWS[v] ? v : "universe";
   document.body.classList.toggle("onboarding-mode", view === "onboarding");
   document.body.dataset.view=view;
   const subChanged = sub !== activeSub || view !== activeView;
   const primary=view==="responsibility"?"work":view;
   document.querySelectorAll("[data-v]").forEach(a=>a.classList.toggle("on", a.dataset.v===primary));
+  document.querySelectorAll("[data-lens]").forEach(a=>a.classList.toggle("on",view==="universe"&&a.dataset.lens===(sub||"universe")));
   const title=TITLES[view] || view[0].toUpperCase()+view.slice(1);
   document.getElementById("title").textContent = title;
   document.title=title.replace(/\s+—.*$/,"")+" · Mino";
   let preserve=false;
-  if (view === "overview" && activeView === "overview" && animating){
-    // don't rebuild mid-animation or the glowing SVG gets wiped
+  if (view === "universe" && activeView === "universe" && activeSub === sub && universeState?.canvas?.isConnected){
+    universeState.lens=sub||"universe";
     preserve=true;
   } else if ((view === "memory" || view === "settings" || view === "database" || view === "onboarding") && editing && !subChanged){
     // don't wipe an in-progress edit on the 5s refresh — but DO switch sub-tabs
@@ -1502,16 +1396,17 @@ function render(){
   const responsibilityViews=D.responsibilities||{today:[],work:[]};
   const attention=responsibilityViews.today.filter(x=>x.status==="needs_you"||x.status==="blocked").length;
   const open=responsibilityViews.work.filter(x=>!["verified","stopped"].includes(x.status)).length;
-  document.getElementById("n-today").textContent = attention||"";
-  document.getElementById("n-work").textContent = open||"";
-  document.getElementById("mobile-n-today").textContent = attention||"";
+  const todayCount=document.getElementById("n-today"),workCount=document.getElementById("n-work"),mobileToday=document.getElementById("mobile-n-today");
+  if(todayCount) todayCount.textContent=attention||"";
+  if(workCount) workCount.textContent=open||"";
+  if(mobileToday) mobileToday.textContent=attention||"";
 }
 let lastFetch = 0, refreshFailed = false;
 function tickLive(){
   const age=lastFetch?Math.round((Date.now()-lastFetch)/1000):null;
   const stale=refreshFailed||age==null||age>15;
   const responsibilityError=Boolean(D&&D.responsibilities&&D.responsibilities.error);
-  const mcp=D&&D.tools&&D.tools.mcp;
+  const mcp=fullDataLoaded&&D&&D.tools&&D.tools.mcp;
   const degraded=!stale&&!responsibilityError&&mcp&&mcp.configured&&!mcp.live;
   const state=stale?"lost":responsibilityError?"attention":degraded?"degraded":"operational";
   const label={lost:"Connection lost",attention:"Attention",degraded:"Degraded",operational:"Operational"}[state];
@@ -1522,14 +1417,29 @@ function tickLive(){
   document.getElementById("health-panel-label").textContent=label;
   document.getElementById("health-freshness").textContent=freshness;
   const details=document.getElementById("health-details");
-  if(details&&D) details.innerHTML=`<div><dt>Provider</dt><dd>${esc(D.active_provider||D.provider||"Unavailable")}</dd></div><div><dt>Responsibilities</dt><dd>${responsibilityError?"Unavailable":"Current"}</dd></div><div><dt>Schedules</dt><dd>${(D.active_tasks||[]).length} active</dd></div><div><dt>MCP</dt><dd>${mcp?(mcp.live?"Connected":mcp.configured?"Unavailable":"Not configured"):"Unknown"}</dd></div>`;
+  if(details&&D) details.innerHTML=`<div><dt>Provider</dt><dd>${esc(fullDataLoaded?(D.active_provider||D.provider||"Unavailable"):"Connected runtime")}</dd></div><div><dt>Responsibilities</dt><dd>${responsibilityError?"Unavailable":`${U?.counts?.responsibilities||0} mapped`}</dd></div><div><dt>Schedules</dt><dd>${fullDataLoaded?(D.active_tasks||[]).length:U?.counts?.schedules||0}</dd></div><div><dt>MCP</dt><dd>${mcp?(mcp.live?"Connected":mcp.configured?"Unavailable":"Not configured"):"Open System to inspect"}</dd></div>`;
+}
+function universeOnlyRoute(){
+  const parts=(location.hash||"#universe").slice(1).split("/"),raw=parts[0]||"universe",sub=parts[1]||"";
+  return raw==="universe"||raw==="overview"||raw==="today"||raw==="work"||raw==="graph"||(raw==="memory"&&sub==="graph");
+}
+function dashboardDataFromUniverse(snapshot){
+  return {needs_onboarding:snapshot.needs_onboarding,timezone:snapshot.timezone,responsibilities:{today:[],work:[]},active_tasks:[],sessions:[],tools:{mcp:{}}};
+}
+async function loadDashboardData(){
+  const response=await fetch("/api/data");
+  if(!response.ok) throw new Error(`dashboard returned ${response.status}`);
+  D=await response.json();fullDataLoaded=true;return D;
 }
 async function refresh(){
   try {
-    const response=await fetch("/api/data");
-    if(!response.ok) throw new Error(`dashboard returned ${response.status}`);
-    D = await response.json(); lastFetch = Date.now(); refreshFailed=false;
-    render(); tickLive();
+    const universeResponse=await fetch("/api/universe");
+    if(!universeResponse.ok) throw new Error(`dashboard returned ${universeResponse.status}`);
+    const nextUniverse=await universeResponse.json();U=nextUniverse;
+    if(!D) D=dashboardDataFromUniverse(nextUniverse);
+    if(!universeOnlyRoute()) await loadDashboardData();
+    lastFetch = Date.now(); refreshFailed=false;
+    render(); universeUpdate(nextUniverse); tickLive();
     syncLiveView();   // live-update an opened conversation (e.g. new phone messages)
   } catch(e){ refreshFailed=true; if(!D) renderRefreshError(e); tickLive(); }
 }
@@ -2123,7 +2033,10 @@ function clearGraphQuery() {
   input.focus();
 }
 
-window.addEventListener("hashchange", render);
+window.addEventListener("hashchange", async()=>{
+  try{if(!universeOnlyRoute())await loadDashboardData();render();tickLive();}
+  catch(error){refreshFailed=true;renderRefreshError(error);tickLive();}
+});
 const THEME_KEY = "mino-theme";
 function applyTheme(mode) {
   const value = ["system", "light", "dark"].includes(mode) ? mode : "system";
@@ -2134,7 +2047,7 @@ function applyTheme(mode) {
   if (select) select.value = value;
 }
 function initTheme() {
-  applyTheme(localStorage.getItem(THEME_KEY) || "system");
+  applyTheme(localStorage.getItem(THEME_KEY) || "light");
   document.getElementById("theme-mode")?.addEventListener("change", event => applyTheme(event.target.value));
 }
 initTheme();

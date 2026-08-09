@@ -1,27 +1,27 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Mino</title>
+<title>Living Field · Mino</title>
 <link rel="icon" type="image/png" href="/static/assets/logo-mark.png">
-<link rel="stylesheet" href="/static/style.css"></head><body class="app-shell" data-view="today">
+<link rel="stylesheet" href="/static/style.css"></head><body class="app-shell" data-view="universe">
 <!--
-THESIS: Nowfield turns accepted Responsibility into one Past / Now / Next field and refuses the centered dashboard ledger.
-OWN-WORLD: crisp mineral surfaces, black sans-serif hierarchy, ultramarine current state, and ruled time geometry.
-STORY: scan what happened, act on what Mino owns now, and see the next truthful action without losing context.
-FIRST VIEWPORT: compact navigation above a full-width time field; the Now axis anchors vertically scrolling Responsibility lanes.
-FORM: Nowfield, the owner-selected replacement direction; seed f4f1d80b.
-FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
+THESIS: Living Field makes Mino's whole durable universe the interface; lists become focused inspection lenses around it.
+OWN-WORLD: a quiet cartographic field, mineral paper, ink-blue topology, and truthful transient activity.
+STORY: see everything Mino carries, rewind how it formed, watch current work move, then talk without losing the map.
+FIRST VIEWPORT: the complete universe, a compact lens rail, contextual inspector, and historical playback.
+FORM: Living Field, the owner-approved map-first direction from issue #78.
 -->
-<header class="operator-nav">
-  <a class="operator-brand" href="#today" aria-label="Mino Today">
+<header class="operator-nav field-rail">
+  <a class="operator-brand" href="#universe" aria-label="Mino Living Field">
     <span class="brand-mark"><img src="/static/assets/logo-mark.png" alt=""></span>
-    <span>Mino</span>
+    <span><strong>Mino</strong><small>Living Field</small></span>
   </a>
-  <nav aria-label="Primary navigation">
-    <a href="#today" data-v="today">Today<span class="nav-count" id="n-today"></span></a>
-    <a href="#work" data-v="work">Work<span class="nav-count" id="n-work"></span></a>
-    <a href="#conversations" data-v="conversations">Conversations</a>
-    <a href="#memory" data-v="memory">Memory</a>
-    <a href="#system" data-v="system">System</a>
+  <nav aria-label="Map lenses">
+    <a href="#universe" data-v="universe" data-lens="universe">Universe</a>
+    <a href="#universe/now" data-v="universe" data-lens="now">Now</a>
+    <a href="#universe/work" data-v="universe" data-lens="work">Work</a>
+    <a href="#universe/memory" data-v="universe" data-lens="memory">Memory</a>
+    <a href="#universe/routines" data-v="universe" data-lens="routines">Routines</a>
+    <a href="#universe/system" data-v="universe" data-lens="system">System</a>
   </nav>
   <div class="operator-actions">
     <button class="health-button" id="health-toggle" type="button" aria-expanded="false" aria-controls="health-panel">
@@ -32,17 +32,17 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
   <section class="health-panel" id="health-panel" hidden aria-label="Runtime health">
     <div><strong id="health-panel-label">Connecting</strong><span id="health-freshness">Waiting for current state</span></div>
     <dl id="health-details"></dl>
-    <label class="health-theme"><span>Appearance</span><select id="theme-mode" aria-label="Appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+    <label class="health-theme"><span>Appearance</span><select id="theme-mode" aria-label="Appearance"><option value="light">Light</option><option value="system">System</option><option value="dark">Dark</option></select></label>
     <a href="#system/overview">Inspect system</a>
   </section>
 </header>
 
 <main>
   <header class="pagehead">
-    <h1 id="title">Today</h1>
+    <div><span class="field-kicker">Your Mino universe</span><h1 id="title">Living Field</h1></div>
     <p class="sub" id="sub" aria-live="polite">Connecting to current state…</p>
   </header>
-  <div id="view"><div class="nowfield-loading" role="status"><span></span><strong>Loading current Responsibility…</strong><p>Reading the latest Past, Now, and Next state.</p></div></div>
+  <div id="view"><div class="nowfield-loading" role="status"><span></span><strong>Mapping Mino’s universe…</strong><p>Reading durable state and its relationships.</p></div></div>
 </main>
 
 <aside id="dock" aria-label="Conversation with Mino">
@@ -84,12 +84,12 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
 <button id="dock-reopen" type="button" aria-label="Open conversation workbench">Open conversation</button>
 
 <nav class="mobile-nav" aria-label="Mobile navigation">
-  <a href="#today" data-v="today"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M7 3v4M17 3v4M5 11h4v4H5zM12 11h7M12 15h5M5 19h14"/></svg><span>Today</span><b id="mobile-n-today"></b></a>
-  <a href="#work" data-v="work"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16v13H4zM8 7V4h8v3M8 12h8M8 16h5"/></svg><span>Work</span></a>
-  <a href="#conversations" data-v="conversations"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v12H9l-5 3V5zM8 9h8M8 13h5"/></svg><span>Inbox</span></a>
-  <a href="#memory" data-v="memory"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v14H5zM8 9h8M8 13h5M8 17h7"/></svg><span>Memory</span></a>
+  <a href="#universe" data-v="universe" data-lens="universe"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2"/><circle cx="12" cy="12" r="7"/><path d="M3 12h18M12 3v18"/></svg><span>Universe</span></a>
+  <a href="#universe/now" data-v="universe" data-lens="now"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg><span>Now</span></a>
+  <a href="#universe/work" data-v="universe" data-lens="work"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16v13H4zM8 7V4h8v3M8 12h8M8 16h5"/></svg><span>Work</span></a>
+  <a href="#universe/memory" data-v="universe" data-lens="memory"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v14H5zM8 9h8M8 13h5M8 17h7"/></svg><span>Memory</span></a>
   <button id="ask-mobile" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18"/></svg><span>Ask</span></button>
-  <a href="#system" data-v="system"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg><span>More</span></a>
+  <a href="#universe/system" data-v="universe" data-lens="system"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg><span>System</span></a>
 </nav>
 
-<script src="/static/app.js"></script></body></html>
+<script src="/static/universe.js"></script><script src="/static/app.js"></script></body></html>
