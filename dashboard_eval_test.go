@@ -68,17 +68,20 @@ func TestDashboardViewsSurviveUnchangedPollingRefresh(t *testing.T) {
 	if !strings.Contains(app, `[...(d.skills || [])].sort`) {
 		t.Fatal("skills must render in a deterministic order across polls")
 	}
-	if !strings.Contains(app, `view === "memory" && sub === "graph" && activeView === "memory" && activeSub === "graph"`) {
-		t.Fatal("polling must preserve the active Memory Graph canvas")
+	if !strings.Contains(app, `view === "universe" && activeView === "universe" && activeSub === sub && universeState?.canvas?.isConnected`) {
+		t.Fatal("polling must preserve the active Living Field canvas")
 	}
-	if !strings.Contains(app, `canvas.isConnected && graphState?.canvas === canvas`) {
-		t.Fatal("obsolete graph animation loops must stop when their canvas is replaced")
+	if !strings.Contains(app, `universeUpdate(nextUniverse)`) {
+		t.Fatal("polling must merge durable universe changes without rebuilding the field")
 	}
-	if !strings.Contains(app, "const layoutRadius = Math.max(160, Math.min(canvas.width, canvas.height) * 0.38)") {
-		t.Fatal("memory graph nodes must start in a spread-out deterministic layout")
+	field, err := staticFiles.ReadFile("static/universe.js")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(app, "const maxNodeSpeed = 8") {
-		t.Fatal("memory graph simulation must cap node velocity")
+	for _, behavior := range []string{`function universeHash(text)`, `function universeLayout(nodes,edges=[])`, `if(!canvas.isConnected||universeState!==state) return`} {
+		if !strings.Contains(string(field), behavior) {
+			t.Errorf("Living Field refresh contract is missing %q", behavior)
+		}
 	}
 }
 
@@ -87,10 +90,14 @@ func TestDashboardNavigationAndLegacyHashContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, route := range []string{"today", "work", "conversations", "memory", "system"} {
-		want := `href="#` + route + `" data-v="` + route + `"`
+	for _, lens := range []string{"universe", "now", "work", "memory", "routines", "system"} {
+		hash := "#universe"
+		if lens != "universe" {
+			hash += "/" + lens
+		}
+		want := `href="` + hash + `" data-v="universe" data-lens="` + lens + `"`
 		if !strings.Contains(string(index), want) {
-			t.Errorf("primary navigation must preserve %q", route)
+			t.Errorf("primary navigation must expose the %q map lens", lens)
 		}
 	}
 
@@ -99,7 +106,9 @@ func TestDashboardNavigationAndLegacyHashContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, redirect := range []string{
-		`if(raw==="overview") route=["today",null]`,
+		`if(raw==="overview") route=["universe",null]`,
+		`else if(raw==="today") route=["universe","now"]`,
+		`else if(raw==="work") route=["universe","work"]`,
 		`else if(raw==="gateway"||raw==="chat") route=["conversations",null]`,
 		`else if(raw==="loop") route=["system","runtime"]`,
 		`else if(raw==="tools") route=["system",sub==="results"?"tool-results":sub==="mcp"?"mcp":"tools"]`,
@@ -108,7 +117,7 @@ func TestDashboardNavigationAndLegacyHashContract(t *testing.T) {
 		`else if(raw==="ops") route=["system",sub&&sub!=="overview"?sub:"overview"]`,
 		`else if(raw==="settings") route=["system","settings"]`,
 		`else if(raw==="activetasks") route=["system","schedules"]`,
-		`else if(raw==="graph") route=["memory","graph"]`,
+		`else if(raw==="graph"||(raw==="memory"&&sub==="graph")) route=["universe","memory"]`,
 	} {
 		if !strings.Contains(string(script), redirect) {
 			t.Errorf("dashboard must preserve legacy route redirect %q", redirect)
@@ -116,23 +125,24 @@ func TestDashboardNavigationAndLegacyHashContract(t *testing.T) {
 	}
 }
 
-func TestDashboardNowfieldSurfaceContract(t *testing.T) {
+func TestDashboardLivingFieldSurfaceContract(t *testing.T) {
 	index, err := staticFiles.ReadFile("static/index.html")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(index), "THESIS: Nowfield") {
-		t.Fatal("dashboard direction contract must name the approved Nowfield surface")
+	if !strings.Contains(string(index), "THESIS: Living Field") {
+		t.Fatal("dashboard direction contract must name the approved Living Field surface")
 	}
 	for _, shell := range []string{
 		`<div id="view"><div class="nowfield-loading"`,
+		`<script src="/static/universe.js"></script>`,
 	} {
 		if !strings.Contains(string(index), shell) {
-			t.Errorf("Nowfield shell is missing %q", shell)
+			t.Errorf("Living Field shell is missing %q", shell)
 		}
 	}
-	if strings.Count(string(index), `<a href="#memory" data-v="memory"`) < 2 {
-		t.Error("Memory must remain reachable in both desktop and mobile navigation")
+	if strings.Contains(string(index), `<svg class="arch`) {
+		t.Error("the retired runtime SVG must not remain in the production shell")
 	}
 
 	script, err := staticFiles.ReadFile("static/app.js")
@@ -140,31 +150,26 @@ func TestDashboardNowfieldSurfaceContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, behavior := range []string{
-		`function nowfieldView(d,mode)`,
-		`function nowfieldAttr(value)`,
-		`.replace(/"/g,"&quot;").replace(/'/g,"&#39;")`,
-		`return nowfieldView(d,"today")`,
-		`return nowfieldView(d,"work")`,
-		`function filterNowfield()`,
-		`aria-label="Search Work"`,
-		`aria-label="Filter Work by status"`,
-		`class="nowfield-axis"`,
-		`<span>Past</span><strong>Now</strong><span>Next</span>`,
-		`#responsibility/${encodeURIComponent(entry.id)}`,
-		`entry.next_action`,
-		`entry.due_at`,
-		`entry.schedule`,
-		`class="nowfield-empty"`,
-		`class="nowfield-focus"`,
-		`class="nowfield-focus-axis"`,
-		`aria-label="Past:`,
-		`aria-label="Now:`,
-		`aria-label="Next:`,
-		`class="nowfield-detail-link"`,
-		`function renderRefreshError(error)`,
+		`universe(d, lens){ return universeView(U,lens||"universe"); }`,
+		`fetch("/api/universe")`,
+		`if(view==="universe") setTimeout(()=>initUniverse(U,sub||"universe"),20)`,
+		`(r.events||[]).forEach(universeActivity)`,
 	} {
 		if !strings.Contains(string(script), behavior) {
-			t.Errorf("Nowfield browser contract is missing %q", behavior)
+			t.Errorf("Living Field app contract is missing %q", behavior)
+		}
+	}
+	field, err := staticFiles.ReadFile("static/universe.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, behavior := range []string{
+		`id="universe-canvas"`, `snapshot.nodes`, `snapshot.edges`, `function playUniverseHistory()`,
+		`state.timeline=Math.min(1`, `function universeActivity(event)`, `state.activities.push`,
+		`requestAnimationFrame(draw)`, `function selectUniverseNode(id)`, `Open full view`,
+	} {
+		if !strings.Contains(string(field), behavior) {
+			t.Errorf("Living Field behavior is missing %q", behavior)
 		}
 	}
 
@@ -173,23 +178,51 @@ func TestDashboardNowfieldSurfaceContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, rule := range []string{
-		`.nowfield{`,
-		`.nowfield-lane{`,
-		`.nowfield-axis{`,
-		`.nowfield-controls{`,
-		`.nowfield-focus{`,
-		`.nowfield-focus-axis{`,
-		`.nowfield-detail-link{`,
-		`.nowfield-loading{`,
-		`height:calc(100vh - 204px)`,
-		`body[data-view="today"] main,body[data-view="work"] main`,
-		`body[data-view="responsibility"] main{width:100%`,
-		`.nowfield-lanes{min-height:0`,
-		`.nowfield-lane{grid-template-columns:1fr`,
+		`body[data-view="universe"]{grid-template-columns:176px minmax(0,1fr)`,
+		`.living-field{`, `.field-stage{`, `#universe-canvas{`, `.field-inspector{`,
+		`.field-timeline{`, `.field-region-labels`, `.field-a11y-index{`,
+		`body[data-view="universe"] #dock{grid-column:1/-1;grid-row:2}`,
+		`@media(max-width:719px){body[data-view="universe"]`,
 	} {
 		if !strings.Contains(string(styles), rule) {
-			t.Errorf("Nowfield layout contract is missing %q", rule)
+			t.Errorf("Living Field layout contract is missing %q", rule)
 		}
+	}
+}
+
+func TestDashboardLivingFieldBehavior(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required for Living Field behavior checks")
+	}
+	const harness = `
+const fs=require("fs"),vm=require("vm"),source=fs.readFileSync(process.argv[1],"utf8");
+function extract(name){
+  const start=source.indexOf("function "+name+"(");
+  if(start<0) throw new Error("missing "+name);
+  const brace=source.indexOf("{",start); let depth=0;
+  for(let i=brace;i<source.length;i++){
+    if(source[i]==="{") depth++;
+    else if(source[i]==="}"&&--depth===0) return source.slice(start,i+1);
+  }
+  throw new Error("unterminated "+name);
+}
+const names=["universeHash","universeRand","universeRegion","universeFocus","universeNodeLink","universeLayout"];
+const box={};vm.runInNewContext(names.map(extract).join("\n"),box);
+function assert(ok,label){if(!ok)throw new Error(label)}
+assert(box.universeHash("memory:a")===box.universeHash("memory:a"),"stable hash");
+assert(box.universeFocus({kind:"reminder",attention:false},"now"),"now lens includes reminders");
+assert(box.universeNodeLink({id:"responsibility:routine:test",kind:"responsibility"})==="#responsibility/routine%3Atest","responsibility deep link");
+const make=()=>Array.from({length:64},(_,i)=>({id:"memory:"+i,kind:"memory",community:0,state:"semantic"}));
+const edges=Array.from({length:63},(_,i)=>({source:"memory:"+i,target:"memory:"+(i+1)}));
+const first=make(),second=make();box.universeLayout(first,edges);box.universeLayout(second,edges);
+assert(JSON.stringify(first.map(n=>[n.x,n.y]))===JSON.stringify(second.map(n=>[n.x,n.y])),"deterministic geography");
+const xs=first.map(n=>n.x),ys=first.map(n=>n.y);
+assert(Math.max(...xs)-Math.min(...xs)>.35&&Math.max(...ys)-Math.min(...ys)>.25,"single stored community must still form a topology field");
+`
+	cmd := exec.Command(node, "-e", harness, filepath.Join("static", "universe.js"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("Living Field behavior failed: %v\n%s", err, out)
 	}
 }
 
