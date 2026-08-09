@@ -90,6 +90,50 @@ func TestGraphMemoryRememberNoMatch(t *testing.T) {
 	}
 }
 
+func TestGraphMemoryRememberOutputsWhyBodyAndRationale(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), nil)
+	if err := gm.RecordFact(Fact{ID: "planet", Type: "semantic", Subject: "My planet is Mars",
+		Body: "The red planet, fourth from the sun.", Why: "because I live there",
+		UseWhen: []string{"when user asks about where I live"}}); err != nil {
+		t.Fatal(err)
+	}
+	got := gm.Remember("where I live", "")
+	for _, want := range []string{"My planet is Mars", "why: because I live there",
+		"body: The red planet, fourth from the sun.", "matched:", "use_when: live, where"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in output:\n%s", want, got)
+		}
+	}
+}
+
+func TestGraphMemoryRememberBudgetsBodyAndKeepsNeighborsLean(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), nil)
+	long := strings.Repeat("word ", 80) // 400 chars
+	if err := gm.RecordFact(Fact{ID: "spoke", Type: "semantic", Subject: "Spoke fact",
+		Body: "spoke body", Why: "spoke why"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gm.RecordFact(Fact{ID: "hub", Type: "semantic", Subject: "Hub fact",
+		Body: long, Why: "hub why", Edges: []Edge{{Target: "spoke", Rel: "links_to"}}}); err != nil {
+		t.Fatal(err)
+	}
+	got := gm.Remember("Hub", "")
+	if !strings.Contains(got, "…") {
+		t.Fatalf("long body not truncated:\n%s", got)
+	}
+	// Start fact carries why + body; the neighbor stays lean (budget discipline).
+	// Query is exact-subject "Hub" so spoke is reachable only as a neighbor.
+	if !strings.Contains(got, "why: hub why") {
+		t.Fatalf("start fact why missing:\n%s", got)
+	}
+	if strings.Contains(got, "spoke why") || strings.Contains(got, "spoke body") {
+		t.Fatalf("neighbor fact leaked why/body — budget blowup:\n%s", got)
+	}
+	if !strings.Contains(got, "→ [links_to] Spoke fact") {
+		t.Fatalf("graph structure lost:\n%s", got)
+	}
+}
+
 func TestGraphMemoryUpdateBodyPersists(t *testing.T) {
 	dir := t.TempDir()
 	gm := NewGraphMemory(dir, nil)

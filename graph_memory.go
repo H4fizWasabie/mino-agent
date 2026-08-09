@@ -744,10 +744,13 @@ func (gm *GraphMemory) fileStamp(id string) fileStamp {
 	return fileStamp{ID: id, Size: info.Size(), ModTime: info.ModTime().UnixNano()}
 }
 
-// Remember is the graph-aware recall tool. Returns an indented tree.
+// Remember is the graph-aware recall tool. Returns an indented tree with each
+// matched fact's why, body, and match rationale, plus its graph neighborhood.
 //
 //	remember("Procura")
 //	→ procura_is_authoritative
+//	  why: The system of record for procurement.
+//	  matched: subject (procura); use_when (procurement)
 //	  → [supersedes] procurepilot_is_legacy
 //	  → [depends_on] procura_db_location
 //	    → [located_at] vps_server
@@ -761,12 +764,12 @@ func (gm *GraphMemory) Remember(query, turn string) string {
 
 	// Step 1: merged ranking — substring + why/use_when overlap (query & turn),
 	// with embedding similarity filling thin results (see entryRanking).
-	startIDs := gm.entryRanking(query, turn)
-	if len(startIDs) == 0 {
+	starts := gm.entryRanking(query, turn)
+	if len(starts) == 0 {
 		return fmt.Sprintf("No memories found for: %s", query)
 	}
-	if len(startIDs) > 3 {
-		startIDs = startIDs[:3]
+	if len(starts) > 3 {
+		starts = starts[:3]
 	}
 
 	// Step 2: BFS traversal from start nodes
@@ -777,13 +780,22 @@ func (gm *GraphMemory) Remember(query, turn string) string {
 	visited := make(map[string]bool)
 	var lines []string
 
-	for _, startID := range startIDs {
-		fact, ok := gm.facts[startID]
+	for _, start := range starts {
+		fact, ok := gm.facts[start.id]
 		if !ok {
 			continue
 		}
 		lines = append(lines, fact.Subject+"  # "+fact.ID)
-		visited[startID] = true
+		if fact.Why != "" {
+			lines = append(lines, "  why: "+oneLine(fact.Why, 160))
+		}
+		if fact.Body != "" {
+			lines = append(lines, "  body: "+oneLine(fact.Body, 200))
+		}
+		if len(start.signals) > 0 {
+			lines = append(lines, "  matched: "+strings.Join(start.signals, "; "))
+		}
+		visited[fact.ID] = true
 		gm.bfsEdges(fact, "  ", 1, maxDepth, visited, &lines)
 		gm.bfsInbound(fact, "  ", 1, maxDepth, visited, &lines)
 	}
@@ -792,6 +804,20 @@ func (gm *GraphMemory) Remember(query, turn string) string {
 		return fmt.Sprintf("No memories found for: %s", query)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// oneLine flattens a fact field to a single space-joined line, truncated to max
+// runes at a word boundary (MEM-04 token budget per result).
+func oneLine(s string, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len([]rune(s)) <= max {
+		return s
+	}
+	runes := []rune(s)[:max]
+	if i := strings.LastIndex(string(runes), " "); i > max/2 {
+		runes = runes[:i]
+	}
+	return string(runes) + "…"
 }
 
 // bfsEdges traverses edges recursively, depth-limited.
@@ -851,48 +877,50 @@ func edgeTraversable(edge Edge) bool {
 // subject/body, why/use_when overlap with the query, and why/use_when overlap
 // with the active turn — then merges embedding similarity (20×cosine) when the
 // free ranking leaves room in the top-3. Weights: subject word 10, body word 3,
-// exact subject 100, why/use_when word 10 per signal. Returns IDs with score>0,
-// best first. (MEM-03: use_when is co-authored recall intent — a word there is
-// worth a subject word, and the turn supplies the query's conversational frame.)
-func (gm *GraphMemory) entryRanking(query, turn string) []string {
-	type scored struct {
-		id    string
-		score int
-	}
+// exact subject 100, why/use_when word 10 per signal. Returns matches best-first
+// with the per-signal breakdown (MEM-04 renders it as the match rationale).
+func (gm *GraphMemory) entryRanking(query, turn string) []rankedFact {
 	queryWords := memoryTokenize(query)
 	turnWords := memoryTokenize(turn)
-	var ranked []scored
+	var ranked []rankedFact
 	for id, fact := range gm.facts {
 		score := 0
 		subj := strings.ToLower(fact.Subject)
 		body := strings.ToLower(fact.Body)
-		for w := range queryWords {
-			if strings.Contains(subj, w) {
-				score += 10
-			}
-			if strings.Contains(body, w) {
-				score += 3
-			}
-		}
+		useWhen := strings.ToLower(strings.Join(fact.UseWhen, " "))
+		why := strings.ToLower(fact.Why)
+		var signals []string
+
 		// Exact subject match bonus
 		if subj == strings.ToLower(strings.TrimSpace(query)) {
 			score += 100
+			signals = append(signals, "exact subject")
+		}
+		if sw := matchedWords(queryWords, subj); len(sw) > 0 {
+			score += 10 * len(sw)
+			signals = append(signals, "subject: "+strings.Join(sw, ", "))
+		}
+		if bw := matchedWords(queryWords, body); len(bw) > 0 {
+			score += 3 * len(bw)
+			signals = append(signals, "body: "+strings.Join(bw, ", "))
 		}
 		// Intent overlap: why/use_when are written to match the questions that
 		// should recall this fact (MEM-02), so a word there is worth a subject word.
-		intent := strings.ToLower(strings.Join(fact.UseWhen, " ") + " " + fact.Why)
-		for w := range queryWords {
-			if strings.Contains(intent, w) {
-				score += 10
-			}
+		if uw := matchedWords(queryWords, useWhen); len(uw) > 0 {
+			score += 10 * len(uw)
+			signals = append(signals, "use_when: "+strings.Join(uw, ", "))
 		}
-		for w := range turnWords {
-			if strings.Contains(intent, w) {
-				score += 10
-			}
+		if wy := matchedWords(queryWords, why); len(wy) > 0 {
+			score += 10 * len(wy)
+			signals = append(signals, "why: "+strings.Join(wy, ", "))
+		}
+		// The active turn's words against the same intent text (MEM-03).
+		if tw := matchedWords(turnWords, useWhen+" "+why); len(tw) > 0 {
+			score += 10 * len(tw)
+			signals = append(signals, "your words: "+strings.Join(tw, ", "))
 		}
 		if score > 0 {
-			ranked = append(ranked, scored{id, score})
+			ranked = append(ranked, rankedFact{id: id, score: score, signals: signals})
 		}
 	}
 	sort.Slice(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
@@ -923,22 +951,39 @@ func (gm *GraphMemory) entryRanking(query, turn string) []string {
 			for i := range ranked {
 				if ranked[i].id == id {
 					ranked[i].score += embScore
+					ranked[i].signals = append(ranked[i].signals, fmt.Sprintf("similarity: %.2f", sd.score))
 					found = true
 					break
 				}
 			}
 			if !found {
-				ranked = append(ranked, scored{id, embScore})
+				ranked = append(ranked, rankedFact{id: id, score: embScore, signals: []string{fmt.Sprintf("similarity: %.2f", sd.score)}})
 			}
 		}
 		sort.Slice(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
 	}
+	return ranked
+}
 
-	ids := make([]string, len(ranked))
-	for i, r := range ranked {
-		ids[i] = r.id
+// rankedFact is one recall match: its merged score and the per-signal word
+// breakdown that becomes the "matched" rationale line (MEM-04).
+type rankedFact struct {
+	id      string
+	score   int
+	signals []string
+}
+
+// matchedWords returns the query/turn words contained in text, sorted — the
+// deterministic signal breakdown for the match rationale.
+func matchedWords(words map[string]bool, text string) []string {
+	var out []string
+	for w := range words {
+		if strings.Contains(text, w) {
+			out = append(out, w)
+		}
 	}
-	return ids
+	sort.Strings(out)
+	return out
 }
 
 // memoryTokenize splits text into lowercase word keys: len>=2, punctuation
