@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [v2.6.2] — Operation-State Visibility (2026-08-09)
 ### Added
 - OSV-04 validation cases (closes #70): table-driven "right store, right answer" suite — (a) a reminder question ("When was my last Arachem meeting?") is answered from the reminder store with zero calendar tool calls; (b) every mutating tool result carries destination + state (9-tool table, OSV-01 pattern); (c) outcome claims contradicted by this turn's tool results are corrected (9-case table over the OSV-03 claim surface). (Why: the map's measurable — "a reminder question never triggers a calendar search; what happened to the information is answerable from the tool result" — now proven by tests, not asserted.)
 - Reminder tool descriptions now carry meeting/appointment/deadline trigger words so the schema-retrieval gate offers the reminder store for reminder questions (exposed by OSV-04 case a: the FTS catalog could not match list_reminders for "when was my last meeting" — the same retrieval gap behind the Arachem detour).
