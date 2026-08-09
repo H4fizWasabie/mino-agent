@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [v2.7.0] — Living Field (2026-08-09)
 ### Added
 - Living Field universe contract (#78): the dashboard now has a compact read-only map of durable memories, responsibilities, routines, reminders, artifacts, conversations, skills, and tools, with chronological responsibility history and non-destructive cursor-based runtime events for playback and live activity. (Why: a map-first interface needs one truthful topology contract; runtime activity must remain ephemeral while verified state remains durable.)
 
