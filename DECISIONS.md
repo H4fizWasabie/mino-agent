@@ -313,3 +313,33 @@ loop without creating a second agent runtime.
 This branch is not production-certified until the exact binary is deployed,
 live behavior is tested in one continuous session, backup/database integrity is
 verified, and local/VPS binary identity matches.
+
+## 24. Deploy: one path to production (REL-05)
+
+**Decision (2026-08-10, #120):** The self-updater (`mino update`, release → VPS,
+version-checked, SHA256SUMS-verified) is the ONLY path to production.
+`deploy.sh` is bootstrap-only: user setup, RTK, oauth.d, extensions.json,
+systemd units, state.db backup — it builds and pushes no binaries. The manual
+path survives only as a documented emergency procedure (raw scp + SHA-verification
+checklist), awkward on purpose, for GitHub-down or broken-release cases.
+
+**Why:** Three agents on three states. 2026-08-10: a manual scp shipped a
+pre-landmarks build (caught by hash mismatch, not by design); cost-watch's unit
+was invisible to deploy.sh and never updated; a v2.8.0 label ran before the tag
+existed; the release was cut from a stale master. The self-updater was the only
+path with built-in verification — so it becomes the only path. The failure class
+was always "a human ran a build from an unverified local tree"; removing the
+local-tree path removes the class.
+
+**Who may deploy:** Splits by act. Cutting a release (tag + publish) is owner-only
+— GitHub carries who/what/when. `mino update` on the VPS is any agent: post-SHA-
+verification the updater can only install a released, checksum-verified binary;
+the updater itself writes the who/what/when line to
+`/home/mino/.mino/deployments.log` (code-generated, cannot rot).
+
+**Builds:** Only from tags. build-release.sh refuses to build unless HEAD is an
+exact tag match on a clean tree, so a version label can never precede its tag.
+
+**Revisit when:** An extension grows a self-updater of its own, or the release
+pipeline automates (CI) — the owner-only release gate and the verification
+chain must survive any automation.
