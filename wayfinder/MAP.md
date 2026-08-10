@@ -60,3 +60,35 @@ Measurable: a schedule whose window passes without a run appears in `schedules.j
 ## Not yet specified
 
 - Production observation (sch-003): confirm missed runs surface in dashboard traces/audit after deploy.
+
+---
+
+# Mino Daily-Job Reliability — Wayfinder Map
+
+## Destination
+
+Every scheduled job either publishes its output or pages the owner — never silent. Failure is caught by outcome verification and alerts, not by model mood. "Healthy" means the day's posts went out, replies were sent, comments were posted — not "service active, stage complete."
+
+## Notes
+
+- **Domain:** Go harness + playbook contracts + provider/model policy. Owner cares about cost (gpt luna too agentic + expensive) and hates silent failure.
+- **Existing machinery:** outbox (Telegram), traces, audit.jsonl, schedules.json missed_at, artifact distillation. Most alerts just aren't wired to outcomes yet.
+- **Known fact from today:** model judgment on "inputs unavailable / tool unavailable" was the skip trigger — twice the claims were false or avoidable. The harness treats stage self-reports ("NOT FULFILLED") as complete.
+- **Convention:** local-markdown tracker (this file + tickets/), wayfinder:<type> labels, one ticket per session when working the map.
+
+## Decisions so far
+
+<!-- none yet -->
+
+## Not yet specified
+
+- Model-drift detection: how to notice a brain getting "moody" (skipping, self-blocking) before it misses three days — depends on the model policy ticket.
+- Alert channel policy: always-page vs digest, quiet hours — depends on the health-alert ticket.
+- Where the health check lives: a playbook, a harness post-run hook, or the dashboard — sharpens once alert semantics are decided.
+
+## Out of scope
+
+- Dashboard features (Living Field, lenses, landmarks) — the map is about the jobs, not the map.
+- Re-fixing today's already-fixed incidents (tribal skip, karma alias, replies glob row).
+- Iteration caps, ticker cadence, timezone semantics (ruled out in the Schedule Reliability map).
+- Executing the model switch itself — this map decides the policy; the switch is execution.
