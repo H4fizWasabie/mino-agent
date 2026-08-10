@@ -25,9 +25,17 @@ for p in "${platforms[@]}"; do
   GOOS="$GOOS" GOARCH="$GOARCH" go build -ldflags "-X main.Version=$VERSION" -o "$out" .
 done
 
+# Updater-less extensions ship as release assets too (REL-05c, #131) so a
+# manual bootstrap or emergency deploy can fetch them verified, never from a
+# local tree.
+echo ""
+echo "Building extensions..."
+(cd extensions/minowrap && go build -o minowrap .) && mv extensions/minowrap/minowrap ./minowrap
+(cd extensions/threads && go build -o threads-extension .) && mv extensions/threads/threads-extension ./threads-extension
+
 # Checksums so the VPS self-updater can verify the linux/amd64 binary
 # before swapping it in (CD via release assets).
-sha256sum mino-linux-amd64 mino-linux-arm64 mino-darwin-amd64 mino-darwin-arm64 mino-windows-amd64.exe > SHA256SUMS.txt
+sha256sum mino-linux-amd64 mino-linux-arm64 mino-darwin-amd64 mino-darwin-arm64 mino-windows-amd64.exe minowrap threads-extension > SHA256SUMS.txt
 
 echo ""
 echo "Done. Upload these to the GitHub release:"
