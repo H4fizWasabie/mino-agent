@@ -465,7 +465,6 @@ func RunLoopContext(
 		// Execute tools and feed results back
 		parseFailures = 0 // a successfully parsed + executed call breaks the streak (issue #24)
 		toolResults := make([]map[string]any, 0)
-		var turnImages []string
 		for _, tc := range toolUses {
 			args, _ := tc.Input.(map[string]any)
 
@@ -490,8 +489,23 @@ func RunLoopContext(
 				return result
 			}
 			if tc.Name == "view_image" && strings.HasPrefix(raw, "data:image/") {
-				turnImages = append(turnImages, raw)
-				raw = "[image loaded into visual context]"
+				// T8 (map #88): the data URL is converted to vision-model text
+				// here instead of being attached to the main messages — the
+				// main brain never carries image bytes, so it stays on the main
+				// provider for the rest of the turn and the provider prompt
+				// cache is not broken by per-iteration image blobs.
+				task, _ := args["task"].(string)
+				desc, err := describeImage(client, sessionID, raw, task, maxTokens)
+				if err != nil {
+					// A failed vision call degrades to an error tool result the
+					// model can react to; never fall back to attaching the image.
+					slog.Warn("view_image vision call failed", "session_id", sessionID, "error", err)
+					trace("vision", map[string]any{"ok": false, "error": err.Error()})
+					raw = "Error: vision analysis failed: " + err.Error()
+				} else {
+					trace("vision", map[string]any{"ok": true, "chars": len(desc)})
+					raw = "[view_image: " + desc + "]"
+				}
 			}
 			output := prepareToolOutput(traceHome, sessionID, i, tc.Name, raw)
 			result.ToolCalls = append(result.ToolCalls, ToolCall{Name: tc.Name, Args: args, Output: output})
@@ -515,7 +529,7 @@ func RunLoopContext(
 				"content":     output,
 			})
 		}
-		messages = append(messages, Message{Role: "user", Content: formatToolResults(toolResults), Images: turnImages})
+		messages = append(messages, Message{Role: "user", Content: formatToolResults(toolResults)})
 
 		// Loop detection: check for repeated identical tool calls. Skipped inside
 		// playbook stages: a stage whose whitelist is only search_web + write_file
@@ -950,6 +964,31 @@ const (
 
 func prepareToolOutput(home, sessionID string, turn int, tool, output string) string {
 	return compactToolOutput(home, sessionID, turn, tool, output)
+}
+
+// describeImage sends one image to the vision-capable provider (VisionModel
+// role, which skips text-only providers) and returns the model's text
+// response. T8 (wayfinder map #88): view_image data URLs are converted here
+// into a text tool result instead of being attached to the main messages — the
+// main brain stays on the main provider for the rest of the turn, per-iteration
+// image re-sends disappear, and the provider prompt cache is no longer broken
+// by unique image blobs. One LLM call, tool-result transformation: no second
+// agent loop. The per-call task text (from the tool args, when provided) steers
+// the analysis; the default is a general describe-for-critique prompt.
+func describeImage(client LLMClient, sessionID, dataURL, task string, maxTokens int) (string, error) {
+	prompt := "Describe this image precisely and neutrally as a brief for a critic: subject, layout, visible text, colors, mood, and any flaws (blur, artifacts, cropping, cut-off elements). Be concrete; do not speculate about intent beyond what is visible."
+	if task != "" {
+		prompt = "You are looking at an image. Task: " + task + " Answer directly and precisely, based only on what the image shows."
+	}
+	resp, err := client.Create(sessionID, VisionModel, []Message{{Role: "user", Content: prompt, Images: []string{dataURL}}}, maxTokens, "", nil)
+	if err != nil {
+		return "", err
+	}
+	desc := strings.TrimSpace(extractText(resp.Content))
+	if desc == "" {
+		return "", fmt.Errorf("empty vision response")
+	}
+	return desc, nil
 }
 
 func compactToolOutput(home, sessionID string, turn int, tool, output string) string {
