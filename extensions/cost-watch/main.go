@@ -2,7 +2,9 @@
 //
 // Scrapes OpenRouter model pages for per-provider pricing, exposes the mino
 // extension protocol (DECISIONS.md §8), and runs an hourly autonomous check
-// that alerts on Telegram when a promotional price expires.
+// that alerts on Telegram when a promotional price expires. Alert-only by
+// policy (REL-01, issue #128): it pages the owner — it never changes the
+// brain. Model changes are human decisions.
 //
 //	GET  /tools    -> [{"name": "...", "schema": {...}}]
 //	POST /execute  -> {"tool": "...", "args": {...}} -> {"result": "..."}
@@ -17,7 +19,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -43,22 +44,23 @@ type modelConfig struct {
 }
 
 type config struct {
-	Listen    string                   `json:"listen"`
-	Port      int                      `json:"port"`
-	Models    map[string]modelConfig   `json:"models"`
-	Chain     []string                 `json:"chain"`
-	Templates map[string][]interface{} `json:"provider_templates"`
-	Telegram  string                   `json:"telegram_chat_id"`
+	Listen   string                 `json:"listen"`
+	Port     int                    `json:"port"`
+	Models   map[string]modelConfig `json:"models"`
+	Telegram string                 `json:"telegram_chat_id"`
 }
 
 func defaultConfig() *config {
+	// The REL-01 policy models (issue #128): promo-expiry and price-spike
+	// paging only covers the actual brain. Expected prices mirror cost.go.
 	return &config{
 		Listen: "127.0.0.1",
 		Port:   9300,
 		Models: map[string]modelConfig{
-			"luna-pro": {"https://openrouter.ai/openai/gpt-5.6-luna-pro", 0.10, 2.0},
+			"tencent/hy3:tencent":                       {"https://openrouter.ai/tencent/hy3", 0.132, 2.0},
+			"deepseek/deepseek-v4-flash-0731:deepinfra": {"https://openrouter.ai/deepseek/deepseek-v4-flash-0731", 0.08, 2.0},
+			"qwen/qwen3.7-flash":                        {"https://openrouter.ai/qwen/qwen3.7-flash", 0.03, 2.0},
 		},
-		Chain: []string{"luna-pro", "qwen"},
 	}
 }
 
@@ -81,12 +83,6 @@ func loadConfig() *config {
 		}
 		for k, v := range extra.Models {
 			cfg.Models[k] = v
-		}
-		if len(extra.Chain) > 0 {
-			cfg.Chain = extra.Chain
-		}
-		if len(extra.Templates) > 0 {
-			cfg.Templates = extra.Templates
 		}
 	}
 	return cfg
@@ -166,9 +162,9 @@ func parsePricing(html string) map[string]providerPrice {
 }
 
 type priceState struct {
-	LastCheck string                     `json:"last_check"`
-	Prices    map[string]map[string]any  `json:"prices"`
-	Flags     map[string]string          `json:"flags"`
+	LastCheck string                    `json:"last_check"`
+	Prices    map[string]map[string]any `json:"prices"`
+	Flags     map[string]string         `json:"flags"`
 }
 
 var state = &priceState{Prices: map[string]map[string]any{}, Flags: map[string]string{}}
@@ -239,33 +235,6 @@ func sendTelegram(cfg *config, message string) string {
 	return fmt.Sprintf("sent (%d)", resp.StatusCode)
 }
 
-func swapModel(cfg *config, model string) string {
-	tmpl, ok := cfg.Templates[model]
-	if !ok {
-		return fmt.Sprintf("Error: no provider template for %q (chain: %s)", model, strings.Join(cfg.Chain, ", "))
-	}
-	orig, err := os.ReadFile(providersPath)
-	if err != nil {
-		return "Error: providers.json not found: " + err.Error()
-	}
-	backup := providersPath + ".bak-cost-watch"
-	if err := os.WriteFile(backup, orig, 0o600); err != nil {
-		return "Error: backup failed: " + err.Error()
-	}
-	out, _ := json.MarshalIndent(map[string]any{"providers": tmpl}, "", "  ")
-	if err := os.WriteFile(providersPath, out, 0o644); err != nil {
-		return "Error: write failed: " + err.Error()
-	}
-	// In-flight playbook guard: defer the restart (self-updater rule).
-	if entries, err := os.ReadDir(runLocksDir); err == nil && len(entries) > 0 {
-		return fmt.Sprintf("providers.json swapped to %s (backup at %s); restart deferred — playbook run in flight", model, backup)
-	}
-	if err := exec.Command("systemctl", "restart", "mino").Run(); err != nil {
-		return fmt.Sprintf("providers.json swapped to %s (backup at %s); restart failed: %v", model, backup, err)
-	}
-	return fmt.Sprintf("providers.json swapped to %s (backup at %s); mino restarted", model, backup)
-}
-
 func statusText(cfg *config) string {
 	var b strings.Builder
 	b.WriteString("last check: " + state.LastCheck)
@@ -301,11 +270,6 @@ func toolSchemas() []map[string]any {
 		{"name": "cost_watch_check",
 			"description": "Scrape the OpenRouter model pages NOW, refresh prices, and return them with any flags.",
 			"schema":      map[string]any{"type": "object", "properties": map[string]any{}}},
-		{"name": "cost_watch_swap",
-			"description": "Swap providers.json to a chain model and restart mino. Chain: luna-pro, qwen.",
-			"schema": map[string]any{"type": "object", "properties": map[string]any{
-				"model": map[string]any{"type": "string", "description": "Target model: luna-pro, qwen"},
-			}, "required": []string{"model"}}},
 	}
 }
 
@@ -327,8 +291,7 @@ func main() {
 			}
 		}
 		if len(problems) > 0 {
-			msg := "⚠️ mino cost-watch\n" + strings.Join(problems, "\n") +
-				fmt.Sprintf("\nSwap: cost_watch_swap (chain: %s)", strings.Join(cfg.Chain, ", "))
+			msg := "⚠️ mino cost-watch\n" + strings.Join(problems, "\n")
 			fmt.Println(sendTelegram(cfg, msg))
 		} else {
 			fmt.Println("all prices ok")
@@ -360,18 +323,9 @@ func main() {
 			writeJSON(w, 400, map[string]any{"error": "bad request: " + err.Error()})
 			return
 		}
-		var result string
-		switch req.Tool {
-		case "cost_watch_status":
-			result = statusText(cfg)
-		case "cost_watch_check":
-			_, flags := checkModels(cfg)
-			result = statusText(cfg) + "\n" + fmt.Sprintf("%v", flags)
-		case "cost_watch_swap":
-			model, _ := req.Args["model"].(string)
-			result = swapModel(cfg, model)
-		default:
-			writeJSON(w, 400, map[string]any{"error": "unknown tool " + req.Tool})
+		result, err := executeTool(cfg, req.Tool, req.Args)
+		if err != nil {
+			writeJSON(w, 400, map[string]any{"error": err.Error()})
 			return
 		}
 		writeJSON(w, 200, map[string]any{"result": result})
@@ -379,4 +333,19 @@ func main() {
 	addr := fmt.Sprintf("%s:%d", cfg.Listen, cfg.Port)
 	fmt.Println("cost-watch listening on", addr)
 	http.ListenAndServe(addr, mux)
+}
+
+// executeTool dispatches one extension-tool call. Model-changing tools do not
+// exist here by policy (REL-01, issue #128): cost-watch pages, it never
+// swaps.
+func executeTool(cfg *config, tool string, args map[string]any) (string, error) {
+	switch tool {
+	case "cost_watch_status":
+		return statusText(cfg), nil
+	case "cost_watch_check":
+		_, flags := checkModels(cfg)
+		return statusText(cfg) + "\n" + fmt.Sprintf("%v", flags), nil
+	default:
+		return "", fmt.Errorf("unknown tool %s", tool)
+	}
 }
