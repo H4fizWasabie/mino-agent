@@ -85,6 +85,7 @@ func NewCore() *Core {
 	}
 	mem.skills = NewSkillLoader(s.Home, mem.embedder)
 	tools := BuildRegistry(db, s.Home, s.Workspace, mem, s.Location())
+	tools.SetMaxToolDescChars(s.MaxToolDescChars)           // schema payload description cap
 	tools.SetLogDB(db)                                      // enable tool_calls table logging
 	tools.SetAuditLog(filepath.Join(s.Home, "audit.jsonl")) // §8.4: immutable audit log
 	LoadExtensions(s.Home, tools)                           // discover + register extension tools

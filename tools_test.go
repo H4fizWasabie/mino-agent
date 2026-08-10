@@ -178,3 +178,71 @@ func TestBashHardFailureNoOutput(t *testing.T) {
 		t.Fatalf("hard-failure format wrong: %q", out)
 	}
 }
+
+func TestCompactSchemaStripsProseKeepsStructure(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"description": "top prose",
+		"properties": map[string]any{
+			"slug": map[string]any{"type": "string", "description": "tool slug", "pattern": "^[A-Z_]+$"},
+			"nested": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"flag": map[string]any{"type": "boolean", "default": false, "examples": []any{true}},
+				},
+				"required": []any{"flag"},
+			},
+		},
+		"required": []any{"slug"},
+	}
+	got := compactSchema(schema)
+	if got["description"] != nil {
+		t.Fatal("top-level description should be stripped")
+	}
+	props := got["properties"].(map[string]any)
+	slug := props["slug"].(map[string]any)
+	if slug["description"] != nil {
+		t.Fatalf("property prose not stripped: %#v", slug)
+	}
+	if slug["type"] != "string" || slug["pattern"] != "^[A-Z_]+$" {
+		t.Fatalf("property type/constraint lost: %#v", slug)
+	}
+	nested := props["nested"].(map[string]any)
+	flag := nested["properties"].(map[string]any)["flag"].(map[string]any)
+	if flag["default"] != nil || flag["examples"] != nil {
+		t.Fatalf("default/examples not stripped: %#v", flag)
+	}
+	if flag["type"] != "boolean" {
+		t.Fatalf("nested type lost: %#v", flag)
+	}
+	if req := nested["required"].([]any); len(req) != 1 || req[0] != "flag" {
+		t.Fatalf("required lost: %#v", nested["required"])
+	}
+	if compactSchema(nil) != nil {
+		t.Fatal("nil schema should stay nil")
+	}
+}
+
+func TestToolDefCapsLongDescription(t *testing.T) {
+	r := NewRegistry()
+	long := strings.Repeat("d", 5000)
+	r.Register(&Tool{Name: "big", Description: long, Schema: map[string]any{"type": "object"}})
+	def, _ := r.Schema("big")
+	if len(def.Description) > toolDescCap+3 {
+		t.Fatalf("description = %d chars, want ≤ %d", len(def.Description), toolDescCap)
+	}
+	if !strings.HasSuffix(def.Description, "…") {
+		t.Fatalf("missing truncation marker: %.20q", def.Description)
+	}
+	// Short descriptions pass through untouched.
+	short := "pong"
+	r.Register(&Tool{Name: "small", Description: short, Schema: map[string]any{"type": "object"}})
+	if def, _ := r.Schema("small"); def.Description != short {
+		t.Fatalf("short description altered: %q", def.Description)
+	}
+	// Operator override via MINO_MAX_TOOL_DESC_CHARS.
+	r.SetMaxToolDescChars(200)
+	if def, _ := r.Schema("big"); len(def.Description) > 203 {
+		t.Fatalf("override not honored: %d chars", len(def.Description))
+	}
+}
