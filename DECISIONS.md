@@ -343,3 +343,38 @@ exact tag match on a clean tree, so a version label can never precede its tag.
 **Revisit when:** An extension grows a self-updater of its own, or the release
 pipeline automates (CI) — the owner-only release gate and the verification
 chain must survive any automation.
+
+## 25. Prompt-assembly test surface (REL-04)
+
+**Decision (2026-08-10, #119):** The named seam list is the rule — not "all
+prompt functions". The Prompt-Assembly Test Surface is the chain that turns
+structured state and CONTEXT.md into model-visible text, or parses
+model-facing contracts. Eleven seams: contract parse (`parseStageInputs`,
+`parseStageOutputs`, `parseStageSuccess`), prompt render
+(`buildWorkspaceStagePrompt`, `renderWorkspaceInput`, `renderWorkspaceInputFiles`,
+`truncateWorkspaceInput`, `workspaceInputPath`), request clean
+(`cleanPlaybookRequest`), ## Success verification, plus the already-covered
+`alertScheduleHealth` and `cost.go`. Playbook contracts count — through their
+Go seams; there is no separate contract-testing regime, bad CONTEXT.md is
+caught by parse tests with realistic fixtures plus the existing "missing input
+is not a skip reason" runtime rule.
+
+**Why:** 2026-08-10's two production failures were 5-line prompt-assembly bugs
+(unresolvable stage inputs, routing tail leaked into stage prompts) with zero
+tests on the path while 366 tests sat elsewhere — conventional coverage
+signals gave false confidence. Both fixes landed with table-driven tests that
+caught real edge cases in minutes (triple-newline markers, path-header
+attribution, empty-glob semantics).
+
+**Enforcement:** Mechanical, not procedural. A presence check in
+`seams_test.go` — the authoritative append-only seam list — fails the suite if
+any listed seam lacks a `Test*` function naming it. It rides `go test ./...`,
+which CI already runs on every push/PR, so no new workflow. Presence-only:
+the check prevents the silent zero (the actual failure class); test quality is
+code review's job. AGENTS.md carries the rule: a feature touching a listed
+seam ships with a table-driven test on that seam; new seams join the list in
+seams_test.go when born.
+
+**Revisit when:** The list outgrows ~20 seams (split by file), or a
+non-Go surface (shell scripts, playbook markdown itself) ships prompt text
+worth protecting — the same presence-check shape applies.
