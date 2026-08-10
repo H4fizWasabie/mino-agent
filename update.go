@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -113,16 +114,117 @@ func DoUpdate() error {
 		return fmt.Errorf("downloaded file too small (%d bytes) — likely not a binary", n)
 	}
 
+	// REL-05a: "verified" only becomes true when the code verifies. The
+	// release ships SHA256SUMS.txt; a binary that does not match its platform
+	// checksum (or a release without a checksum) is refused — the self-updater
+	// is the only production path, so it must be the trusted one.
+	assetName := fmt.Sprintf("mino-%s-%s", runtime.GOOS, runtime.GOARCH)
+	sum, err := sha256File(newPath)
+	if err != nil {
+		os.Remove(newPath)
+		return fmt.Errorf("checksum local file: %w", err)
+	}
+	want, ok, err := fetchReleaseChecksum(tag, assetName)
+	if err != nil {
+		os.Remove(newPath)
+		return fmt.Errorf("verify release checksum: %w", err)
+	}
+	if !ok {
+		os.Remove(newPath)
+		return fmt.Errorf("release %s has no checksum for %s — refusing to install unverified binary", tag, assetName)
+	}
+	if !strings.EqualFold(sum, want) {
+		os.Remove(newPath)
+		return fmt.Errorf("checksum mismatch for %s: got %s, want %s — refusing to install", assetName, sum, want)
+	}
+
 	if err := os.Rename(newPath, exe); err != nil {
 		os.Remove(newPath)
 		return fmt.Errorf("replace binary: %w — try running with sudo", err)
 	}
 
-	fmt.Printf("Updated to %s. Restart Mino to use the new version.\n", tag)
+	// The who/what/when ledger is written by the updater itself so it cannot
+	// rot (REL-05: code-generated, not agent-remembered).
+	appendDeploymentLog(homeDir(), tag, exe, sum)
+
+	fmt.Printf("Updated to %s (verified %s). Restart Mino to use the new version.\n", tag, assetName)
 	return nil
 }
 
 // --- helpers ---
+
+// homeDir resolves the Mino home the same way LoadSettings does, so the
+// deployments.log lands next to the other state even when `mino update` runs
+// standalone (no Settings loaded).
+func homeDir() string {
+	if home := os.Getenv("MINO_HOME"); home != "" {
+		return home
+	}
+	hd, err := os.UserHomeDir()
+	if err != nil {
+		return ".mino"
+	}
+	return filepath.Join(hd, ".mino")
+}
+
+// sha256File returns the lowercase hex SHA-256 of a file.
+func sha256File(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+// releaseChecksumURL is the download URL of a release's checksum file (the
+// download domain, not the API — no rate limits).
+func releaseChecksumURL(tag string) string {
+	return fmt.Sprintf("https://github.com/%s/%s/releases/download/%s/SHA256SUMS.txt", repoOwner, repoName, tag)
+}
+
+// fetchReleaseChecksum fetches SHA256SUMS.txt for the release and returns the
+// checksum line for the named asset. Each line is "<hex>  <name>".
+func fetchReleaseChecksum(tag, assetName string) (string, bool, error) {
+	resp, err := updateClient.Get(releaseChecksumURL(tag))
+	if err != nil {
+		return "", false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return "", false, fmt.Errorf("fetch %s: HTTP %d", releaseChecksumURL(tag), resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", false, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[1] == assetName {
+			return fields[0], true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// appendDeploymentLog records one line per successful update — timestamp,
+// version, verified checksum, binary path. Append-only, 0600, never rotated
+// by the updater (the owner can prune it).
+func appendDeploymentLog(home, tag, exe, sum string) {
+	if err := os.MkdirAll(home, 0700); err != nil {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(home, "deployments.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s update=%s sha256=%s binary=%s\n", time.Now().UTC().Format(time.RFC3339), tag, sum, exe)
+}
 
 func fetchLatestRelease() (string, error) {
 	req, _ := http.NewRequest("GET", releasesURL, nil)
