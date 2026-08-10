@@ -12,6 +12,8 @@ const fixtureGLM = `<script>window.__DATA__ = "{\"name\":\"StreamLake\",\"pricin
 
 const fixtureLUNA = `<script>window.__DATA__ = "{\"name\":\"OpenAI\",\"pricing\":{\"prompt\":\"0.0000001\",\"completion\":\"0.0000006\",\"input_cache_read\":\"0.00000001\",\"discount\":0.5},\"name\":\"Azure\",\"pricing\":{\"prompt\":\"0.0000011\",\"completion\":\"0.0000066\",\"input_cache_read\":\"0.00000011\",\"discount\":0.0}}"</script>`
 
+const fixtureQwen = `<script>window.__DATA__ = "{\"name\":\"Qwen\",\"pricing\":{\"prompt\":\"0.00000003\",\"completion\":\"0.00000013\",\"input_cache_read\":\"0.000000006\",\"discount\":0.0}}"</script>`
+
 func approx(a, b float64) bool { return a-b < 0.0001 && b-a < 0.0001 }
 
 func TestParseGLMPricing(t *testing.T) {
@@ -62,49 +64,90 @@ func TestBestProvider(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigMonitorsPolicyModels(t *testing.T) {
+	cfg := defaultConfig()
+	// REL-01 policy: paging must cover the actual brain (issue #128).
+	want := map[string]float64{
+		"tencent/hy3:tencent":                       0.132,
+		"deepseek/deepseek-v4-flash-0731:deepinfra": 0.08,
+		"qwen/qwen3.7-flash":                        0.03,
+	}
+	for m, price := range want {
+		mc, ok := cfg.Models[m]
+		if !ok {
+			t.Fatalf("policy model %q not monitored", m)
+		}
+		if mc.Expected != price {
+			t.Fatalf("%s expected = %v, want %v", m, mc.Expected, price)
+		}
+	}
+	if len(cfg.Models) != len(want) {
+		t.Fatalf("monitored set = %v, want only the three policy models", cfg.Models)
+	}
+}
+
 func TestFlagOnPriceSpike(t *testing.T) {
 	cfg := defaultConfig()
 	orig := fetch
 	defer func() { fetch = orig }()
-	fetch = func(url string) (string, error) { return fixtureLUNA, nil }
+	fetch = func(url string) (string, error) { return fixtureQwen, nil }
 	_, flags := checkModels(cfg)
-	if flags["luna-pro"] != "ok" {
-		t.Fatalf("expected ok, got %q", flags["luna-pro"])
+	for _, m := range []string{"tencent/hy3:tencent", "deepseek/deepseek-v4-flash-0731:deepinfra", "qwen/qwen3.7-flash"} {
+		if flags[m] != "ok" {
+			t.Fatalf("%s: expected ok, got %q", m, flags[m])
+		}
 	}
 	// Promo dies: the discounted host drops to the full price.
 	fetch = func(url string) (string, error) {
-		s := strings.ReplaceAll(fixtureLUNA, "0.0000001", "0.0000006")
+		s := strings.ReplaceAll(fixtureQwen, "0.00000003", "0.0000006")
 		return s, nil
 	}
 	_, flags2 := checkModels(cfg)
-	if !strings.Contains(flags2["luna-pro"], "PRICE SPIKE") {
-		t.Fatalf("spike not detected: %q", flags2["luna-pro"])
+	if !strings.Contains(flags2["qwen/qwen3.7-flash"], "PRICE SPIKE") {
+		t.Fatalf("spike not detected: %q", flags2["qwen/qwen3.7-flash"])
 	}
 }
 
-func TestSwapWritesProvidersAndBacksUp(t *testing.T) {
+func TestExecuteRejectsModelSwap(t *testing.T) {
+	// Alert-only policy (REL-01, #128): no tool may change the brain.
 	cfg := defaultConfig()
-	cfg.Templates = map[string][]interface{}{
-		"luna-pro": {
-			map[string]any{"name": "openrouter", "priority": 1, "model": "openai/gpt-5.6-luna-pro"},
-		},
+	orig := fetch
+	defer func() { fetch = orig }()
+	fetch = func(url string) (string, error) { return fixtureLUNA, nil }
+
+	for _, tool := range []string{"cost_watch_swap", "swap_model", "swap"} {
+		if _, err := executeTool(cfg, tool, map[string]any{"model": "qwen/qwen3.7-flash"}); err == nil {
+			t.Fatalf("%s must be rejected", tool)
+		}
 	}
-	dir := t.TempDir()
-	origProv := providersPath
-	origLocks := runLocksDir
-	defer func() { providersPath, runLocksDir = origProv, origLocks }()
-	providersPath = filepath.Join(dir, "providers.json")
-	runLocksDir = filepath.Join(dir, "run-locks") // nonexistent = no locks
-	os.WriteFile(providersPath, []byte(`{"providers":[{"name":"old","priority":1}]}`), 0o600)
-	result := swapModel(cfg, "luna-pro")
-	if !strings.Contains(result, "swapped to luna-pro") {
-		t.Fatalf("result = %q", result)
+	for _, tool := range toolSchemas() {
+		if name, _ := tool["name"].(string); name == "cost_watch_swap" {
+			t.Fatal("cost_watch_swap must not be advertised in /tools")
+		}
 	}
-	if _, err := os.Stat(providersPath + ".bak-cost-watch"); err != nil {
-		t.Fatalf("backup missing: %v", err)
+	if _, err := executeTool(cfg, "cost_watch_status", nil); err != nil {
+		t.Fatalf("status tool should still work: %v", err)
 	}
-	data, _ := os.ReadFile(providersPath)
-	if !strings.Contains(string(data), "openai/gpt-5.6-luna-pro") {
-		t.Fatalf("providers.json not rewritten: %s", data)
+}
+
+func TestCheckFlagsSpikeWithoutTouchingProviders(t *testing.T) {
+	cfg := defaultConfig()
+	orig := fetch
+	defer func() { fetch = orig }()
+	fetch = func(url string) (string, error) {
+		s := strings.ReplaceAll(fixtureQwen, "0.00000003", "0.0000006")
+		return s, nil
+	}
+	home := t.TempDir()
+	providers := filepath.Join(home, "providers.json")
+	os.WriteFile(providers, []byte(`{"providers":[{"name":"unchanged"}]}`), 0o600)
+	before, _ := os.ReadFile(providers)
+	_, flags := checkModels(cfg)
+	if !strings.Contains(flags["qwen/qwen3.7-flash"], "PRICE SPIKE") {
+		t.Fatalf("spike not flagged: %q", flags["qwen/qwen3.7-flash"])
+	}
+	after, _ := os.ReadFile(providers)
+	if string(before) != string(after) {
+		t.Fatal("a price spike must never rewrite providers.json")
 	}
 }

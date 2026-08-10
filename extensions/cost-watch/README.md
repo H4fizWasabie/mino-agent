@@ -1,14 +1,12 @@
 # mino cost-watch — the price guardian
 
-Keeps Mino on the cheapest model. Scrapes OpenRouter model pages hourly,
-detects when a promotional price expires, alerts on Telegram, and can swap
-`providers.json` to the next model in the chain — with a backup and an
-atomic restart.
+Watches the prices Mino pays. Scrapes OpenRouter model pages hourly, detects
+when a promotional price expires, and alerts on Telegram. **Alert-only by
+policy (REL-01): it pages the owner — it never changes the brain.** Model
+changes are human decisions.
 
-Mino's provider stack often runs on promotional pricing (e.g. luna-pro at
-50% off via OpenAI). When a promo
-expires the billed cost jumps 7-20× with no signal. cost-watch is that
-signal — and the wrench.
+Mino's provider stack often runs on promotional pricing. When a promo
+expires the billed cost jumps with no signal. cost-watch is that signal.
 
 ## How it works
 
@@ -16,7 +14,6 @@ signal — and the wrench.
 hourly (systemd timer, root)
   └─ scrape the model pages → parse per-provider pricing
        └─ best price > expected × threshold? → Telegram alert
-            └─ "swap to luna" → backup + rewrite providers.json → restart mino
 ```
 
 The scraper is deterministic — no LLM, no API key, just the public model
@@ -43,35 +40,33 @@ Then register it in `~/.mino/extensions.json`:
 ]
 ```
 
-Restart mino, and the tools appear: `cost_watch_status`, `cost_watch_check`,
-`cost_watch_swap`.
+Restart mino, and the tools appear: `cost_watch_status`, `cost_watch_check`.
 
 ## Config (`/etc/mino-cost-watch.json`)
 
 ```json
 {
   "models": {
-    "luna-pro": {"url": "https://openrouter.ai/openai/gpt-5.6-luna-pro", "expected": 0.10,  "threshold": 2.0}
+    "tencent/hy3:tencent": {"url": "https://openrouter.ai/tencent/hy3", "expected": 0.132, "threshold": 2.0},
+    "deepseek/deepseek-v4-flash-0731:deepinfra": {"url": "https://openrouter.ai/deepseek/deepseek-v4-flash-0731", "expected": 0.08, "threshold": 2.0},
+    "qwen/qwen3.7-flash": {"url": "https://openrouter.ai/qwen/qwen3.7-flash", "expected": 0.03, "threshold": 2.0}
   },
-  "chain": ["luna-pro", "qwen"],
   "telegram_chat_id": ""
 }
 ```
 
-- `expected` — the promo price you currently pay ($/M input)
+- `expected` — the price you pay today ($/M input) — the REL-01 policy
+  prices; keep in sync with `cost.go` in the main repo
 - `threshold` — alert when the best price exceeds `expected × threshold`
-- `chain` — the swap order (qwen needs no promo — the safe final step)
-- `provider_templates` — full provider entries per chain model (edit to
-  match your stack; backups are written before every swap)
 
 Telegram alerts use `TELEGRAM_BOT_TOKEN` + `MINO_TELEGRAM_CHAT_ID` from
 mino.env (or `telegram_chat_id` in the config).
 
 ## Safety
 
-- Every swap writes `providers.json.bak-cost-watch` first
-- Restarts are deferred while a playbook run is in flight (run-locks guard,
-  same rule as the self-updater)
+- No tool or check path can rewrite `providers.json` — the swap capability
+  was removed (issue #128): an LLM-callable brain-swap tool is how the
+  luna surprises happened
 - The scraper is fail-visible: a changed page structure alerts instead of
   silently passing
 
