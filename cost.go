@@ -34,9 +34,14 @@ const (
 	monthCostCeiling = 25.0 // $ per calendar month → review trigger
 )
 
-// usageCost prices one usage.jsonl record at the policy table. The second
-// return is false when the model is not in the table (unpriced).
+// usageCost prices one usage.jsonl record. Real provider-reported USD wins
+// (issue #76): usage.jsonl is the source of truth for spend, the policy
+// table is only a fallback for providers that omit cost. The second return
+// is false when the record carries neither.
 func usageCost(r map[string]any) (float64, bool) {
+	if c, ok := r["cost_usd"].(float64); ok && c > 0 {
+		return c, true
+	}
 	model, _ := r["model"].(string)
 	p, ok := policyPrices[model]
 	if !ok {
