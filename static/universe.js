@@ -86,8 +86,8 @@ function universeNodeLink(node){
 function universeRegionCenters(){
   return {now:[.49,.18],memory:[.5,.51],work:[.73,.3],routines:[.77,.71],system:[.22,.71]};
 }
-function universeLandmarkCount(nodes,region,visible){
-  return nodes.reduce((count,node)=>count+(visible(node)&&universeRegion(node)===region?1:0),0);
+function universeLandmarkCount(nodes,region,visible,currentIDs){
+  return nodes.reduce((count,node)=>count+(currentIDs.has(node.id)&&visible(node)&&universeRegion(node)===region?1:0),0);
 }
 function universeLandmarkStyle(zoom){
   const overview=Math.max(0,Math.min(1,(1-zoom)/.35)),detail=Math.max(0,Math.min(1,(zoom-1)/2));
@@ -179,7 +179,7 @@ function initUniverse(snapshot,lens="universe"){
   const edges=(snapshot.edges||[]).filter(edge=>nodeMap[edge.source]&&nodeMap[edge.target]);
   const degrees=universeDegrees(nodes,edges);nodes.forEach(node=>node._degree=degrees[node.id]||0);universeLayout(nodes,edges);
   const dated=nodes.map(n=>n._time).filter(Number.isFinite);
-  const state={canvas,nodes,nodeMap,edges,lens:UNIVERSE_LENSES[lens]?lens:"universe",selected:null,hovered:null,hoveredLandmark:null,landmarkBoxes:[],
+  const state={canvas,nodes,nodeMap,edges,lens:UNIVERSE_LENSES[lens]?lens:"universe",selected:null,hovered:null,landmarkBoxes:[],currentNodeIDs:new Set(nodes.map(node=>node.id)),
     query:"",timeline:1,playing:false,playStarted:0,earliest:dated.length?Math.min(...dated):Date.now(),latest:dated.length?Math.max(...dated):Date.now(),
     panX:0,panY:0,zoom:universeDefaultZoom(canvas.clientWidth),activities:[],snapshot,raf:0,pointer:null,degrees};
   universeState=state;
@@ -263,7 +263,7 @@ function initUniverse(snapshot,lens="universe"){
     const landmarkStyle=universeLandmarkStyle(state.zoom),regionColors={now:"#b53c42",memory:"#426fbd",work:"#c46f31",routines:"#697a43",system:"#65727d"};
     state.landmarkBoxes=[];
     Object.entries(universeRegionCenters()).forEach(([region,center])=>{
-      const p=screen({x:center[0],y:center[1]}),count=universeLandmarkCount(nodes,region,visible),label=`${UNIVERSE_LENSES[region].label.toUpperCase()} · ${count.toLocaleString()}`,color=regionColors[region];
+      const p=screen({x:center[0],y:center[1]}),count=universeLandmarkCount(nodes,region,visible,state.currentNodeIDs),label=`${UNIVERSE_LENSES[region].label.toUpperCase()} · ${count.toLocaleString()}`,color=regionColors[region];
       ctx.save();ctx.globalAlpha=landmarkStyle.alpha;
       ctx.beginPath();ctx.arc(p.x,p.y,landmarkStyle.radius+4,0,Math.PI*2);ctx.strokeStyle=`${color}38`;ctx.lineWidth=1;ctx.stroke();
       ctx.beginPath();ctx.arc(p.x,p.y,landmarkStyle.radius,0,Math.PI*2);ctx.fillStyle="rgba(246,247,244,.9)";ctx.fill();ctx.strokeStyle=color;ctx.lineWidth=1.4;ctx.stroke();
@@ -296,11 +296,11 @@ function initUniverse(snapshot,lens="universe"){
   };
   canvas.onpointermove=event=>{
     if(state.pointer){state.panX=state.pointer.panX+event.clientX-state.pointer.x;state.panY=state.pointer.panY+event.clientY-state.pointer.y;return;}
-    const hit=pick(event.clientX,event.clientY);state.hovered=hit.node;state.hoveredLandmark=hit.landmark;canvas.style.cursor=hit.node||hit.landmark?"pointer":"grab";
+    const hit=pick(event.clientX,event.clientY);state.hovered=hit.node;canvas.style.cursor=hit.node||hit.landmark?"pointer":"grab";
   };
-  canvas.onpointerdown=event=>{const hit=pick(event.clientX,event.clientY);state.hovered=hit.node;state.hoveredLandmark=hit.landmark;if(!hit.node&&!hit.landmark){state.pointer={x:event.clientX,y:event.clientY,panX:state.panX,panY:state.panY};canvas.setPointerCapture(event.pointerId);}};
+  canvas.onpointerdown=event=>{const hit=pick(event.clientX,event.clientY);state.hovered=hit.node;if(!hit.node&&!hit.landmark){state.pointer={x:event.clientX,y:event.clientY,panX:state.panX,panY:state.panY};canvas.setPointerCapture(event.pointerId);}};
   canvas.onpointerup=event=>{if(state.pointer){state.pointer=null;canvas.releasePointerCapture(event.pointerId);return;}const hit=pick(event.clientX,event.clientY);if(hit.landmark)focusUniverseRegion(hit.landmark);else if(hit.node)selectUniverseNode(hit.node.id);};
-  canvas.onpointerleave=()=>{state.hovered=null;state.hoveredLandmark=null;state.pointer=null;};
+  canvas.onpointerleave=()=>{state.hovered=null;state.pointer=null;};
   canvas.onwheel=event=>{event.preventDefault();state.zoom=Math.max(.65,Math.min(3,state.zoom*(event.deltaY>0 ? .9 : 1.1)));};
   canvas.onkeydown=event=>{if(event.key==="Escape")selectUniverseNode(null);};
   document.getElementById("universe-search").oninput=event=>{state.query=event.target.value.trim().toLowerCase();};
@@ -341,6 +341,7 @@ function selectUniverseNode(id){
 function universeUpdate(snapshot){
   U=snapshot;const state=universeState;if(!state||!document.getElementById("universe-canvas"))return;
   const incoming=new Map((snapshot.nodes||[]).map(node=>[node.id,node])),now=performance.now();
+  state.currentNodeIDs=new Set(incoming.keys());
   incoming.forEach((fresh,id)=>{
     const node=state.nodeMap[id];
     if(node){Object.assign(node,fresh);node._time=universeTimeValue(node);}

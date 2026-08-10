@@ -181,8 +181,9 @@ func TestDashboardLivingFieldSurfaceContract(t *testing.T) {
 		`id="universe-canvas"`, `snapshot.nodes`, `snapshot.edges`, `function playUniverseHistory()`,
 		`state.timeline=Math.min(1`, `function universeActivity(event)`, `state.activities.push`,
 		`requestAnimationFrame(draw)`, `function selectUniverseNode(id)`, `Open full view`,
-		`function universeRegionCenters()`, `function universeLandmarkCount(nodes,region,visible)`,
+		`function universeRegionCenters()`, `function universeLandmarkCount(nodes,region,visible,currentIDs)`,
 		`function universeLandmarkStyle(zoom)`, `function universeDefaultZoom(width)`, `function focusUniverseRegion(region)`,
+		`state.currentNodeIDs=new Set(incoming.keys())`,
 	} {
 		if !strings.Contains(string(field), behavior) {
 			t.Errorf("Living Field behavior is missing %q", behavior)
@@ -226,7 +227,7 @@ function extract(name){
   }
   throw new Error("unterminated "+name);
 }
-const names=["universeHash","universeRand","universeTimeValue","universeRegion","universeFocus","universeNodeLink","universeRegionCenters","universeLandmarkCount","universeLandmarkStyle","universeDefaultZoom","universeLayout","universeCenterRegion","focusUniverseRegion"];
+const names=["universeHash","universeRand","universeRegion","universeFocus","universeNodeLink","universeRegionCenters","universeLandmarkCount","universeLandmarkStyle","universeDefaultZoom","universeLayout","universeCenterRegion","focusUniverseRegion"];
 const box={location:{hash:"#universe"},universePendingRegion:null};vm.runInNewContext(names.map(extract).join("\n"),box);
 function assert(ok,label){if(!ok)throw new Error(label)}
 assert(box.universeHash("memory:a")===box.universeHash("memory:a"),"stable hash");
@@ -236,12 +237,14 @@ const centers=box.universeRegionCenters();
 assert(Object.keys(centers).join(",")==="now,memory,work,routines,system","five stable landmark centers");
 const landmarkNodes=[
   {id:"memory:a",kind:"memory"},
+  {id:"memory:removed",kind:"memory"},
   {id:"tool:a",kind:"tool"},
   {id:"artifact:a",kind:"artifact",region:"work"},
   {id:"reminder:a",kind:"reminder"},
 ];
-assert(box.universeLandmarkCount(landmarkNodes,"memory",()=>true)===1,"memory landmark count");
-assert(box.universeLandmarkCount(landmarkNodes,"system",node=>node.kind!=="memory")===1,"filtered system landmark count");
+const currentIDs=new Set(["memory:a","tool:a","artifact:a","reminder:a"]);
+assert(box.universeLandmarkCount(landmarkNodes,"memory",()=>true,currentIDs)===1,"removed snapshot node is not counted");
+assert(box.universeLandmarkCount(landmarkNodes,"system",node=>node.kind!=="memory",currentIDs)===1,"filtered system landmark count");
 const overview=box.universeLandmarkStyle(.65),detail=box.universeLandmarkStyle(3);
 assert(overview.alpha>detail.alpha&&overview.radius>detail.radius,"landmarks lead at overview scale and recede in detail");
 assert(box.universeDefaultZoom(390)<box.universeDefaultZoom(1440),"phone starts at overview scale");
