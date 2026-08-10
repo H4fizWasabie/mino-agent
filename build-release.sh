@@ -6,6 +6,24 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 VERSION="${1:-dev}"
+
+# Tag-only builds (REL-05b, #130): version labels must never precede a tag.
+# Refuse unless HEAD is exactly the requested tag AND the tree is clean — a
+# dirty tree 'at the tag' could still ship uncommitted drift.
+if [ "$VERSION" = "dev" ]; then
+	echo "usage: ./build-release.sh vX.Y.Z — builds only from an exact, clean tag" >&2
+	exit 1
+fi
+HEAD_TAG="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
+if [ "$HEAD_TAG" != "$VERSION" ]; then
+	echo "error: HEAD is '${HEAD_TAG:-not a tag}', not the '$VERSION' tag — check out the tag before building (e.g. git checkout $VERSION)" >&2
+	exit 1
+fi
+if [ -n "$(git status --porcelain)" ]; then
+	echo "error: working tree is dirty — commit or stash before building a release" >&2
+	exit 1
+fi
+
 echo "Building Mino $VERSION for all platforms..."
 echo ""
 
