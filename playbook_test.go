@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -1056,8 +1057,8 @@ func TestRunPlaybookRejectsSamePlaybookRecursion(t *testing.T) {
 		ctx  context.Context
 		name string
 	}{
-		{stageCtx, "other-playbook"},          // cross-playbook delegation allowed
-		{context.Background(), "brief"},      // chat context, no stage tags
+		{stageCtx, "other-playbook"},    // cross-playbook delegation allowed
+		{context.Background(), "brief"}, // chat context, no stage tags
 	} {
 		func() {
 			defer func() { recover() }() // nil test Core panics past the guard — fine
@@ -1167,8 +1168,8 @@ func TestClassifySchedule(t *testing.T) {
 	loc := mustKL(t)
 	at := func(d, h, m int) time.Time { return time.Date(2026, 8, d, h, m, 0, 0, loc) }
 	const tz = "Asia/Kuala_Lumpur"
-	today1300 := "2026-08-10T05:00:00Z"  // today 13:00 KL
-	today1305 := "2026-08-10T05:00:05Z"  // today 13:00:05 KL
+	today1300 := "2026-08-10T05:00:00Z"   // today 13:00 KL
+	today1305 := "2026-08-10T05:00:05Z"   // today 13:00:05 KL
 	yesterday09 := "2026-08-09T01:00:00Z" // yesterday 09:00 KL
 	future := "2026-08-11T05:00:00Z"
 
@@ -1417,5 +1418,182 @@ func TestStagePromptInputBudgetCapsTotal(t *testing.T) {
 	// Declaration order is the author's priority: the first inputs render in full.
 	if !strings.Contains(msg, strings.Repeat("x", 4000)) {
 		t.Fatal("first declared input not rendered in full")
+	}
+}
+
+func addStageSuccess(t *testing.T, home, name, outcome, toolCell string) {
+	t.Helper()
+	path := filepath.Join(home, "playbooks", name, "stages", "01-work", "CONTEXT.md")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "\n## Success\n\n| Outcome | Required tool call |\n| --- | --- |\n| %s | %s |\n", outcome, toolCell)
+}
+
+func TestParseStageSuccess(t *testing.T) {
+	cases := []struct {
+		name    string
+		section string
+		want    []StageSuccess
+	}{
+		{"absent", "", nil},
+		{"header only", "| Outcome | Required tool call |\n| --- | --- |", nil},
+		{"backticked tool", "| Post published | `threads_post` returned a post ID |",
+			[]StageSuccess{{Outcome: "Post published", Tool: "threads_post"}}},
+		{"plain word tool", "| Post published | threads_post returned a post ID |",
+			[]StageSuccess{{Outcome: "Post published", Tool: "threads_post"}}},
+		{"multiple rows", "| A | `x` did a |\n| B | `y` did b |",
+			[]StageSuccess{{Outcome: "A", Tool: "x"}, {Outcome: "B", Tool: "y"}}},
+		{"tool-less row skipped", "| Vague | |", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseStageSuccess(tc.section)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("parseStageSuccess(%q) = %+v, want %+v", tc.section, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestVerifyStageSuccessOutcomes(t *testing.T) {
+	// Table-driven harness checks: a declared ## Success row passes only when a
+	// successful call to the named tool carries a 15+ digit ID in its result.
+	home := t.TempDir()
+	writeWorkspaceStageTool(t, home, "pub", "threads_post")
+	addStageSuccess(t, home, "pub", "Post published", "`threads_post` returned a post ID")
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	registry.Register(&Tool{Name: "threads_post", Behavior: BehaviorMutate})
+	pb, err := loadPlaybookWorkspace(home, "pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := loadOrCreatePlaybookRun(pb, registry, "run", "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage1, _ := workspaceStage(pb, 1)
+	path := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("result"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	write := []ToolCall{{Name: "write_file", Args: map[string]any{"path": path}}}
+	cases := []struct {
+		name    string
+		calls   []ToolCall
+		wantErr string // "" = pass
+	}{
+		{"platform ID present", append(write, ToolCall{Name: "threads_post", Output: "Post published, ID 73918123456789012"}), ""},
+		{"publish call absent", write, "no successful threads_post call recorded"},
+		{"publish errored", append(write, ToolCall{Name: "threads_post", Output: "Error: rate limited"}), "no successful threads_post call recorded"},
+		{"publish without ID", append(write, ToolCall{Name: "threads_post", Output: "Post published"}), "no successful threads_post call recorded"},
+		{"ID too short", append(write, ToolCall{Name: "threads_post", Output: "ID 12345"}), "no successful threads_post call recorded"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := verifyWorkspaceStageOutputs(pb, run, stage1, tc.calls)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("verification failed: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("verification error = %v, want containing %q", err, tc.wantErr)
+			}
+		})
+	}
+	// Absent ## Success section = unchanged behavior: outputs alone pass.
+	home2 := t.TempDir()
+	writeWorkspaceStageTool(t, home2, "plain", "search_web")
+	registry2 := NewRegistry()
+	registry2.Register(makeWriteTool(home2, home2))
+	registry2.Register(&Tool{Name: "search_web", Behavior: BehaviorObserve})
+	pb2, err := loadPlaybookWorkspace(home2, "plain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run2, err := loadOrCreatePlaybookRun(pb2, registry2, "run", "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage2, _ := workspaceStage(pb2, 1)
+	path2 := playbookRunOutputPath(pb2, run2, stage2, stage2.Outputs[0])
+	if err := os.MkdirAll(filepath.Dir(path2), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path2, []byte("result"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifyWorkspaceStageOutputs(pb2, run2, stage2, []ToolCall{{Name: "write_file", Args: map[string]any{"path": path2}}}); err != nil {
+		t.Fatalf("stage without ## Success should verify on outputs alone, got %v", err)
+	}
+}
+
+func TestWorkspaceStageOutcomeFailurePushesOnceThenFails(t *testing.T) {
+	// A declared ## Success outcome the stage never proves triggers the
+	// push-once retry (attempt 2), then the run fails with the outcome reason
+	// and a stage_outcome_failed trace event.
+	home := t.TempDir()
+	writeWorkspaceStageTool(t, home, "outcome", "search_web")
+	addStageSuccess(t, home, "outcome", "Search hit", "`search_web` returned a result ID")
+	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	registry.Register(&Tool{Name: "search_web", Behavior: BehaviorObserve})
+	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
+	pb, err := loadPlaybookWorkspace(home, "outcome")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := loadOrCreatePlaybookRun(pb, registry, "run", "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage1, _ := workspaceStage(pb, 1)
+	path := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
+	oldLoop := runPlaybookStageLoop
+	defer func() { runPlaybookStageLoop = oldLoop }()
+	attempts := 0
+	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
+		attempts++
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("result"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		// search_web never returns a 15+ digit ID: the outcome stays unproven
+		// across both attempts.
+		return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{
+			{Name: "write_file", Args: map[string]any{"path": path}},
+			{Name: "search_web", Output: "no results"},
+		}}
+	}
+	result, err := RunPlaybook(context.Background(), core, "outcome", "run", "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "failed" {
+		t.Fatalf("outcome failure should fail the run, got %+v", result)
+	}
+	if attempts != 2 || result.StagesRun != 2 {
+		t.Fatalf("attempts = %d, StagesRun = %d, want 2 (pushed once, then failed)", attempts, result.StagesRun)
+	}
+	if !strings.Contains(result.Reply, "no successful search_web call recorded") {
+		t.Fatalf("reply should carry the outcome reason, got: %s", result.Reply)
+	}
+	traceData, err := os.ReadFile(filepath.Join(home, "traces", time.Now().Format("2006-01-02")+".jsonl"))
+	if err != nil {
+		t.Fatalf("trace file: %v", err)
+	}
+	if !strings.Contains(string(traceData), "stage_outcome_failed") || !strings.Contains(string(traceData), "search_web") {
+		t.Fatalf("trace should record stage_outcome_failed with the tool, got:\n%s", traceData)
 	}
 }

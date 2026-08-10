@@ -6,9 +6,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,6 +36,15 @@ type WorkspaceStage struct {
 	Tools   []string
 	Outputs []StageOutput
 	Audit   string
+	Success []StageSuccess
+}
+
+// StageSuccess is a declared outcome from the optional ## Success section: the
+// harness verifies a successful call to the named tool whose result carries a
+// 15+ digit ID, so a run that claims victory without publishing fails.
+type StageSuccess struct {
+	Outcome string
+	Tool    string
 }
 
 type StageInput struct {
@@ -182,6 +193,7 @@ func loadWorkspaceStage(dir, folder string) (*WorkspaceStage, error) {
 	stage.Tools = parseStageTools(extractSection(context, "## Tools"))
 	stage.Outputs = parseStageOutputs(extractSection(context, "## Outputs"))
 	stage.Audit = extractSection(context, "## Audit")
+	stage.Success = parseStageSuccess(extractSection(context, "## Success"))
 	return stage, nil
 }
 
@@ -195,6 +207,34 @@ func parseStageInputs(section string) []StageInput {
 		inputs = append(inputs, StageInput{Source: cells[0], Path: strings.Trim(cells[1], "`"), Scope: cells[2]})
 	}
 	return inputs
+}
+
+func parseStageSuccess(section string) []StageSuccess {
+	var success []StageSuccess
+	for _, line := range strings.Split(section, "\n") {
+		cells := tableCells(line)
+		if len(cells) < 2 || strings.EqualFold(cells[0], "outcome") || strings.HasPrefix(cells[0], "---") {
+			continue
+		}
+		// Tool name is the first backticked span in the Required tool call
+		// column ("`threads_post` returned a post ID"); fall back to the first
+		// word when the contract omits backticks.
+		tool := ""
+		if start := strings.Index(cells[1], "`"); start >= 0 {
+			if end := strings.Index(cells[1][start+1:], "`"); end >= 0 {
+				tool = strings.TrimSpace(cells[1][start+1 : start+1+end])
+			}
+		}
+		if tool == "" {
+			if fields := strings.Fields(cells[1]); len(fields) > 0 {
+				tool = strings.Trim(fields[0], "`,")
+			}
+		}
+		if tool != "" {
+			success = append(success, StageSuccess{Outcome: cells[0], Tool: tool})
+		}
+	}
+	return success
 }
 
 func parseStageTools(section string) []string {
@@ -723,6 +763,19 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 				} else {
 					state.Error = verifyErr.Error()
 				}
+				// Outcome failures (## Success) get a dedicated trace event so the
+				// dashboard can surface "ran but did not publish" separately from
+				// missing artifacts.
+				var of *outcomeFailure
+				if errors.As(verifyErr, &of) {
+					logTrace(core.Settings.Home, "stage_outcome_failed", map[string]any{
+						"playbook": pb.Name,
+						"stage":    fmt.Sprintf("%02d-%s", stage.Number, stage.Name),
+						"run":      run.ID,
+						"outcome":  of.Outcome,
+						"tool":     of.Tool,
+					})
+				}
 				run.Status = "failed"
 				_ = savePlaybookRun(pb, run)
 				result.Status = "failed"
@@ -756,10 +809,28 @@ func workspaceStage(pb *PlaybookWorkspace, number int) (WorkspaceStage, bool) {
 	return WorkspaceStage{}, false
 }
 
+// outcomeID is the harness's proof-of-publication: a 15+ digit platform ID in
+// the tool result. The model cannot satisfy it by editing logs — only a real
+// publish call returns one.
+var outcomeID = regexp.MustCompile(`\d{15,}`)
+
+// outcomeFailure marks a failed ## Success verification so the caller can
+// trace it as stage_outcome_failed instead of a generic output miss.
+type outcomeFailure struct {
+	Outcome string
+	Tool    string
+}
+
+func (e *outcomeFailure) Error() string {
+	return fmt.Sprintf("required outcome %q: no successful %s call recorded — publish or say why", e.Outcome, e.Tool)
+}
+
 // verifyWorkspaceStageOutputs enforces write-attributed completion: a declared
 // output passes only if it exists, is non-empty, AND was written by a write_file
 // call recorded inside this stage's own tool log. Pre-seeded files (main loop
 // doing the work, then run_playbook rubber-stamping) fail attribution.
+// Declared ## Success outcomes are checked next: a successful call to the named
+// tool whose result carries a 15+ digit ID. Absent section = unchanged behavior.
 func verifyWorkspaceStageOutputs(pb *PlaybookWorkspace, run *PlaybookRun, stage WorkspaceStage, calls []ToolCall) ([]string, error) {
 	wrote := make(map[string]bool)
 	for _, call := range calls {
@@ -781,6 +852,18 @@ func verifyWorkspaceStageOutputs(pb *PlaybookWorkspace, run *PlaybookRun, stage 
 			return nil, fmt.Errorf("required output %q exists but was not written by this stage's tools", output.Path)
 		}
 		outputs = append(outputs, path)
+	}
+	for _, want := range stage.Success {
+		verified := false
+		for _, call := range calls {
+			if call.Name == want.Tool && toolOutputStatus(call.Output) == "ok" && outcomeID.MatchString(call.Output) {
+				verified = true
+				break
+			}
+		}
+		if !verified {
+			return nil, &outcomeFailure{Outcome: want.Outcome, Tool: want.Tool}
+		}
 	}
 	return outputs, nil
 }
