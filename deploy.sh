@@ -93,15 +93,15 @@ chown -R mino:mino /home/mino
 '
 
 # 6. Push + enable systemd units
+# Note: the old playbook dispatcher (mino-playbook-dispatcher.{service,timer},
+# mino-playbook-runner.sh, mino-daily-malaysia-news.timer) was replaced by the
+# in-process scheduler (closes #74) and must NOT be installed — re-installing
+# it resurrects dead units and scripts on every deploy.
 echo "--- Setting up systemd ---"
 for unit in extensions/*.service; do
     [ -f "$unit" ] || continue
     scp "$unit" "$VPS_USER@$VPS:/etc/systemd/system/"
 done
-
-scp extensions/mino-playbook-runner.sh extensions/mino-playbook-dispatcher.sh "$VPS_USER@$VPS:/tmp/"
-scp extensions/mino-playbook-dispatcher.service extensions/mino-playbook-dispatcher.timer "$VPS_USER@$VPS:/etc/systemd/system/"
-ssh "$VPS_USER@$VPS" 'install -m 755 /tmp/mino-playbook-runner.sh /usr/local/bin/mino-playbook-runner; install -m 755 /tmp/mino-playbook-dispatcher.sh /usr/local/bin/mino-playbook-dispatcher; rm -f /tmp/mino-playbook-runner.sh /tmp/mino-playbook-dispatcher.sh'
 
 ssh "$VPS_USER@$VPS" '
     command -v sqlite3 >/dev/null || apt-get install -y -qq sqlite3
@@ -122,8 +122,8 @@ ssh "$VPS_USER@$VPS" '
     fi
     systemctl daemon-reload
     systemctl enable mino mino-fileingest minowrap threads
-    systemctl disable --now mino-daily-malaysia-news.timer || true
-    systemctl disable --now mino-playbook-dispatcher.timer 2>/dev/null || true  # replaced by in-process scheduler
+    # The external playbook-dispatcher and daily-malaysia-news timers were
+    # removed (in-process scheduler, closes #74); nothing to disable.
     systemctl restart minowrap
     systemctl restart mino-fileingest
     systemctl restart threads
