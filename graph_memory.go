@@ -1138,40 +1138,55 @@ func (gm *GraphMemory) entryRanking(query, turn string, facts map[string]*Fact, 
 	// Embedding similarity fills vocabulary gaps only when the free ranking is
 	// thin (room in the top-3) — keeps the per-remember embed API call bounded.
 	if len(ranked) < 3 && useEmbedder && gm.embedder != nil {
-		for _, sd := range gm.embedder.SearchScored(query, 8) {
-			if sd.score < 0.5 {
-				continue
-			}
-			id := ""
-			if strings.HasPrefix(sd.doc.Source, "fact:") {
-				id = strings.TrimPrefix(sd.doc.Source, "fact:")
-			} else {
-				for fid, f := range facts { // legacy "fact" sources: map by content
-					if f.Subject+": "+f.Body == sd.doc.Content {
-						id = fid
-						break
-					}
-				}
-			}
-			if _, ok := facts[id]; !ok {
-				continue
-			}
-			embScore := int(20 * sd.score)
-			found := false
-			for i := range ranked {
-				if ranked[i].id == id {
-					ranked[i].score += embScore
-					ranked[i].signals = append(ranked[i].signals, fmt.Sprintf("similarity: %.2f", sd.score))
-					found = true
+		ranked = mergeEmbeddingHits(ranked, gm.embedder.SearchScored(query, 8), facts)
+	}
+	return ranked
+}
+
+// mergeThreshold sits below the measured natural-paraphrase similarity
+// (~0.5 for text-embedding-3-large) so close phrasings actually merge;
+// oblique queries (~0.27 measured) stay filtered (issue #141).
+const mergeThreshold = 0.4
+
+// mergeEmbeddingHits merges embedding hits into the keyword ranking: hits at
+// or above mergeThreshold join (or boost) ranked facts with a
+// "similarity: 0.xx" signal; stale vectors (unknown fact id) are dropped.
+// Extracted from entryRanking so the gate is unit-testable without the
+// embedding API (issue #141).
+func mergeEmbeddingHits(ranked []rankedFact, hits []scoredDoc, facts map[string]*Fact) []rankedFact {
+	for _, sd := range hits {
+		if sd.score < mergeThreshold {
+			continue
+		}
+		id := ""
+		if strings.HasPrefix(sd.doc.Source, "fact:") {
+			id = strings.TrimPrefix(sd.doc.Source, "fact:")
+		} else {
+			for fid, f := range facts { // legacy "fact" sources: map by content
+				if f.Subject+": "+f.Body == sd.doc.Content {
+					id = fid
 					break
 				}
 			}
-			if !found {
-				ranked = append(ranked, rankedFact{id: id, score: embScore, signals: []string{fmt.Sprintf("similarity: %.2f", sd.score)}})
+		}
+		if _, ok := facts[id]; !ok {
+			continue
+		}
+		embScore := int(20 * sd.score)
+		found := false
+		for i := range ranked {
+			if ranked[i].id == id {
+				ranked[i].score += embScore
+				ranked[i].signals = append(ranked[i].signals, fmt.Sprintf("similarity: %.2f", sd.score))
+				found = true
+				break
 			}
 		}
-		sort.Slice(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
+		if !found {
+			ranked = append(ranked, rankedFact{id: id, score: embScore, signals: []string{fmt.Sprintf("similarity: %.2f", sd.score)}})
+		}
 	}
+	sort.Slice(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
 	return ranked
 }
 
