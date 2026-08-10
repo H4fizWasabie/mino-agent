@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -317,7 +318,8 @@ func RunLoopContext(
 		schemaChars += len(s.Name) + len(s.Description) + 200 // ~params JSON
 		schemaNames = append(schemaNames, s.Name)
 	}
-	trace("context_diag", map[string]any{"system_chars": len(system), "msg_count": len(messages), "schema_count": len(schemas), "schema_names": schemaNames, "schema_est_chars": schemaChars, "one_turn_chars": len(oneTurnText)})
+	schemaBytes, schemaHeavy := schemaDiag(schemas)
+	trace("context_diag", map[string]any{"system_chars": len(system), "msg_count": len(messages), "schema_count": len(schemas), "schema_names": schemaNames, "schema_est_chars": schemaChars, "schema_bytes": schemaBytes, "schema_heavy": schemaHeavy, "one_turn_chars": len(oneTurnText)})
 
 	mutationChecked := false // push the unverified-mutation-claim correction at most once per turn
 	claimChecked := false   // push the contradicted-outcome-claim correction at most once per turn
@@ -606,6 +608,36 @@ func stageRewriteStreak(calls []ToolCall) string {
 		return path
 	}
 	return ""
+}
+
+// schemaDiag measures the real serialized schema payload: the JSON bytes sent
+// to the provider plus the five heaviest schemas. schema_est_chars (+200 per
+// schema) undercounts MCP executor schemas by ~4×, so compaction and capping
+// decisions are sized from the real number.
+func schemaDiag(schemas []ToolDef) (bytes int, heavy []map[string]any) {
+	if len(schemas) == 0 {
+		return 0, nil
+	}
+	raw, err := json.Marshal(schemas)
+	if err != nil {
+		return 0, nil
+	}
+	bytes = len(raw)
+	type sized struct {
+		name string
+		size int
+	}
+	all := make([]sized, 0, len(schemas))
+	for _, s := range schemas {
+		if b, err := json.Marshal(s); err == nil {
+			all = append(all, sized{s.Name, len(b)})
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].size > all[j].size })
+	for i := 0; i < len(all) && i < 5; i++ {
+		heavy = append(heavy, map[string]any{"name": all[i].name, "chars": all[i].size})
+	}
+	return bytes, heavy
 }
 
 func toolSelectionContext(system string, messages []Message) string {
