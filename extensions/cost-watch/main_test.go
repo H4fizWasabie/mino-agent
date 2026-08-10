@@ -66,20 +66,19 @@ func TestFlagOnPriceSpike(t *testing.T) {
 	cfg := defaultConfig()
 	orig := fetch
 	defer func() { fetch = orig }()
-	fetch = func(url string) (string, error) { return fixtureGLM, nil }
+	fetch = func(url string) (string, error) { return fixtureLUNA, nil }
 	_, flags := checkModels(cfg)
-	if flags["glm-5.2"] != "ok" {
-		t.Fatalf("expected ok, got %q", flags["glm-5.2"])
+	if flags["luna-pro"] != "ok" {
+		t.Fatalf("expected ok, got %q", flags["luna-pro"])
 	}
-	// Promo dies: both discounted hosts drop to the full price.
+	// Promo dies: the discounted host drops to the full price.
 	fetch = func(url string) (string, error) {
-		s := strings.ReplaceAll(fixtureGLM, "0.000000098", "0.00000068")
-		s = strings.ReplaceAll(s, "0.000000112", "0.00000068")
+		s := strings.ReplaceAll(fixtureLUNA, "0.0000001", "0.0000006")
 		return s, nil
 	}
 	_, flags2 := checkModels(cfg)
-	if !strings.Contains(flags2["glm-5.2"], "PRICE SPIKE") {
-		t.Fatalf("spike not detected: %q", flags2["glm-5.2"])
+	if !strings.Contains(flags2["luna-pro"], "PRICE SPIKE") {
+		t.Fatalf("spike not detected: %q", flags2["luna-pro"])
 	}
 }
 

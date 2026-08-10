@@ -5,8 +5,8 @@ detects when a promotional price expires, alerts on Telegram, and can swap
 `providers.json` to the next model in the chain — with a backup and an
 atomic restart.
 
-Mino's provider stack often runs on promotional pricing (e.g. GLM 5.2 at
-93% off via StreamLake, luna-pro at 50% off via OpenAI). When a promo
+Mino's provider stack often runs on promotional pricing (e.g. luna-pro at
+50% off via OpenAI). When a promo
 expires the billed cost jumps 7-20× with no signal. cost-watch is that
 signal — and the wrench.
 
@@ -51,10 +51,9 @@ Restart mino, and the tools appear: `cost_watch_status`, `cost_watch_check`,
 ```json
 {
   "models": {
-    "glm-5.2":  {"url": "https://openrouter.ai/z-ai/glm-5.2",          "expected": 0.098, "threshold": 2.0},
     "luna-pro": {"url": "https://openrouter.ai/openai/gpt-5.6-luna-pro", "expected": 0.10,  "threshold": 2.0}
   },
-  "chain": ["glm-5.2", "luna-pro", "qwen"],
+  "chain": ["luna-pro", "qwen"],
   "telegram_chat_id": ""
 }
 ```
