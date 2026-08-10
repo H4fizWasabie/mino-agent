@@ -1092,6 +1092,7 @@ func runScheduleDispatcher(core *Core) {
 	defer ticker.Stop()
 	for range ticker.C {
 		dispatchDueSchedules(core)
+		checkMonthlyCostOnce(core, time.Now())
 	}
 }
 
@@ -1268,6 +1269,7 @@ func fireSchedule(core *Core, s PlaybookSchedule, at time.Time, run scheduledPla
 	if result != nil {
 		slog.Info("schedule playbook result", "name", s.Name, "status", result.Status, "stages", result.StagesRun)
 		alertScheduleHealth(core, s, result, time.Now())
+		alertRunCost(core, s, at)
 	}
 	finishedAt := time.Now().UTC()
 	if recordErr := core.Responsibilities.finishRoutine(core.Settings.Home, sessionID, s, result, err, finishedAt); recordErr != nil {
