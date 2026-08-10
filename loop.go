@@ -369,8 +369,9 @@ func RunLoopContext(
 
 		toolUses := extractToolUses(resp.Content)
 		markerFound := false
+		failedMarker := ""
 		if len(toolUses) == 0 {
-			toolUses, markerFound = extractTextToolUses(extractText(resp.Content))
+			toolUses, markerFound, failedMarker = extractTextToolUses(extractText(resp.Content))
 		}
 
 		// No tool calls = LLM is done — unless a text tool-call marker was
@@ -392,11 +393,11 @@ func RunLoopContext(
 					result.Reply = fmt.Sprintf("(error: repeatedly emitted unparseable tool calls after %d attempts)", parseFailures)
 					return result
 				}
-				slog.Warn("unparseable tool_call marker", "session_id", sessionID, "iteration", i, "failures", parseFailures)
+				slog.Warn("unparseable tool_call marker", "session_id", sessionID, "iteration", i, "failures", parseFailures, "marker", failedMarker)
 				if audit, ok := ctx.Value(auditKey{}).(func(string, string, int)); ok {
 					audit("tool_call_parse_failed", fmt.Sprintf("text marker found but args did not parse (failure %d)", parseFailures), i)
 				}
-				trace("tool_call_parse_failed", map[string]any{"iteration": i, "failures": parseFailures})
+				trace("tool_call_parse_failed", map[string]any{"iteration": i, "failures": parseFailures, "marker": failedMarker})
 				if parseFailures >= 3 {
 					messages = append(messages, Message{
 						Role:    "user",
@@ -751,10 +752,13 @@ func extractToolUses(blocks []ContentBlock) []ContentBlock {
 // Returns the parsed uses and whether any marker was found — a marker that
 // failed to parse must be surfaced to the caller, not silently dropped
 // (2026-08-07: a bash marker with shell-style \' escapes ended a playbook
-// stage "complete" without its required output).
-func extractTextToolUses(text string) ([]ContentBlock, bool) {
+// stage "complete" without its required output). The third return is a
+// bounded snippet of the last marker whose args could not be parsed, for
+// diagnostics (the loop logs it — without it the failure shape is invisible).
+func extractTextToolUses(text string) ([]ContentBlock, bool, string) {
 	var uses []ContentBlock
 	markerFound := false
+	failed := ""
 	marker := "[tool_call:"
 	for {
 		idx := strings.Index(text, marker)
@@ -765,28 +769,32 @@ func extractTextToolUses(text string) ([]ContentBlock, bool) {
 		text = text[idx+len(marker):]
 		paren := strings.IndexByte(text, '(')
 		if paren == -1 {
+			failed = markerSnippet(text)
 			break
 		}
 		name := strings.TrimSpace(text[:paren])
 		text = text[paren+1:]
 		if len(text) == 0 || text[0] != '{' {
-			break
+			// The model may wrap the args in a markdown code fence inside the
+			// marker: [tool_call: name(```json\n{...}\n```)]. Strip it before
+			// giving up.
+			if fenced := stripJSONFences(text); len(fenced) > 0 && fenced[0] == '{' {
+				text = fenced
+			} else {
+				failed = markerSnippet(text)
+				break
+			}
 		}
 		argsJSON, rest := extractBalancedJSON(text)
 		if argsJSON == "" {
+			failed = markerSnippet(text)
 			break
 		}
 		text = rest
-		var args map[string]any
-		// Repair common model sloppiness in hand-written JSON: shell-style
-		// escapes (devil\'s), trailing commas, and stray newlines in strings.
-		// Strict-parse first; only repair-then-parse when strict fails, so
-		// valid JSON is never touched.
-		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-			argsJSON = repairToolArgsJSON(argsJSON)
-			if err2 := json.Unmarshal([]byte(argsJSON), &args); err2 != nil {
-				continue // keep scanning for later markers; caller sees markerFound
-			}
+		args, ok := parseToolArgsJSON(argsJSON)
+		if !ok {
+			failed = markerSnippet(name + "(" + argsJSON + ")")
+			continue // keep scanning for later markers; caller sees markerFound
 		}
 		uses = append(uses, ContentBlock{
 			Type:  "tool_use",
@@ -795,7 +803,178 @@ func extractTextToolUses(text string) ([]ContentBlock, bool) {
 			Input: args,
 		})
 	}
-	return uses, markerFound
+	return uses, markerFound, failed
+}
+
+// markerSnippet bounds the diagnostic text so a pathological marker cannot
+// flood the trace or logs.
+func markerSnippet(s string) string {
+	const max = 200
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) > max {
+		s = s[:max] + "…"
+	}
+	return s
+}
+
+// parseToolArgsJSON parses tool-call args, trying progressively lenient
+// repairs of common model sloppiness in hand-written JSON: shell-style
+// escapes (devil\'s), trailing commas, stray newlines, markdown fences,
+// single-quoted strings, and unquoted keys. Valid JSON parses on the first
+// attempt and is never transformed.
+func parseToolArgsJSON(s string) (map[string]any, bool) {
+	var args map[string]any
+	if json.Unmarshal([]byte(s), &args) == nil {
+		return args, true
+	}
+	for _, variant := range repairToolArgsVariants(s) {
+		if json.Unmarshal([]byte(variant), &args) == nil {
+			return args, true
+		}
+	}
+	return nil, false
+}
+
+// repairToolArgsVariants returns deterministic lenient repairs, cheapest
+// first. Each is applied to the original text (fence stripping runs first,
+// then the standard repair).
+func repairToolArgsVariants(s string) []string {
+	base := repairToolArgsJSON(s)
+	sq := singleQuotesToDouble(base)
+	return []string{
+		base,
+		repairToolArgsJSON(stripJSONFences(s)),
+		sq,
+		quoteUnquotedKeys(base),
+		quoteUnquotedKeys(sq),
+	}
+}
+
+// stripJSONFences removes a ```json / ``` code fence wrapped around the args.
+func stripJSONFences(s string) string {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "```") {
+		return s
+	}
+	if i := strings.IndexByte(s, '\n'); i != -1 {
+		s = s[i+1:]
+	} else {
+		s = s[3:]
+	}
+	s = strings.TrimSpace(s)
+	if strings.HasSuffix(s, "```") {
+		s = strings.TrimSpace(s[:len(s)-3])
+	}
+	return s
+}
+
+// singleQuotesToDouble converts single-quoted strings to double-quoted, the
+// shape models emit when they write JSON by hand ({'path': '/x'}). Only ever
+// applied as a repair variant — the result must still parse to be used.
+func singleQuotesToDouble(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	inDQ := false
+	inSQ := false
+	escaped := false
+	for _, c := range s {
+		if escaped {
+			b.WriteRune(c)
+			escaped = false
+			continue
+		}
+		switch {
+		case c == '\\' && (inDQ || inSQ):
+			b.WriteRune(c)
+			escaped = true
+		case inSQ:
+			if c == '\'' {
+				b.WriteRune('"')
+				inSQ = false
+			} else {
+				b.WriteRune(c)
+			}
+		case inDQ:
+			if c == '"' {
+				inDQ = false
+			}
+			b.WriteRune(c)
+		case c == '\'':
+			b.WriteRune('"')
+			inSQ = true
+		case c == '"':
+			b.WriteRune(c)
+			inDQ = true
+		default:
+			b.WriteRune(c)
+		}
+	}
+	return b.String()
+}
+
+// quoteUnquotedKeys adds quotes around unquoted object keys ({path: /x} ->
+// {"path": /x}). Only ever applied as a repair variant.
+func quoteUnquotedKeys(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	inDQ := false
+	escaped := false
+	// Classic loop: the body skips ahead (i = j-1) after quoting a key,
+	// which range iteration would ignore.
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if escaped {
+			b.WriteByte(c)
+			escaped = false
+			continue
+		}
+		if inDQ {
+			b.WriteByte(c)
+			if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inDQ = false
+			}
+			continue
+		}
+		if c == '"' {
+			inDQ = true
+			b.WriteByte(c)
+			continue
+		}
+		// Outside strings: a word right after { or , that is followed by :
+		// is an unquoted key.
+		if c == '{' || c == ',' {
+			b.WriteByte(c)
+			j := i + 1
+			for j < len(s) && (s[j] == ' ' || s[j] == '\t' || s[j] == '\n' || s[j] == '\r') {
+				b.WriteByte(s[j])
+				j++
+			}
+			start := j
+			for j < len(s) && isKeyChar(s[j]) {
+				j++
+			}
+			if j > start && j < len(s) && s[j] == ':' && s[start] != '"' {
+				b.WriteByte('"')
+				b.WriteString(s[start:j])
+				b.WriteByte('"')
+				i = j - 1
+				continue
+			}
+			if j > start {
+				b.WriteString(s[start:j])
+				i = j - 1
+			}
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
+func isKeyChar(c byte) bool {
+	return c == '_' || c == '-' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
 // repairToolArgsJSON tolerates the JSON sloppiness models emit when writing

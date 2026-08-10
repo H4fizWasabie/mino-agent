@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+- Text tool-call parsing is hardened and self-diagnosing (closes #110): hand-written `[tool_call: name({...})]` args now survive markdown code fences, single-quoted strings, and unquoted keys via try-in-order lenient repairs (valid JSON is never transformed); the trace/log now carries a bounded snippet of any marker that still fails to parse. (Why: parse-failure noise cost 1-5 extra iterations per run and 543 events on 2026-08-08 — and the failing marker's shape was never logged, so the exact model sloppiness was unobservable.)
 
 ## [v2.8.0] — Context budget cut (2026-08-10)
 ### Added

@@ -18,7 +18,7 @@ import (
 // output/result.md. The parser must repair the args and keep the call.
 func TestExtractTextToolUsesRepairsShellEscapes(t *testing.T) {
 	text := `[tool_call: bash({"command":"echo -n 'Most people use AI to confirm what they already think.\n\nAsk AI to play devil\'s advocate. Ask it to tell you what you\'re missing.' | wc -c"})]`
-	uses, found := extractTextToolUses(text)
+	uses, found, _ := extractTextToolUses(text)
 	if !found {
 		t.Fatal("marker not found")
 	}
@@ -38,12 +38,15 @@ func TestExtractTextToolUsesRepairsShellEscapes(t *testing.T) {
 // A marker that still fails after repair must be reported as found-but-broken
 // so the loop pushes the model to re-emit instead of treating it as "done".
 func TestExtractTextToolUsesReportsUnparseableMarker(t *testing.T) {
-	uses, found := extractTextToolUses(`[tool_call: bash({not valid json at all!!})]`)
+	uses, found, failed := extractTextToolUses(`[tool_call: bash({not valid json at all!!})]`)
 	if !found {
 		t.Fatal("marker should be reported as found")
 	}
 	if len(uses) != 0 {
 		t.Fatalf("got %d uses, want 0 for unparseable marker", len(uses))
+	}
+	if !strings.Contains(failed, "not valid json") {
+		t.Fatalf("failed marker snippet not surfaced: %q", failed)
 	}
 }
 
@@ -494,5 +497,57 @@ func TestLoopParseCounterResetsOnSuccess(t *testing.T) {
 	}
 	if !escalatedLate {
 		t.Fatal("escalated push missing after 3 consecutive failures post-reset")
+	}
+}
+
+// #110: hand-written JSON sloppiness that must survive the lenient repair —
+// fences, single-quoted strings, unquoted keys, and combinations. Valid JSON
+// must parse on the strict path untouched.
+func TestParseToolArgsJSONLenient(t *testing.T) {
+	cases := []struct {
+		name string
+		json string
+		want string // key whose value must be present
+	}{
+		{"valid untouched", `{"path":"/x","limit":5}`, "path"},
+		{"shell escapes", `{"command":"echo 'devil\'s advocate'"}` + "", "command"},
+		{"trailing comma", `{"path":"/x",}`, "path"},
+		{"fenced", "```json\n{\"path\": \"/x\"}\n```", "path"},
+		{"single quotes", `{'path': '/x', 'limit': 5}`, "path"},
+		{"unquoted keys", `{path: "/x", limit: 5}`, "path"},
+		{"single quotes + unquoted keys", `{path: '/x', limit: 5}`, "path"},
+	}
+	for _, c := range cases {
+		args, ok := parseToolArgsJSON(c.json)
+		if !ok {
+			t.Errorf("%s: parse failed for %s", c.name, c.json)
+			continue
+		}
+		if _, exists := args[c.want]; !exists {
+			t.Errorf("%s: key %q missing in %v", c.name, c.want, args)
+		}
+	}
+	// Genuinely broken JSON must still fail.
+	if _, ok := parseToolArgsJSON(`{not valid json at all!!}`); ok {
+		t.Fatal("broken JSON parsed")
+	}
+}
+
+// #110: the full marker path repairs each shape end to end.
+func TestExtractTextToolUsesLenientShapes(t *testing.T) {
+	cases := []string{
+		`[tool_call: read_file({'path': '/tmp/x'})]`,
+		"[tool_call: read_file(```json\n{\"path\": \"/tmp/x\"}\n```)]",
+		`[tool_call: read_file({path: '/tmp/x'})]`,
+	}
+	for _, text := range cases {
+		uses, found, failed := extractTextToolUses(text)
+		if !found || len(uses) != 1 {
+			t.Fatalf("marker %q: found=%v uses=%d failed=%q", text, found, len(uses), failed)
+		}
+		args := uses[0].Input.(map[string]any)
+		if args["path"] != "/tmp/x" {
+			t.Fatalf("marker %q: path = %v", text, args["path"])
+		}
 	}
 }
