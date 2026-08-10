@@ -1,24 +1,18 @@
 #!/bin/bash
-# Mino VPS deploy — one-shot setup + push
+# Mino VPS bootstrap — setup only. Production binaries arrive via release →
+# `mino update` (REL-05, #131): this script never builds or pushes a binary.
+# Emergency manual deploys: see docs/emergency-deploy.md.
 set -euo pipefail
 
 VPS="${VPS_HOST:?Set VPS_HOST to your server IP}"
 VPS_USER="root"
-BINARY="./mino"
 MINO_HOME="/home/mino"
-BUILD_TAGS="${MINO_BUILD_TAGS:-}"
-VERSION="${MINO_VERSION:-$(git describe --tags --abbrev=0 2>/dev/null || echo dev)}"
 
-echo "=== Deploying Mino to $VPS ==="
+# Removed: binary builds + pushes (mino, minowrap, threads-extension).
+# The self-updater (release → `mino update`) is the only production path;
+# updater-less extensions ship as release assets (build-release.sh).
 
-echo "--- Building Mino ($BUILD_TAGS) ---"
-go build -trimpath -buildvcs=false -tags "$BUILD_TAGS" -ldflags "-buildid= -X main.Version=$VERSION" -o "$BINARY" .
-
-echo "--- Building minowrap ---"
-(cd extensions/minowrap && go build -o minowrap .)
-
-echo "--- Building threads-extension ---"
-(cd extensions/threads && go build -o threads-extension .)
+echo "=== Bootstrapping Mino on $VPS ==="
 
 # 1. Create mino user if not exists
 echo "--- Creating mino user ---"
@@ -39,18 +33,9 @@ if [ "$(rtk --version 2>/dev/null || true)" != "rtk 0.43.0" ]; then
 fi
 '
 
-# 2. Push binaries
-echo "--- Pushing binaries ---"
-# upload to temp name + atomic mv: scp onto a running binary fails with ETXTBSY
-scp "$BINARY" "$VPS_USER@$VPS:/usr/local/bin/mino.new"
-ssh "$VPS_USER@$VPS" 'chmod +x /usr/local/bin/mino.new && mv /usr/local/bin/mino.new /usr/local/bin/mino'
-LOCAL_SHA=$(sha256sum "$BINARY" | awk '{print $1}')
-REMOTE_SHA=$(ssh "$VPS_USER@$VPS" "sha256sum /usr/local/bin/mino | awk '{print \$1}'")
-[ "$LOCAL_SHA" = "$REMOTE_SHA" ] || { echo "Mino binary hash mismatch: local=$LOCAL_SHA remote=$REMOTE_SHA" >&2; exit 1; }
-scp extensions/minowrap/minowrap "$VPS_USER@$VPS:/usr/local/bin/minowrap.new"
-ssh "$VPS_USER@$VPS" 'chmod +x /usr/local/bin/minowrap.new && mv /usr/local/bin/minowrap.new /usr/local/bin/minowrap'
-scp extensions/threads/threads-extension "$VPS_USER@$VPS:/usr/local/bin/threads-extension.new"
-ssh "$VPS_USER@$VPS" 'chmod +x /usr/local/bin/threads-extension.new && mv /usr/local/bin/threads-extension.new /usr/local/bin/threads-extension'
+# 2. Push binaries is REMOVED — release → `mino update` is the only path
+#    (REL-05). Extensions update from release assets when present; the
+#    bootstrap installs whatever is already on the host.
 
 # 3. Push extensions
 echo "--- Pushing extensions ---"

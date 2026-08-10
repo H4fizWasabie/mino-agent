@@ -242,7 +242,8 @@ reminder.go          — persistent one-time reminders with Telegram delivery
 eval.go              — evaluation harness for automated correctness
 db.go                — SQLite schema and migrations
 config.go            — environment variable → Settings
-update.go            — self-update from GitHub releases
+update.go            — self-update from GitHub releases (the only production deploy path; see docs/emergency-deploy.md for the manual lane)
+deploy.sh            — VPS bootstrap only (user, oauth, units, DB backup); never pushes binaries
 ```
 
 Playbooks are filesystem workspaces with `stages/NN-name/CONTEXT.md` contracts
