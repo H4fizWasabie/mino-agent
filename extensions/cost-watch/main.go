@@ -56,10 +56,9 @@ func defaultConfig() *config {
 		Listen: "127.0.0.1",
 		Port:   9300,
 		Models: map[string]modelConfig{
-			"glm-5.2":  {"https://openrouter.ai/z-ai/glm-5.2", 0.098, 2.0},
 			"luna-pro": {"https://openrouter.ai/openai/gpt-5.6-luna-pro", 0.10, 2.0},
 		},
-		Chain: []string{"glm-5.2", "luna-pro", "qwen"},
+		Chain: []string{"luna-pro", "qwen"},
 	}
 }
 
@@ -303,9 +302,9 @@ func toolSchemas() []map[string]any {
 			"description": "Scrape the OpenRouter model pages NOW, refresh prices, and return them with any flags.",
 			"schema":      map[string]any{"type": "object", "properties": map[string]any{}}},
 		{"name": "cost_watch_swap",
-			"description": "Swap providers.json to a chain model and restart mino. Chain: glm-5.2, luna-pro, qwen.",
+			"description": "Swap providers.json to a chain model and restart mino. Chain: luna-pro, qwen.",
 			"schema": map[string]any{"type": "object", "properties": map[string]any{
-				"model": map[string]any{"type": "string", "description": "Target model: glm-5.2, luna-pro, qwen"},
+				"model": map[string]any{"type": "string", "description": "Target model: luna-pro, qwen"},
 			}, "required": []string{"model"}}},
 	}
 }

@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+- cost-watch extension no longer tracks or swaps to glm-5.2 (closes #107): the hardcoded defaults dropped the GLM model entry and the swap chain is now luna-pro → qwen; docs, swap-tool descriptions, and the price-spike test re-targeted. (Why: GLM's promo pricing is ending — the cliff is ~7× the promo rate — and the live stack no longer uses GLM anywhere (small model moved to deepseek-v4-flash-0731), so a cost_watch_swap could have swapped the primary model back onto the promo gamble.)
 
 ## [v2.8.0] — Context budget cut (2026-08-10)
 ### Added
