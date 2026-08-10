@@ -930,12 +930,25 @@ func closeTrace(home string) {
 
 // --- Artifact compaction (moved from artifacts.go) ---
 
-const artifactInlineLimit = 8000
+// artifactInlineLimit bounds how much of a tool result is appended inline to
+// the running turn. Larger results are written to an artifact file and the
+// inline copy carries the marker plus a head/tail preview, so the model sees
+// the beginning (status, first matches) and end (final lines, errors) of
+// every result without re-sending tens of thousands of chars on each
+// iteration (issue #99 / wayfinder map #88). read_file is NOT exempt: live
+// measurement (facebook run, 2026-08-10) showed eleven read_file results —
+// up to 8k chars each, re-sent on every iteration — dominating a 2.48M-token
+// run. The system prompt already coaches targeted slice reads.
+const artifactInlineLimit = 4000
+
+// toolPreviewHead/Tail: how much of a compacted result stays inline after the
+// marker (the compactUserInput pattern).
+const (
+	toolPreviewHead = 2000
+	toolPreviewTail = 500
+)
 
 func prepareToolOutput(home, sessionID string, turn int, tool, output string) string {
-	if tool == "read_file" {
-		return output
-	}
 	return compactToolOutput(home, sessionID, turn, tool, output)
 }
 
@@ -951,7 +964,15 @@ func compactToolOutput(home, sessionID string, turn int, tool, output string) st
 	if err := os.WriteFile(path, []byte(output), 0600); err != nil {
 		return output[:artifactInlineLimit] + "\n[artifact write failed]"
 	}
-	return fmt.Sprintf("[artifact: %s → %d chars at %s; use read_file with offset and limit]", tool, len(output), path)
+	head := toolPreviewHead
+	if head > len(output) {
+		head = len(output)
+	}
+	tail := toolPreviewTail
+	if tail > len(output)-head {
+		tail = len(output) - head
+	}
+	return fmt.Sprintf("[artifact: %s → %d chars at %s; use read_file with offset and limit]\nHEAD:\n%s\n...\nTAIL:\n%s", tool, len(output), path, output[:head], output[len(output)-tail:])
 }
 
 func safePath(s string) string {
