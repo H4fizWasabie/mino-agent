@@ -2,11 +2,14 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -244,5 +247,147 @@ func TestToolDefCapsLongDescription(t *testing.T) {
 	r.SetMaxToolDescChars(200)
 	if def, _ := r.Schema("big"); len(def.Description) > 203 {
 		t.Fatalf("override not honored: %d chars", len(def.Description))
+	}
+}
+
+func unionNames(u *schemaUnion) []string {
+	return append([]string(nil), u.order...)
+}
+
+func TestSchemaUnionCapEvictsLRU(t *testing.T) {
+	u := newSchemaUnion()
+	for _, n := range []string{"a", "b", "c", "d", "e"} {
+		u.selectName(n)
+	}
+	u.capAt(3, nil, nil)
+	if got, want := unionNames(u), []string{"c", "d", "e"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after cap 3: %v, want %v", got, want)
+	}
+}
+
+func TestSchemaUnionRefreshKeepsRecent(t *testing.T) {
+	u := newSchemaUnion()
+	for _, n := range []string{"a", "b", "c"} {
+		u.selectName(n)
+	}
+	u.selectName("a") // refresh: a is now most recent
+	u.capAt(2, nil, nil)
+	if got, want := unionNames(u), []string{"c", "a"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after refresh+cap: %v, want %v", got, want)
+	}
+}
+
+func TestSchemaUnionPinnedNeverEvicted(t *testing.T) {
+	u := newSchemaUnion()
+	for _, n := range []string{"a", "b", "c", "d"} {
+		u.selectName(n)
+	}
+	u.capAt(2, map[string]bool{"b": true}, nil)
+	if got, want := unionNames(u), []string{"b", "d"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("pinned b evicted or wrong survivors: %v, want %v", got, want)
+	}
+}
+
+func TestSchemaUnionExplicitImmunity(t *testing.T) {
+	u := newSchemaUnion()
+	for _, n := range []string{"a", "b", "c", "d"} {
+		u.selectName(n)
+	}
+	// a is oldest but explicitly named this turn → survives; b, c go.
+	u.capAt(2, nil, map[string]bool{"a": true})
+	if got, want := unionNames(u), []string{"a", "d"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("immune a evicted: %v, want %v", got, want)
+	}
+}
+
+func TestSchemaUnionImmuneOverflowStays(t *testing.T) {
+	// pinned+immune > cap: protected tools survive, union stays larger.
+	u := newSchemaUnion()
+	for _, n := range []string{"a", "b", "c", "d"} {
+		u.selectName(n)
+	}
+	u.capAt(2, map[string]bool{"a": true, "b": true}, map[string]bool{"c": true, "d": true})
+	if got, want := unionNames(u), []string{"a", "b", "c", "d"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("protected tools dropped: %v, want %v", got, want)
+	}
+}
+
+// TestSchemasForContextCappedUnion exercises the union through the real
+// selection path: essentials always present, cap 20 enforced, oldest explicit
+// tools evicted when new ones arrive, and the output byte-stable across
+// identical turns (prefix-cache requirement).
+func TestSchemasForContextCappedUnion(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("CREATE VIRTUAL TABLE tool_catalog_fts USING fts5(name, description, keywords)"); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry()
+	for _, name := range essentialNamesSorted {
+		r.Register(&Tool{Name: name, Description: "essential", Schema: map[string]any{"type": "object"}})
+	}
+	for i := 100; i < 130; i++ {
+		r.Register(&Tool{Name: fmt.Sprintf("special_%d", i), Description: "specialized tool", Schema: map[string]any{"type": "object"}})
+	}
+	r.SetSearchDB(db)
+
+	names := func(schemas []ToolDef) []string {
+		out := make([]string, len(schemas))
+		for i, s := range schemas {
+			out[i] = s.Name
+		}
+		return out
+	}
+	hasAll := func(t *testing.T, got []string, want ...string) {
+		t.Helper()
+		for _, w := range want {
+			found := false
+			for _, g := range got {
+				if g == w {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("missing %q in %v", w, got)
+			}
+		}
+	}
+
+	// Turn 1: 11 essentials + 6 explicit = 17, under the cap.
+	first := names(r.SchemasForContext("s1", "", "use special_101 special_102 special_103 special_104 special_105 special_106 now", nil))
+	if len(first) != 17 {
+		t.Fatalf("turn 1: %d schemas, want 17: %v", len(first), first)
+	}
+	hasAll(t, first, essentialNamesSorted...)
+
+	// Turn 2: 6 new explicit tools → union 23 → evict the 3 oldest explicit.
+	second := names(r.SchemasForContext("s1", "", "use special_107 special_108 special_109 special_110 special_111 special_112 now", nil))
+	if len(second) != schemaUnionCap {
+		t.Fatalf("turn 2: %d schemas, want cap %d", len(second), schemaUnionCap)
+	}
+	hasAll(t, second, essentialNamesSorted...)
+	hasAll(t, second, "special_104", "special_105", "special_106", "special_107", "special_108", "special_109", "special_110", "special_111", "special_112")
+	for _, gone := range []string{"special_101", "special_102", "special_103"} {
+		for _, g := range second {
+			if g == gone {
+				t.Fatalf("%s survived eviction: %v", gone, second)
+			}
+		}
+	}
+
+	// Turn 3: identical to turn 2 → identical output (prefix-cache stability).
+	third := names(r.SchemasForContext("s1", "", "use special_107 special_108 special_109 special_110 special_111 special_112 now", nil))
+	if !reflect.DeepEqual(second, third) {
+		t.Fatalf("unstable output across identical turns:\n%v\n%v", second, third)
+	}
+
+	// A different session starts its own union.
+	other := names(r.SchemasForContext("s2", "", "use special_107 special_108 special_109 special_110 special_111 special_112 now", nil))
+	if len(other) != 17 {
+		t.Fatalf("session s2 inherited union: %d schemas, want 17", len(other))
 	}
 }

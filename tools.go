@@ -78,13 +78,13 @@ type Registry struct {
 	searchMu       sync.Mutex
 	toolEmbeddings map[string][]float32
 
-	// Monotonic per-session tool set: once a tool is selected for a session it
-	// stays selected, so the `tools` array in the request payload stabilizes
-	// across turns and the provider's prompt-prefix cache stays warm. Without
-	// this, selection re-runs against each new user message, the array drifts
-	// (e.g. 28 schemas turn 1, 27 turn 2), and the whole prefix misses.
+	// Per-session tool union capped at schemaUnionCap: a tool stays selected
+	// once chosen so the `tools` array in the request payload stabilizes
+	// across turns and the provider's prompt-prefix cache stays warm.
+	// Essentials are pinned; overflow evicts the least-recently-selected
+	// non-essential tool (explicit mentions are immune for the turn).
 	schemaMu       sync.Mutex
-	sessionSchemas map[string]map[string]bool
+	sessionSchemas map[string]*schemaUnion
 
 	maxToolDesc int // description cap in toolDef (0 = toolDescCap)
 }
@@ -223,6 +223,18 @@ var essentialToolNames = map[string]bool{
 	"list_schedules":  true, "cancel_schedule": true,
 }
 
+// essentialNamesSorted is essentialToolNames in sorted order — the per-turn
+// selection merge must be deterministic (map iteration order is random) so
+// eviction tiebreaks are stable.
+var essentialNamesSorted = func() []string {
+	names := make([]string, 0, len(essentialToolNames))
+	for name := range essentialToolNames {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}()
+
 var toolFamilies = [][]string{
 	{"read_file", "write_file", "edit_file"},
 	{"create_event", "list_events"},
@@ -245,26 +257,37 @@ func (r *Registry) SchemasForContext(sessionID string, fullCtx string, oneTurnTe
 		return r.Schemas()
 	}
 	selected := make(map[string]bool, len(essentialToolNames))
-	for name := range essentialToolNames {
-		if _, ok := r.tools[name]; ok {
+	// selOrder records the deterministic insertion order (map iteration is
+	// random): essentials → explicit → keyword → semantic → MCP → families.
+	// The capped union uses it as the eviction tiebreak within a turn.
+	var selOrder []string
+	add := func(name string) {
+		if !selected[name] {
 			selected[name] = true
+			selOrder = append(selOrder, name)
+		}
+	}
+	for _, name := range essentialNamesSorted {
+		if _, ok := r.tools[name]; ok {
+			add(name)
 		}
 	}
 	// Explicit capability names in the current turn are authoritative. This
 	// keeps channel-specific context from hiding a named registered tool.
-	for _, name := range r.explicitToolNames(oneTurnText) {
-		selected[name] = true
+	explicit := r.explicitToolNames(oneTurnText)
+	for _, name := range explicit {
+		add(name)
 	}
 
 	// Built-in tools: keyword FTS5 on full context + semantic on one-turn window
 	for _, name := range r.searchToolNames(fullCtx) {
 		if !strings.HasPrefix(name, "MCP_") {
-			selected[name] = true
+			add(name)
 		}
 	}
 	for _, name := range r.semanticToolNames(oneTurnText, es) {
 		if !strings.HasPrefix(name, "MCP_") {
-			selected[name] = true
+			add(name)
 		}
 	}
 
@@ -279,7 +302,7 @@ func (r *Registry) SchemasForContext(sessionID string, fullCtx string, oneTurnTe
 		if !strings.HasPrefix(name, "MCP_") {
 			continue
 		}
-		selected[name] = true
+		add(name)
 		mcpCount++
 		if mcpCount >= maxMCPTools {
 			break
@@ -297,30 +320,42 @@ func (r *Registry) SchemasForContext(sessionID string, fullCtx string, oneTurnTe
 		if matched {
 			for _, name := range family {
 				if _, ok := r.tools[name]; ok {
-					selected[name] = true
+					add(name)
 				}
 			}
 		}
 	}
-	// Monotonic per-session union: merge this turn's selection into the
-	// session's set so the tools array only grows, never shrinks. The array
-	// must be byte-stable across turns for the provider prefix cache; a fresh
-	// selection per message would drift it (cache miss every turn). The union
-	// converges after a few turns and stays stable thereafter.
+	// Per-session capped union: merge this turn's selection so the tools
+	// array stabilizes across turns for the provider prefix cache — but bound
+	// it, the old monotonic union converged to near-total tool coverage on
+	// long-lived sessions (28-47 tools observed). Essentials are pinned;
+	// when the union exceeds the cap the least-recently-selected non-essential
+	// tool is evicted, except tools explicitly named in this turn (immune
+	// until the next turn). Eviction happens only on selection churn
+	// (task-phase changes): each churn costs one prefix-cache miss, then
+	// re-caches.
 	if sessionID != "" {
 		r.schemaMu.Lock()
 		if r.sessionSchemas == nil {
-			r.sessionSchemas = make(map[string]map[string]bool)
+			r.sessionSchemas = make(map[string]*schemaUnion)
 		}
 		sess := r.sessionSchemas[sessionID]
 		if sess == nil {
-			sess = make(map[string]bool)
+			sess = newSchemaUnion()
 			r.sessionSchemas[sessionID] = sess
 		}
-		for name := range selected {
-			sess[name] = true
+		immune := make(map[string]bool, len(explicit))
+		for _, name := range explicit {
+			immune[name] = true
 		}
-		selected = sess
+		for _, name := range selOrder {
+			sess.selectName(name)
+		}
+		sess.capAt(schemaUnionCap, essentialToolNames, immune)
+		selected = make(map[string]bool, len(sess.set))
+		for name := range sess.set {
+			selected[name] = true
+		}
 		r.schemaMu.Unlock()
 	}
 
@@ -332,6 +367,61 @@ func (r *Registry) SchemasForContext(sessionID string, fullCtx string, oneTurnTe
 	}
 	sort.Slice(schemas, func(i, j int) bool { return schemas[i].Name < schemas[j].Name })
 	return schemas
+}
+
+// schemaUnionCap bounds the per-session tool union (essentials count toward
+// it). Sized from compacted schema bytes (~500-800 chars/tool → 10-16k chars
+// ≈ 7-12k tokens at 20 tools); the cap cuts the observed 28-47-tool chat
+// payload roughly another 30% (design: issue #92).
+const schemaUnionCap = 20
+
+// schemaUnion is a per-session set of tool names ordered by recency of
+// selection (front = least recently selected, evicted first). pinned tools
+// are never evicted; immune tools (explicitly named this turn) survive until
+// the next turn.
+type schemaUnion struct {
+	set   map[string]bool
+	order []string
+}
+
+func newSchemaUnion() *schemaUnion {
+	return &schemaUnion{set: make(map[string]bool)}
+}
+
+// selectName marks name as selected this turn, refreshing its recency.
+func (u *schemaUnion) selectName(name string) {
+	if u.set[name] {
+		for i, n := range u.order {
+			if n == name {
+				copy(u.order[i:], u.order[i+1:])
+				u.order = u.order[:len(u.order)-1]
+				break
+			}
+		}
+	} else {
+		u.set[name] = true
+	}
+	u.order = append(u.order, name)
+}
+
+// capAt evicts least-recently-selected tools until the union holds at most n
+// names. If pinned+immune alone exceed n the union stays larger until the
+// next turn (explicit mentions are authoritative over the budget).
+func (u *schemaUnion) capAt(n int, pinned, immune map[string]bool) {
+	for len(u.order) > n {
+		evict := -1
+		for i, name := range u.order {
+			if !pinned[name] && !immune[name] {
+				evict = i
+				break
+			}
+		}
+		if evict < 0 {
+			return
+		}
+		delete(u.set, u.order[evict])
+		u.order = append(u.order[:evict], u.order[evict+1:]...)
+	}
 }
 
 func (r *Registry) explicitToolNames(contextText string) []string {
@@ -449,7 +539,16 @@ func (r *Registry) semanticToolNames(contextText string, es *EmbeddingStore) []s
 		}
 	}
 	r.searchMu.Unlock()
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
+	// Name tiebreak keeps the order deterministic: candidates are collected
+	// from a map (random iteration), and this order feeds the per-session
+	// union's eviction tiebreak — a tie in cosine score must not pick a
+	// different tool turn to turn.
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score > candidates[j].score
+		}
+		return candidates[i].name < candidates[j].name
+	})
 	if len(candidates) > 8 {
 		candidates = candidates[:8]
 	}
