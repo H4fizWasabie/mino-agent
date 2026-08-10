@@ -30,10 +30,11 @@ type ContentBlock struct {
 }
 
 type UsageInfo struct {
-	InputTokens         int `json:"input_tokens"`
-	OutputTokens        int `json:"output_tokens"`
-	CacheReadTokens     int `json:"cache_read_input_tokens,omitempty"`
-	CacheCreationTokens int `json:"cache_creation_input_tokens,omitempty"`
+	InputTokens         int     `json:"input_tokens"`
+	OutputTokens        int     `json:"output_tokens"`
+	CacheReadTokens     int     `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationTokens int     `json:"cache_creation_input_tokens,omitempty"`
+	CostUSD             float64 `json:"cost_usd,omitempty"` // provider-reported USD, 0 when omitted
 }
 
 type LLMResponse struct {
@@ -216,8 +217,9 @@ func parseResponse(r io.Reader) (*LLMResponse, error) {
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 		Usage struct {
-			PromptTokens       int `json:"prompt_tokens"`
-			CompletionTokens   int `json:"completion_tokens"`
+			PromptTokens       int     `json:"prompt_tokens"`
+			CompletionTokens   int     `json:"completion_tokens"`
+			CostUSD            float64 `json:"cost"`
 			PromptTokenDetails struct {
 				CachedTokens     int `json:"cached_tokens"`
 				CacheWriteTokens int `json:"cache_write_tokens"`
@@ -275,6 +277,7 @@ func parseResponse(r io.Reader) (*LLMResponse, error) {
 			OutputTokens:        result.Usage.CompletionTokens,
 			CacheReadTokens:     result.Usage.PromptTokenDetails.CachedTokens,
 			CacheCreationTokens: result.Usage.PromptTokenDetails.CacheWriteTokens,
+			CostUSD:             result.Usage.CostUSD,
 		},
 		Content:   blocks,
 		FinalText: content,
@@ -705,6 +708,13 @@ func (c *Client) logUsage(ctx context.Context, model string, resp *LLMResponse, 
 		"cache_read":  resp.Usage.CacheReadTokens,
 		"cache_write": resp.Usage.CacheCreationTokens,
 		"latency_ms":  time.Since(startTime).Milliseconds(),
+	}
+	// Real provider-reported USD (issue #76): usage.jsonl is the source of
+	// truth for spend; the price table is only a fallback for providers that
+	// omit cost. Kept out of the record when 0 so legacy consumers see the
+	// same shape and the fallback path stays exercisable.
+	if resp.Usage.CostUSD > 0 {
+		record["cost_usd"] = resp.Usage.CostUSD
 	}
 	data, _ := json.Marshal(record)
 	f, err := os.OpenFile(c.usageLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
