@@ -1373,3 +1373,49 @@ func TestCatchUpNeverRunScheduleIsNotAMiss(t *testing.T) {
 		t.Fatalf("never-run schedule notified: %v", err)
 	}
 }
+
+func TestStagePromptInputBudgetCapsTotal(t *testing.T) {
+	home := t.TempDir()
+	writeWorkspacePlaybook(t, home, "budget", []string{"01-collect"})
+	stageDir := filepath.Join(home, "playbooks", "budget", "stages", "01-collect")
+	table := "| Source | File/Location | Section/Scope | Why |\n| --- | --- | --- | --- |\n"
+	for i := 0; i < 6; i++ {
+		p := filepath.Join(home, fmt.Sprintf("big-%d.md", i))
+		if err := os.WriteFile(p, []byte(strings.Repeat("x", 4000)), 0600); err != nil {
+			t.Fatal(err)
+		}
+		table += "| Big | `" + p + "` | Full | Exclusion |\n"
+	}
+	content := "# Collect\n\n## Inputs\n\n" + table + "\n## Process\n\n1. Produce the result.\n\n## Tools\n\n- write_file\n\n## Outputs\n\n| Artifact | Location | Format |\n| --- | --- | --- |\n| Result | `output/result.md` | Markdown |\n"
+	if err := os.WriteFile(filepath.Join(stageDir, "CONTEXT.md"), []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	pb, err := loadPlaybookWorkspace(home, "budget")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := loadOrCreatePlaybookRun(pb, NewRegistry(), "run", "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, _ := workspaceStage(pb, 1)
+	msg := buildWorkspaceStagePrompt(pb, run, stage, time.Now(), time.UTC)
+	// The budget caps the Run Inputs section, not the whole prompt (request +
+	// contract + rules live outside it); small slack covers the explicit
+	// truncation/omission markers.
+	start := strings.Index(msg, "## Run Inputs")
+	end := strings.Index(msg, "## Required Outputs")
+	if start < 0 || end < 0 || end <= start {
+		t.Fatalf("cannot locate Run Inputs section in prompt:\n%.300s", msg)
+	}
+	if section := msg[start:end]; len(section) > stageInputBudget+200 {
+		t.Fatalf("inputs section = %d chars, want ≤ %d (+marker slack)", len(section), stageInputBudget)
+	}
+	if !strings.Contains(msg, "stage input budget exceeded") {
+		t.Fatalf("missing budget-exceeded marker in prompt (%d chars):\n%.300s", len(msg), msg)
+	}
+	// Declaration order is the author's priority: the first inputs render in full.
+	if !strings.Contains(msg, strings.Repeat("x", 4000)) {
+		t.Fatal("first declared input not rendered in full")
+	}
+}
