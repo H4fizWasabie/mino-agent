@@ -539,7 +539,16 @@ func (r *Registry) semanticToolNames(contextText string, es *EmbeddingStore) []s
 		}
 	}
 	r.searchMu.Unlock()
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
+	// Name tiebreak keeps the order deterministic: candidates are collected
+	// from a map (random iteration), and this order feeds the per-session
+	// union's eviction tiebreak — a tie in cosine score must not pick a
+	// different tool turn to turn.
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score > candidates[j].score
+		}
+		return candidates[i].name < candidates[j].name
+	})
 	if len(candidates) > 8 {
 		candidates = candidates[:8]
 	}
