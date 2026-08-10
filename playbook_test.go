@@ -681,9 +681,103 @@ func TestPlaybookSystemPromptHasNoClock(t *testing.T) {
 	}
 	stage, _ := workspaceStage(pb, 1)
 	// The clock lands in the user-role stage message, not in system.
-	stageMsg := buildWorkspaceStagePrompt(pb, run, stage) + "\n\n" + appendSystemTime("", time.Now(), core.Settings.Location())
+	stageMsg := buildWorkspaceStagePrompt(pb, run, stage, time.Now(), time.Local) + "\n\n" + appendSystemTime("", time.Now(), core.Settings.Location())
 	if !strings.Contains(stageMsg, "System time") {
 		t.Fatalf("stage message missing clock: %s", stageMsg)
+	}
+}
+
+// Declared stage inputs must actually resolve (issue #86): Runtime sources
+// render the run clock, glob paths expand (newest first, path-attributed,
+// bounded), an empty glob is a valid empty list rather than an error, and
+// absolute declared paths resolve as-is instead of being double-joined under
+// the playbook dir. Only a genuinely broken literal path stays "Unavailable".
+func TestWorkspaceStageInputsResolve(t *testing.T) {
+	home := t.TempDir()
+	stageDir := filepath.Join(home, "playbooks", "brief", "stages", "01-collect")
+	if err := os.MkdirAll(stageDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "playbooks", "brief", "CONTEXT.md"), []byte("# Test playbook\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	logs := filepath.Join(home, "logs")
+	empty := filepath.Join(home, "empty")
+	abs := filepath.Join(home, "abs")
+	for _, dir := range []string{logs, empty, abs} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldLog := filepath.Join(logs, "a.md")
+	newLog := filepath.Join(logs, "b.md")
+	if err := os.WriteFile(oldLog, []byte("OLD LOG"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newLog, []byte("NEW LOG"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(oldLog, base, base.Add(-2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(newLog, base, base.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	absLog := filepath.Join(abs, "x.md")
+	if err := os.WriteFile(absLog, []byte("ABS LOG"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	content := "# Collect\n\n## Inputs\n\n| Source | File/Location | Section/Scope | Why |\n| --- | --- | --- | --- |\n" +
+		"| Runtime | Authoritative local date | Full | Date the post |\n" +
+		"| Logs | `" + filepath.Join(logs, "*.md") + "` | Most recent | Exclusion list |\n" +
+		"| Empty glob | `" + filepath.Join(empty, "*.md") + "` | All | No logs yet |\n" +
+		"| Abs logs | `" + filepath.Join(abs, "*.md") + "` | All | Absolute path |\n" +
+		"| Missing | `" + filepath.Join(home, "nope.md") + "` | Full | Gone |\n\n" +
+		"## Process\n\n1. Do it.\n\n## Tools\n\n- write_file\n\n## Outputs\n\n| Artifact | Location | Format |\n| --- | --- | --- |\n| Result | `output/result.md` | Markdown |\n"
+	if err := os.WriteFile(filepath.Join(stageDir, "CONTEXT.md"), []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	pb, err := loadPlaybookWorkspace(home, "brief")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := loadOrCreatePlaybookRun(pb, registry, "run it", "test", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, _ := workspaceStage(pb, 1)
+	loc := time.FixedZone("MYT", 8*3600)
+	now := time.Date(2026, 8, 10, 8, 30, 0, 0, loc)
+	msg := buildWorkspaceStagePrompt(pb, run, stage, now, loc)
+
+	tests := []struct {
+		name    string
+		want    string
+		notWant string
+	}{
+		{"runtime source renders the run clock", "### Authoritative local date\n2026-08-10 (Monday)\n", "### Authoritative local date\nUnavailable"},
+		{"glob match carries its path header", "--- " + newLog + " ---\nNEW LOG", ""},
+		{"empty glob is an empty list, not an error", "### " + filepath.Join(empty, "*.md") + "\nNo files matched.\n", "### " + filepath.Join(empty, "*.md") + "\nUnavailable"},
+		{"absolute glob path resolves", "--- " + absLog + " ---\nABS LOG", ""},
+		{"literal missing file stays unavailable", "### " + filepath.Join(home, "nope.md") + "\nUnavailable:", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !strings.Contains(msg, tt.want) {
+				t.Fatalf("expected %q in stage prompt:\n%s", tt.want, msg)
+			}
+			if tt.notWant != "" && strings.Contains(msg, tt.notWant) {
+				t.Fatalf("did not expect %q in stage prompt:\n%s", tt.notWant, msg)
+			}
+		})
+	}
+	// Newest match first (mtime), so the exclusion list is most-recent-led.
+	if i, j := strings.Index(msg, "NEW LOG"), strings.Index(msg, "OLD LOG"); i < 0 || j < 0 || i > j {
+		t.Fatalf("glob matches not newest-first:\n%s", msg)
 	}
 }
 
