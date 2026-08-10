@@ -1597,3 +1597,148 @@ func TestWorkspaceStageOutcomeFailurePushesOnceThenFails(t *testing.T) {
 		t.Fatalf("trace should record stage_outcome_failed with the tool, got:\n%s", traceData)
 	}
 }
+
+func scheduleHealthEntry(t *testing.T, home, name string) PlaybookSchedule {
+	t.Helper()
+	scheds, err := loadSchedules(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range scheds {
+		if s.Name == name {
+			return s
+		}
+	}
+	t.Fatalf("schedule %q not found", name)
+	return PlaybookSchedule{}
+}
+
+func outboxText(t *testing.T, home string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(home, "outbox", "msg_owner.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func writeHealthSchedule(t *testing.T, home, name string, streak int, lastFail, alerted string) {
+	t.Helper()
+	scheds := []PlaybookSchedule{{
+		Name: name, Time: "09:30", Timezone: "Asia/Kuala_Lumpur",
+		FailStreak: streak, LastFailDay: lastFail, AlertedDay: alerted,
+	}}
+	if err := saveSchedules(home, scheds); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAlertScheduleHealth(t *testing.T) {
+	loc := mustKL(t)
+	at := func(d, h, m int) time.Time { return time.Date(2026, 8, d, h, m, 0, 0, loc) }
+	failResult := &PlaybookResult{Status: "failed", Reply: "Run 123 stopped at stage 02-publish: required outcome \"Post published\": no successful threads_post call recorded"}
+	cancelledResult := &PlaybookResult{Status: "failed", Reply: "Run 123 stopped at stage 01-collect: runtime cancelled: user stopped the run"}
+
+	cases := []struct {
+		name         string
+		now          time.Time
+		streak       int    // schedules.json state before the call
+		lastFail     string // schedules.json state before the call
+		alerted      string // schedules.json state before the call
+		result       *PlaybookResult
+		wantMsg      string // "" = no alert expected
+		wantStreak   int    // schedules.json state after
+		wantLastFail string // schedules.json state after
+		wantAlerted  string // schedules.json state after
+	}{
+		{"first failure alerts, streak 1", at(10, 9, 30), 0, "", "", failResult,
+			"⚠️ Scheduled run failed: *tribal*", 1, "2026-08-10", "2026-08-10"},
+		{"second same-day failure deduped", at(10, 9, 30), 1, "2026-08-10", "2026-08-10", failResult,
+			"", 1, "2026-08-10", "2026-08-10"},
+		{"consecutive day escalates", at(11, 9, 30), 1, "2026-08-10", "2026-08-10", failResult,
+			"🚨 *tribal* has failed 2 days in a row", 2, "2026-08-11", "2026-08-11"},
+		{"gap day resets streak", at(12, 9, 30), 2, "2026-08-10", "2026-08-10", failResult,
+			"⚠️ Scheduled run failed: *tribal*", 1, "2026-08-12", "2026-08-12"},
+		{"success resets streak but not dedup", at(10, 16, 0), 1, "2026-08-10", "2026-08-10",
+			&PlaybookResult{Status: "complete", Reply: "done"},
+			"", 0, "", "2026-08-10"},
+		{"failure after same-day success deduped", at(10, 18, 0), 0, "", "2026-08-10", failResult,
+			"", 0, "", "2026-08-10"},
+		{"cancelled run never alerts or counts", at(10, 9, 30), 1, "2026-08-09", "2026-08-09", cancelledResult,
+			"", 1, "2026-08-09", "2026-08-09"},
+		{"failure after cancelled carries streak", at(11, 9, 30), 1, "2026-08-10", "2026-08-10", failResult,
+			"🚨 *tribal* has failed 2 days in a row", 2, "2026-08-11", "2026-08-11"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			writeHealthSchedule(t, home, "tribal", tc.streak, tc.lastFail, tc.alerted)
+			core := &Core{Settings: &Settings{Home: home}}
+			alertScheduleHealth(core, scheduleHealthEntry(t, home, "tribal"), tc.result, tc.now)
+			got := ""
+			if data, err := os.ReadFile(filepath.Join(home, "outbox", "msg_owner.txt")); err == nil {
+				got = string(data)
+			}
+			if tc.wantMsg == "" && got != "" {
+				t.Fatalf("unexpected alert: %q", got)
+			}
+			if tc.wantMsg != "" && !strings.Contains(got, tc.wantMsg) {
+				t.Fatalf("alert = %q, want containing %q", got, tc.wantMsg)
+			}
+			after := scheduleHealthEntry(t, home, "tribal")
+			if after.FailStreak != tc.wantStreak || after.LastFailDay != tc.wantLastFail || after.AlertedDay != tc.wantAlerted {
+				t.Fatalf("state after = streak %d lastFail %q alerted %q, want streak %d lastFail %q alerted %q",
+					after.FailStreak, after.LastFailDay, after.AlertedDay, tc.wantStreak, tc.wantLastFail, tc.wantAlerted)
+			}
+		})
+	}
+}
+
+func TestAlertScheduleHealthCarriesReason(t *testing.T) {
+	loc := mustKL(t)
+	home := t.TempDir()
+	writeHealthSchedule(t, home, "reddit", 0, "", "")
+	core := &Core{Settings: &Settings{Home: home}}
+	result := &PlaybookResult{Status: "failed", Reply: "Run 9 stopped at stage 01-collect: required output \"output/result.md\" was not written"}
+	alertScheduleHealth(core, scheduleHealthEntry(t, home, "reddit"), result, time.Date(2026, 8, 10, 9, 30, 0, 0, loc))
+	msg := outboxText(t, home)
+	// The alert carries playbook, stage, and the model's stated reason inline;
+	// the internal run ID is stripped.
+	for _, want := range []string{"reddit", "stopped at stage 01-collect", "required output"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("alert %q missing %q", msg, want)
+		}
+	}
+	if strings.Contains(msg, "Run 9") {
+		t.Fatalf("alert should not carry the run ID: %q", msg)
+	}
+}
+
+func TestFireScheduleAlertsOnFailedRun(t *testing.T) {
+	// The hook lives where stage_outcome_failed already lands: a scheduled
+	// fire whose run fails pages the owner once via the outbox.
+	core, home := newScheduleTestCore(t)
+	loc := mustKL(t)
+	writeHealthSchedule(t, home, "tribal", 0, "", "")
+	sched := scheduleHealthEntry(t, home, "tribal")
+	run := func(_ context.Context, _ *Core, _ string, _ string, _ string, _ Observer) (*PlaybookResult, error) {
+		return &PlaybookResult{Status: "failed", Reply: "Run 1 stopped at stage 02-publish: required outcome \"Post published\": no successful threads_post call recorded"}, nil
+	}
+	fireSchedule(core, sched, time.Date(2026, 8, 10, 9, 30, 0, 0, loc), run)
+	msg := outboxText(t, home)
+	if !strings.Contains(msg, "tribal") || !strings.Contains(msg, "no successful threads_post call recorded") {
+		t.Fatalf("fire alert = %q, want tribal + outcome reason", msg)
+	}
+	if after := scheduleHealthEntry(t, home, "tribal"); after.FailStreak != 1 || after.AlertedDay != "2026-08-10" {
+		t.Fatalf("counters not persisted: %+v", after)
+	}
+	// A successful run resets the streak.
+	okRun := func(_ context.Context, _ *Core, _ string, _ string, _ string, _ Observer) (*PlaybookResult, error) {
+		return &PlaybookResult{Status: "complete", Reply: "done"}, nil
+	}
+	fireSchedule(core, sched, time.Date(2026, 8, 10, 16, 0, 0, 0, loc), okRun)
+	if after := scheduleHealthEntry(t, home, "tribal"); after.FailStreak != 0 || after.LastFailDay != "" {
+		t.Fatalf("streak not reset: %+v", after)
+	}
+	waitForRows(t, core.DB, 2)
+}

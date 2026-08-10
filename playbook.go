@@ -797,12 +797,15 @@ func writePlaybookFile(path, content string) error {
 
 // PlaybookSchedule is one scheduled playbook entry in ~/.mino/schedules.json.
 type PlaybookSchedule struct {
-	Name      string `json:"name"`
-	Time      string `json:"time"`                 // HH:MM local time
-	Timezone  string `json:"timezone"`             // IANA timezone
-	LastRun   string `json:"last_run"`             // RFC3339 of last execution, empty if never
-	LastError string `json:"last_error,omitempty"` // last fire failure, empty when healthy
-	MissedAt  string `json:"missed_at,omitempty"`  // when a due run was skipped without firing (downtime); cleared on next fire
+	Name        string `json:"name"`
+	Time        string `json:"time"`                    // HH:MM local time
+	Timezone    string `json:"timezone"`                // IANA timezone
+	LastRun     string `json:"last_run"`                // RFC3339 of last execution, empty if never
+	LastError   string `json:"last_error,omitempty"`    // last fire failure, empty when healthy
+	MissedAt    string `json:"missed_at,omitempty"`     // when a due run was skipped without firing (downtime); cleared on next fire
+	FailStreak  int    `json:"fail_streak,omitempty"`   // consecutive owner-local failure days, 0 when healthy
+	LastFailDay string `json:"last_fail_day,omitempty"` // YYYY-MM-DD of the last counted failure day
+	AlertedDay  string `json:"alerted_day,omitempty"`   // YYYY-MM-DD of the last health alert (one per playbook per day)
 }
 
 // schedulesMu serializes read-modify-write of schedules.json: the dispatch
@@ -1264,6 +1267,7 @@ func fireSchedule(core *Core, s PlaybookSchedule, at time.Time, run scheduledPla
 	}
 	if result != nil {
 		slog.Info("schedule playbook result", "name", s.Name, "status", result.Status, "stages", result.StagesRun)
+		alertScheduleHealth(core, s, result, time.Now())
 	}
 	finishedAt := time.Now().UTC()
 	if recordErr := core.Responsibilities.finishRoutine(core.Settings.Home, sessionID, s, result, err, finishedAt); recordErr != nil {
@@ -1281,6 +1285,100 @@ func recordScheduleError(home, name, errMsg string) {
 	for i := range scheds {
 		if scheds[i].Name == name {
 			scheds[i].LastError = errMsg
+			saveSchedules(home, scheds)
+			return
+		}
+	}
+}
+
+// alertScheduleHealth enforces the REL-03 health-alert contract (issue #124):
+// a failed scheduled run pages the owner once per playbook per day, and a
+// failure on 2+ consecutive owner-local days escalates to a louder message.
+// A successful run resets the streak (a mid-day success redeems the day); a
+// cancelled run (owner-initiated stop) never alerts or counts. Trends ride
+// the persisted fail_streak fields in schedules.json, which the morning
+// briefing already reads.
+func alertScheduleHealth(core *Core, s PlaybookSchedule, result *PlaybookResult, now time.Time) {
+	if result.Status == "complete" {
+		updateScheduleHealth(core.Settings.Home, s.Name, func(p *PlaybookSchedule) {
+			p.FailStreak, p.LastFailDay = 0, ""
+		})
+		return
+	}
+	if result.Status != "failed" {
+		return
+	}
+	reason := failureReason(result.Reply)
+	if strings.Contains(reason, "runtime cancelled") {
+		return // owner-initiated stop, not a failure
+	}
+	loc := scheduleLoc(s)
+	today := now.In(loc).Format("2006-01-02")
+	yesterday := now.In(loc).AddDate(0, 0, -1).Format("2006-01-02")
+	streak, alerted := 1, ""
+	updateScheduleHealth(core.Settings.Home, s.Name, func(p *PlaybookSchedule) {
+		if p.AlertedDay == today {
+			alerted = today // one alert per playbook per day, hard rule
+			return
+		}
+		switch p.LastFailDay {
+		case yesterday:
+			streak = p.FailStreak + 1
+		case today:
+			streak = p.FailStreak
+		}
+		p.FailStreak, p.LastFailDay, p.AlertedDay = streak, today, today
+	})
+	if alerted == today {
+		return
+	}
+	loud := streak >= 2
+	var msg string
+	if loud {
+		msg = fmt.Sprintf("🚨 *%s* has failed %d days in a row — this is broken, not flaky.\n%s", s.Name, streak, reason)
+	} else {
+		msg = fmt.Sprintf("⚠️ Scheduled run failed: *%s*\n%s", s.Name, reason)
+	}
+	queueOutbox(core.Settings.Home, "owner", msg)
+	logTrace(core.Settings.Home, "health_alert", map[string]any{
+		"playbook": s.Name,
+		"day":      today,
+		"streak":   streak,
+		"loud":     loud,
+		"reason":   reason,
+	})
+}
+
+// scheduleLoc resolves a schedule's timezone, falling back to the host's
+// local zone; owner-local day boundaries drive streaks and dedup.
+func scheduleLoc(s PlaybookSchedule) *time.Location {
+	if s.Timezone != "" {
+		if loc, err := time.LoadLocation(s.Timezone); err == nil {
+			return loc
+		}
+	}
+	return time.Local
+}
+
+// failureReason strips the run-ID prefix from a failure reply so the alert
+// carries the stage and reason, not the internal identifier.
+func failureReason(reply string) string {
+	if i := strings.Index(reply, "stopped at stage"); i >= 0 {
+		return reply[i:]
+	}
+	return reply
+}
+
+// updateScheduleHealth applies f to the schedule entry by name, persisting
+// when it exists; a missing entry leaves no counters (the alert still fires).
+func updateScheduleHealth(home, name string, f func(*PlaybookSchedule)) {
+	scheds, err := loadSchedules(home)
+	if err != nil || len(scheds) == 0 {
+		return
+	}
+	for i := range scheds {
+		if scheds[i].Name == name {
+			f(&scheds[i])
 			saveSchedules(home, scheds)
 			return
 		}
