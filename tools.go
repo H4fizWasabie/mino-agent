@@ -1885,15 +1885,17 @@ func httpGet(url string) (string, error) {
 	return string(data), nil
 }
 
-// makeViewImageTool loads an image file into the model's visual context.
-// The loop intercepts the returned data URL and attaches it as vision content.
+// makeViewImageTool reads an image file and hands it to the vision provider.
+// The loop converts the returned data URL into a vision-model text description
+// (describeImage in loop.go); the main messages never carry image bytes.
 func makeViewImageTool() *Tool {
 	mimes := map[string]string{".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif"}
 	return &Tool{
 		Name:        "view_image",
-		Description: "Look at an image file with your own vision (png/jpg/jpeg/webp/gif). Use for photos the user sent and for page images rendered from scanned PDFs.",
+		Description: "Look at an image file with a dedicated vision model (png/jpg/jpeg/webp/gif) and get a text description back. Use for photos the user sent and for page images rendered from scanned PDFs. The optional 'task' steers the analysis (e.g. critique the composition, extract the text, describe the subject).",
 		Schema: map[string]any{"type": "object", "properties": map[string]any{
 			"path": map[string]any{"type": "string", "description": "Absolute path to the image file"},
+			"task": map[string]any{"type": "string", "description": "Optional instruction steering the vision analysis (critique, describe, OCR)"},
 		}, "required": []string{"path"}},
 		Fn: func(args map[string]any) string {
 			path, _ := args["path"].(string)

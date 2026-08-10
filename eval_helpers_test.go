@@ -13,6 +13,7 @@ type fakeClient struct {
 	tools    []ToolDef
 	messages [][]Message
 	toolSets [][]ToolDef
+	roles    []ModelRole
 }
 
 type streamingFake struct{ *fakeClient }
@@ -24,6 +25,7 @@ func (f *streamingFake) Stream(session string, role ModelRole, messages []Messag
 
 func (f *fakeClient) Create(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
 	f.tools = tools
+	f.roles = append(f.roles, role)
 	f.messages = append(f.messages, append([]Message(nil), messages...))
 	f.toolSets = append(f.toolSets, append([]ToolDef(nil), tools...))
 	if f.pos >= len(f.script) {

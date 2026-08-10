@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -448,4 +449,134 @@ func TestAddExchangeTruncatesToolTrails(t *testing.T) {
 	if !strings.Contains(last.Content, "[tool result: 3000 chars at ") {
 		t.Fatalf("restored history missing pointer: %.200q", last.Content)
 	}
+}
+
+// T8 (wayfinder map #88): a view_image data-URL result must be converted into
+// a direct vision-model call whose TEXT response becomes the tool result. The
+// main messages never carry image bytes, so the main brain stays on the main
+// provider for the rest of the turn and the provider prompt cache is not
+// broken by per-iteration image blobs.
+func TestLoopConvertsViewImageToVisionText(t *testing.T) {
+	img := filepath.Join(t.TempDir(), "photo.png")
+	if err := os.WriteFile(img, []byte("fake-png-bytes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	tools := NewRegistry()
+	tools.Register(makeViewImageTool())
+	client := &fakeClient{script: []*LLMResponse{
+		scriptedResp([]ContentBlock{toolBlock("view_image", map[string]any{"path": img})}, "tool_use"),
+		scriptedResp([]ContentBlock{textBlock("a red bicycle leaning against a brick wall")}, "stop"),
+		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
+	}}
+	result := RunLoopContext(context.Background(), client, "vision-loop", "", []Message{{Role: "user", Content: "look"}}, tools, 5, 100, nil, false, "", nil)
+	if result.Status != "complete" {
+		t.Fatalf("status = %q, want complete (reply=%q)", result.Status, result.Reply)
+	}
+
+	// The vision model's text response became the tool result.
+	if len(result.ToolCalls) != 1 || !strings.Contains(result.ToolCalls[0].Output, "[view_image: a red bicycle leaning against a brick wall]") {
+		t.Fatalf("tool output = %q, want vision text wrapped as [view_image: ...]", result.ToolCalls[0].Output)
+	}
+
+	// A vision call was issued for the data-URL result, carrying the image.
+	var visionCall []Message
+	visionIdx := -1
+	for i, role := range client.roles {
+		if role == VisionModel {
+			visionCall, visionIdx = client.messages[i], i
+			break
+		}
+	}
+	if visionCall == nil {
+		t.Fatal("no VisionModel call issued for the image result")
+	}
+	if len(visionCall) != 1 || len(visionCall[0].Images) != 1 || !strings.HasPrefix(visionCall[0].Images[0], "data:image/png;base64,") {
+		t.Fatalf("vision call messages = %#v, want one user message with the data URL", visionCall)
+	}
+
+	// Main messages never carry image bytes — not as Images, not inline.
+	for i, role := range client.roles {
+		if role == MainModel {
+			for _, m := range client.messages[i] {
+				if len(m.Images) > 0 || strings.Contains(m.Content, "data:image/") {
+					t.Fatalf("main call %d carries image bytes: %#v", i, m)
+				}
+			}
+		}
+	}
+
+	// The main brain never flipped: the turn was main → vision (one-shot) → main.
+	if client.roles[0] != MainModel || client.roles[visionIdx+1] != MainModel {
+		t.Fatalf("roles = %v, want main → vision → main", client.roles)
+	}
+}
+
+// T8: non-image tool results must flow through unchanged — no vision call, no
+// wrapping.
+func TestLoopLeavesNonImageToolResultsUntouched(t *testing.T) {
+	tools := NewRegistry()
+	tools.Register(&Tool{Name: "probe", Schema: map[string]any{"type": "object"}, Fn: func(map[string]any) string { return "plain probe result" }})
+	client := &fakeClient{script: []*LLMResponse{
+		scriptedResp([]ContentBlock{toolBlock("probe", map[string]any{})}, "tool_use"),
+		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
+	}}
+	result := RunLoopContext(context.Background(), client, "plain-tool-loop", "", []Message{{Role: "user", Content: "go"}}, tools, 5, 100, nil, false, "", nil)
+	if result.Status != "complete" {
+		t.Fatalf("status = %q, want complete", result.Status)
+	}
+	if len(result.ToolCalls) != 1 || result.ToolCalls[0].Output != "plain probe result" {
+		t.Fatalf("non-image tool output was transformed: %#v", result.ToolCalls)
+	}
+	for _, role := range client.roles {
+		if role == VisionModel {
+			t.Fatal("non-image tool triggered a vision call")
+		}
+	}
+}
+
+// T8: a failed vision call degrades to an error tool result the model can
+// react to — it must never fall back to attaching the image to the main
+// messages.
+func TestLoopDegradesFailedVisionCallToErrorResult(t *testing.T) {
+	img := filepath.Join(t.TempDir(), "photo.png")
+	if err := os.WriteFile(img, []byte("fake-png-bytes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	tools := NewRegistry()
+	tools.Register(makeViewImageTool())
+	client := &failingVisionClient{fakeClient: &fakeClient{script: []*LLMResponse{
+		scriptedResp([]ContentBlock{toolBlock("view_image", map[string]any{"path": img})}, "tool_use"),
+		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
+	}}}
+	result := RunLoopContext(context.Background(), client, "vision-fail-loop", "", []Message{{Role: "user", Content: "look"}}, tools, 5, 100, nil, false, "", nil)
+	if result.Status != "complete" {
+		t.Fatalf("status = %q, want complete (reply=%q)", result.Status, result.Reply)
+	}
+	if len(result.ToolCalls) != 1 || !strings.Contains(result.ToolCalls[0].Output, "Error: vision analysis failed") {
+		t.Fatalf("tool output = %q, want error result", result.ToolCalls[0].Output)
+	}
+	for i, role := range client.fakeClient.roles {
+		if role == MainModel {
+			for _, m := range client.fakeClient.messages[i] {
+				if len(m.Images) > 0 || strings.Contains(m.Content, "data:image/") {
+					t.Fatalf("main call %d carries image bytes after vision failure: %#v", i, m)
+				}
+			}
+		}
+	}
+}
+
+// failingVisionClient fails any VisionModel call so the loop's degradation
+// path can be exercised offline.
+type failingVisionClient struct{ fakeClient *fakeClient }
+
+func (f *failingVisionClient) Create(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
+	if role == VisionModel {
+		return nil, errors.New("vision provider down")
+	}
+	return f.fakeClient.Create(session, role, messages, maxTokens, system, tools)
+}
+
+func (f *failingVisionClient) Stream(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
+	return f.Create(session, role, messages, maxTokens, system, tools)
 }
