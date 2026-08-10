@@ -198,13 +198,41 @@ func explicitPlaybookCommand(userMessage, playbookName string) bool {
 	return false
 }
 
+// toolTrailLimit bounds how much of a tool result is stored inline in the
+// session history's [tools used:] record. Larger results are written to the
+// artifact store first so the truncated trail stays recoverable through the
+// artifact catalog (issue #89 / wayfinder map #88). Outputs that already carry
+// an artifact pointer are left untouched.
+const toolTrailLimit = 500
+
+func toolTrailForHistory(sessionID, tool, output string, mem *Memory) string {
+	if len(output) <= toolTrailLimit {
+		return output
+	}
+	if _, ok := artifactFromOutput(output); ok {
+		return output
+	}
+	dir := filepath.Join("/tmp/mino/results", safePath(sessionID), "trail")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return output[:toolTrailLimit] + fmt.Sprintf(" [%d more chars not saved]", len(output)-toolTrailLimit)
+	}
+	path := filepath.Join(dir, fmt.Sprintf("%s-%d.txt", safePath(tool), time.Now().UnixNano()))
+	if err := os.WriteFile(path, []byte(output), 0600); err != nil {
+		return output[:toolTrailLimit] + fmt.Sprintf(" [%d more chars not saved]", len(output)-toolTrailLimit)
+	}
+	if mem != nil {
+		mem.RecordArtifact(sessionID, tool, path, len(output))
+	}
+	return fmt.Sprintf("[tool result: %d chars at %s; use read_file with offset and limit]", len(output), path)
+}
+
 // AddExchange — Core's add_exchange(): folds tool activity into [tools used: ...]
 func (s *Session) AddExchange(userRaw, userContext, reply string, toolCalls []ToolCall, source string) {
 	record := reply
 	if len(toolCalls) > 0 {
 		parts := make([]string, 0)
 		for _, tc := range toolCalls {
-			parts = append(parts, fmt.Sprintf("%s(%v) -> %s", tc.Name, tc.Args, tc.Output))
+			parts = append(parts, fmt.Sprintf("%s(%v) -> %s", tc.Name, tc.Args, toolTrailForHistory(s.sessionID, tc.Name, tc.Output, s.mem)))
 		}
 		record = fmt.Sprintf("%s\n[tools used: %s]", reply, strings.Join(parts, "; "))
 	}

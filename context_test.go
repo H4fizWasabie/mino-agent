@@ -359,3 +359,73 @@ func TestContextDiagTraceLogsRealSchemaBytes(t *testing.T) {
 		t.Fatalf("schema_heavy = %#v, want non-empty", diag["schema_heavy"])
 	}
 }
+
+func TestToolTrailForHistory(t *testing.T) {
+	home := t.TempDir()
+	mem := &Memory{db: Connect(home), cfg: &Settings{Home: home}}
+	defer mem.db.Close()
+
+	short := "pong"
+	if got := toolTrailForHistory("s", "ping", short, mem); got != short {
+		t.Fatalf("short output altered: %q", got)
+	}
+
+	pointer := "[artifact: bash → 1234 chars at /tmp/mino/results/s/1/bash.txt; use read_file with offset and limit]"
+	if got := toolTrailForHistory("s", "bash", pointer, mem); got != pointer {
+		t.Fatalf("existing artifact pointer altered: %q", got)
+	}
+
+	long := strings.Repeat("x", 700)
+	got := toolTrailForHistory("s", "grep", long, mem)
+	if strings.Contains(got, strings.Repeat("x", 501)) {
+		t.Fatalf("long output not truncated: %q", got)
+	}
+	if !strings.Contains(got, "[tool result: 700 chars at ") {
+		t.Fatalf("missing artifact pointer: %q", got)
+	}
+	path := got[strings.Index(got, "/tmp/mino/results"):]
+	path = path[:strings.Index(path, ";")]
+	if data, err := os.ReadFile(path); err != nil || string(data) != long {
+		t.Fatalf("artifact file missing or wrong content: %v", err)
+	}
+	if catalog := mem.SessionArtifacts("s", 2000); !strings.Contains(catalog, "grep") {
+		t.Fatalf("artifact not recorded in catalog: %q", catalog)
+	}
+
+	if got := toolTrailForHistory("s", "grep", long, nil); !strings.Contains(got, "[tool result:") {
+		t.Fatalf("nil memory: %q", got)
+	}
+}
+
+func TestAddExchangeTruncatesToolTrails(t *testing.T) {
+	home := t.TempDir()
+	mem := &Memory{db: Connect(home), cfg: &Settings{Home: home}}
+	defer mem.db.Close()
+	s := NewSession(&Settings{Home: home}, mem)
+	s.sessionID = "trail-session"
+
+	long := strings.Repeat("y", 3000)
+	s.AddExchange("user raw", "user ctx", "done", []ToolCall{{Name: "bash", Args: map[string]any{"cmd": "echo hi"}, Output: long}}, "cli")
+
+	// chat_log assistant record carries the truncated trail, not the full output.
+	pairs := mem.SessionHistory("trail-session")
+	record := pairs[len(pairs)-1][1]
+	if strings.Contains(record, strings.Repeat("y", 501)) {
+		t.Fatal("chat_log still contains full tool output")
+	}
+	if !strings.Contains(record, "[tools used: bash(map[cmd:echo hi]) -> [tool result: 3000 chars at ") {
+		t.Fatalf("chat_log trail not truncated: %.200q", record)
+	}
+
+	// A session switch restores chat_log into context history — the restored
+	// tail must carry the slimmed pointer, not the 3000-char output.
+	s.Switch("other")
+	s.Switch("trail-session")
+	last := s.history[len(s.history)-1]
+	if strings.Contains(last.Content, strings.Repeat("y", 501)) {
+		t.Fatal("restored history contains full tool output")
+	}
+	if !strings.Contains(last.Content, "[tool result: 3000 chars at ") {
+		t.Fatalf("restored history missing pointer: %.200q", last.Content)
+	}
+}
