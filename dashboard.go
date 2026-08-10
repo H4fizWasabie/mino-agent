@@ -2060,6 +2060,38 @@ func traceFileName(home string) string {
 	return time.Now().Format("2006-01-02") + ".jsonl"
 }
 
+// traceLLMInputs collects today's per-iteration input tokens from llm trace
+// events, in trace order.
+func traceLLMInputs(home string) []int {
+	var vals []int
+	for _, ev := range traceEvents(home) {
+		if ev["type"] != "llm" {
+			continue
+		}
+		if in, ok := ev["in"].(float64); ok && in > 0 {
+			vals = append(vals, int(in))
+		}
+	}
+	return vals
+}
+
+// medianP90 returns the upper median and 90th percentile of vals (sorted copy).
+// Upper median (sorted[len/2]) keeps the gauge simple and deterministic; the
+// caller treats 0,0 as "no data".
+func medianP90(vals []int) (median, p90 int) {
+	if len(vals) == 0 {
+		return 0, 0
+	}
+	sorted := append([]int(nil), vals...)
+	sort.Ints(sorted)
+	median = sorted[len(sorted)/2]
+	idx := (len(sorted) * 9) / 10
+	if idx >= len(sorted) {
+		idx = len(sorted) - 1
+	}
+	return median, sorted[idx]
+}
+
 func traceTelemetry(home string) (skips, retrieves, toolErrors int) {
 	inTurn, recalled := false, false
 	for _, ev := range traceEvents(home) {
@@ -2228,6 +2260,16 @@ func handleMetrics(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+	}
+	// Per-iteration input tokens from today's trace: daily median/p90 track
+	// context-budget health, the destination of the context-bloat effort.
+	if dashCore != nil && dashCore.Settings != nil && dashCore.Settings.Home != "" {
+		if inputs := traceLLMInputs(dashCore.Settings.Home); len(inputs) > 0 {
+			median, p90 := medianP90(inputs)
+			b.WriteString(fmt.Sprintf("mino_llm_input_tokens_median %d\n", median))
+			b.WriteString(fmt.Sprintf("mino_llm_input_tokens_p90 %d\n", p90))
+			b.WriteString(fmt.Sprintf("mino_llm_iterations_today %d\n", len(inputs)))
+		}
 	}
 	w.Write([]byte(b.String()))
 }

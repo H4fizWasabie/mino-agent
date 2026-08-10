@@ -275,3 +275,47 @@ func TestMergeEnvFile(t *testing.T) {
 		t.Fatalf("got:\n%s\nwant:\n%s", data, want)
 	}
 }
+
+func TestMedianP90(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		vals       []int
+		wantMedian int
+		wantP90    int
+	}{
+		{"empty", nil, 0, 0},
+		{"single", []int{7}, 7, 7},
+		{"even upper median", []int{1, 2, 3, 4}, 3, 4},
+		{"ten upper median", []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, 6, 10},
+		{"skewed clamps", []int{5, 5, 5, 5}, 5, 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			median, p90 := medianP90(tc.vals)
+			if median != tc.wantMedian || p90 != tc.wantP90 {
+				t.Fatalf("medianP90(%v) = %d,%d want %d,%d", tc.vals, median, p90, tc.wantMedian, tc.wantP90)
+			}
+		})
+	}
+}
+
+func TestTraceLLMInputsParsesIterationTokens(t *testing.T) {
+	home := t.TempDir()
+	traceDir := filepath.Join(home, "traces")
+	if err := os.MkdirAll(traceDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	lines := []string{
+		`{"type":"turn_start","msg_chars":100}`,
+		`{"type":"llm","iteration":1,"in":32346,"out":215}`,
+		`{"type":"gate","decision":"skip"}`,
+		`{"type":"llm","iteration":2,"in":33304,"out":637}`,
+		`{"type":"llm","iteration":1,"in":0,"out":0}`,
+	}
+	if err := os.WriteFile(filepath.Join(traceDir, traceFileName(home)), []byte(strings.Join(lines, "\n")), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got := traceLLMInputs(home)
+	if len(got) != 2 || got[0] != 32346 || got[1] != 33304 {
+		t.Fatalf("traceLLMInputs = %v, want [32346 33304]", got)
+	}
+}

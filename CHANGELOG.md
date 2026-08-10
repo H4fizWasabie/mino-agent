@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+- Context diagnostics measure the real payload (closes #91): `context_diag` traces now log the actual serialized tool-schema JSON bytes plus the five heaviest schemas, and /metrics exposes today's median and p90 of per-iteration input tokens with the iteration count. (Why: the old +200-char-per-schema estimate undercounted MCP executor schemas ~4×, so context-budget decisions — schema compaction and per-session schema capping — were being sized blind; the daily median/p90 is the destination metric of the context-bloat effort (map #88).)
 ### Fixed
 - Declared workspace stage inputs now resolve (closes #86): Runtime sources render the run clock's local date, glob paths expand to their matches (newest first, each attributed with its path, bounded at the existing 4000-char input cap), and absolute declared paths resolve as-is instead of being double-joined under the playbook directory. An empty glob is a valid empty exclusion list ("No files matched."), not an error; only a genuinely broken literal path still renders `Unavailable:`. (Why: the ALL_PLATFORMS exclusion glob and the "authoritative local date" input declared by most playbook stages never resolved — `buildWorkspaceStagePrompt` read them as literal files, so the stage prompt always said `Unavailable`. An LLM's judgment on that prompt was nondeterministic: a scheduled daily post stage skipped a day because it "could not safely choose a non-reused angle" with the exclusion list missing, while the same prompt had been worked around on prior days. The harness now delivers what the contract declares; CONTEXT.md rules that "a missing input is not a skip reason" remain as defense-in-depth for genuinely broken paths.)
 
