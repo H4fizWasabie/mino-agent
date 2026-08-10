@@ -966,6 +966,27 @@ func prepareToolOutput(home, sessionID string, turn int, tool, output string) st
 	return compactToolOutput(home, sessionID, turn, tool, output)
 }
 
+// visionPrompt maps the view_image task argument to a curated prompt
+// (T8 follow-up from #103). critique/OCR/describe get their own variants;
+// an empty task keeps the original describe-for-critic prompt; anything
+// else falls through to the free-form wrapper so custom tasks still work.
+func visionPrompt(task string) string {
+	lower := strings.ToLower(task)
+	switch {
+	case strings.Contains(lower, "critique") || strings.Contains(lower, "review") ||
+		strings.Contains(lower, "assess") || strings.Contains(lower, "judge") || strings.Contains(lower, "approve"):
+		return "You are a rigorous image critic. Evaluate this image for quality and fitness for publication: composition, focus, exposure, resolution, artifacts, cropping, text legibility, and anything that would look unprofessional. End with a clear verdict: PASS or REJECT — and if REJECT, name the single most important fix."
+	case strings.Contains(lower, "ocr") || strings.Contains(lower, "extract") || strings.Contains(lower, "transcrib"):
+		return "Extract all visible text from this image verbatim, preserving line breaks. Output only the extracted text; if there is none, say exactly 'No text found'. Do not summarize, correct, or comment."
+	case strings.Contains(lower, "describe") || strings.Contains(lower, "description"):
+		return "Describe this image factually: subject, setting, visible text, colors, layout, and mood. Be neutral and concrete; do not speculate about intent beyond what is visible."
+	case task == "":
+		return "Describe this image precisely and neutrally as a brief for a critic: subject, layout, visible text, colors, mood, and any flaws (blur, artifacts, cropping, cut-off elements). Be concrete; do not speculate about intent beyond what is visible."
+	default:
+		return "You are looking at an image. Task: " + task + " Answer directly and precisely, based only on what the image shows."
+	}
+}
+
 // describeImage sends one image to the vision-capable provider (VisionModel
 // role, which skips text-only providers) and returns the model's text
 // response. T8 (wayfinder map #88): view_image data URLs are converted here
@@ -974,12 +995,9 @@ func prepareToolOutput(home, sessionID string, turn int, tool, output string) st
 // image re-sends disappear, and the provider prompt cache is no longer broken
 // by unique image blobs. One LLM call, tool-result transformation: no second
 // agent loop. The per-call task text (from the tool args, when provided) steers
-// the analysis; the default is a general describe-for-critique prompt.
+// the analysis via visionPrompt.
 func describeImage(client LLMClient, sessionID, dataURL, task string, maxTokens int) (string, error) {
-	prompt := "Describe this image precisely and neutrally as a brief for a critic: subject, layout, visible text, colors, mood, and any flaws (blur, artifacts, cropping, cut-off elements). Be concrete; do not speculate about intent beyond what is visible."
-	if task != "" {
-		prompt = "You are looking at an image. Task: " + task + " Answer directly and precisely, based only on what the image shows."
-	}
+	prompt := visionPrompt(task)
 	resp, err := client.Create(sessionID, VisionModel, []Message{{Role: "user", Content: prompt, Images: []string{dataURL}}}, maxTokens, "", nil)
 	if err != nil {
 		return "", err
