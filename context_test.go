@@ -91,6 +91,13 @@ func TestCompactToolOutputWritesArtifact(t *testing.T) {
 	if !strings.Contains(compact, "artifact") {
 		t.Fatalf("got %q", compact)
 	}
+	// Head/tail preview rides along with the marker.
+	if !strings.Contains(compact, "HEAD:\n"+strings.Repeat("x", toolPreviewHead)) {
+		t.Fatalf("missing head preview: %.200q", compact)
+	}
+	if !strings.Contains(compact, "TAIL:\n"+strings.Repeat("x", toolPreviewTail)) {
+		t.Fatalf("missing tail preview: %.200q", compact)
+	}
 	path := strings.Split(strings.Split(compact, " at ")[1], ";")[0]
 	data, err := os.ReadFile(path)
 	if err != nil || string(data) != output {
@@ -99,11 +106,19 @@ func TestCompactToolOutputWritesArtifact(t *testing.T) {
 	os.RemoveAll("/tmp/mino/results/test-session")
 }
 
-func TestPrepareToolOutputKeepsReadSliceInline(t *testing.T) {
+func TestPrepareToolOutputCompactsReadFileToo(t *testing.T) {
+	// Live measurement (facebook run, 2026-08-10): read_file results — up to
+	// 8k chars each, re-sent every iteration — dominated a 2.48M-token run.
+	// read_file is deliberately not exempt from the inline cap.
 	output := strings.Repeat("x", artifactInlineLimit+1)
 	got := prepareToolOutput("", "test-session", 1, "read_file", output)
-	if got != output {
-		t.Fatalf("read_file was compacted: %q", got)
+	if !strings.Contains(got, "artifact") || strings.Contains(got, strings.Repeat("x", artifactInlineLimit+1)) {
+		t.Fatalf("read_file not compacted: %.200q", got)
+	}
+	// Small read_file results stay inline (offset/limit slicing still works).
+	small := strings.Repeat("y", 100)
+	if got := prepareToolOutput("", "test-session", 1, "read_file", small); got != small {
+		t.Fatalf("small read_file result altered: %.100q", got)
 	}
 }
 
