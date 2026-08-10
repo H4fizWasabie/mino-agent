@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+- `view_image` gains curated vision prompts for its task argument (closes #109, T8 follow-up from #103): critique/review/assess/judge map to a verdict-oriented critique prompt (PASS/REJECT + the single most important fix), OCR/extract/transcribe to a verbatim text-extraction prompt, describe/description to a factual description prompt; empty tasks keep the original describe-for-critic prompt and unknown tasks keep the free-form wrapper. (Why: the image-critique loop before publication depends on the vision prompt's verdict quality, and OCR of scanned pages needs extraction discipline — one generic prompt served neither well.)
 
 ## [v2.8.0] — Context budget cut (2026-08-10)
 ### Added

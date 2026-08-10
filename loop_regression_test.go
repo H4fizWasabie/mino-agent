@@ -496,3 +496,32 @@ func TestLoopParseCounterResetsOnSuccess(t *testing.T) {
 		t.Fatal("escalated push missing after 3 consecutive failures post-reset")
 	}
 }
+
+// T8 (#103 follow-up): the view_image task argument maps to curated prompts —
+// critique/OCR/describe get dedicated variants, empty keeps the original
+// describe-for-critic prompt, unknown tasks fall through to the free-form
+// wrapper.
+func TestVisionPromptVariants(t *testing.T) {
+	cases := []struct {
+		task string
+		want string
+	}{
+		{"", "brief for a critic"},
+		{"critique the composition", "PASS or REJECT"},
+		{"critique", "PASS or REJECT"},
+		{"review this photo", "PASS or REJECT"},
+		{"assess the quality", "PASS or REJECT"},
+		{"judge it", "PASS or REJECT"},
+		{"OCR this screenshot", "No text found"},
+		{"extract the text", "No text found"},
+		{"transcribe it", "No text found"},
+		{"describe the subject", "Be neutral and concrete"},
+		{"a description", "Be neutral and concrete"},
+		{"check if it has people", "You are looking at an image. Task:"},
+	}
+	for _, c := range cases {
+		if got := visionPrompt(c.task); !strings.Contains(got, c.want) {
+			t.Errorf("visionPrompt(%q) missing %q: %.60q", c.task, c.want, got)
+		}
+	}
+}
