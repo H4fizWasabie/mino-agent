@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+## [v2.8.2] — Truth in the logs (2026-08-10)
+
+
 ## [v2.8.1] — Never silent (2026-08-10)
 ### Added
 - deploy.sh is bootstrap-only and the updater-less extensions ship as release assets (closes #131, REL-05c): deploy.sh no longer builds or pushes ANY binary (mino, minowrap, threads-extension) — it keeps user setup, RTK, oauth.d, extensions.json, systemd units, and the state.db backup; build-release.sh now also builds minowrap + threads-extension into the release with SHA256SUMS lines; the manual lane is documented as an emergency procedure in docs/emergency-deploy.md (raw scp + SHA-verification checklist, acceptable only when GitHub is down or a release is broken); README points at release → `mino update` as THE deploy path. (Why: the self-updater was made the only production path in REL-05, but minowrap and threads-extension had no self-updater — they stayed a local-tree push path, the exact failure class the decision was meant to kill. Extensions now have a verified release-asset path, and the emergency lane is documented rather than scripted, awkward on purpose.)
