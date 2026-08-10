@@ -38,8 +38,8 @@ If neither is true, **use the normal path**: tag → `build-release.sh` →
 4. **Record it** — the emergency lane bypasses the code-generated
    `deployments.log`, so append the line yourself (and note: the self-updater
    writes to `MINO_HOME`, so run manual updates as
-   `MINO_HOME=/home/mino mino update` — a bare `mino update` as root logs to
-   root's own home):
+   `MINO_HOME=/home/mino/.mino mino update` (the Mino home — a bare
+   `mino update` as root logs to root's own home):
    ```
    ssh root@VPS 'echo "$(date -u +%FT%TZ) update=vX.Y.Z-EMERGENCY sha256=<sum> binary=/usr/local/bin/mino" >> /home/mino/.mino/deployments.log'
    ```
