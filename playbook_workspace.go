@@ -485,15 +485,37 @@ func validateWorkspaceStageTools(pb *PlaybookWorkspace, registry *Registry) erro
 	return nil
 }
 
+// stageInputBudget caps the total rendered stage-input section of a stage
+// prompt. Per-input rendering keeps its own 4000-char cap; this bounds the sum
+// so a stage declaring many inputs cannot build an unbounded prompt.
+const stageInputBudget = 20000
+
 func buildWorkspaceStagePrompt(pb *PlaybookWorkspace, run *PlaybookRun, stage WorkspaceStage, now time.Time, loc *time.Location) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are executing playbook %q, run %s, stage %02d-%s.\n\n", pb.Name, run.ID, stage.Number, stage.Name)
 	fmt.Fprintf(&b, "## Request\n\n%s\n\n", run.Request)
 	b.WriteString("## Stage Contract\n\n")
 	b.WriteString(stage.Context)
-	b.WriteString("\n\n## Run Inputs\n")
+	b.WriteString("## Run Inputs\n")
+	// Shared budget across all declared inputs: the per-input cap bounds a
+	// single input, but N inputs were unbounded in total (10 × 4k = 40k chars).
+	// Declaration order is the playbook author's priority — first inputs get
+	// the budget first; once exhausted, later inputs render an explicit marker
+	// instead of being silently dropped (issue #96 / wayfinder map #88).
+	budget := stageInputBudget
 	for _, input := range stage.Inputs {
-		fmt.Fprintf(&b, "\n### %s\n%s\n", input.Path, renderWorkspaceInput(pb, run, stage, input, now, loc))
+		header := fmt.Sprintf("\n### %s\n", input.Path)
+		if budget <= 0 {
+			b.WriteString(header)
+			b.WriteString("[omitted — stage input budget exceeded]\n")
+			continue
+		}
+		block := header + renderWorkspaceInput(pb, run, stage, input, now, loc) + "\n"
+		if len(block) > budget {
+			block = block[:budget] + "\n[truncated — stage input budget exceeded]\n"
+		}
+		b.WriteString(block)
+		budget -= len(block)
 	}
 	b.WriteString("\n## Required Outputs\n")
 	for _, output := range stage.Outputs {
