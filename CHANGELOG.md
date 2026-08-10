@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+- Declared workspace stage inputs now resolve (closes #86): Runtime sources render the run clock's local date, glob paths expand to their matches (newest first, each attributed with its path, bounded at the existing 4000-char input cap), and absolute declared paths resolve as-is instead of being double-joined under the playbook directory. An empty glob is a valid empty exclusion list ("No files matched."), not an error; only a genuinely broken literal path still renders `Unavailable:`. (Why: the ALL_PLATFORMS exclusion glob and the "authoritative local date" input declared by most playbook stages never resolved — `buildWorkspaceStagePrompt` read them as literal files, so the stage prompt always said `Unavailable`. An LLM's judgment on that prompt was nondeterministic: a scheduled daily post stage skipped a day because it "could not safely choose a non-reused angle" with the exclusion list missing, while the same prompt had been worked around on prior days. The harness now delivers what the contract declares; CONTEXT.md rules that "a missing input is not a skip reason" remain as defense-in-depth for genuinely broken paths.)
 
 ## [v2.7.2] — Living Field graph polish (2026-08-10)
 ### Fixed

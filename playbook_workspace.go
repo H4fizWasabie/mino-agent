@@ -485,7 +485,7 @@ func validateWorkspaceStageTools(pb *PlaybookWorkspace, registry *Registry) erro
 	return nil
 }
 
-func buildWorkspaceStagePrompt(pb *PlaybookWorkspace, run *PlaybookRun, stage WorkspaceStage) string {
+func buildWorkspaceStagePrompt(pb *PlaybookWorkspace, run *PlaybookRun, stage WorkspaceStage, now time.Time, loc *time.Location) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are executing playbook %q, run %s, stage %02d-%s.\n\n", pb.Name, run.ID, stage.Number, stage.Name)
 	fmt.Fprintf(&b, "## Request\n\n%s\n\n", run.Request)
@@ -493,17 +493,7 @@ func buildWorkspaceStagePrompt(pb *PlaybookWorkspace, run *PlaybookRun, stage Wo
 	b.WriteString(stage.Context)
 	b.WriteString("\n\n## Run Inputs\n")
 	for _, input := range stage.Inputs {
-		path := workspaceInputPath(pb, run, stage, input.Path)
-		data, err := os.ReadFile(path)
-		if err != nil {
-			fmt.Fprintf(&b, "\n### %s\nUnavailable: %v\n", input.Path, err)
-			continue
-		}
-		content := strings.TrimSpace(string(data))
-		if len(content) > 4000 {
-			content = content[:4000] + "\n[truncated]"
-		}
-		fmt.Fprintf(&b, "\n### %s\n%s\n", input.Path, content)
+		fmt.Fprintf(&b, "\n### %s\n%s\n", input.Path, renderWorkspaceInput(pb, run, stage, input, now, loc))
 	}
 	b.WriteString("\n## Required Outputs\n")
 	for _, output := range stage.Outputs {
@@ -527,7 +517,80 @@ func workspaceInputPath(pb *PlaybookWorkspace, run *PlaybookRun, stage Workspace
 	if strings.HasPrefix(clean, "references/") {
 		return filepath.Join(stage.Dir, filepath.FromSlash(clean))
 	}
+	// Absolute declared paths are deliberate absolute references (e.g. the
+	// ALL_PLATFORMS exclusion glob); filepath.Join would mangle them into a
+	// doubled path under the playbook dir (issue #86).
+	if filepath.IsAbs(clean) {
+		return filepath.FromSlash(clean)
+	}
 	return filepath.Join(pb.Dir, filepath.FromSlash(clean))
+}
+
+// renderWorkspaceInput renders one declared stage input. Runtime sources are
+// answered from the run clock; paths with glob metacharacters are expanded to
+// their matches (newest first, each prefixed with its path, bounded by the
+// same 4000-char cap as a single file); everything else is read literally.
+// An empty glob is a valid state for an exclusion list — "no files matched"
+// is not an error, because "Unavailable" was being misread by the model as a
+// skip reason (issue #86).
+func renderWorkspaceInput(pb *PlaybookWorkspace, run *PlaybookRun, stage WorkspaceStage, input StageInput, now time.Time, loc *time.Location) string {
+	if strings.EqualFold(input.Source, "Runtime") {
+		local := now.In(loc)
+		return fmt.Sprintf("%s (%s)", local.Format("2006-01-02"), local.Format("Monday"))
+	}
+	path := workspaceInputPath(pb, run, stage, input.Path)
+	if strings.ContainsAny(path, "*?[") {
+		matches, err := filepath.Glob(path)
+		if err != nil {
+			return "Unavailable: " + err.Error()
+		}
+		if len(matches) == 0 {
+			return "No files matched."
+		}
+		return renderWorkspaceInputFiles(matches)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "Unavailable: " + err.Error()
+	}
+	return truncateWorkspaceInput(string(data))
+}
+
+// renderWorkspaceInputFiles concatenates glob matches newest-first (mtime,
+// path as tiebreak), each under a path header so the model can attribute a log
+// to its playbook/platform, then applies the shared truncation cap.
+func renderWorkspaceInputFiles(matches []string) string {
+	sort.Slice(matches, func(i, j int) bool {
+		ti, tj := workspaceFileModTime(matches[i]), workspaceFileModTime(matches[j])
+		if !ti.Equal(tj) {
+			return ti.After(tj)
+		}
+		return matches[i] < matches[j]
+	})
+	var b strings.Builder
+	for _, m := range matches {
+		data, err := os.ReadFile(m)
+		if err != nil || len(strings.TrimSpace(string(data))) == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "\n--- %s ---\n%s\n", m, strings.TrimSpace(string(data)))
+	}
+	return truncateWorkspaceInput(b.String())
+}
+
+func workspaceFileModTime(path string) time.Time {
+	if info, err := os.Stat(path); err == nil {
+		return info.ModTime()
+	}
+	return time.Time{}
+}
+
+func truncateWorkspaceInput(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > 4000 {
+		s = s[:4000] + "\n[truncated]"
+	}
+	return s
 }
 
 func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessionID string, obs Observer) (*PlaybookResult, error) {
@@ -580,7 +643,7 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 			stageTools = core.Tools.Only(stage.Tools...)
 		}
 		messages := append([]Message(nil), baseMessages...)
-		messages = append(messages, Message{Role: "user", Content: buildWorkspaceStagePrompt(pb, run, stage) + "\n\n" + appendSystemTime("", time.Now(), core.Settings.Location())})
+		messages = append(messages, Message{Role: "user", Content: buildWorkspaceStagePrompt(pb, run, stage, time.Now(), core.Settings.Location()) + "\n\n" + appendSystemTime("", time.Now(), core.Settings.Location())})
 		retrySafe := stageRetrySafe(core.Tools, stage)
 
 		var outputs []string
