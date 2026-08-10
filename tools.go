@@ -85,6 +85,17 @@ type Registry struct {
 	// (e.g. 28 schemas turn 1, 27 turn 2), and the whole prefix misses.
 	schemaMu       sync.Mutex
 	sessionSchemas map[string]map[string]bool
+
+	maxToolDesc int // description cap in toolDef (0 = toolDescCap)
+}
+
+// SetMaxToolDescChars overrides the per-tool description cap (0 = standard
+// cap). MINO_MAX_TOOL_DESC_CHARS is the escape hatch for operators who want
+// longer or shorter descriptions in the schema payload.
+func (r *Registry) SetMaxToolDescChars(n int) {
+	if n > 0 {
+		r.maxToolDesc = n
+	}
 }
 
 // SetLogDB enables tool-call logging to the tool_calls table.
@@ -482,9 +493,59 @@ func (r *Registry) Schema(name string) (ToolDef, bool) {
 	return r.toolDef(t), true
 }
 
+// toolDescCap bounds how much of a tool's description ships in the schema
+// payload. Composio MCP descriptions measured 261-8,770 chars (17.4k across
+// seven tools, 2026-08-10) — the head carries the selection semantics and the
+// tail is usage prose. Validated against the production model (issue #93):
+// function-calling quality held or improved at 40-56% fewer prompt tokens.
+const toolDescCap = 1000
+
 func (r *Registry) toolDef(t *Tool) ToolDef {
 	desc := t.Description
-	return ToolDef{Name: t.Name, Description: desc, Parameters: t.Schema}
+	cap := toolDescCap
+	if r.maxToolDesc > 0 {
+		cap = r.maxToolDesc
+	}
+	if len(desc) > cap {
+		desc = desc[:cap] + "…"
+	}
+	return ToolDef{Name: t.Name, Description: desc, Parameters: compactSchema(t.Schema)}
+}
+
+// compactSchema strips per-property prose from a JSON schema while keeping its
+// structure — property names, types, required, and nesting survive; property
+// descriptions, defaults, examples, and format noise go. This is what makes
+// 8,770-char composio schemas readable at ~1.3k chars without breaking the
+// model's ability to call the tool (validated against the real production
+// model on search/execute/facebook scenarios, issue #93).
+func compactSchema(p map[string]any) map[string]any {
+	if p == nil {
+		return nil
+	}
+	out := make(map[string]any, len(p))
+	for k, v := range p {
+		switch k {
+		case "description", "default", "examples", "$schema", "format", "title":
+			continue
+		}
+		switch typed := v.(type) {
+		case map[string]any:
+			out[k] = compactSchema(typed)
+		case []any:
+			list := make([]any, 0, len(typed))
+			for _, item := range typed {
+				if m, ok := item.(map[string]any); ok {
+					list = append(list, compactSchema(m))
+				} else {
+					list = append(list, item)
+				}
+			}
+			out[k] = list
+		default:
+			out[k] = v
+		}
+	}
+	return out
 }
 
 func (r *Registry) Execute(name string, args map[string]any) string {

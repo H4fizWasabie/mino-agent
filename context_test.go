@@ -327,7 +327,7 @@ func TestSchemaDiagMeasuresRealBytesAndHeavySchemas(t *testing.T) {
 func TestContextDiagTraceLogsRealSchemaBytes(t *testing.T) {
 	home := t.TempDir()
 	tools := NewRegistry()
-	tools.Register(&Tool{Name: "read_file", Description: "r", Schema: map[string]any{"type": "object", "properties": map[string]any{"p": map[string]any{"type": "string", "description": strings.Repeat("x", 1500)}}}})
+	tools.Register(&Tool{Name: "read_file", Description: strings.Repeat("d", 2000), Schema: map[string]any{"type": "object", "properties": map[string]any{"p": map[string]any{"type": "string", "description": strings.Repeat("x", 1500)}}}})
 	tools.Register(&Tool{Name: "search_web", Description: "s", Schema: map[string]any{"type": "object"}})
 	client := &fakeClient{script: []*LLMResponse{scriptedResp([]ContentBlock{textBlock("done")}, "stop")}}
 	result := RunLoopContext(context.Background(), client, "diag-bytes", "", []Message{{Role: "user", Content: "go"}}, tools, 3, 100, nil, false, home, nil)
@@ -351,8 +351,13 @@ func TestContextDiagTraceLogsRealSchemaBytes(t *testing.T) {
 		t.Fatal("no context_diag event in trace")
 	}
 	bytes, ok := diag["schema_bytes"].(float64)
-	if !ok || int(bytes) <= 1500 {
-		t.Fatalf("schema_bytes = %#v, want > 1500 (real serialized JSON, not the +200 estimate)", diag["schema_bytes"])
+	if !ok || int(bytes) <= 1000 {
+		t.Fatalf("schema_bytes = %#v, want > 1000 (real serialized JSON including the capped description)", diag["schema_bytes"])
+	}
+	// Compaction strips property prose: the 1500-char property description
+	// must not survive into the payload.
+	if int(bytes) > 3000 {
+		t.Fatalf("schema_bytes = %v, want ≤ 3000 (property descriptions stripped)", diag["schema_bytes"])
 	}
 	heavy, ok := diag["schema_heavy"].([]any)
 	if !ok || len(heavy) == 0 {

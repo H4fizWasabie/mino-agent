@@ -26,7 +26,7 @@ type Settings struct {
 	MinSimilarity    float64
 	ContextChars     int
 	MaxHistoryTurns  int // keep only last N turns (0 = unlimited, default 5)
-	MaxToolDescChars int // trim tool descriptions exceeding this (0 = no limit)
+	MaxToolDescChars int // trim tool descriptions exceeding this (0 = standard cap 1000)
 	BashTimeout      time.Duration
 	CodingTimeout    time.Duration
 	SyncTimeout      time.Duration
