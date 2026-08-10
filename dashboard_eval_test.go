@@ -181,10 +181,15 @@ func TestDashboardLivingFieldSurfaceContract(t *testing.T) {
 		`id="universe-canvas"`, `snapshot.nodes`, `snapshot.edges`, `function playUniverseHistory()`,
 		`state.timeline=Math.min(1`, `function universeActivity(event)`, `state.activities.push`,
 		`requestAnimationFrame(draw)`, `function selectUniverseNode(id)`, `Open full view`,
+		`function universeRegionCenters()`, `function universeLandmarkCount(nodes,region,visible)`,
+		`function universeLandmarkStyle(zoom)`, `function universeDefaultZoom(width)`, `function focusUniverseRegion(region)`,
 	} {
 		if !strings.Contains(string(field), behavior) {
 			t.Errorf("Living Field behavior is missing %q", behavior)
 		}
+	}
+	if strings.Contains(string(field), `class="field-region-labels"`) {
+		t.Error("camera-bound landmarks must replace fixed region-label overlays")
 	}
 
 	styles, err := staticFiles.ReadFile("static/style.css")
@@ -194,7 +199,7 @@ func TestDashboardLivingFieldSurfaceContract(t *testing.T) {
 	for _, rule := range []string{
 		`body[data-view="universe"]{grid-template-columns:176px minmax(0,1fr)`,
 		`.living-field{`, `.field-stage{`, `#universe-canvas{`, `.field-inspector{`,
-		`.field-timeline{`, `.field-region-labels`, `.field-a11y-index{`,
+		`.field-timeline{`, `.field-a11y-index{`,
 		`body[data-view="universe"] #dock{grid-column:1/-1;grid-row:2}`,
 		`@media(max-width:719px){body[data-view="universe"]`,
 	} {
@@ -221,12 +226,30 @@ function extract(name){
   }
   throw new Error("unterminated "+name);
 }
-const names=["universeHash","universeRand","universeRegion","universeFocus","universeNodeLink","universeLayout"];
-const box={};vm.runInNewContext(names.map(extract).join("\n"),box);
+const names=["universeHash","universeRand","universeTimeValue","universeRegion","universeFocus","universeNodeLink","universeRegionCenters","universeLandmarkCount","universeLandmarkStyle","universeDefaultZoom","universeLayout","universeCenterRegion","focusUniverseRegion"];
+const box={location:{hash:"#universe"},universePendingRegion:null};vm.runInNewContext(names.map(extract).join("\n"),box);
 function assert(ok,label){if(!ok)throw new Error(label)}
 assert(box.universeHash("memory:a")===box.universeHash("memory:a"),"stable hash");
 assert(box.universeFocus({kind:"reminder",attention:false},"now"),"now lens includes reminders");
 assert(box.universeNodeLink({id:"responsibility:routine:test",kind:"responsibility"})==="#responsibility/routine%3Atest","responsibility deep link");
+const centers=box.universeRegionCenters();
+assert(Object.keys(centers).join(",")==="now,memory,work,routines,system","five stable landmark centers");
+const landmarkNodes=[
+  {id:"memory:a",kind:"memory"},
+  {id:"tool:a",kind:"tool"},
+  {id:"artifact:a",kind:"artifact",region:"work"},
+  {id:"reminder:a",kind:"reminder"},
+];
+assert(box.universeLandmarkCount(landmarkNodes,"memory",()=>true)===1,"memory landmark count");
+assert(box.universeLandmarkCount(landmarkNodes,"system",node=>node.kind!=="memory")===1,"filtered system landmark count");
+const overview=box.universeLandmarkStyle(.65),detail=box.universeLandmarkStyle(3);
+assert(overview.alpha>detail.alpha&&overview.radius>detail.radius,"landmarks lead at overview scale and recede in detail");
+assert(box.universeDefaultZoom(390)<box.universeDefaultZoom(1440),"phone starts at overview scale");
+box.universeState={canvas:{clientWidth:1000,clientHeight:800},lens:"memory",zoom:3,panX:0,panY:0};
+box.focusUniverseRegion("memory");
+assert(box.universeState.zoom===1.28&&box.universeState.panY!==0,"active landmark centers its region");
+box.focusUniverseRegion("system");
+assert(box.location.hash==="#universe/system"&&box.universePendingRegion==="system","new landmark activates its lens route");
 const make=()=>Array.from({length:64},(_,i)=>({id:"memory:"+i,kind:"memory",community:0,state:"semantic"}));
 const edges=Array.from({length:63},(_,i)=>({source:"memory:"+i,target:"memory:"+(i+1)}));
 const first=make(),second=make();box.universeLayout(first,edges);box.universeLayout(second,edges);

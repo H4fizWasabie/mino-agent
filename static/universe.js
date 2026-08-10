@@ -1,5 +1,6 @@
 let U = null;
 let universeState = null;
+let universePendingRegion = null;
 const universeKnown = new Set();
 const UNIVERSE_COLORS = {
   memory:"#426fbd", responsibility:"#d07a38", playbook:"#697a43", schedule:"#91a14d",
@@ -29,7 +30,6 @@ function universeView(snapshot, lens="universe"){
         <span class="field-live" id="universe-live"><i></i> Live</span>
       </div>
       <canvas id="universe-canvas" tabindex="0" aria-label="Interactive map of Mino's durable universe. Use search or the accessible index to inspect nodes."></canvas>
-      <div class="field-region-labels" aria-hidden="true"><span data-region="now">Now</span><span data-region="memory">Memory</span><span data-region="work">Work</span><span data-region="routines">Routines</span><span data-region="system">System</span></div>
       <aside class="field-inspector" id="universe-inspector" aria-live="polite">
         <button class="field-inspector-close" id="universe-inspector-close" type="button" aria-label="Close inspector">×</button>
         <span class="field-inspector-kicker">Living Field</span><h3>Select anything</h3><p>Choose a node to inspect what it is, where it came from, and how it connects.</p>
@@ -83,8 +83,19 @@ function universeNodeLink(node){
   if(node.kind==="artifact") return "#system/files";
   return "#system/database-reminders";
 }
+function universeRegionCenters(){
+  return {now:[.49,.18],memory:[.5,.51],work:[.73,.3],routines:[.77,.71],system:[.22,.71]};
+}
+function universeLandmarkCount(nodes,region,visible){
+  return nodes.reduce((count,node)=>count+(visible(node)&&universeRegion(node)===region?1:0),0);
+}
+function universeLandmarkStyle(zoom){
+  const overview=Math.max(0,Math.min(1,(1-zoom)/.35)),detail=Math.max(0,Math.min(1,(zoom-1)/2));
+  return {alpha:.94-detail*.54,radius:11+overview*5-detail*2,fontSize:9+overview*1.5-detail};
+}
+function universeDefaultZoom(width){return width<720?.78:1;}
 function universeLayout(nodes,edges=[]){
-  const centers={now:[.49,.18],memory:[.5,.51],work:[.73,.3],routines:[.77,.71],system:[.22,.71],conversations:[.25,.28]};
+  const centers={...universeRegionCenters(),conversations:[.25,.28]};
   const memoryPalette=["#84b58e","#a77bd0","#72b6c2","#e8b65d","#e47f72","#88a5d5","#d29cc6"];
   const memories=nodes.filter(node=>node.kind==="memory"),stored=[...new Set(memories.map(node=>node.community))];
   if(memories.length>24&&stored.length<=1){
@@ -148,6 +159,17 @@ function universeDegrees(nodes,edges){
   edges.forEach(edge=>{if(degrees[edge.source]!=null)degrees[edge.source]++;if(degrees[edge.target]!=null)degrees[edge.target]++;});
   return degrees;
 }
+function universeCenterRegion(state,region){
+  const center=universeRegionCenters()[region];if(!state||!center)return;
+  state.zoom=state.canvas.clientWidth<720?1.05:1.28;
+  state.panX=-(center[0]*state.canvas.clientWidth-state.canvas.clientWidth/2)*state.zoom;
+  state.panY=-(center[1]*state.canvas.clientHeight-state.canvas.clientHeight/2)*state.zoom;
+}
+function focusUniverseRegion(region){
+  const state=universeState;if(!state||!universeRegionCenters()[region])return;
+  if(state.lens===region){universeCenterRegion(state,region);return;}
+  universePendingRegion=region;location.hash="#universe/"+region;
+}
 
 function initUniverse(snapshot,lens="universe"){
   const canvas=document.getElementById("universe-canvas");
@@ -157,11 +179,12 @@ function initUniverse(snapshot,lens="universe"){
   const edges=(snapshot.edges||[]).filter(edge=>nodeMap[edge.source]&&nodeMap[edge.target]);
   const degrees=universeDegrees(nodes,edges);nodes.forEach(node=>node._degree=degrees[node.id]||0);universeLayout(nodes,edges);
   const dated=nodes.map(n=>n._time).filter(Number.isFinite);
-  const state={canvas,nodes,nodeMap,edges,lens:UNIVERSE_LENSES[lens]?lens:"universe",selected:null,hovered:null,
+  const state={canvas,nodes,nodeMap,edges,lens:UNIVERSE_LENSES[lens]?lens:"universe",selected:null,hovered:null,hoveredLandmark:null,landmarkBoxes:[],
     query:"",timeline:1,playing:false,playStarted:0,earliest:dated.length?Math.min(...dated):Date.now(),latest:dated.length?Math.max(...dated):Date.now(),
-    panX:0,panY:0,zoom:1,activities:[],snapshot,raf:0,pointer:null,degrees};
+    panX:0,panY:0,zoom:universeDefaultZoom(canvas.clientWidth),activities:[],snapshot,raf:0,pointer:null,degrees};
   universeState=state;
   nodes.forEach(node=>universeKnown.add(node.id));
+  if(universePendingRegion===state.lens){universeCenterRegion(state,state.lens);universePendingRegion=null;}
 
   const resize=()=>{
     const rect=canvas.getBoundingClientRect(), dpr=Math.min(2,window.devicePixelRatio||1);
@@ -237,6 +260,19 @@ function initUniverse(snapshot,lens="universe"){
         const width=ctx.measureText(label).width+14;ctx.fillStyle="rgba(250,251,249,.96)";ctx.strokeStyle="rgba(105,115,120,.25)";ctx.lineWidth=1;ctx.beginPath();ctx.roundRect(p.x+10,p.y-13,width,24,6);ctx.fill();ctx.stroke();ctx.fillStyle="#172028";ctx.fillText(label,p.x+17,p.y+3);
       }
     });
+    const landmarkStyle=universeLandmarkStyle(state.zoom),regionColors={now:"#b53c42",memory:"#426fbd",work:"#c46f31",routines:"#697a43",system:"#65727d"};
+    state.landmarkBoxes=[];
+    Object.entries(universeRegionCenters()).forEach(([region,center])=>{
+      const p=screen({x:center[0],y:center[1]}),count=universeLandmarkCount(nodes,region,visible),label=`${UNIVERSE_LENSES[region].label.toUpperCase()} · ${count.toLocaleString()}`,color=regionColors[region];
+      ctx.save();ctx.globalAlpha=landmarkStyle.alpha;
+      ctx.beginPath();ctx.arc(p.x,p.y,landmarkStyle.radius+4,0,Math.PI*2);ctx.strokeStyle=`${color}38`;ctx.lineWidth=1;ctx.stroke();
+      ctx.beginPath();ctx.arc(p.x,p.y,landmarkStyle.radius,0,Math.PI*2);ctx.fillStyle="rgba(246,247,244,.9)";ctx.fill();ctx.strokeStyle=color;ctx.lineWidth=1.4;ctx.stroke();
+      ctx.beginPath();ctx.arc(p.x,p.y,3,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();
+      ctx.font=`700 ${landmarkStyle.fontSize}px ui-monospace,SFMono-Regular,Menlo,monospace`;ctx.textAlign="center";ctx.textBaseline="middle";
+      const labelY=p.y+landmarkStyle.radius+13;
+      ctx.lineWidth=4;ctx.lineJoin="round";ctx.strokeStyle="rgba(246,247,244,.94)";ctx.strokeText(label,p.x,labelY);ctx.fillStyle=color;ctx.fillText(label,p.x,labelY);ctx.restore();
+      state.landmarkBoxes.push({region,x:p.x-22,y:p.y-22,width:44,height:44});
+    });
     state.activities=state.activities.filter(activity=>now-activity.started<4200);
     state.activities.forEach(activity=>{
       const node=nodeMap[activity.nodeID];if(!node||!visible(node))return;const end=screen(node),age=(now-activity.started)/1800,t=Math.min(1,age),start={x:canvas.clientWidth*.5,y:16};
@@ -251,20 +287,24 @@ function initUniverse(snapshot,lens="universe"){
   };
   state.draw=draw;state.screen=screen;state.visible=visible;
 
-  canvas.onpointermove=event=>{
-    if(state.pointer){state.panX=state.pointer.panX+event.clientX-state.pointer.x;state.panY=state.pointer.panY+event.clientY-state.pointer.y;return;}
-    const rect=canvas.getBoundingClientRect(),x=event.clientX-rect.left,y=event.clientY-rect.top;
+  const pick=(clientX,clientY)=>{
+    const rect=canvas.getBoundingClientRect(),x=clientX-rect.left,y=clientY-rect.top,landmark=state.landmarkBoxes.find(box=>x>=box.x&&x<=box.x+box.width&&y>=box.y&&y<=box.y+box.height);
+    if(landmark)return {landmark:landmark.region,node:null};
     let hit=null,distance=12;
     nodes.forEach(node=>{if(!visible(node))return;const p=screen(node),d=Math.hypot(p.x-x,p.y-y);if(d<distance){distance=d;hit=node;}});
-    state.hovered=hit;canvas.style.cursor=hit?"pointer":"grab";
+    return {landmark:null,node:hit};
   };
-  canvas.onpointerdown=event=>{if(!state.hovered){state.pointer={x:event.clientX,y:event.clientY,panX:state.panX,panY:state.panY};canvas.setPointerCapture(event.pointerId);}};
-  canvas.onpointerup=event=>{if(state.pointer){state.pointer=null;canvas.releasePointerCapture(event.pointerId);return;} if(state.hovered)selectUniverseNode(state.hovered.id);};
-  canvas.onpointerleave=()=>{state.hovered=null;state.pointer=null;};
+  canvas.onpointermove=event=>{
+    if(state.pointer){state.panX=state.pointer.panX+event.clientX-state.pointer.x;state.panY=state.pointer.panY+event.clientY-state.pointer.y;return;}
+    const hit=pick(event.clientX,event.clientY);state.hovered=hit.node;state.hoveredLandmark=hit.landmark;canvas.style.cursor=hit.node||hit.landmark?"pointer":"grab";
+  };
+  canvas.onpointerdown=event=>{const hit=pick(event.clientX,event.clientY);state.hovered=hit.node;state.hoveredLandmark=hit.landmark;if(!hit.node&&!hit.landmark){state.pointer={x:event.clientX,y:event.clientY,panX:state.panX,panY:state.panY};canvas.setPointerCapture(event.pointerId);}};
+  canvas.onpointerup=event=>{if(state.pointer){state.pointer=null;canvas.releasePointerCapture(event.pointerId);return;}const hit=pick(event.clientX,event.clientY);if(hit.landmark)focusUniverseRegion(hit.landmark);else if(hit.node)selectUniverseNode(hit.node.id);};
+  canvas.onpointerleave=()=>{state.hovered=null;state.hoveredLandmark=null;state.pointer=null;};
   canvas.onwheel=event=>{event.preventDefault();state.zoom=Math.max(.65,Math.min(3,state.zoom*(event.deltaY>0 ? .9 : 1.1)));};
   canvas.onkeydown=event=>{if(event.key==="Escape")selectUniverseNode(null);};
   document.getElementById("universe-search").oninput=event=>{state.query=event.target.value.trim().toLowerCase();};
-  document.getElementById("universe-fit").onclick=()=>{state.panX=0;state.panY=0;state.zoom=1;};
+  document.getElementById("universe-fit").onclick=()=>{state.panX=0;state.panY=0;state.zoom=universeDefaultZoom(canvas.clientWidth);};
   document.getElementById("universe-inspector-close").onclick=()=>selectUniverseNode(null);
   document.getElementById("universe-range").oninput=event=>{state.playing=false;state.timeline=Number(event.target.value)/1000;syncUniverseTimeline();};
   document.getElementById("universe-play").onclick=()=>playUniverseHistory();
