@@ -13,6 +13,52 @@ import (
 	"time"
 )
 
+// The main loop tail-injects routing + clock into the user message for cache
+// stability (RespondForContext). run_playbook must forward only the clean user
+// message to the stage — the injected "your first action MUST be
+// run_playbook" guidance makes the stage model try to re-run the playbook
+// from inside the stage and bail when the tool is whitelisted out (issue #97).
+func TestCleanPlaybookRequest(t *testing.T) {
+	tests := []struct {
+		name    string
+		request string
+		want    string
+	}{
+		{
+			"explicit routing + clock tail stripped",
+			"Run the threads-replies playbook now.\n\n\nThe user explicitly asked to run the \"threads-replies\" playbook. Your first action MUST be run_playbook with name=\"threads-replies\". Do NOT do the work yourself first — the playbook's stages perform the task. Run it, then report the result.\n\n[AUTHORITATIVE LOCAL CLOCK: Monday, 2026-08-10 10:04:35 +08 (UTC+08:00). Today is 2026-08-10.]\nUse this clock; do not infer the current time from conversation history.",
+			"Run the threads-replies playbook now.",
+		},
+		{
+			"soft routing + clock tail stripped",
+			"anything about the news?\n\nPOSSIBLY RELEVANT PLAYBOOK: \"malaysian-news-daily\" — daily news\nUse run_playbook with name=\"malaysian-news-daily\" only if this repeatable procedure is the best fit for the current request. Otherwise handle the request normally.\n\n[AUTHORITATIVE LOCAL CLOCK: Monday, 2026-08-10 10:04:35 +08 (UTC+08:00). Today is 2026-08-10.]",
+			"anything about the news?",
+		},
+		{
+			"clock-only tail stripped",
+			"Scheduled run\n\n[AUTHORITATIVE LOCAL CLOCK: Monday, 2026-08-10 10:04:35 +08 (UTC+08:00). Today is 2026-08-10.]\nUse this clock; do not infer the current time from conversation history.",
+			"Scheduled run",
+		},
+		{
+			"plain message unchanged",
+			"Run the playbook",
+			"Run the playbook",
+		},
+		{
+			"user text after a clock-like marker is trimmed (documented tradeoff)",
+			"First line\nSecond line\n\n[AUTHORITATIVE LOCAL CLOCK: something the user typed]\nthird",
+			"First line\nSecond line",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := cleanPlaybookRequest(tt.request); got != tt.want {
+				t.Fatalf("cleanPlaybookRequest(%q) = %q, want %q", tt.request, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWorkspaceRunResumesFirstIncompleteStage(t *testing.T) {
 	home := t.TempDir()
 	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect", "02-report"})

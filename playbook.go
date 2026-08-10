@@ -257,6 +257,14 @@ func makeRunPlaybookTool(core *Core) *Tool {
 				sid, _ = v.(string)
 			}
 			request, _ := ctx.Value(userMessageKey{}).(string)
+			// The main loop tail-injects per-turn routing and the clock into the
+			// user message (cache stability; see RespondForContext). Those are
+			// instructions for the MAIN loop — "your first action MUST be
+			// run_playbook" — and forwarding them into the stage prompt makes the
+			// stage model try to re-run the playbook from inside the stage, then
+			// treat the whitelisted-out tool as a skip reason (issue #97). Pass
+			// the clean request.
+			request = cleanPlaybookRequest(request)
 			output, err := runPlaybookWithResponsibility(ctx, core, name, request, sid, RunPlaybook, time.Now().UTC())
 			if err != nil {
 				return fmt.Sprintf("Error: %v", err)
@@ -264,6 +272,24 @@ func makeRunPlaybookTool(core *Core) *Tool {
 			return output
 		},
 	}
+}
+
+// cleanPlaybookRequest strips the main loop's per-turn tail injection (routing
+// block + authoritative clock) from a run_playbook request. The injected text
+// is guidance for the main loop, not the playbook contract; a stage that
+// inherits "your first action MUST be run_playbook" obeys it, finds the tool
+// whitelisted out, and bails instead of doing the work (issue #97).
+func cleanPlaybookRequest(request string) string {
+	for _, marker := range []string{
+		"\n\n[AUTHORITATIVE LOCAL CLOCK:",
+		"\n\nThe user explicitly asked to run the",
+		"\n\nPOSSIBLY RELEVANT PLAYBOOK",
+	} {
+		if i := strings.Index(request, marker); i >= 0 {
+			request = request[:i]
+		}
+	}
+	return strings.TrimRight(request, "\n")
 }
 
 // makeListPlaybooksTool creates the list_playbooks tool.
