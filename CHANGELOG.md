@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+- Optional `## Success` stage contracts (implements REL-02, closes #122): a stage CONTEXT.md may declare expected outcomes as a table (`| Outcome | Required tool call |`); the harness then requires a successful call to the named tool whose result carries a 15+ digit platform ID, verified from the stage's own recorded tool log — the model cannot satisfy it by editing files. A missing outcome pushes once through the existing retry path, then fails the run with a `stage_outcome_failed` trace event. Stages without the section behave exactly as before. (Why: the owner was the monitoring system — the karma freeze, a missing Telegram report, and the GLM promo cliff were all caught by hand after silent runs; REL-02 lets the harness distinguish "ran and published" from "ran and said so" for the six must-publish playbooks.)
 
 ## [v2.8.0] — Context budget cut (2026-08-10)
 ### Added
