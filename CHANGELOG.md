@@ -1,4 +1,6 @@
 ## [Unreleased]
+
+## [v2.8.6] — Cancel and interrupt hardened (2026-08-11)
 ### Changed
 - Documentation restructured: AGENTS.md is now the mechanically-verified index (rules split into rules.md + coding-conventions.md, contributor workflow in CONTRIBUTING.md, design docs linked). (Why: AGENTS.md mixed process rules, code patterns, and public discipline into one 9.3K blob — an agent needing release gating read everything. The index follows the repo's link-first navigation philosophy; `TestAgentsIndexLinksResolve` fails the suite on any dangling link or missing heading, so the index cannot rot like the memory notes the Context Truth work removed.)
 ### Fixed
