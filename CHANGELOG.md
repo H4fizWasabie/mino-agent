@@ -1,6 +1,6 @@
-# Changelog
-
 ## [Unreleased]
+
+## [v2.8.4] — Context Truth lands in production (2026-08-11)
 ### Added
 - Native send_document tool for Telegram file delivery (implements CTX-009, closes #153): queues a local file pointer in the outbox (`doc_*.json`), delivered by the outbox dispatcher as multipart to `/sendDocument`; the bot token and chat id come from config at delivery time and never appear in tool args, trails, or logs. (Why: in the 2026-08-11 live test the model had to read the bot token from env and hand-roll curl `sendDocument` after composio had no Telegram connection — the token landed in tool args, the audit log, and session trails. The outbox pattern already kept text sends token-free; documents now ride it.)
 - Wayfinder ticket CTX-010 opened (docs): provider failure reasons are swallowed by the circuit breaker — the 2026-08-11 failover to the fallback model was silent, root cause guessed post-hoc. Log the error string; fallback semantics unchanged.

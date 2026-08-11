@@ -8,7 +8,7 @@ Why did the main model silently fail over to qwen at 04:33, and how do we make t
 
 ## Evidence (2026-08-11)
 
-- 04:33:29-40: four qwen/qwen3.7-flash calls handled the send-file turn's iterations; the final reply ("Siap, Abah") was qwen's.
+- 04:33:29-40: four qwen/qwen3.7-flash calls handled the send-file turn's iterations; the final reply (in Malay) was qwen's.
 - Mechanism: the main (deepseek via OpenRouter, unpinned at the time) failed 3x within ~60s → circuit breaker (provider_manager.go failure(): 3 failures → 60s openUntil) → candidates() skipped it → qwen-fallback provider served the rest.
 - The failure REASON was logged nowhere: failure() only increments a counter. Root cause was guessed post-hoc (reasoning_effort=max rejected by an unpinned provider) and confirmed only by fixing the config (pinning :deepinfra stopped the failures).
 
