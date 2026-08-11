@@ -16,7 +16,7 @@ HEAD:
 <first 4000 chars — the reply text>
 ...
 TAIL:
-<last 4000 chars — the [tools used:] trails with DB paths and commands>]
+<last 4000 chars — the [tools used:] trails with paths and commands>]
 ```
 
 Same budget (8000 total), same cap — only the middle (large result tables, already artifacted) is dropped. Assistant messages are built reply-then-trail, so the tail is exactly the method the next turn needs. Mirrors the existing `compactUserInput` pattern.
@@ -24,11 +24,11 @@ Same budget (8000 total), same cap — only the middle (large result tables, alr
 ## Acceptance criteria (all met)
 
 - [x] Head+tail preview with HEAD/TAIL markers for messages > inputPreviewLimit
-- [x] Trailing tool trails (DB paths, commands) present in the preview tail
+- [x] Trailing tool trails (paths, commands) present in the preview tail
 - [x] Preview length bounded by inputPreviewLimit + small overhead
 - [x] Test covering the incident shape: `TestContextMessagesKeepsMethodTailOfLargeMessages` (12k reply + method-bearing trail)
 
 ## Validation
 
-- `go test ./...` — 496 pass
+- `go test ./...` — 500 pass
 - Changelog updated; pushed to master

@@ -6,7 +6,7 @@ Build self-awareness of cognitive loops. Mino detects when it's repeating the sa
 
 What to build:
 - Pattern detection: same tool + same args N times? same error pattern? configurable threshold?
-- Action on detection: pause, self-audit entry, optionally escalate to Abah via Telegram
+- Action on detection: pause, self-audit entry, optionally escalate to the owner via Telegram
 - Integration: does this live inside loop.go as a guard, or as a separate watcher goroutine?
 
 ## Type

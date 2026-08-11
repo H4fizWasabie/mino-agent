@@ -2,7 +2,7 @@
 
 ## Question
 
-Build the mid-loop response system. When Abah sends `/btw` (or equivalent) via Telegram, Mino must respond *without* waiting for the current tool call or LLM call to finish.
+Build the mid-loop response system. When the owner sends `/btw` (or equivalent) via Telegram, Mino must respond *without* waiting for the current tool call or LLM call to finish.
 
 What to build:
 - Interrupt channel/listener that lives alongside the main loop

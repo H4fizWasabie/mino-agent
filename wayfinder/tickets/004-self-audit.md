@@ -2,7 +2,7 @@
 
 ## Question
 
-Build persistent, queryable audit trail of Mino's own behavior. Abah can ask "what happened?" and Mino can explain.
+Build persistent, queryable audit trail of Mino's own behavior. the owner can ask "what happened?" and Mino can explain.
 
 What to build:
 - Audit event schema (SQLite — reuse existing DB)
