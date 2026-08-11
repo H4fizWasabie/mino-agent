@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"io"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -88,6 +89,71 @@ func TestDeliverOutboxOnceSendsAndRemoves(t *testing.T) {
 	rest, _ := os.ReadDir(outbox)
 	if len(rest) != 0 {
 		t.Fatalf("outbox not drained: %v", rest)
+	}
+}
+
+// CTX-009: send_document queues a file pointer, never the token; the
+// dispatcher posts it as multipart to /sendDocument and drains on success.
+func TestSendDocumentOutboxDeliversAndDrains(t *testing.T) {
+	home := t.TempDir()
+	filePath := filepath.Join(home, "report.xlsx")
+	os.WriteFile(filePath, []byte("XLSX-BYTES"), 0600)
+	if err := queueDocument(home, filePath, "June report"); err != nil {
+		t.Fatal(err)
+	}
+	if err := queueDocument(home, filepath.Join(home, "missing.txt"), ""); err == nil {
+		t.Fatal("missing file must not queue")
+	}
+
+	var gotBody []byte
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+	telegramAPIBase = srv.URL
+	defer func() { telegramAPIBase = "https://api.telegram.org" }()
+
+	s := &Settings{Home: home, Telegram: "tok", TelegramChatID: 12345}
+	if n := deliverOutboxOnce(s); n != 1 {
+		t.Fatalf("delivered = %d, want 1", n)
+	}
+	if !strings.HasSuffix(gotPath, "/sendDocument") {
+		t.Fatalf("path = %q, want sendDocument", gotPath)
+	}
+	if !strings.Contains(string(gotBody), "XLSX-BYTES") || !strings.Contains(string(gotBody), "June report") {
+		t.Fatalf("multipart body missing file or caption")
+	}
+	if strings.Contains(string(gotBody), "tok") {
+		t.Fatal("bot token leaked into the request body")
+	}
+	rest, _ := os.ReadDir(filepath.Join(home, "outbox"))
+	if len(rest) != 0 {
+		t.Fatalf("outbox not drained: %v", rest)
+	}
+}
+
+func TestSendDocumentToolDraftsWithoutToken(t *testing.T) {
+	home := t.TempDir()
+	tool := makeSendDocumentTool(home)
+	filePath := filepath.Join(home, "x.pdf")
+	os.WriteFile(filePath, []byte("PDF"), 0600)
+	out := tool.Fn(map[string]any{"path": filePath, "caption": "hi"})
+	if !strings.Contains(out, "queued") {
+		t.Fatalf("tool output = %q", out)
+	}
+	entries, _ := os.ReadDir(filepath.Join(home, "outbox"))
+	if len(entries) != 1 || !strings.HasPrefix(entries[0].Name(), "doc_") {
+		t.Fatalf("drafts = %v, want one doc_ file", entries)
+	}
+	data, _ := os.ReadFile(filepath.Join(home, "outbox", entries[0].Name()))
+	if strings.Contains(string(data), "\"tok\"") {
+		t.Fatalf("token in draft: %s", data)
+	}
+	if out := tool.Fn(map[string]any{"path": filepath.Join(home, "nope.pdf")}); !strings.Contains(out, "Error") {
+		t.Fatalf("missing file must error, got %q", out)
 	}
 }
 

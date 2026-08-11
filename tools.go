@@ -816,6 +816,7 @@ func BuildRegistry(db *sql.DB, home, workspace string, mem *Memory, location ...
 
 	// messages (Core: messages.make_tool)
 	r.Register(behaves(makeMessagesTool(home), BehaviorMutate))
+	r.Register(behaves(makeSendDocumentTool(home), BehaviorMutate))
 
 	// web search (Core: search.make_tool)
 	r.Register(behaves(makeSearchTool(), BehaviorObserve))
@@ -1537,6 +1538,29 @@ func makeMessagesTool(home string) *Tool {
 			queueOutbox(home, to, msg)
 			path := filepath.Join(home, "outbox", fmt.Sprintf("msg_%s.txt", to))
 			return fmt.Sprintf("Message to %s drafted at %s", to, path)
+		},
+	}
+}
+
+func makeSendDocumentTool(home string) *Tool {
+	return &Tool{
+		Name:        "send_document",
+		Description: "Send a local file (Excel, PDF, image, report) to the owner's Telegram. The file is queued in the outbox and delivered by the outbox dispatcher within seconds. Use when the owner asks to send/email you a file or you produced a deliverable (report, export, image) they need. The bot token is never taken as an argument — it comes from config at delivery time.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path":    map[string]any{"type": "string", "description": "Absolute path to the file to send"},
+				"caption": map[string]any{"type": "string", "description": "Optional caption text shown with the file"},
+			},
+			"required": []string{"path"},
+		},
+		Fn: func(args map[string]any) string {
+			path, _ := args["path"].(string)
+			caption, _ := args["caption"].(string)
+			if err := queueDocument(home, path, caption); err != nil {
+				return fmt.Sprintf("Error queueing document: %v", err)
+			}
+			return fmt.Sprintf("File %s queued for Telegram delivery (outbox, ~20s). Verify delivery before claiming it arrived.", filepath.Base(path))
 		},
 	}
 }

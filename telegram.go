@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"log/slog"
 	"net/http"
 	"os"
@@ -42,6 +43,23 @@ func queueOutbox(home, to, msg string) {
 	os.WriteFile(path, []byte(msg), 0644)
 }
 
+// queueDocument validates a local file and drafts it to the outbox as a
+// doc_*.json pointer; the outbox dispatcher sends it via sendDocument.
+// The bot token is never part of the draft (CTX-009).
+func queueDocument(home, path, caption string) error {
+	st, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("file not readable: %v", err)
+	}
+	if !st.Mode().IsRegular() {
+		return fmt.Errorf("not a regular file: %s", path)
+	}
+	outboxDir := filepath.Join(home, "outbox")
+	os.MkdirAll(outboxDir, 0700)
+	draft := fmt.Sprintf("{\"path\":%q,\"caption\":%q}", path, caption)
+	return os.WriteFile(filepath.Join(outboxDir, fmt.Sprintf("doc_%d.json", time.Now().UnixNano())), []byte(draft), 0600)
+}
+
 // deliverOutboxOnce sends every outbox draft to the configured Telegram chat
 // and removes the file on success. Returns the number delivered.
 func deliverOutboxOnce(s *Settings) int {
@@ -60,6 +78,27 @@ func deliverOutboxOnce(s *Settings) int {
 		path := filepath.Join(s.Home, "outbox", e.Name())
 		data, err := os.ReadFile(path)
 		if err != nil {
+			continue
+		}
+		// Document drafts (CTX-009): pointer to a local file, sent via sendDocument.
+		if strings.HasPrefix(e.Name(), "doc_") && strings.HasSuffix(e.Name(), ".json") {
+			var draft struct {
+				Path    string `json:"path"`
+				Caption string `json:"caption"`
+			}
+			if json.Unmarshal(data, &draft) != nil || draft.Path == "" {
+				slog.Error("outbox doc draft malformed", "file", e.Name())
+				continue
+			}
+			if sendTelegramDocument(s.Telegram, s.TelegramChatID, draft.Path, draft.Caption) {
+				if err := os.Remove(path); err != nil {
+					slog.Error("outbox doc delivered but cleanup failed", "file", e.Name(), "error", err)
+				}
+				delivered++
+				logTrace(s.Home, "outbox_doc_delivered", map[string]any{"file": draft.Path})
+			} else {
+				slog.Error("outbox doc rejected", "file", e.Name(), "path", draft.Path)
+			}
 			continue
 		}
 		if sendTelegramText(s.Telegram, s.TelegramChatID, string(data), true) {
@@ -107,6 +146,46 @@ func postTelegram(token string, payload map[string]any) bool {
 		OK bool `json:"ok"`
 	}
 	json.NewDecoder(resp.Body).Decode(&r)
+	return r.OK
+}
+
+// sendTelegramDocument posts a local file to /sendDocument as multipart/form-data
+// (CTX-009). Returns true when Telegram accepted the file.
+func sendTelegramDocument(token string, chatID int64, path, caption string) bool {
+	file, err := os.Open(path)
+	if err != nil {
+		slog.Error("telegram doc open failed", "path", path, "error", err)
+		return false
+	}
+	defer file.Close()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	mw.WriteField("chat_id", fmt.Sprint(chatID))
+	if caption != "" {
+		mw.WriteField("caption", caption)
+	}
+	part, err := mw.CreateFormFile("document", filepath.Base(path))
+	if err == nil {
+		_, err = io.Copy(part, file)
+	}
+	mw.Close()
+	if err != nil {
+		slog.Error("telegram doc multipart failed", "error", err)
+		return false
+	}
+	resp, err := http.Post(fmt.Sprintf("%s/bot%s/sendDocument", telegramAPIBase, token), mw.FormDataContentType(), &buf)
+	if err != nil {
+		slog.Error("telegram doc send failed", "error", err)
+		return false
+	}
+	defer resp.Body.Close()
+	var r struct {
+		OK bool `json:"ok"`
+	}
+	json.NewDecoder(resp.Body).Decode(&r)
+	if !r.OK {
+		slog.Error("telegram doc rejected", "path", path)
+	}
 	return r.OK
 }
 
