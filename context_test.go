@@ -158,6 +158,27 @@ func TestContextMessagesKeepsTailOnly(t *testing.T) {
 	}
 }
 
+func TestContextMessagesKeepsMethodTailOfLargeMessages(t *testing.T) {
+	s := &Session{settings: &Settings{MaxHistoryTurns: 0}, history: []Message{
+		{Role: "user", Content: "check july consumables"},
+		{Role: "assistant", Content: strings.Repeat("a", 12000) + "\n[tools used: bash(map[command:sqlite3 /home/procura/data/procura.sqlite ...]) -> ok]"},
+	}}
+	got := s.ContextMessages(100000)
+	joined := ""
+	for _, m := range got {
+		joined += m.Content
+	}
+	if !strings.Contains(joined, "procura.sqlite") {
+		t.Fatalf("method tail lost from large message: %q", joined[:300])
+	}
+	if !strings.Contains(joined, "HEAD") || !strings.Contains(joined, "TAIL") {
+		t.Fatalf("head/tail markers missing: %q", joined[:300])
+	}
+	if len(joined) > inputPreviewLimit+500 {
+		t.Fatalf("preview exceeded budget: %d", len(joined))
+	}
+}
+
 func TestContextForBoundsCurrentInputAndKeepsArtifactCatalog(t *testing.T) {
 	home := t.TempDir()
 	db := Connect(home)

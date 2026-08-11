@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+- Large history messages keep a head+tail preview instead of a bare placeholder (closes #145): messages over `inputPreviewLimit` (8000 chars) now render the first 4000 + last 4000 chars with HEAD/TAIL markers instead of `[Large previous message...]`, mirroring `compactUserInput`. (Why: on 2026-08-10 a procura question burned 30 iterations because the three previous turns' replies (20-25k chars each, carrying the DB path and method in their `[tools used:]` trails) were wholesale-replaced by the placeholder — the model started from a different project's database and re-derived everything from scratch. The bare pointer deleted self-describing method knowledge that cost nothing to keep; the tail preview preserves it at the same budget.)
 
 ## [v2.8.2] — Truth in the logs (2026-08-10)
 

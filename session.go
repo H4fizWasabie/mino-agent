@@ -271,7 +271,14 @@ func (s *Session) ContextMessages(maxChars int) []Message {
 	for i, message := range s.history {
 		history[i] = message
 		if len(message.Content) > inputPreviewLimit {
-			history[i].Content = fmt.Sprintf("[Large previous %s message (%d chars) is retained in the session artifact catalog.]", message.Role, len(message.Content))
+			// Head+tail preview instead of a bare pointer: large messages are
+			// usually replies whose trailing [tools used:] records carry the
+			// method (DB paths, commands) the next turn needs. A bare pointer
+			// left the model amnesiac — CHEM 15 incident (2026-08-10).
+			head := inputPreviewLimit / 2
+			history[i].Content = fmt.Sprintf(
+				"[Large previous %s message (%d chars); full text is in the session log.\nHEAD:\n%s\n...\nTAIL:\n%s",
+				message.Role, len(message.Content), message.Content[:head], message.Content[len(message.Content)-head:])
 		}
 	}
 
