@@ -102,7 +102,7 @@ Measurable: (1) a session whose previous replies exceed `inputPreviewLimit` stil
 - [CTX-010 — Log provider failure reasons](tickets/ctx-010-provider-failure-logging.md) — **resolved** (closes #154): every failed provider call logs provider/role/model/error; circuit-breaker trips log the cooldown.
 - [CTX-011 — Stop-word anywhere stops](tickets/ctx-011-stop-anywhere.md) — **resolved** (closes #157): "its fine, stop" now cancels; questions about stopping still proceed.
 - [CTX-012 — Interrupt replies dropped on tool-call answers](tickets/ctx-012-interrupt-empty.md) (closes #156) — status query answered with a tool call became "(no response)"; fix: no schemas in the interrupt call.
-- [CTX-013 — send_document unreachable under the schema cap](tickets/ctx-013-send-document-unpinned.md) (open, #155) — the token leak repeated because the native tool got evicted; fix: pin it essential.
+- [CTX-013 — Stale workaround memory overrides the native tool](tickets/ctx-013-send-document-unpinned.md) (open, #155) — selection verified working; four stale notes taught the curl path; deleted them. No pinning — the essential set stays universal.
 
 ## Out of scope
 

@@ -1,19 +1,28 @@
-# Context Truth — send_document unreachable under the schema cap
+# Context Truth — Stale workaround memory overrides the native tool
 
-Status: **OPEN** (GitHub issue #155)
+Status: **OPEN** (GitHub issue #155, re-scoped)
 
 ## Question
 
-Why did the model use the insecure bash+curl workaround again instead of the native send_document tool?
+Why did the model use the insecure bash+curl sendDocument flow again, even though the native send_document tool exists?
 
-## Evidence (2026-08-11 full-suite live test, phases 7-8)
+## Root cause (corrected diagnosis)
 
-- tool_calls row: bash args contain the bot token (`BOT_TOKEN="8905..."`) — the curl sendDocument flow from the memory note `telegram_send_document_curl_workaround`
-- `send_document` is registered but NOT in `essentialToolNames` — the per-session 20-tool schema cap can evict it, and keyword selection did not surface it for "send it to my telegram"
-- The memory note actively re-teaches the insecure path, so the model follows it
+**Not a schema-selection failure.** The FTS index surfaces `send_document` at the top for "send OR telegram" — verified against the live catalog. The model had the tool available and still followed the workaround, because **four memory notes from the pre-tool era actively taught the curl path** ("Verified method... bypassing the send_message tool", "fallback to multipart upload via curl", "fell back to curl with the bot token; sent successfully"). The note's authoritative framing beat the system prompt's tool-preference rule.
 
-## Design sketch
+## Principle (owner decision)
 
-- Add `send_document` to `essentialToolNames` (pinned like `send_message`)
-- Update or annotate the `telegram_send_document_curl_workaround` memory note to prefer the native tool
-- Acceptance: a "send file to telegram" turn uses send_document (visible in tool_calls); no bot token in any bash args; the file still arrives
+**No pinning.** Mino's essential tool set stays minimal and universal — a tool is essential when every user needs it every turn, not when one user's stale memory misbehaves. Pinning `send_document` would tax every session's schema payload to band-aid a local incident.
+
+## Resolution applied
+
+- Deleted the four stale instructional notes on the VPS (the curl workaround, connection-issue workaround, delivery-workaround, and the original note) — they taught the token-exposing path and predated the native tool
+- Episodic records referencing them were left as history (harmless dangling edges)
+- The existing system-prompt rule ("prefer the purpose-built tool... dedicated tools before generic workarounds") now prevails with the stale teaching removed
+
+## Acceptance criteria
+
+- [x] `send_document` verified reachable by keyword selection (FTS rank #1 for send/telegram)
+- [x] Stale workaround notes removed from the VPS memory store
+- [x] No tool added to the essential set
+- [ ] Production observation: the next "send a file" turn uses send_document, no token in bash args
