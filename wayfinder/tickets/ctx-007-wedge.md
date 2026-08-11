@@ -1,6 +1,6 @@
 # Context Truth — Dashboard client disconnect can wedge the session mutex
 
-Status: **OPEN** (GitHub issue #152)
+Status: **RESOLVED** (closes GitHub issue #152, commit pending)
 
 ## Question
 
@@ -26,3 +26,13 @@ Why did a dashboard turn whose client disconnected mid-turn block every later tu
 - [ ] Kill the client connection mid-turn → session responsive within a bounded time
 - [ ] No service restart needed to recover
 - [ ] Regression test simulating a client disconnect mid-provider-call
+
+
+## Resolution
+
+The loop's LLM calls now go through `CreateContext` (the ctx-aware path): `client.Create` → `client.CreateContext(ctx, ...)` for the main model and for `describeImage` (vision). The provider HTTP layer already used `http.NewRequestWithContext`, so a cancelled turn now propagates into the in-flight provider call and the loop returns `cancelled` promptly — the session mutex is released instead of wedged. The context variant was already in the `contextLLMClient` interface; it is now part of `LLMClient` and both test fakes implement it.
+
+## Validation
+
+- New regression test: `TestLoopReturnsWhenClientDisconnectsMidProviderCall` — a provider call that blocks until ctx cancellation; cancel mid-call → loop returns `cancelled` within a bounded time
+- `go test ./...` — 507 pass

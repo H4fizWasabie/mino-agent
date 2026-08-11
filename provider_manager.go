@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -240,6 +241,9 @@ func (m *ProviderManager) callWithConfig(session string, role ModelRole, call fu
 				m.success(session, role, p.Name)
 				return resp, nil
 			}
+			// CTX-010: log every failure with the error string so a silent
+			// failover is diagnosable without post-hoc guessing.
+			slog.Warn("provider call failed", "provider", p.Name, "role", role, "model", modelFor(p, role), "attempt", attempt+1, "error", err)
 			lastErr = err
 			if attempt < 2 {
 				m.sleep(time.Duration(1<<attempt) * time.Second)
@@ -280,6 +284,9 @@ func (m *ProviderManager) callContextWithConfig(ctx context.Context, session str
 				m.success(session, role, p.Name)
 				return resp, nil
 			}
+			// CTX-010: log every failure with the error string so a silent
+			// failover is diagnosable without post-hoc guessing.
+			slog.Warn("provider call failed", "provider", p.Name, "role", role, "model", modelFor(p, role), "attempt", attempt+1, "error", err)
 			lastErr = err
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
@@ -365,6 +372,8 @@ func (m *ProviderManager) failure(session string, role ModelRole, name string) {
 		s.failures = 0
 		s.openUntil = m.now().Add(60 * time.Second)
 		delete(m.sticky, m.key(session, role))
+		// CTX-010: the circuit-breaker trip is the failover moment — log it.
+		slog.Warn("provider circuit opened", "provider", name, "role", role, "session", session, "open_for", 60*time.Second)
 	}
 }
 

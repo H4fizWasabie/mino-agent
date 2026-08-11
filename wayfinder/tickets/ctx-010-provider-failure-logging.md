@@ -1,6 +1,6 @@
 # Context Truth — Log provider failure reasons in the provider manager
 
-Status: **OPEN** (GitHub issue #154)
+Status: **RESOLVED** (closes GitHub issue #154, commit pending)
 
 ## Question
 
@@ -23,3 +23,12 @@ Why did the main model silently fail over to qwen at 04:33, and how do we make t
 - [ ] Every provider failure logs name/role/model/error
 - [ ] Circuit-breaker trips are logged with the aggregated error
 - [ ] No change to fallback behavior
+
+
+## Resolution
+
+Every failed provider call now logs `slog.Warn("provider call failed", provider, role, model, attempt, error)` in both `callWithConfig` and `callContextWithConfig`, and the circuit-breaker trip logs `"provider circuit opened"` with the provider, role, session, and cooldown. The 2026-08-11 failover would now show the exact error string in the journal.
+
+## Validation
+
+- `go test ./...` — 507 pass

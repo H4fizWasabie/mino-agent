@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -37,6 +38,10 @@ func (f *fakeClient) Create(session string, role ModelRole, messages []Message, 
 }
 
 func (f *fakeClient) Stream(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
+	return f.Create(session, role, messages, maxTokens, system, tools)
+}
+
+func (f *fakeClient) CreateContext(ctx context.Context, session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
 	return f.Create(session, role, messages, maxTokens, system, tools)
 }
 

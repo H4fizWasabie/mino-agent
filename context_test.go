@@ -702,3 +702,7 @@ func (f *failingVisionClient) Create(session string, role ModelRole, messages []
 func (f *failingVisionClient) Stream(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
 	return f.Create(session, role, messages, maxTokens, system, tools)
 }
+
+func (f *failingVisionClient) CreateContext(ctx context.Context, session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
+	return f.Create(session, role, messages, maxTokens, system, tools)
+}

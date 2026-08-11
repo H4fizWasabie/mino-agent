@@ -6,7 +6,55 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+// CTX-007: a client disconnect cancels the turn's ctx; the provider call must
+// observe it so the loop returns promptly instead of wedging the session mutex
+// (2026-08-11: a dead dashboard connection left the turn inside a provider call
+// that ignored cancellation — every later turn blocked on conversation.mu).
+func TestLoopReturnsWhenClientDisconnectsMidProviderCall(t *testing.T) {
+	tools := NewRegistry()
+	started := make(chan struct{})
+	blocking := &blockingClient{started: started}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan *LoopResult, 1)
+	go func() {
+		done <- RunLoopContext(ctx, blocking, "wedge", "", []Message{{Role: "user", Content: "go"}}, tools, 10, 100, nil, false, "", nil)
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("provider call never started")
+	}
+	cancel() // the client connection died
+	select {
+	case res := <-done:
+		if res.Status != "cancelled" {
+			t.Fatalf("status = %q, want cancelled", res.Status)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("loop wedged after cancel — the session mutex would block forever")
+	}
+}
+
+// blockingClient's CreateContext blocks until the ctx is cancelled, simulating
+// a slow provider call that must be interruptible.
+type blockingClient struct{ started chan struct{} }
+
+func (b *blockingClient) Create(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
+	return scriptedResp([]ContentBlock{textBlock("done")}, "stop"), nil
+}
+
+func (b *blockingClient) CreateContext(ctx context.Context, session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
+	close(b.started)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (b *blockingClient) Stream(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
+	return b.Create(session, role, messages, maxTokens, system, tools)
+}
 
 // Regression 2026-08-07: the threads-ai-learning publish stage failed because
 // mimo-v2.5 emitted a text marker whose JSON args used shell-style \' escapes:

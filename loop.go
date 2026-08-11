@@ -40,6 +40,7 @@ func notify(obs Observer, kind string, data map[string]any) {
 // One real implementation (ProviderManager), one fake for tests.
 type LLMClient interface {
 	Create(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error)
+	CreateContext(context.Context, string, ModelRole, []Message, int, string, []ToolDef) (*LLMResponse, error)
 	Stream(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error)
 }
 
@@ -339,7 +340,7 @@ func RunLoopContext(
 		}
 
 		_, llmCancel := context.WithTimeout(ctx, 90*time.Second)
-		resp, err := client.Create(sessionID, MainModel, messages, maxTokens, system, schemas)
+		resp, err := client.CreateContext(ctx, sessionID, MainModel, messages, maxTokens, system, schemas)
 		llmCancel()
 		if err != nil {
 			if ctx.Err() != nil {
@@ -503,7 +504,7 @@ func RunLoopContext(
 				// provider for the rest of the turn and the provider prompt
 				// cache is not broken by per-iteration image blobs.
 				task, _ := args["task"].(string)
-				desc, err := describeImage(client, sessionID, raw, task, maxTokens)
+				desc, err := describeImage(ctx, client, sessionID, raw, task, maxTokens)
 				if err != nil {
 					// A failed vision call degrades to an error tool result the
 					// model can react to; never fall back to attaching the image.
@@ -1182,9 +1183,9 @@ func visionPrompt(task string) string {
 // by unique image blobs. One LLM call, tool-result transformation: no second
 // agent loop. The per-call task text (from the tool args, when provided) steers
 // the analysis via visionPrompt.
-func describeImage(client LLMClient, sessionID, dataURL, task string, maxTokens int) (string, error) {
+func describeImage(ctx context.Context, client LLMClient, sessionID, dataURL, task string, maxTokens int) (string, error) {
 	prompt := visionPrompt(task)
-	resp, err := client.Create(sessionID, VisionModel, []Message{{Role: "user", Content: prompt, Images: []string{dataURL}}}, maxTokens, "", nil)
+	resp, err := client.CreateContext(ctx, sessionID, VisionModel, []Message{{Role: "user", Content: prompt, Images: []string{dataURL}}}, maxTokens, "", nil)
 	if err != nil {
 		return "", err
 	}
