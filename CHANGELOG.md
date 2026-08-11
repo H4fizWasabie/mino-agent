@@ -1,10 +1,13 @@
 ## [Unreleased]
+
+## [v2.8.5] — Turn cancellation and diagnosable failover (2026-08-11)
 ### Changed
 - Provider policy declares the flash model as main (implements CTX-008, closes #151): `providers.policy.json` now pins `deepseek/deepseek-v4-flash-0731:deepinfra` (effort max, DeepInfra routing) for main and small; the cost-watch monitored set drops the retired main model and keeps the fallback; docs and the policy-file test follow. (Why: the 2026-08-11 swap passed the task the previous main failed twice and is now permanent — the documented policy must match the live config or the next policy review reads fiction. The retired main's price row stays in the cost table as a legacy fallback for pre-swap usage records.)
 ### Changed
 - Provider calls honor turn cancellation (implements CTX-007, closes #152): the loop's LLM and vision calls now go through the ctx-aware client path, so a client disconnect mid-turn propagates into the in-flight provider call and the loop returns instead of holding the session mutex indefinitely. (Why: 2026-08-11 live test — a dead dashboard connection left a turn inside a provider call that ignored cancellation; every later turn for that session blocked until a service restart. The HTTP layer already used request contexts; only the loop called the non-ctx variant.)
 - Provider failures are logged with the error string (implements CTX-010, closes #154): every failed call logs provider/role/model/attempt/error and circuit-breaker trips log the cooldown. (Why: the same test's failover to the fallback model was silent — the manager incremented a counter and ate the error; root cause was guessed post-hoc instead of read from the journal.)
- — Context Truth lands in production (2026-08-11)
+
+## [v2.8.4] — Context Truth lands in production (2026-08-11)
 ### Added
 - Native send_document tool for Telegram file delivery (implements CTX-009, closes #153): queues a local file pointer in the outbox (`doc_*.json`), delivered by the outbox dispatcher as multipart to `/sendDocument`; the bot token and chat id come from config at delivery time and never appear in tool args, trails, or logs. (Why: in the 2026-08-11 live test the model had to read the bot token from env and hand-roll curl `sendDocument` after composio had no Telegram connection — the token landed in tool args, the audit log, and session trails. The outbox pattern already kept text sends token-free; documents now ride it.)
 - Wayfinder ticket CTX-010 opened (docs): provider failure reasons are swallowed by the circuit breaker — the 2026-08-11 failover to the fallback model was silent, root cause guessed post-hoc. Log the error string; fallback semantics unchanged.
