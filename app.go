@@ -389,6 +389,20 @@ func isStopMessage(message string) bool {
 	case "stop", "cancel", "halt":
 		return true
 	}
+	// CTX-011: a stop-word anywhere is decisive, even non-leading ("its fine,
+	// stop"). The 2026-08-11 suite showed the substantive-remainder guard
+	// treated the trailing "stop" as substance and queued the message as a
+	// normal turn behind the running one. Leading behavior is unchanged.
+	// Questions about stopping are not stops.
+	questionWords := map[string]bool{"why": true, "what": true, "when": true, "where": true, "how": true, "is": true, "are": true, "did": true, "does": true, "do": true, "can": true, "could": true, "would": true, "should": true}
+	isQuestion := strings.Contains(message, "?") || (len(words) > 0 && questionWords[words[0]])
+	if !isQuestion {
+		for _, w := range words {
+			if w == "stop" || w == "halt" {
+				return true
+			}
+		}
+	}
 	// Natural cancel phrasings (CTX-005). A message whose remainder still
 	// contains substantive text after the phrases are stripped is a question
 	// or a new instruction, not a stop — e.g. "i think chem 15 is not

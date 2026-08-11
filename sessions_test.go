@@ -75,6 +75,23 @@ func TestStopMessageNaturalCancels(t *testing.T) {
 	}
 }
 
+// CTX-011: a stop-word in non-leading position must still stop ("its fine,
+// stop" queued as a normal turn in the 2026-08-11 suite because the remainder
+// guard saw the trailing "stop" as substance).
+func TestStopMessageStopWordAnywhere(t *testing.T) {
+	for _, message := range []string{"its fine, stop", "please stop", "ok stop now", "halt please", "stop", "ok mino stop."} {
+		if !isStopMessage(message) {
+			t.Errorf("isStopMessage(%q) = false, want stop", message)
+		}
+	}
+	if isStopMessage("stopwatch is on") {
+		t.Fatal("stopwatch was classified as stop")
+	}
+	if isStopMessage("why did you stop mid-task") {
+		t.Fatal("question about stopping was classified as stop")
+	}
+}
+
 func TestTelegramNotificationContextSurvivesRestart(t *testing.T) {
 	home := t.TempDir()
 	db := Connect(home)
