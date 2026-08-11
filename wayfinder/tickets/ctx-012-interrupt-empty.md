@@ -1,6 +1,6 @@
 # Context Truth — Interrupt replies dropped when the model answers with a tool call
 
-Status: **OPEN** (GitHub issue #156)
+Status: **RESOLVED** (closes GitHub issue #156, commit pending)
 
 ## Question
 
@@ -13,8 +13,14 @@ Why did "btw status" return "(no response)" even though the model answered?
 - `handleInterrupt` (nerves.go) calls the main model with the ObserveOnly tool schemas; `extractText` returns empty when the response is a native tool_use block — the model answered by calling a tool instead of writing text, and the harness dropped the reply
 - The snapshot already carries the state summary — tools are unnecessary for a status reply
 
-## Design sketch
+## Resolution
 
-- Pass nil schemas to the interrupt call, with an explicit "reply in plain text, do not call tools" instruction
-- If the response is still tool-only, fall back to the snapshot's status text
-- Acceptance: interrupt reply contains the snapshot's iteration/status; regression test with a tool-call-only response
+- The interrupt call now passes **nil schemas** — the model physically cannot emit a native tool call
+- The interrupt system prompt says "Reply in plain text only — do NOT call any tools"
+- If the response is still tool-only, the reply falls back to a snapshot status line (`(status: iteration N, running_tool, on bash)`) instead of "(no response)"
+
+## Validation
+
+- `TestInterruptFallsBackWhenModelAnswersWithToolCall` — tool-call-only response yields the snapshot status line
+- `TestInterruptTextReplyPassesThrough` — text responses unchanged
+- `go test ./...` — 511 pass

@@ -116,11 +116,11 @@ func (w *Core) handleInterrupt(sessionID, query string, replyFunc func(string)) 
 	defer cancel()
 
 	messages := []Message{{Role: "user", Content: query}}
-	var schemas []ToolDef
-	if w.Tools != nil {
-		schemas = w.Tools.ObserveOnly().Schemas()
-	}
-	resp, err := w.Client.CreateContext(ctx, sessionID+"_intr", MainModel, messages, 1024, system, schemas)
+	// CTX-012: no tool schemas — the state snapshot is sufficient, and a
+	// tool-call answer gets dropped by extractText (observed 2026-08-11:
+	// "btw status" returned "(no response)" while the model had answered
+	// with a tool call).
+	resp, err := w.Client.CreateContext(ctx, sessionID+"_intr", MainModel, messages, 1024, system, nil)
 	if err != nil {
 		replyFunc(fmt.Sprintf("(interrupt error: %v)", err))
 		return
@@ -128,7 +128,13 @@ func (w *Core) handleInterrupt(sessionID, query string, replyFunc func(string)) 
 
 	reply := extractText(resp.Content)
 	if reply == "" {
-		reply = "(no response)"
+		// Last resort: a tool-call-only response still gets a useful status
+		// line from the snapshot instead of a dead "(no response)".
+		reply = fmt.Sprintf("(status: iteration %d, %s", snap.Iteration, snap.Status)
+		if snap.CurrentTool != "" {
+			reply += ", on " + snap.CurrentTool
+		}
+		reply += ")"
 	}
 	replyFunc(reply)
 
@@ -157,7 +163,7 @@ func (w *Core) handleInterrupt(sessionID, query string, replyFunc func(string)) 
 func (w *Core) buildInterruptSystem(snap *LoopSnapshot, query string) string {
 	var b strings.Builder
 	b.WriteString(`You are Mino's self-awareness system. Answer the user's mid-task query concisely and factually.
-Base your answer on the CURRENT STATE below. You may use only read-only tools to inspect a real file or audit record when the state below is insufficient.
+Base your answer on the CURRENT STATE below. Reply in plain text only — do NOT call any tools; the state below is sufficient.
 Be direct — the user is checking in on a running task.
 
 CURRENT STATE:
