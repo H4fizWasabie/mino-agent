@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"unicode"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"log/slog"
@@ -358,6 +359,23 @@ func (w *Core) CancelTurn(sessionID string) bool {
 	return w.Sessions.Get(sessionID).cancelTurn()
 }
 
+// cancelPhrases (CTX-005): natural cancel phrasings anywhere in the message.
+// "Its fine then, ill get this data myself" must stop a task, not spawn a
+// 30-iteration turn. The phrase list is deliberately short and concrete —
+// this is a harness stop-word gate, not an intent classifier.
+var cancelPhrases = []string{
+	"its fine", "it's fine", "never mind", "nevermind",
+	"ill do it myself", "i'll do it myself",
+	"ill get this data", "i'll get this data",
+	"ill fetch this", "i'll fetch this",
+	"forget it", "dont bother", "don't bother",
+	"lets drop it", "let's drop it",
+}
+
+// cancelGlue: connective words that can remain after a cancel phrase is
+// stripped ("its fine THEN, i'll get this data MYSELF") — not substance.
+var cancelGlue = []string{"then", "myself", "so", "now", "just", "already", "please", "ok", "okay", "first", "again"}
+
 func isStopMessage(message string) bool {
 	clean := strings.NewReplacer(".", " ", ",", " ", "!", " ", "?", " ", ":", " ").Replace(strings.ToLower(message))
 	words := strings.Fields(clean)
@@ -371,11 +389,36 @@ func isStopMessage(message string) bool {
 	case "stop", "cancel", "halt":
 		return true
 	}
-	switch strings.Join(words, " ") {
-	case "never mind", "nevermind":
-		return true
+	// Natural cancel phrasings (CTX-005). A message whose remainder still
+	// contains substantive text after the phrases are stripped is a question
+	// or a new instruction, not a stop — e.g. "i think chem 15 is not
+	// supposed to be in it. its fine, ill get this data myself" keeps the
+	// doubt alive, so the turn proceeds (cheaply, now that CTX-002/004 hold).
+	// A rhetorical trailing "?" on a bare cancel ("never mind?") still stops.
+	lower := strings.ToLower(message)
+	found := false
+	for _, p := range cancelPhrases {
+		if strings.Contains(lower, p) {
+			found = true
+			break
+		}
 	}
-	return false
+	if !found {
+		return false
+	}
+	rest := lower
+	for _, p := range cancelPhrases {
+		rest = strings.ReplaceAll(rest, p, " ")
+	}
+	for _, g := range cancelGlue {
+		rest = strings.ReplaceAll(rest, g, " ")
+	}
+	for _, r := range rest {
+		if unicode.IsLetter(r) {
+			return false // substantive remainder — not a pure cancel
+		}
+	}
+	return true
 }
 
 func (w *Core) Close() {

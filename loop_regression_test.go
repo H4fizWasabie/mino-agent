@@ -185,7 +185,7 @@ func TestStageRewriteStreakTripwire(t *testing.T) {
 	tools := NewRegistry()
 	tools.Register(&Tool{
 		Name: "write_file", Schema: map[string]any{"type": "object", "properties": map[string]any{}},
-		Fn:   func(map[string]any) string { return "wrote" },
+		Fn: func(map[string]any) string { return "wrote" },
 	})
 	client := &fakeClient{}
 	out := "/tmp/stage-out/result.md"
@@ -217,11 +217,11 @@ func TestStageRewriteStreakAllowsInterleavedReads(t *testing.T) {
 	tools := NewRegistry()
 	tools.Register(&Tool{
 		Name: "write_file", Schema: map[string]any{"type": "object", "properties": map[string]any{}},
-		Fn:   func(map[string]any) string { return "wrote" },
+		Fn: func(map[string]any) string { return "wrote" },
 	})
 	tools.Register(&Tool{
 		Name: "read_file", Schema: map[string]any{"type": "object", "properties": map[string]any{}},
-		Fn:   func(map[string]any) string { return "content" },
+		Fn: func(map[string]any) string { return "content" },
 	})
 	client := &fakeClient{}
 	out := "/tmp/stage-out/result.md"
@@ -433,6 +433,35 @@ func TestLoopAbortsAfterSixConsecutiveParseFailures(t *testing.T) {
 	}
 	if result.Iterations != 6 {
 		t.Fatalf("iterations = %d, want 6 (abort before the cap)", result.Iterations)
+	}
+}
+
+// CTX-006: a model that alternates malformed markers and successful calls
+// (2026-08-10 CHEM 15: failures at iters 4, 11-14, 16, 24-26 — never 6
+// consecutive) must still abort at 6 total failures, not burn to the cap.
+func TestLoopAbortsAfterSixTotalParseFailuresWithInterleavedSuccesses(t *testing.T) {
+	tools := NewRegistry()
+	tools.Register(&Tool{
+		Name:        "echo",
+		Description: "echo back",
+		Schema:      map[string]any{"type": "object", "properties": map[string]any{"n": map[string]any{"type": "number"}}},
+		Fn:          func(args map[string]any) string { return "ok" },
+	})
+	// Each broken marker is followed by a successful native tool call, so the
+	// old streak counter reset every time — 7 broken markers never aborted.
+	// Args vary so the loop detector does not fire before the parse guard.
+	script := make([]*LLMResponse, 0, 14)
+	for i := 0; i < 7; i++ {
+		script = append(script, scriptedResp([]ContentBlock{textBlock("[tool_call: echo({broken)")}, "stop"))
+		script = append(script, scriptedResp([]ContentBlock{toolBlock("echo", map[string]any{"n": float64(i)})}, "tool_use"))
+	}
+	client := &fakeClient{script: script}
+	result := RunLoopContext(context.Background(), client, "parse-alternating", "", []Message{{Role: "user", Content: "go"}}, tools, 30, 100, nil, false, "", nil)
+	if result.Status != "error" {
+		t.Fatalf("status = %q, want error (7 broken markers in 14 iterations)", result.Status)
+	}
+	if result.Iterations != 11 {
+		t.Fatalf("iterations = %d, want 11 (6th total failure aborts, not the 30-cap)", result.Iterations)
 	}
 }
 

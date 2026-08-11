@@ -184,7 +184,7 @@ func TestBashHardFailureNoOutput(t *testing.T) {
 
 func TestCompactSchemaStripsProseKeepsStructure(t *testing.T) {
 	schema := map[string]any{
-		"type": "object",
+		"type":        "object",
 		"description": "top prose",
 		"properties": map[string]any{
 			"slug": map[string]any{"type": "string", "description": "tool slug", "pattern": "^[A-Z_]+$"},

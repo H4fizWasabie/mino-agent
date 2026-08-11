@@ -322,8 +322,8 @@ func RunLoopContext(
 	trace("context_diag", map[string]any{"system_chars": len(system), "msg_count": len(messages), "schema_count": len(schemas), "schema_names": schemaNames, "schema_est_chars": schemaChars, "schema_bytes": schemaBytes, "schema_heavy": schemaHeavy, "one_turn_chars": len(oneTurnText)})
 
 	mutationChecked := false // push the unverified-mutation-claim correction at most once per turn
-	claimChecked := false   // push the contradicted-outcome-claim correction at most once per turn
-	parseFailures := 0       // consecutive unparseable text-marker calls (issue #24)
+	claimChecked := false    // push the contradicted-outcome-claim correction at most once per turn
+	parseFailures := 0       // per-turn unparseable text-marker calls (issue #24; CTX-006)
 
 	for i := 1; i <= maxIter; i++ {
 		if ctx.Err() != nil {
@@ -386,6 +386,10 @@ func RunLoopContext(
 				// help, so escalate, then abort with a diagnosis instead of
 				// burning to the iteration cap (observed 2026-08-08: 16
 				// consecutive failures on the facebook run, iters 35-50).
+				// CTX-006: the count is per-turn TOTAL, not a streak — on
+				// 2026-08-10 the CHEM 15 turn failed at iters 4, 11-14, 16,
+				// 24-26 (9 total) yet never hit 6 consecutive, so the old
+				// streak guard never fired and the run burned to the cap.
 				if parseFailures >= 6 {
 					slog.Error("repeated unparseable tool markers", "session_id", sessionID, "iteration", i, "failures", parseFailures)
 					trace("tool_call_parse_aborted", map[string]any{"iteration": i, "failures": parseFailures})
@@ -464,7 +468,10 @@ func RunLoopContext(
 		}
 
 		// Execute tools and feed results back
-		parseFailures = 0 // a successfully parsed + executed call breaks the streak (issue #24)
+		// CTX-006: no parseFailures reset here. The counter is per-turn total —
+		// a model that alternates success and malformed markers (2026-08-10
+		// CHEM 15) degrades just as surely as one stuck in a streak, and both
+		// must abort at the same bound.
 		toolResults := make([]map[string]any, 0)
 		for _, tc := range toolUses {
 			args, _ := tc.Input.(map[string]any)

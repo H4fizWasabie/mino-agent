@@ -206,4 +206,3 @@ func migrateChatLog(db *sql.DB) error {
 	}
 	return nil
 }
-

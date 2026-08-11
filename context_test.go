@@ -64,6 +64,18 @@ func TestBuildSystemIncludesStateMap(t *testing.T) {
 	}
 }
 
+// CTX-003: a user-named value that differs from a computed one must be
+// stated, never smoothed — the rule lives in the system prompt.
+func TestBuildSystemIncludesNumberVerificationRule(t *testing.T) {
+	s := NewSession(&Settings{Home: t.TempDir(), Workspace: t.TempDir()}, nil)
+	system := s.BuildSystem("hello", "cli")
+	for _, want := range []string{"BOTH numbers", "never something to smooth over", "source of truth"} {
+		if !strings.Contains(system, want) {
+			t.Fatalf("number-verification rule missing %q from system prompt", want)
+		}
+	}
+}
+
 func TestSettingsLocationFallsBackForInvalidTimezone(t *testing.T) {
 	if got := (&Settings{Timezone: "not/a-real-zone"}).Location(); got != time.Local {
 		t.Fatalf("invalid timezone location = %v, want local %v", got, time.Local)
@@ -345,7 +357,7 @@ func TestLoopHardStopsAfterThreeDetections(t *testing.T) {
 	tools := NewRegistry()
 	tools.Register(&Tool{
 		Name: "probe", Schema: map[string]any{"type": "object", "properties": map[string]any{}},
-		Fn:   func(map[string]any) string { return "observed" },
+		Fn: func(map[string]any) string { return "observed" },
 	})
 	// Varying args exercise the same-name loop path (identical-args repeats
 	// trigger earlier); 8 scripted probe calls > loopNameThreshold(6) so the

@@ -92,10 +92,14 @@ Measurable: (1) a session whose previous replies exceed `inputPreviewLimit` stil
 
 ## Frontier (open tickets)
 
-- [CTX-003 — Verification discipline](tickets/ctx-003-verification-discipline.md) — user-named ≠ computed must be stated, never smoothed.
+- [CTX-003 — Verification discipline](tickets/ctx-003-verification-discipline.md) — **resolved** (closes #149): system prompt rule — user-named ≠ computed must state both numbers and the gap; "verified" only from source of truth.
 - [CTX-004 — Working-state persistence](tickets/ctx-004-working-state.md) — **resolved** (closes #146): per-session `session_notes` row, appended by the harness (bash commands) and the model (`note_session` tool), injected at turn start, bounded 1500 chars.
-- [CTX-005 — Cancel-intent recognition](tickets/ctx-005-cancel-intent.md) — "its fine, ill get this data myself" must stop, not spawn a 30-iteration turn.
-- [CTX-006 — Degeneration guard](tickets/ctx-006-degeneration-guard.md) — N consecutive parse failures → stop and report.
+- [CTX-005 — Cancel-intent recognition](tickets/ctx-005-cancel-intent.md) — **resolved** (closes #148): natural cancel phrasings stop; doubt/cancel hybrids proceed as turns.
+- [CTX-006 — Degeneration guard](tickets/ctx-006-degeneration-guard.md) — **resolved** (closes #147): parse failures counted per-turn total, abort at 6 — closes the alternation loophole the 2026-08-10 run exploited.
+
+## Frontier (open tickets)
+
+- None — map complete. Next iteration targets: production observation of all four fixes (discrepancy replies, note injection, cancel behavior, early aborts) before new tickets.
 
 ## Out of scope
 

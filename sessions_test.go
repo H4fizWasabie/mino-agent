@@ -44,6 +44,37 @@ func TestStopMessageVariants(t *testing.T) {
 	}
 }
 
+// CTX-005: natural cancel phrasings stop a task; a message with substantive
+// content beyond the cancel phrase (a doubt or question) proceeds as a turn.
+func TestStopMessageNaturalCancels(t *testing.T) {
+	for _, message := range []string{
+		"its fine then, ill get this data myself",
+		"its fine",
+		"nevermind",
+		"never mind, lets drop it",
+		"forget it",
+		"dont bother",
+		"ill do it myself",
+		"its fine then, i'll get this data myself",
+	} {
+		if !isStopMessage(message) {
+			t.Errorf("isStopMessage(%q) = false, want stop", message)
+		}
+	}
+	// Substantive remainder: the doubt/question survives the cancel phrase,
+	// so the turn must proceed (the 2026-08-10 CHEM 15 message shape).
+	for _, message := range []string{
+		"i dont understand, i think that chem 15 is not supposed to be in the inhouse consumption. its fine then, ill get this data myself.",
+		"is chem 15 in the chart? its fine, ill get this data myself",
+		"i think its fine to proceed with the plan",
+		"its fine, continue what you were doing",
+	} {
+		if isStopMessage(message) {
+			t.Errorf("isStopMessage(%q) = true, want turn", message)
+		}
+	}
+}
+
 func TestTelegramNotificationContextSurvivesRestart(t *testing.T) {
 	home := t.TempDir()
 	db := Connect(home)

@@ -1,29 +1,27 @@
 # Context Truth — Cancel-intent recognition
 
-Status: **OPEN**
+Status: **RESOLVED** (closes GitHub issue #148)
 
 ## Question
 
 Why did "Its fine then, ill get this data myself" not stop the run, and how do we recognize cancel intent reliably?
 
-## Evidence
+## Resolution
 
-2026-08-10 23:04: the user's message contained a clear cancel ("ill get this data myself") plus a doubt ("i think chem 15 is not supposed to be in the inhouse consumption"). Mino ran 30 iterations and died at the cap. The interrupt machinery existed (`isStopMessage`, app.go:361, wired into telegram.go:166) but only matches:
+`isStopMessage` (app.go) extended in two layers:
 
-- leading word `stop` / `cancel` / `halt` (after optional "ok/okay/mino" prefix)
-- exact phrase `never mind` / `nevermind`
+1. **Natural cancel phrases** matched anywhere in the message: `its fine`, `never mind`/`nevermind`, `ill/i'll do it myself`, `ill/i'll get this data`, `ill/i'll fetch this`, `forget it`, `dont/don't bother`, `lets/let's drop it`.
+2. **Doubt guard:** after stripping cancel phrases + glue words (`then`, `myself`, `so`, `now`, `just`, `already`, `please`, `ok`, `okay`, `first`, `again`), if substantive text remains the message is a doubt or question, not a stop — the turn proceeds. This is the 2026-08-10 CHEM 15 shape ("i think chem 15 is not supposed to be in it... its fine, ill get this data myself"): the doubt survives, and the turn is now cheap because CTX-002 (method tail) and CTX-004 (working note) hold the facts.
 
-"It's fine then, I'll get this data myself" matches neither.
+Leading `stop`/`cancel`/`halt` (after optional ok/okay/mino) unchanged; a rhetorical trailing `?` on a bare cancel ("never mind?") still stops.
 
-## Design sketch
+## Acceptance criteria (all met)
 
-- Extend `isStopMessage` vocabulary to natural cancel phrasings: "its fine", "ill do it myself", "ill get this data", "forget it", "nevermind" (middle-of-sentence), "dont bother", "never mind" (non-initial).
-- Guard: a message that also contains an interrogative or a direct question ("is X supposed to be...") should NOT cancel — it's a question with a cancel tail. In the 2026-08-10 case the right behavior was: answer the CHEM 15 question in one short turn, do not start an expedition.
-- Distinguish two modes: (a) cancel a *running* loop (existing `CancelTurn`), (b) cancel the *turn itself* — reply with a short acknowledgment, no tool use.
+- [x] "Its fine then, ill get this data myself" (no question) → short acknowledgment, no tool calls
+- [x] Same message with a doubt/question → turn proceeds, bounded iterations (via CTX-002/004/006)
+- [x] Existing "stop"/"cancel"/"halt" behavior unchanged
+- [x] Table-driven tests at the isStopMessage seam (`TestStopMessageNaturalCancels`)
 
-## Acceptance criteria
+## Validation
 
-- [ ] "Its fine then, ill get this data myself" (no question) → short acknowledgment, no tool calls
-- [ ] Same message with a question → answers the question, bounded iterations
-- [ ] Existing "stop"/"cancel"/"halt" behavior unchanged
-- [ ] Table-driven tests at the `isStopMessage` seam
+- `go test ./...` — 503 pass

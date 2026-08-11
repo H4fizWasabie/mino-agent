@@ -221,7 +221,7 @@ var essentialToolNames = map[string]bool{
 	"list_playbooks": true, "run_playbook": true,
 	"manage_playbook": true,
 	"list_schedules":  true, "cancel_schedule": true,
-	"note_session":    true,
+	"note_session": true,
 }
 
 // essentialNamesSorted is essentialToolNames in sorted order — the per-turn
