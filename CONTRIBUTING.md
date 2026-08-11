@@ -2,13 +2,18 @@
 
 Mino keeps it simple. Less code = less bugs.
 
-## Rules
+## Process rules
 
-1. **Go stdlib first.** No external dependency without discussion.
-2. **~100 lines per file max.** If it's growing, split it.
-3. **Table-driven tests.** `go test ./...` passes before push.
-4. **Update CHANGELOG.md** with every PR.
-5. **One feature per PR.** If it takes more than a day, split it.
+All process rules live in **[rules.md](rules.md)** — issue-first, release gating, version control, public-facing discipline, testing. Read it before opening a PR. Coding style lives in **[coding-conventions.md](coding-conventions.md)**.
+
+The short version:
+
+1. **No code change without a GitHub issue.** Create it first, reference it everywhere.
+2. **Table-driven tests.** `go test ./...` passes before push; a bug fix ships with its test.
+3. **Update `CHANGELOG.md`** with every PR — generic why-notes, never the owner's incidents.
+4. **One feature per PR.** If it takes more than a day, split it.
+5. **Branches:** `fix/issue-<N>-short-name`, `feat/...`, `refactor/...`.
+6. **Commit at every milestone** — subject says what, body says WHY. Push after commit.
 
 ## Setup
 

@@ -1,4 +1,6 @@
 ## [Unreleased]
+### Changed
+- Documentation restructured: AGENTS.md is now the mechanically-verified index (rules split into rules.md + coding-conventions.md, contributor workflow in CONTRIBUTING.md, design docs linked). (Why: AGENTS.md mixed process rules, code patterns, and public discipline into one 9.3K blob — an agent needing release gating read everything. The index follows the repo's link-first navigation philosophy; `TestAgentsIndexLinksResolve` fails the suite on any dangling link or missing heading, so the index cannot rot like the memory notes the Context Truth work removed.)
 ### Fixed
 - A stop-word anywhere now cancels (implements CTX-011, closes #155): "its fine, stop" was queued as a normal turn because the remainder guard treated the trailing "stop" as substance; stop/halt now match in any position, with a question guard so "why did you stop" still proceeds. (Why: the 2026-08-11 full-suite test sent a cancel mid-task and it silently became a queued turn.)
 ### Added
