@@ -66,3 +66,39 @@ Measurable: a schedule whose window passes without a run appears in `schedules.j
 # Mino Daily-Job Reliability — Wayfinder Map
 
 Canonical tracker: GitHub issue #115 (map + child tickets REL-01..REL-06). This local file is not the source of truth for the REL series.
+
+---
+
+# Mino Context Truth — Wayfinder Map
+
+## Destination
+
+A turn's established knowledge survives into the next turn; a user-named number is verified against ground truth, never confirmed by proximity; a run that degrades stops cheaply instead of burning to the iteration cap.
+
+Measurable: (1) a session whose previous replies exceed `inputPreviewLimit` still has the method (DB paths, commands) in context; (2) a user-named value that differs from a computed one produces a reply stating the discrepancy; (3) a turn with 3+ consecutive `tool_call_parse_failed` iterations stops before the iteration cap.
+
+## Notes
+
+- **Incident 2026-08-10 (tg session, CHEM 15):** user asked why IDEXX CHEM 15 was in the July in-house-consumption Excel. Mino burned 30 iterations, hit the cap, replied "(stopped after 30 iterations)". User gave up and said they'd fetch the data themselves.
+- **Ground truth:** the procura analysis module (internal/analytics/analytics.go:178) computes in-house consumption as `out+adj_out × cost` filtered to `item_behaviour='in-house use'`. July 2026 chart = **RM 20,851.69** — matching the user's "~20.8k" exactly. Mino's Excel was built from invented SQL (net depletion × cost, all Consumables, no behaviour filter) = 20,073.26, including CHEM 15 (`item_behaviour='Standard / Pack'` → correctly excluded). Deployed VPS binary verified against local source: identical analytics queries, frozen map (Jan 10,400 / Feb 27,800 / Mar 32,600 / Jun 15,576) present, July not frozen.
+- **Why Mino failed:** all three prior replies (25,222 / 20,215 / 22,977 chars) exceeded `inputPreviewLimit` (8000) and were wholesale-replaced with a bare placeholder — the method-bearing `[tools used:]` trails never reached the model. It started the next turn at a different project's DB (`pos_server_test/prisma/dev.db`), re-derived everything from scratch, and confirmed by proximity ("essentially correct") instead of exact match.
+- **The model self-diagnosed at 22:54:** wrote a `remember` note "directly query the Procura/PIMS database without searching around first" — compensating for harness-level rot with a pull-memory note that lacks the DB path.
+- **Skills rejected as a fix:** existing `procura-purchase-history` skill carries the correct DB path and was listed at 22:49 — walked past anyway. A static skill rots the same way the model does.
+
+## Decisions so far
+
+- [CTX-001 — Root cause](tickets/ctx-001-root-cause.md) — **confirmed** against session.go + VPS state.db: the 8000-char wholesale replacement is the primary rot source; proximity confirmation (VFY class) the secondary; no stop signal the multiplier.
+- [CTX-002 — Head/tail large-message preview](tickets/ctx-002-head-tail-preview.md) — **resolved** (closes #145, commit 4ffae81): messages over the limit keep first 4000 + last 4000 chars with HEAD/TAIL markers; the tail carries the trails. Test: `TestContextMessagesKeepsMethodTailOfLargeMessages`.
+
+## Frontier (open tickets)
+
+- [CTX-003 — Verification discipline](tickets/ctx-003-verification-discipline.md) — user-named ≠ computed must be stated, never smoothed.
+- [CTX-004 — Working-state persistence](tickets/ctx-004-working-state.md) — per-session note (paths, methods, numbers, open discrepancies) injected at next turn start.
+- [CTX-005 — Cancel-intent recognition](tickets/ctx-005-cancel-intent.md) — "its fine, ill get this data myself" must stop, not spawn a 30-iteration turn.
+- [CTX-006 — Degeneration guard](tickets/ctx-006-degeneration-guard.md) — N consecutive parse failures → stop and report.
+
+## Out of scope
+
+- New skills as the fix (proven to rot: walked past at 22:49)
+- Changes to the 30-iteration cap itself (the guard stops early; the cap stays)
+- Reversing or duplicating history ordering (chronology is required; tail is already the newest)
