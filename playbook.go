@@ -1268,7 +1268,11 @@ func fireSchedule(core *Core, s PlaybookSchedule, at time.Time, run scheduledPla
 	}
 	if result != nil {
 		slog.Info("schedule playbook result", "name", s.Name, "status", result.Status, "stages", result.StagesRun)
-		alertScheduleHealth(core, s, result, time.Now())
+		// Health counters use the fire time, not a second wall-clock read —
+		// two clocks in one function made the streak-day test date-dependent
+		// (passed on the 10th, failed on the 11th when midnight rolled the
+		// day over between the two calls).
+		alertScheduleHealth(core, s, result, at)
 		alertRunCost(core, s, at)
 	}
 	finishedAt := time.Now().UTC()
