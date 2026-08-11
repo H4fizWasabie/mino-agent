@@ -96,7 +96,8 @@ Measurable: (1) a session whose previous replies exceed `inputPreviewLimit` stil
 
 ## Frontier (open tickets)
 
-- None — map complete. Next iteration targets: production observation of all four fixes (discrepancy replies, note injection, cancel behavior, early aborts) before new tickets.
+- [CTX-007 — Dashboard client disconnect can wedge the session mutex](tickets/ctx-007-wedge.md) (closes #152) — provider call must honor ctx / turn decoupled from client connection; found in the 2026-08-11 live test (T3 needed a restart).
+- [CTX-008 — Provider policy docs lag the main-model change](tickets/ctx-008-policy-docs.md) (closes #151) — flash became main after passing the June task; docs to follow iff permanent.
 
 ## Out of scope
 
