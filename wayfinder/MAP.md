@@ -100,9 +100,9 @@ Measurable: (1) a session whose previous replies exceed `inputPreviewLimit` stil
 - [CTX-008 — Provider policy docs lag the main-model change](tickets/ctx-008-policy-docs.md) — **resolved** (closes #151): policy file, cost-watch monitored set, and docs now declare deepseek:deepinfra as main; the swap is permanent.
 - [CTX-009 — Native send_document tool](tickets/ctx-009-send-document.md) — **resolved** (closes #153, commit ff4ecec): outbox `doc_*.json` drafts delivered via multipart `/sendDocument`; token never in args. Awaiting release to the VPS.
 - [CTX-010 — Log provider failure reasons](tickets/ctx-010-provider-failure-logging.md) — **resolved** (closes #154): every failed provider call logs provider/role/model/error; circuit-breaker trips log the cooldown.
-- [CTX-011 — Stop-word anywhere stops](tickets/ctx-011-stop-anywhere.md) — **resolved** (closes #155): "its fine, stop" now cancels; questions about stopping still proceed.
+- [CTX-011 — Stop-word anywhere stops](tickets/ctx-011-stop-anywhere.md) — **resolved** (closes #157): "its fine, stop" now cancels; questions about stopping still proceed.
 - [CTX-012 — Interrupt replies dropped on tool-call answers](tickets/ctx-012-interrupt-empty.md) (closes #156) — status query answered with a tool call became "(no response)"; fix: no schemas in the interrupt call.
-- [CTX-013 — send_document unreachable under the schema cap](tickets/ctx-013-send-document-unpinned.md) (closes #155) — the token leak repeated because the native tool got evicted; fix: pin it essential.
+- [CTX-013 — send_document unreachable under the schema cap](tickets/ctx-013-send-document-unpinned.md) (open, #155) — the token leak repeated because the native tool got evicted; fix: pin it essential.
 
 ## Out of scope
 

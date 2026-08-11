@@ -1,6 +1,6 @@
 # Context Truth — Stop-word in non-leading position must stop
 
-Status: **RESOLVED** (closes GitHub issue #155, commit pending)
+Status: **RESOLVED** (closes GitHub issue #157, commit 6e0e91f)
 
 ## Question
 
