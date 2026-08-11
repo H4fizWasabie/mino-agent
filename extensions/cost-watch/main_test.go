@@ -68,7 +68,6 @@ func TestDefaultConfigMonitorsPolicyModels(t *testing.T) {
 	cfg := defaultConfig()
 	// REL-01 policy: paging must cover the actual brain (issue #128).
 	want := map[string]float64{
-		"tencent/hy3:tencent":                       0.132,
 		"deepseek/deepseek-v4-flash-0731:deepinfra": 0.08,
 		"qwen/qwen3.7-flash":                        0.03,
 	}
@@ -92,7 +91,7 @@ func TestFlagOnPriceSpike(t *testing.T) {
 	defer func() { fetch = orig }()
 	fetch = func(url string) (string, error) { return fixtureQwen, nil }
 	_, flags := checkModels(cfg)
-	for _, m := range []string{"tencent/hy3:tencent", "deepseek/deepseek-v4-flash-0731:deepinfra", "qwen/qwen3.7-flash"} {
+	for _, m := range []string{"deepseek/deepseek-v4-flash-0731:deepinfra", "qwen/qwen3.7-flash"} {
 		if flags[m] != "ok" {
 			t.Fatalf("%s: expected ok, got %q", m, flags[m])
 		}

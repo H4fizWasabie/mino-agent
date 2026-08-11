@@ -57,7 +57,6 @@ func defaultConfig() *config {
 		Listen: "127.0.0.1",
 		Port:   9300,
 		Models: map[string]modelConfig{
-			"tencent/hy3:tencent":                       {"https://openrouter.ai/tencent/hy3", 0.132, 2.0},
 			"deepseek/deepseek-v4-flash-0731:deepinfra": {"https://openrouter.ai/deepseek/deepseek-v4-flash-0731", 0.08, 2.0},
 			"qwen/qwen3.7-flash":                        {"https://openrouter.ai/qwen/qwen3.7-flash", 0.03, 2.0},
 		},

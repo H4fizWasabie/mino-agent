@@ -20,7 +20,7 @@ type modelPrice struct {
 	In, Out, Cache float64
 }
 
-// policyPrices covers the three policy models (main hy3, small deepseek,
+// policyPrices covers the policy models (main+small deepseek; hy3 row kept as a
 // fallback+vision qwen) at the prices locked in REL-01. Unlisted models price
 // at $0 and count as "unpriced" so a report never silently omits spend.
 var policyPrices = map[string]modelPrice{

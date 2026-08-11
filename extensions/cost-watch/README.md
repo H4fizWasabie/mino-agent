@@ -47,7 +47,7 @@ Restart mino, and the tools appear: `cost_watch_status`, `cost_watch_check`.
 ```json
 {
   "models": {
-    "tencent/hy3:tencent": {"url": "https://openrouter.ai/tencent/hy3", "expected": 0.132, "threshold": 2.0},
+
     "deepseek/deepseek-v4-flash-0731:deepinfra": {"url": "https://openrouter.ai/deepseek/deepseek-v4-flash-0731", "expected": 0.08, "threshold": 2.0},
     "qwen/qwen3.7-flash": {"url": "https://openrouter.ai/qwen/qwen3.7-flash", "expected": 0.03, "threshold": 2.0}
   },

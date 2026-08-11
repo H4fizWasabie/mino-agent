@@ -184,8 +184,8 @@ func TestCheckMonthlyCostOnce(t *testing.T) {
 
 func TestPolicyProvidersFile(t *testing.T) {
 	// providers.policy.json is the canonical REL-01 config: main/stages =
-	// hy3:tencent pinned, small = deepseek:deepinfra pinned, fallback =
-	// qwen unpinned, main provider text-only so vision turns route to qwen.
+	// deepseek:deepinfra pinned (since 2026-08-11), small = same model pinned,
+	// fallback = qwen unpinned, main provider text-only so vision turns route to qwen.
 	t.Setenv("MINO_OPENROUTER_KEY", "test-key")
 	home := t.TempDir()
 	data, err := os.ReadFile("providers.policy.json")
@@ -203,11 +203,11 @@ func TestPolicyProvidersFile(t *testing.T) {
 		t.Fatalf("providers = %d, want 2", len(m.providers))
 	}
 	main, fallback := m.providers[0], m.providers[1]
-	if main.Model != "tencent/hy3:tencent" || main.Priority != 1 {
-		t.Fatalf("main = %+v, want hy3:tencent priority 1", main)
+	if main.Model != "deepseek/deepseek-v4-flash-0731:deepinfra" || main.Priority != 1 {
+		t.Fatalf("main = %+v, want deepseek:deepinfra priority 1", main)
 	}
-	if len(main.ProviderRouting) != 1 || main.ProviderRouting[0] != "Tencent" {
-		t.Fatalf("main routing = %v, want [Tencent]", main.ProviderRouting)
+	if len(main.ProviderRouting) != 1 || main.ProviderRouting[0] != "DeepInfra" {
+		t.Fatalf("main routing = %v, want [DeepInfra]", main.ProviderRouting)
 	}
 	if !main.TextOnly {
 		t.Fatal("main provider must be text_only so vision turns skip it")

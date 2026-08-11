@@ -97,7 +97,7 @@ Measurable: (1) a session whose previous replies exceed `inputPreviewLimit` stil
 ## Frontier (open tickets)
 
 - [CTX-007 — Dashboard client disconnect can wedge the session mutex](tickets/ctx-007-wedge.md) — **resolved** (closes #152): the loop's LLM calls now go through the ctx-aware path; a dead client connection propagates into the provider call and the loop returns instead of wedging. Regression test included.
-- [CTX-008 — Provider policy docs lag the main-model change](tickets/ctx-008-policy-docs.md) (closes #151) — flash became main after passing the June task; docs to follow iff permanent.
+- [CTX-008 — Provider policy docs lag the main-model change](tickets/ctx-008-policy-docs.md) — **resolved** (closes #151): policy file, cost-watch monitored set, and docs now declare deepseek:deepinfra as main; the swap is permanent.
 - [CTX-009 — Native send_document tool](tickets/ctx-009-send-document.md) — **resolved** (closes #153, commit ff4ecec): outbox `doc_*.json` drafts delivered via multipart `/sendDocument`; token never in args. Awaiting release to the VPS.
 - [CTX-010 — Log provider failure reasons](tickets/ctx-010-provider-failure-logging.md) — **resolved** (closes #154): every failed provider call logs provider/role/model/error; circuit-breaker trips log the cooldown.
 

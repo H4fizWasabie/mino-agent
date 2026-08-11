@@ -18,7 +18,7 @@ Use the `cost_watch_*` tools whenever prices, costs, or promos come up. Do not w
 **Alert-only by policy (REL-01): cost-watch pages, it never swaps. Model changes are human decisions — say so and leave the change to the owner.**
 
 ### Status
-- `cost_watch_status` — current best provider prices for the configured models (the REL-01 policy models: hy3:tencent, deepseek:deepinfra, qwen3.7-flash), last check time, and flags.
+- `cost_watch_status` — current best provider prices for the configured models (the REL-01 policy models: deepseek:deepinfra, qwen3.7-flash), last check time, and flags.
 - Use it when Abah asks about prices, costs, or "what are we paying".
 - Include the numbers in your answer: best provider, input price per M, and whether the flag is OK.
 
@@ -28,5 +28,5 @@ Use the `cost_watch_*` tools whenever prices, costs, or promos come up. Do not w
 - A "PRICE SPIKE" flag means a promo expired: the best price jumped past expected × threshold. Report it — do not change providers.json.
 
 ### Context
-- The brain policy: main/stages hy3:tencent, small role deepseek-v4-flash-0731:deepinfra, fallback+vision qwen3.7-flash (see providers.policy.json).
+- The brain policy: main/stages + small role deepseek-v4-flash-0731:deepinfra (pinned DeepInfra), fallback+vision qwen3.7-flash (see providers.policy.json).
 - Cheap prices matter — promos expire silently. If a price spike contradicts the policy table, surface it to Abah.
