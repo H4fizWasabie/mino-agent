@@ -1,4 +1,8 @@
 ## [Unreleased]
+### Fixed
+- A stop-word anywhere now cancels (implements CTX-011, closes #155): "its fine, stop" was queued as a normal turn because the remainder guard treated the trailing "stop" as substance; stop/halt now match in any position, with a question guard so "why did you stop" still proceeds. (Why: the 2026-08-11 full-suite test sent a cancel mid-task and it silently became a queued turn.)
+### Added
+- Wayfinder tickets CTX-012/CTX-013 opened (docs): the full-suite live test found the interrupt path drops replies when the model answers with a tool call, and the send-document tool is evicted by the schema cap so the insecure curl workaround (and the token leak) recurred. Both are the suite's remaining findings.
 
 ## [v2.8.5] — Turn cancellation and diagnosable failover (2026-08-11)
 ### Changed
