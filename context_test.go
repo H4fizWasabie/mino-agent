@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -176,6 +177,94 @@ func TestContextMessagesKeepsMethodTailOfLargeMessages(t *testing.T) {
 	}
 	if len(joined) > inputPreviewLimit+500 {
 		t.Fatalf("preview exceeded budget: %d", len(joined))
+	}
+}
+
+func TestSessionNoteAppendIsBoundedNewestWins(t *testing.T) {
+	home := t.TempDir()
+	db := Connect(home)
+	defer db.Close()
+	mem := NewMemory(db, nil, &Settings{Home: home})
+	// Fill past the cap with a distinctive newest line.
+	for i := 0; i < 100; i++ {
+		mem.AppendSessionNote("s", fmt.Sprintf("line-%d-%s", i, strings.Repeat("x", 100)))
+	}
+	note := mem.SessionNote("s", 100000)
+	if !strings.Contains(note, "line-99") {
+		t.Fatalf("newest line lost: %q", note[:200])
+	}
+	if strings.Contains(note, "line-0") {
+		t.Fatalf("oldest line survived past cap: %q", note[:200])
+	}
+	if len(note) > sessionNoteCap {
+		t.Fatalf("note exceeded cap: %d", len(note))
+	}
+	if got := mem.SessionNote("missing", 1000); got != "" {
+		t.Fatalf("missing session note = %q", got)
+	}
+}
+
+func TestSessionNoteHeadTailTruncation(t *testing.T) {
+	home := t.TempDir()
+	db := Connect(home)
+	defer db.Close()
+	mem := NewMemory(db, nil, &Settings{Home: home})
+	mem.AppendSessionNote("s", strings.Repeat("a", 3000))
+	mem.AppendSessionNote("s", strings.Repeat("b", 3000))
+	note := mem.SessionNote("s", 1000)
+	if len(note) > 1005 || !strings.Contains(note, "...") {
+		t.Fatalf("head+tail not bounded: len=%d", len(note))
+	}
+}
+
+func TestContextForIncludesSessionWorkingNote(t *testing.T) {
+	home := t.TempDir()
+	db := Connect(home)
+	defer db.Close()
+	mem := NewMemory(db, nil, &Settings{Home: home})
+	s := NewSession(&Settings{Home: home, ContextChars: 50000}, mem)
+	s.sessionID = "test-session"
+	s.history = []Message{{Role: "user", Content: "hi"}, {Role: "assistant", Content: "hello"}}
+	messages, _ := s.ContextFor("sys", "check july consumables")
+	joined := ""
+	for _, m := range messages {
+		joined += m.Content
+	}
+	if strings.Contains(joined, "working note") {
+		t.Fatalf("note injected while empty: %q", joined)
+	}
+	mem.AppendSessionNote("test-session", "CONFIRMED: procura DB = /home/procura/data/procura.sqlite")
+	mem.AppendSessionNote("test-session", "computed 20073.26 vs user's 20.8k — unresolved")
+	messages, _ = s.ContextFor("sys", "is chem 15 in it?")
+	joined = ""
+	for _, m := range messages {
+		joined += m.Content
+	}
+	if !strings.Contains(joined, "/home/procura/data/procura.sqlite") || !strings.Contains(joined, "unresolved") {
+		t.Fatalf("working note missing from context: %q", joined[:300])
+	}
+	if !strings.Contains(joined, "do not re-discover") {
+		t.Fatalf("note header missing: %q", joined[:300])
+	}
+}
+
+func TestAddExchangeRecordsBashCommandsToSessionNote(t *testing.T) {
+	home := t.TempDir()
+	db := Connect(home)
+	defer db.Close()
+	mem := NewMemory(db, nil, &Settings{Home: home})
+	s := NewSession(&Settings{Home: home}, mem)
+	s.sessionID = "test-session"
+	s.AddExchange("q", "q", "a", []ToolCall{
+		{Name: "bash", Args: map[string]any{"command": "sqlite3 /home/procura/data/procura.sqlite \".tables\""}, Output: "ok"},
+		{Name: "read_file", Args: map[string]any{"path": "/x"}, Output: "y"},
+	}, "test")
+	note := mem.SessionNote("test-session", 100000)
+	if !strings.Contains(note, "sqlite3 /home/procura/data/procura.sqlite") {
+		t.Fatalf("bash command not recorded: %q", note)
+	}
+	if strings.Contains(note, "read_file") {
+		t.Fatalf("non-bash tool recorded: %q", note)
 	}
 }
 

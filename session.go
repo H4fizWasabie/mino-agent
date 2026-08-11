@@ -205,6 +205,13 @@ func explicitPlaybookCommand(userMessage, playbookName string) bool {
 // an artifact pointer are left untouched.
 const toolTrailLimit = 500
 
+// sessionNoteInjectionLimit bounds the working note injected at turn start.
+const sessionNoteInjectionLimit = 1500
+
+// sessionNoteCommandLen bounds one bash command line in the harness-written
+// part of the working note (the command, not its output — the how, not the what).
+const sessionNoteCommandLen = 200
+
 func toolTrailForHistory(sessionID, tool, output string, mem *Memory) string {
 	if len(output) <= toolTrailLimit {
 		return output
@@ -247,6 +254,17 @@ func (s *Session) AddExchange(userRaw, userContext, reply string, toolCalls []To
 		for _, tc := range toolCalls {
 			if artifact, ok := artifactFromOutput(tc.Output); ok {
 				s.mem.RecordArtifact(s.sessionID, artifact.Label, artifact.Path, artifact.Size)
+			}
+			// CTX-004: the harness records bash commands mechanically, so the
+			// next turn inherits discovered paths/methods even if no note_session
+			// call was made.
+			if tc.Name == "bash" {
+				if cmd, ok := tc.Args["command"].(string); ok && cmd != "" {
+					if len(cmd) > sessionNoteCommandLen {
+						cmd = cmd[:sessionNoteCommandLen] + "…"
+					}
+					s.mem.AppendSessionNote(s.sessionID, "ran: "+cmd)
+				}
 			}
 		}
 	}
@@ -336,6 +354,11 @@ func (s *Session) ContextFor(system, userMessage string) ([]Message, string) {
 	if catalog != "" {
 		messages = append(messages, Message{Role: "assistant", Content: catalog})
 	}
+	if s.mem != nil {
+		if note := s.mem.SessionNote(s.sessionID, sessionNoteInjectionLimit); note != "" {
+			messages = append(messages, Message{Role: "assistant", Content: "Session working note (established by earlier turns — do not re-discover; verify only if contradictory):\n" + note})
+		}
+	}
 	messages = append(messages, Message{Role: "user", Content: userContext})
 	return messages, userContext
 }
@@ -349,6 +372,11 @@ func (s *Session) PlaybookContext(system string) []Message {
 	messages := s.ContextMessages(historyBudget)
 	if catalog != "" {
 		messages = append(messages, Message{Role: "assistant", Content: catalog})
+	}
+	if s.mem != nil {
+		if note := s.mem.SessionNote(s.sessionID, sessionNoteInjectionLimit); note != "" {
+			messages = append(messages, Message{Role: "assistant", Content: "Session working note (established by earlier turns — do not re-discover; verify only if contradictory):\n" + note})
+		}
 	}
 	return messages
 }

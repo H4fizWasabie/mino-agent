@@ -56,6 +56,11 @@ var schemaStatements = []string{
 		distilled INTEGER NOT NULL DEFAULT 0,
 		created_at TEXT DEFAULT (datetime('now'))
 	)`,
+	`CREATE TABLE IF NOT EXISTS session_notes (
+		session_id TEXT PRIMARY KEY,
+		note TEXT NOT NULL,
+		updated_at TEXT DEFAULT (datetime('now'))
+	)`,
 	`CREATE TABLE IF NOT EXISTS tool_calls (
 		id INTEGER PRIMARY KEY,
 		session_id TEXT NOT NULL DEFAULT '',

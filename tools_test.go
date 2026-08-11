@@ -357,10 +357,10 @@ func TestSchemasForContextCappedUnion(t *testing.T) {
 		}
 	}
 
-	// Turn 1: 11 essentials + 6 explicit = 17, under the cap.
+	// Turn 1: 12 essentials + 6 explicit = 18, under the cap.
 	first := names(r.SchemasForContext("s1", "", "use special_101 special_102 special_103 special_104 special_105 special_106 now", nil))
-	if len(first) != 17 {
-		t.Fatalf("turn 1: %d schemas, want 17: %v", len(first), first)
+	if len(first) != 18 {
+		t.Fatalf("turn 1: %d schemas, want 18: %v", len(first), first)
 	}
 	hasAll(t, first, essentialNamesSorted...)
 
@@ -370,8 +370,8 @@ func TestSchemasForContextCappedUnion(t *testing.T) {
 		t.Fatalf("turn 2: %d schemas, want cap %d", len(second), schemaUnionCap)
 	}
 	hasAll(t, second, essentialNamesSorted...)
-	hasAll(t, second, "special_104", "special_105", "special_106", "special_107", "special_108", "special_109", "special_110", "special_111", "special_112")
-	for _, gone := range []string{"special_101", "special_102", "special_103"} {
+	hasAll(t, second, "special_105", "special_106", "special_107", "special_108", "special_109", "special_110", "special_111", "special_112")
+	for _, gone := range []string{"special_101", "special_102", "special_103", "special_104"} {
 		for _, g := range second {
 			if g == gone {
 				t.Fatalf("%s survived eviction: %v", gone, second)
@@ -387,7 +387,7 @@ func TestSchemasForContextCappedUnion(t *testing.T) {
 
 	// A different session starts its own union.
 	other := names(r.SchemasForContext("s2", "", "use special_107 special_108 special_109 special_110 special_111 special_112 now", nil))
-	if len(other) != 17 {
-		t.Fatalf("session s2 inherited union: %d schemas, want 17", len(other))
+	if len(other) != 18 {
+		t.Fatalf("session s2 inherited union: %d schemas, want 18", len(other))
 	}
 }

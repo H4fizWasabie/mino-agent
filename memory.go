@@ -92,6 +92,50 @@ func (m *Memory) CleanupArtifacts() {
 	m.db.Exec("DELETE FROM session_artifacts WHERE distilled = 1 AND created_at < datetime('now', '-1 day')")
 }
 
+// --- Session working note (CTX-004: established facts survive across turns) ---
+// Per-session, ephemeral, always injected at turn start. Distinct from
+// save_note: the graph is durable and pull-based; this is the working state
+// the next turn must not re-discover. Written by the harness (bash commands,
+// mechanically) and by the model (note_session tool).
+
+const sessionNoteCap = 2000
+
+func (m *Memory) AppendSessionNote(sessionID, line string) {
+	if sessionID == "" || line == "" {
+		return
+	}
+	var existing string
+	m.db.QueryRow("SELECT note FROM session_notes WHERE session_id = ?", sessionID).Scan(&existing)
+	note := line
+	if existing != "" {
+		note = existing + "\n" + line
+	}
+	// Bounded: drop oldest whole lines until under the cap.
+	lines := strings.Split(note, "\n")
+	for len(note) > sessionNoteCap && len(lines) > 1 {
+		lines = lines[1:]
+		note = strings.Join(lines, "\n")
+	}
+	m.db.Exec("INSERT OR REPLACE INTO session_notes (session_id, note, updated_at) VALUES (?,?,datetime('now'))", sessionID, note)
+}
+
+// SessionNote returns the session's working note, head+tail truncated to
+// maxChars. Empty when the session has no note.
+func (m *Memory) SessionNote(sessionID string, maxChars int) string {
+	if sessionID == "" || maxChars <= 0 {
+		return ""
+	}
+	var note string
+	if err := m.db.QueryRow("SELECT note FROM session_notes WHERE session_id = ?", sessionID).Scan(&note); err != nil {
+		return ""
+	}
+	if len(note) <= maxChars {
+		return note
+	}
+	head := maxChars / 2
+	return note[:head] + "\n...\n" + note[len(note)-(maxChars-head):]
+}
+
 // --- Playbook output distillation (durable queue → episodic memory) ---
 
 const distillOutputPrompt = `You distill a playbook run's output files into long-term memory.

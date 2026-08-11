@@ -221,6 +221,7 @@ var essentialToolNames = map[string]bool{
 	"list_playbooks": true, "run_playbook": true,
 	"manage_playbook": true,
 	"list_schedules":  true, "cancel_schedule": true,
+	"note_session":    true,
 }
 
 // essentialNamesSorted is essentialToolNames in sorted order — the per-turn
@@ -811,6 +812,7 @@ func BuildRegistry(db *sql.DB, home, workspace string, mem *Memory, location ...
 
 	// notes (Core: notes.make_tool)
 	r.Register(behaves(makeNotesTool(db, mem), BehaviorMutate))
+	r.Register(behaves(makeNoteSessionTool(mem), BehaviorMutate))
 
 	// messages (Core: messages.make_tool)
 	r.Register(behaves(makeMessagesTool(home), BehaviorMutate))
@@ -1430,6 +1432,29 @@ func makeListCalendarTool(db *sql.DB, location *time.Location) *Tool {
 				return fmt.Sprintf("No events in the next %d days.", days)
 			}
 			return fmt.Sprintf("Upcoming events:\n%s", s)
+		},
+	}
+}
+
+func makeNoteSessionTool(mem *Memory) *Tool {
+	return &Tool{
+		Name:        "note_session",
+		Description: "Append one line to this session's working note, injected at the start of the next turn. Use for facts the next turn must not re-discover: confirmed file/DB paths, the method that produced a key number, open discrepancies (e.g. 'computed 20073 vs user's 20.8k — unresolved'). Ephemeral and per-session; for durable long-term facts use save_note instead.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"content": map[string]any{"type": "string", "description": "One line: the established fact, path, method, or open discrepancy"},
+			},
+			"required": []string{"content"},
+		},
+		ContextFn: func(ctx context.Context, args map[string]any) string {
+			sid, _ := ctx.Value(sessionIDKey{}).(string)
+			content, _ := args["content"].(string)
+			if mem == nil || sid == "" || content == "" {
+				return "Error: no session"
+			}
+			mem.AppendSessionNote(sid, content)
+			return "Noted. It will be injected at the start of the next turn."
 		},
 	}
 }

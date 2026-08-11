@@ -93,7 +93,7 @@ Measurable: (1) a session whose previous replies exceed `inputPreviewLimit` stil
 ## Frontier (open tickets)
 
 - [CTX-003 — Verification discipline](tickets/ctx-003-verification-discipline.md) — user-named ≠ computed must be stated, never smoothed.
-- [CTX-004 — Working-state persistence](tickets/ctx-004-working-state.md) — per-session note (paths, methods, numbers, open discrepancies) injected at next turn start.
+- [CTX-004 — Working-state persistence](tickets/ctx-004-working-state.md) — **resolved** (closes #146): per-session `session_notes` row, appended by the harness (bash commands) and the model (`note_session` tool), injected at turn start, bounded 1500 chars.
 - [CTX-005 — Cancel-intent recognition](tickets/ctx-005-cancel-intent.md) — "its fine, ill get this data myself" must stop, not spawn a 30-iteration turn.
 - [CTX-006 — Degeneration guard](tickets/ctx-006-degeneration-guard.md) — N consecutive parse failures → stop and report.
 
