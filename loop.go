@@ -598,8 +598,31 @@ func RunLoopContext(
 	}
 
 	result.Status = "iteration_limit"
-	result.Reply = "(stopped after " + fmt.Sprint(maxIter) + " iterations)"
+	result.Reply = iterationCapReply(maxIter, result.ToolCalls)
 	return result
+}
+
+// iterationCapReply builds the message shown when a turn or playbook hits the
+// iteration cap. Instead of a bare "(stopped after N iterations)" it reports
+// what was attempted so the user (or a "continue") knows where work stops.
+// #161: a silent cap reply made every Continue blindly re-run the same dead
+// task; surfacing the completed tools + a continue/abandon decision point lets
+// the user (and the model on a later turn) resume meaningfully.
+func iterationCapReply(maxIter int, toolCalls []ToolCall) string {
+	done := make([]string, 0)
+	seen := map[string]bool{}
+	for _, tc := range toolCalls {
+		if tc.Name != "" && !seen[tc.Name] {
+			seen[tc.Name] = true
+			done = append(done, tc.Name)
+		}
+	}
+	header := fmt.Sprintf("(stopped after %d iterations)", maxIter)
+	if len(done) == 0 {
+		return header + " No tools were completed yet."
+	}
+	return fmt.Sprintf("%s Completed steps: %s. Continue, or abandon the task? Reply \"continue\" to resume or describe what to change.",
+		header, strings.Join(done, ", "))
 }
 
 // stageRewriteStreak reports the output path being rewritten by a trailing run

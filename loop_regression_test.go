@@ -717,3 +717,34 @@ func TestExtractBareToolUsesSkipsNonJSONArgs(t *testing.T) {
 		t.Fatalf("non-JSON bare call dispatched: found=%v uses=%d", found, len(uses))
 	}
 }
+
+// #161: the iteration-cap reply must report progress and offer a decision point
+// instead of a bare "(stopped after N iterations)", so the user knows what was
+// attempted and a "continue" can resume meaningfully.
+func TestIterationCapReplyReportsProgress(t *testing.T) {
+	calls := []ToolCall{
+		{Name: "bash", Output: "ok"},
+		{Name: "generate_image", Output: "path"},
+		{Name: "bash", Output: "ok"},
+	}
+	reply := iterationCapReply(50, calls)
+	if !strings.Contains(reply, "stopped after 50 iterations") {
+		t.Fatalf("reply missing cap note: %q", reply)
+	}
+	if !strings.Contains(reply, "generate_image") || !strings.Contains(reply, "bash") {
+		t.Fatalf("reply missing completed tools: %q", reply)
+	}
+	if !strings.Contains(reply, "Continue") || !strings.Contains(reply, "abandon") {
+		t.Fatalf("reply missing continue/abandon decision point: %q", reply)
+	}
+	if strings.Count(reply, "bash") != 1 {
+		t.Fatalf("reply should dedupe repeated tools: %q", reply)
+	}
+}
+
+func TestIterationCapReplyNoTools(t *testing.T) {
+	reply := iterationCapReply(30, nil)
+	if !strings.Contains(reply, "No tools were completed") {
+		t.Fatalf("reply should note no completion: %q", reply)
+	}
+}
