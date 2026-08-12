@@ -668,6 +668,11 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 		return nil, err
 	}
 	result := &PlaybookResult{Name: name}
+	// CTX-018: design-time audit gate — inject risk flags ONLY when the
+	// playbook is new, its last run failed, or its contract changed since the
+	// last run. A stable, recently-successful playbook runs without the audit
+	// (no wasted resources). Computed once per run; injected per stage.
+	doAudit := needsPlaybookAudit(pb)
 	conversation := core.Sessions.Get(sessionID)
 	// Cache stability: the system prompt must be byte-stable across all
 	// iterations of a stage so the provider's prefix cache stays warm. The
@@ -705,7 +710,13 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 			stageTools = core.Tools.Only(stage.Tools...)
 		}
 		messages := append([]Message(nil), baseMessages...)
-		messages = append(messages, Message{Role: "user", Content: buildWorkspaceStagePrompt(pb, run, stage, time.Now(), core.Settings.Location()) + "\n\n" + appendSystemTime("", time.Now(), core.Settings.Location())})
+		stagePrompt := buildWorkspaceStagePrompt(pb, run, stage, time.Now(), core.Settings.Location()) + "\n\n" + appendSystemTime("", time.Now(), core.Settings.Location())
+		if doAudit {
+			if flags := stageRiskFlags(stage); flags != "" {
+				stagePrompt += "\n\n" + flags
+			}
+		}
+		messages = append(messages, Message{Role: "user", Content: stagePrompt})
 		retrySafe := stageRetrySafe(core.Tools, stage)
 
 		var outputs []string
