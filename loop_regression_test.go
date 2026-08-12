@@ -780,3 +780,36 @@ func TestLoopIterationAwarenessRepeatedTool(t *testing.T) {
 		t.Fatal("repetition-awareness observation was not injected")
 	}
 }
+
+// CTX-019: a mid-flight redirect signal (repetition) must be observable in the
+// trace so the post-mortem can verify whether the redirect was followed and
+// whether it helped — redirects are checked against outcomes, not assumed.
+func TestLoopLogsMidflightRedirectSignal(t *testing.T) {
+	tools := NewRegistry()
+	tools.Register(&Tool{Name: "bounce", Description: "returns fixed output", Fn: func(args map[string]any) string { return "bounced" }})
+	var script []*LLMResponse
+	for i := 0; i < 4; i++ {
+		script = append(script, scriptedResp([]ContentBlock{toolBlock("bounce", map[string]any{"k": "v"})}, "tool_use"))
+	}
+	script = append(script, scriptedResp([]ContentBlock{textBlock("done")}, "stop"))
+	client := &fakeClient{script: script}
+	home := t.TempDir()
+	RunLoopContext(context.Background(), client, "awareness", "", []Message{{Role: "user", Content: "go"}}, tools, 20, 100, nil, false, home, nil)
+
+	found := false
+	files, _ := filepath.Glob(filepath.Join(home, "traces", "*.jsonl"))
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.Contains(line, "midflight_signal") && strings.Contains(line, "repetition") {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("midflight_signal repetition event was not logged to the trace (redirect must be observable for CTX-019 verification)")
+	}
+}

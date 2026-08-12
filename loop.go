@@ -364,6 +364,10 @@ func RunLoopContext(
 						"[System: you have repeated the identical tool call (%s) %d times in a row without progress, and have used %d of %d iterations. CHANGE APPROACH or state explicitly why you are abandoning this one — do not keep retrying the same thing to the iteration cap.]",
 						sig, repStreak, i-1, maxIter),
 				})
+				// CTX-019: make the redirect observable — the post-mortem reads
+				// midflight_signal events + the run outcome to verify whether a
+				// redirect was followed and whether it helped.
+				trace("midflight_signal", map[string]any{"signal": "repetition", "iteration": i - 1, "tool": sig, "streak": repStreak})
 			}
 		}
 		if i == maxIter-3 {
@@ -373,6 +377,7 @@ func RunLoopContext(
 					"[System: %d of %d iterations used. Finish the task now with what you have, or state what remains — do not start new exploration.]",
 					i-1, maxIter),
 			})
+			trace("midflight_signal", map[string]any{"signal": "near_cap", "iteration": i - 1})
 		}
 
 		_, llmCancel := context.WithTimeout(ctx, 90*time.Second)

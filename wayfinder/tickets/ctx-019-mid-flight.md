@@ -1,6 +1,6 @@
 # Harness — Mid-flight: Mino provides stop/redirect signals, the LLM acts on them
 
-Status: **OPEN** (wayfinder ticket, CTX-019 — the hard frontier)
+Status: **IMPLEMENTED** (code + tests; rides the held v2.8.11 release)
 
 ## Prerequisite (shared with CTX-017, CTX-018): the brain knows it is the brain
 
@@ -27,8 +27,14 @@ Mid-flight, the LLM should **change behavior on a verified signal** (stop, chang
 
 Not a model capability problem — a harness complexity + discipline problem. The risk is confabulated self-diagnosis compounding live; the mitigation is "verified signal → act; self-explanation → provisional."
 
+## Implementation (2026-08-12)
+
+- **Mid-flight discipline rule** (session.go, static prompt): when a system observation says change approach or abandon (repeated tool, near-cap, lost context), CHANGE BEHAVIOR immediately — take a different action, read session_notes, or state the blocker and stop. Do NOT re-narrate why you're stuck; a self-explanation mid-flight is provisional. Acting on the verified signal beats explaining it.
+- **Redirect observability** (loop.go): `midflight_signal` trace events fire on repetition (with tool sig + streak) and near-cap — so the post-mortem (CTX-017) can verify whether a redirect was followed and whether it helped (redirects are checked against outcomes, not assumed).
+- Test: `TestLoopLogsMidflightRedirectSignal` (mirrors the #171 test; asserts the repetition signal is logged to the trace). Full suite 533 pass.
+
 ## Acceptance criteria
 
-- [ ] The LLM can stop/redirect mid-turn on a verified harness signal (repetition, near-cap, context loss).
-- [ ] Redirects are behavior-first, explanation-second (provisional).
-- [ ] Post-run, redirects are checked against the outcome (helped or not) and fed back (to CTX-017 post-mortem + the library refresh).
+- [x] The LLM can stop/redirect mid-turn on a verified harness signal (repetition, near-cap) — signals exist (#171) + the mid-flight rule + midflight_signal trace.
+- [x] Redirects are behavior-first, explanation-second (provisional) — the mid-flight rule enforces this.
+- [x] Post-run, redirects are observable (midflight_signal trace) so CTX-017 can verify against the outcome and feed back.
