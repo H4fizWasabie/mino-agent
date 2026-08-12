@@ -80,3 +80,48 @@ func TestPlaybookAuthoringSkillIsEmbedded(t *testing.T) {
 		}
 	}
 }
+
+func TestSkillLoaderAutoGate(t *testing.T) {
+	home := t.TempDir()
+	// Invoke-on-demand skill: no `auto` (defaults false).
+	os.MkdirAll(filepath.Join(home, "skills", "procura"), 0700)
+	os.WriteFile(filepath.Join(home, "skills", "procura", "SKILL.md"), []byte(`---
+name: procura
+description: Purchase history and stock reports
+triggers:
+  - purchase history
+  - stock report
+---
+Query the Procura DB.`), 0600)
+	// Auto-ambient skill: `auto: true`.
+	os.MkdirAll(filepath.Join(home, "skills", "image-gen"), 0700)
+	os.WriteFile(filepath.Join(home, "skills", "image-gen", "SKILL.md"), []byte(`---
+name: image-gen
+description: Generate images for posts
+auto: true
+triggers:
+  - image
+---
+Generate the image.`), 0600)
+
+	// Explicit trigger loads an on-demand skill.
+	sl := NewSkillLoader(home, nil)
+	hits := sl.Match("run a purchase history for March")
+	if len(hits) != 1 || hits[0].Name != "procura" {
+		t.Fatalf("explicit trigger should load on-demand skill, got %d hits", len(hits))
+	}
+
+	// Fuzzy word-overlap (no trigger/description) must NOT auto-load an on-demand skill.
+	sl2 := NewSkillLoader(home, nil)
+	hits = sl2.Match("check the purchase stock levels please")
+	if len(hits) != 0 {
+		t.Fatalf("on-demand skill auto-loaded on fuzzy overlap (issues #170): %d hits", len(hits))
+	}
+
+	// An auto:true skill IS loaded by fuzzy word-overlap.
+	sl3 := NewSkillLoader(home, nil)
+	hits = sl3.Match("create an image for the post")
+	if len(hits) != 1 || hits[0].Name != "image-gen" {
+		t.Fatalf("auto skill should fuzzy-load, got %d hits", len(hits))
+	}
+}

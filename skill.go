@@ -18,13 +18,19 @@ type Skill struct {
 	Name        string   `yaml:"name"        json:"name"`
 	Description string   `yaml:"description" json:"description"`
 	Triggers    []string `yaml:"triggers"    json:"triggers"`
-	Body        string   `yaml:"-"           json:"-"`
-	Source      string   `yaml:"-"           json:"source"`
-	UseCount    int      `json:"use_count"`
-	LastUsedAt  float64  `json:"last_used_at"`
-	State       string   `json:"state"`
-	CreatedAt   float64  `json:"created_at"`
-	descEmb     []float32 `yaml:"-" json:"-"` // cached descriptor embedding
+	// Auto marks a skill as always-ambient: it participates in the fuzzy
+	// word-overlap and semantic auto-match. Skills without it (default) are
+	// invoke-on-demand — they load only on an explicit trigger/description
+	// mention, keeping task-specific skills from auto-injecting on near-miss
+	// requests (issues #170; ICM "prevention, not compression").
+	Auto       bool      `yaml:"auto,omitempty" json:"auto,omitempty"`
+	Body       string    `yaml:"-"           json:"-"`
+	Source     string    `yaml:"-"           json:"source"`
+	UseCount   int       `json:"use_count"`
+	LastUsedAt float64   `json:"last_used_at"`
+	State      string    `json:"state"`
+	CreatedAt  float64   `json:"created_at"`
+	descEmb    []float32 `yaml:"-" json:"-"` // cached descriptor embedding
 }
 
 type SkillLoader struct {
@@ -72,6 +78,14 @@ func (sl *SkillLoader) Match(message string) []*Skill {
 			hits = append(hits, s)
 			goto next
 		}
+		// Auto-invoke (fuzzy word overlap + semantic fallback) is reserved for
+		// automation-essential skills (Auto=true). Everything else is
+		// invoke-on-demand: it only fires on the explicit trigger/description
+		// paths above, so a task-specific skill can't auto-inject on a near-miss
+		// request (issues #170).
+		if !s.Auto {
+			continue
+		}
 		if skillWords(s) != nil && inputWords(lowered) != nil {
 			skillSet := skillWords(s)
 			inputSet := inputWords(lowered)
@@ -112,7 +126,7 @@ func (sl *SkillLoader) semanticMatch(message string) []*Skill {
 	}
 	var candidates []skCandidate
 	for _, s := range sl.skills {
-		if s.State != "active" && s.State != "pinned" || len(s.descEmb) == 0 {
+		if s.State != "active" && s.State != "pinned" || len(s.descEmb) == 0 || !s.Auto {
 			continue
 		}
 		candidates = append(candidates, skCandidate{s, cosineSimilarity(qEmb, s.descEmb)})
