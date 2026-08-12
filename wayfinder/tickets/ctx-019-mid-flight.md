@@ -38,3 +38,4 @@ Not a model capability problem — a harness complexity + discipline problem. Th
 - [x] The LLM can stop/redirect mid-turn on a verified harness signal (repetition, near-cap) — signals exist (#171) + the mid-flight rule + midflight_signal trace.
 - [x] Redirects are behavior-first, explanation-second (provisional) — the mid-flight rule enforces this.
 - [x] Post-run, redirects are observable (midflight_signal trace) so CTX-017 can verify against the outcome and feed back.
+- [x] Live (2026-08-12, v2.8.11-rc4): a stuck task (3 nonexistent files, "don't give up easily") ended in 4 iterations — changed approach (bash verification instead of repeated blind reads), concluded honestly, refused to fabricate. No spin, no cap. Unit test covers the midflight_signal trace on true identical repetition.
