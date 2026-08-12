@@ -33,3 +33,4 @@ Every session failure was a harness gap, not a model fault: FB 50-iter churn (no
 - [x] Diagnosis cites specific trace/tool-call lines (iteration numbers) — the evidence is returned with citations for the LLM to restate.
 - [x] Writes a ticket-format markdown (the LLM renders the wayfinder-style ticket from the tool's evidence).
 - [x] The LLM (component) renders; the harness supplies the trace + enforces grounding.
+- [x] Live (2026-08-12, v2.8.11-rc2): `post_mortem` diagnosed the real FB run that hit its 50-iteration cap — returned iterations=50, final reply, gate decision. Also fixed `daily-ai-concept` missing root CONTEXT.md (would have failed loadPlaybookWorkspace).
