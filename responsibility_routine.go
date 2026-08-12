@@ -100,7 +100,7 @@ func runPlaybookWithResponsibility(ctx context.Context, core *Core, name, reques
 		if err != nil {
 			return "", err
 		}
-		return formatPlaybookResult(result), nil
+		return formatPlaybookResult(core.Settings.Home, result), nil
 	}
 	id := fmt.Sprintf("one-off:%s:%s:%d", name, sessionID, at.UnixNano())
 	if err := core.Responsibilities.startOneOff(id, name, request, sessionID, at); err != nil {
@@ -113,7 +113,7 @@ func runPlaybookWithResponsibility(ctx context.Context, core *Core, name, reques
 	if runErr != nil {
 		return "", runErr
 	}
-	return formatPlaybookResult(result), nil
+	return formatPlaybookResult(core.Settings.Home, result), nil
 }
 
 func (s *ResponsibilityStore) finishRoutine(

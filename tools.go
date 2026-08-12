@@ -825,6 +825,7 @@ func BuildRegistry(db *sql.DB, home, workspace string, mem *Memory, location ...
 	// messages (Core: messages.make_tool)
 	r.Register(behaves(makeMessagesTool(home), BehaviorMutate))
 	r.Register(behaves(makeSendDocumentTool(home), BehaviorMutate))
+	r.Register(behaves(makePostMortemTool(home), BehaviorObserve))
 
 	// web search (Core: search.make_tool)
 	r.Register(behaves(makeSearchTool(), BehaviorObserve))
@@ -1759,14 +1760,18 @@ func makeManageMemoryTool(mem *Memory) *Tool {
 				}
 				return fmt.Sprintf("memory: %d facts, %d edges, %d unconsolidated chat rows", facts, edges, unconsolidated)
 			case "consolidate":
+				var before int
+				mem.db.QueryRow("SELECT COUNT(*) FROM chat_log WHERE consolidated = 0").Scan(&before)
 				n := mem.ConsolidateDue()
 				if n == 0 && mem.client == nil {
 					return "consolidate unavailable: no model provider configured"
 				}
+				var after int
+				mem.db.QueryRow("SELECT COUNT(*) FROM chat_log WHERE consolidated = 0").Scan(&after)
 				if n == 0 {
-					return "consolidate: nothing eligible — no session has unconsolidated history old enough to consolidate (already consolidated, or all recent)."
+					return fmt.Sprintf("consolidate: nothing eligible — no session has unconsolidated history old enough to consolidate (unconsolidated rows %d → %d).", before, after)
 				}
-				return fmt.Sprintf("consolidated %d sessions into facts", n)
+				return fmt.Sprintf("consolidated %d session(s) into facts (unconsolidated rows %d → %d)", n, before, after)
 			case "dedup":
 				n := mem.DedupDue()
 				if n == 0 && mem.embedder == nil {

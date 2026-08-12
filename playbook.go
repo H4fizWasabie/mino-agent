@@ -1030,7 +1030,7 @@ func makeSystemCheckTool(db *sql.DB, home string) *Tool {
 	}
 }
 
-func formatPlaybookResult(result *PlaybookResult) string {
+func formatPlaybookResult(home string, result *PlaybookResult) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("## Playbook: %s — %s\n\n", result.Name, result.Status))
 	b.WriteString(fmt.Sprintf("Stages completed: %d\n", result.StagesRun))
@@ -1044,6 +1044,14 @@ func formatPlaybookResult(result *PlaybookResult) string {
 	if result.Reply != "" {
 		b.WriteString("\n")
 		b.WriteString(result.Reply)
+	}
+	// CTX-017: on failure, inject the run's trace evidence so the LLM can
+	// diagnose from signals (parse failures, contradictions, iteration usage)
+	// instead of re-scanning, which itself churns to the cap.
+	if result.Status == "failed" {
+		if ev, _, err := extractFailureEvidence(home, result.Name); err == nil && ev != "" {
+			b.WriteString("\n\n" + ev)
+		}
 	}
 	return b.String()
 }
