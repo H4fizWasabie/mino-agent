@@ -222,6 +222,14 @@ var essentialToolNames = map[string]bool{
 	"manage_playbook": true,
 	"list_schedules":  true, "cancel_schedule": true,
 	"note_session": true,
+	// CTX-013: recurring owner need + token-leak safety. Must be in every
+	// turn's schema so the model never believes "no native tool exists" and
+	// falls back to bash+curl with the bot token in args (observed 2026-08-11:
+	// raw token in the api.telegram.org/bot<token>/sendDocument URL). The
+	// original ticket's "no pinning" call assumed the tool was available and
+	// the model merely preferred curl; production disproved that — without
+	// essentials membership it isn't in the schema at all.
+	"send_document": true,
 }
 
 // essentialNamesSorted is essentialToolNames in sorted order — the per-turn
