@@ -326,6 +326,12 @@ func RunLoopContext(
 	claimChecked := false    // push the contradicted-outcome-claim correction at most once per turn
 	parseFailures := 0       // per-turn unparseable text-marker calls (issue #24; CTX-006)
 
+	// #171 — per-turn repetition tracking for the awareness/containment
+	// observation injected into the message stream (never the byte-stable system
+	// prompt, so prefix-cache warmth is preserved).
+	repStreak := 0
+	var lastToolSig string
+
 	for i := 1; i <= maxIter; i++ {
 		if ctx.Err() != nil {
 			result.Status = "cancelled"
@@ -337,6 +343,36 @@ func RunLoopContext(
 		// Update nervous system snapshot
 		if update, ok := ctx.Value(snapshotKey{}).(func(LoopSnapshot)); ok {
 			update(LoopSnapshot{Iteration: i, Status: "thinking"})
+		}
+
+		// #171 — iteration/retry awareness. Give the model sight of its own
+		// repetition and budget so it can diverge or stop BEFORE the cap. Both
+		// injections go into the message stream (cache-safe) — never the static
+		// system prompt — and fire only when notable to avoid token spam.
+		if len(result.ToolCalls) > 0 {
+			sig := loopToolSignature(result.ToolCalls[len(result.ToolCalls)-1])
+			if sig == lastToolSig {
+				repStreak++
+			} else {
+				lastToolSig = sig
+				repStreak = 1
+			}
+			if repStreak >= 3 && repStreak%3 == 0 {
+				messages = append(messages, Message{
+					Role: "user",
+					Content: fmt.Sprintf(
+						"[System: you have repeated the identical tool call (%s) %d times in a row without progress, and have used %d of %d iterations. CHANGE APPROACH or state explicitly why you are abandoning this one — do not keep retrying the same thing to the iteration cap.]",
+						sig, repStreak, i-1, maxIter),
+				})
+			}
+		}
+		if i == maxIter-3 {
+			messages = append(messages, Message{
+				Role: "user",
+				Content: fmt.Sprintf(
+					"[System: %d of %d iterations used. Finish the task now with what you have, or state what remains — do not start new exploration.]",
+					i-1, maxIter),
+			})
 		}
 
 		_, llmCancel := context.WithTimeout(ctx, 90*time.Second)
@@ -1309,4 +1345,27 @@ func safePath(s string) string {
 		return '_'
 	}, s)
 	return s
+}
+
+// loopToolSignature is a deterministic signature of a tool call (name + sorted
+// args) used to detect an identical retry loop (issues #171). Args are a map,
+// so keys are sorted to keep the signature stable regardless of iteration order.
+func loopToolSignature(tc ToolCall) string {
+	args := tc.Args
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteString(tc.Name)
+	b.WriteByte('{')
+	for i, k := range keys {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, "%s=%v", k, args[k])
+	}
+	b.WriteByte('}')
+	return b.String()
 }

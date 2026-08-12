@@ -748,3 +748,35 @@ func TestIterationCapReplyNoTools(t *testing.T) {
 		t.Fatalf("reply should note no completion: %q", reply)
 	}
 }
+
+// TestLoopIterationAwarenessRepeatedTool (issues #171): when the model repeats
+// the identical tool call 3x, the loop injects a repetition-awareness
+// observation into the message stream so the model can diverge or stop BEFORE
+// burning to the cap.
+func TestLoopIterationAwarenessRepeatedTool(t *testing.T) {
+	tools := NewRegistry()
+	tools.Register(&Tool{
+		Name:        "bounce",
+		Description: "returns fixed output",
+		Fn:          func(args map[string]any) string { return "bounced" },
+	})
+	var script []*LLMResponse
+	for i := 0; i < 4; i++ {
+		script = append(script, scriptedResp([]ContentBlock{toolBlock("bounce", map[string]any{"k": "v"})}, "tool_use"))
+	}
+	script = append(script, scriptedResp([]ContentBlock{textBlock("done")}, "stop"))
+	client := &fakeClient{script: script}
+	RunLoopContext(context.Background(), client, "awareness", "", []Message{{Role: "user", Content: "go"}}, tools, 20, 100, nil, false, "", nil)
+
+	found := false
+	for _, msgs := range client.messages {
+		for _, m := range msgs {
+			if strings.Contains(m.Content, "repeated the identical tool call") && strings.Contains(m.Content, "CHANGE APPROACH") {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("repetition-awareness observation was not injected")
+	}
+}
