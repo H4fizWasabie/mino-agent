@@ -83,9 +83,10 @@ func checkErrorRate(db *sql.DB, notifyFn func(string)) {
 	msg := fmt.Sprintf("[MINO ALERT] High error rate: %d/%d tool calls failed in the last hour (%.0f%%)",
 		errors, total, rate*100)
 	slog.Error(msg)
-	if notifyFn != nil {
-		notifyFn(msg)
-	}
+	// The error-rate alert is operational detail — useful to the LLM (readable
+	// via the journal / tool_calls DB) but noise for the owner's Telegram. Do
+	// NOT page the owner for it; keep the silence (dead man's switch) and
+	// extension-stuck alerts as the owner-facing ones.
 }
 
 func checkSilence(db *sql.DB, notifyFn func(string), loc *time.Location) {
