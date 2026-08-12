@@ -76,6 +76,21 @@ func TestBuildSystemIncludesNumberVerificationRule(t *testing.T) {
 	}
 }
 
+// #160: the verify-then-claim rule must be in the system prompt so that no
+// run can write a record or log containing an external ID (post ID, order ID)
+// it did not receive verbatim from the owning tool's response — fabrication
+// under cap pressure is forbidden at the prompt level, generically across any
+// model or playbook.
+func TestBuildSystemIncludesVerifyThenClaimRule(t *testing.T) {
+	s := NewSession(&Settings{Home: t.TempDir(), Workspace: t.TempDir()}, nil)
+	system := s.BuildSystem("hello", "cli")
+	for _, want := range []string{"Verify-then-claim", "external identifier", "did not receive verbatim", "never invent an ID"} {
+		if !strings.Contains(system, want) {
+			t.Fatalf("verify-then-claim rule missing %q from system prompt", want)
+		}
+	}
+}
+
 func TestSettingsLocationFallsBackForInvalidTimezone(t *testing.T) {
 	if got := (&Settings{Timezone: "not/a-real-zone"}).Location(); got != time.Local {
 		t.Fatalf("invalid timezone location = %v, want local %v", got, time.Local)
