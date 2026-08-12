@@ -109,3 +109,22 @@ Measurable: (1) a session whose previous replies exceed `inputPreviewLimit` stil
 - New skills as the fix (proven to rot: walked past during the incident session)
 - Changes to the 30-iteration cap itself (the guard stops early; the cap stays)
 - Reversing or duplicating history ordering (chronology is required; tail is already the newest)
+
+# Mino Context-Awareness & Tool-Loading — Wayfinder Map
+
+## Destination
+
+Mino's context is lean at the eager-injection layer (skills loaded by section, not full body) and the model can self-regulate (see iterations/retries, diverge or stop before the cap) instead of burning to a silent harness cap.
+
+## Decisions so far
+
+- **Frontier (not yet a ticket): the working-set *choice* layer (#4).** Mechanism side (lazy fetch: `remember` pointers, artifact catalog, 8-tool playbook scoping, bounded history) is ~shipped; choice side (model can perceive/prune/compress its own window mid-turn) is ~0 — every model context tool is a *writer* (`note_session`, `save_note`, `add_working_memory`), none reads or shrinks the current window. Deferred by design: choice needs awareness (#171) first; revisit with a real case after #170+#171 land. (Measured 2026-08-12: playbook `one_turn` 18–28k chars ≈ 2–3× the whole ~2.4k static prompt.)
+- [GitHub #170 — Eager skill bodies injected en bloc (no section routing)](https://github.com/H4fizWasabie/mino-agent/issues/170) — measured token waste on automation; only `image-generation` needed by playbooks.
+- [GitHub #171 — Iteration/retry awareness + containment](https://github.com/H4fizWasabie/mino-agent/issues/171) — expose live `i/maxIter` + repeated-tool signal; model-visible rule to diverge or give up before the cap. Driver: 2026-08-12 FB `01-post` 50-iteration research churn (pre-contract-fix).
+- **Static system prompt is thin (~2.4k tok), not fat** — measured; trimming it is a low-value/high-regression lever. The real token cost is the [eager skill injection](#170), not the static prompt.
+- **Tool-schema union is correct as-is** — chat=20 wide (legit), automation=8 tight (legit).
+
+## Out of scope
+- Context-budget telemetry (#2) — rejected; cheaper to stop-on-spin (#171) than to gauge.
+- Multi-owner trust/provenance (single-owner Mino)
+- The 30-iteration cap itself
