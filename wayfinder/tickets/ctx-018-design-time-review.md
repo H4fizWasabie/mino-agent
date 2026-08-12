@@ -38,3 +38,4 @@ Harder than CTX-017: a design-time review is a *prediction* about behavior, not 
 - [x] Flags are framed as risks (churn / unverified / fabrication), never as confirmed outcomes.
 - [x] The harness supplies the lens + review surface; the LLM renders the flags.
 - [x] Adaptive gate: auto-audit injects risk-flags into stage prompts ONLY when the playbook is new / recently failed / contract changed — a stable playbook costs nothing extra.
+- [x] Live (2026-08-12, v2.8.11-rc3): `audit_playbook` audited `daily-ai-concept` clean (research_bounded/verification/grounding all true). It also caught real bugs — `daily-ai-concept` and `post-mortem` were missing the required `## Outputs` section (loadPlaybookWorkspace fails without it); fixed on the VPS.
