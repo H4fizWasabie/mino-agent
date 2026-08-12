@@ -140,6 +140,9 @@ func TestConsolidationUsesFakeProviderResponse(t *testing.T) {
 	if _, err := db.Exec("INSERT INTO chat_log (role, content, session_id) VALUES ('user', 'remember this', 'fake-session'), ('assistant', 'okay', 'fake-session')"); err != nil {
 		t.Fatal(err)
 	}
+	// Age the rows back so they clear the recency gate (CTX-015): without
+	// this they'd be 'now' and consolidation would skip them.
+	db.Exec("UPDATE chat_log SET created_at = datetime('now','-2 hours') WHERE session_id = 'fake-session'")
 	pm := &ProviderManager{
 		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
 		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
@@ -482,8 +485,12 @@ func TestConsolidateDue(t *testing.T) {
 			mem.LogChat("assistant", "hi", sid, "test")
 		}
 	}
-	seed("a", 2) // 2 exchanges = due
-	seed("b", 1) // below threshold
+	seed("a", 2) // 2 exchanges
+	seed("b", 1)
+	ageBack := func(sid string, hours int) {
+		db.Exec("UPDATE chat_log SET created_at = datetime('now', ?) WHERE session_id = ?", fmt.Sprintf("-%d hours", hours), sid)
+	}
+	ageBack("a", 2) // a old enough to be eligible; b stays recent (ineligible)
 
 	// 1. Summarizer failure: nothing written, nothing marked, retried later.
 	if got := mem.ConsolidateDue(); got != 0 {
@@ -528,6 +535,7 @@ func TestConsolidateDue(t *testing.T) {
 	// 5. Echoed template placeholders: rejected, not saved.
 	response = `{"facts":[{"id":"<snake_case_id>","subject":"<one sentence>","content":"<optional body>","edges":[]}],"episode":"<one sentence>"}`
 	seed("c", 2)
+	ageBack("c", 2) // eligible so the placeholder-rejection path actually runs
 	before = mem.graph.Stat()
 	if got := mem.ConsolidateDue(); got != 0 {
 		t.Fatalf("placeholder echo was written: %d", got)
@@ -543,6 +551,57 @@ func TestConsolidateDue(t *testing.T) {
 	mem.ConsolidateDue() // returns 0 because merge skips, but that's fine
 	if mem.graph.Stat() != before {
 		t.Fatalf("duplicate fact created new file: %d -> %d", before, mem.graph.Stat())
+	}
+}
+
+func TestConsolidateDueSelectsByRecency(t *testing.T) {
+	// Few-row-but-old session MUST be eligible; many-row-but-recent MUST NOT
+	// (never consolidate an active conversation). Locks the recency gate that
+	// replaced the per-session row-count floor (CTX-015): short interactive
+	// chats were previously skipped forever, leaving history unconsolidated.
+	calls := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"facts\":[{\"id\":\"user_pref\",\"subject\":\"User has a durable preference\",\"content\":\"Has a durable preference\",\"edges\":[]}],\"episode\":\"A useful conversation\"}"},"finish_reason":"stop"}],"usage":{}}`)
+	}))
+	defer ts.Close()
+
+	home := t.TempDir()
+	db := Connect(home)
+	defer db.Close()
+	cfg := &Settings{Home: home, MemoriesDir: filepath.Join(home, "memories"), ConsolidateEvery: 2, TopK: 4}
+	mem := NewMemory(db, &ProviderManager{
+		providers: []ProviderConfig{{Name: "fake", Priority: 1, Model: "m"}},
+		clients:   map[string]*Client{"fake": NewClient("k", ts.URL)},
+		state:     map[string]*providerState{"fake": {}},
+		sticky:    map[string]string{}, now: time.Now, sleep: func(time.Duration) {},
+	}, cfg)
+	seed := func(sid string, n int) {
+		for range n {
+			mem.LogChat("user", "hello", sid, "test")
+			mem.LogChat("assistant", "hi", sid, "test")
+		}
+	}
+	ageBack := func(sid string, hours int) {
+		db.Exec("UPDATE chat_log SET created_at = datetime('now', ?) WHERE session_id = ?", fmt.Sprintf("-%d hours", hours), sid)
+	}
+
+	seed("old-few", 1)     // 1 exchange (2 rows) — few rows...
+	ageBack("old-few", 2)  // ...but old → MUST be eligible
+	seed("recent-many", 5) // 10 rows — many rows...
+	// ...but recent (created_at = now) → MUST NOT be eligible
+
+	if got := mem.ConsolidateDue(); got != 1 {
+		t.Fatalf("recency gate wrote %d facts, want 1 (old-few only)", got)
+	}
+	var recentPending, oldPending int
+	db.QueryRow("SELECT COUNT(*) FROM chat_log WHERE consolidated = 0 AND session_id = 'recent-many'").Scan(&recentPending)
+	db.QueryRow("SELECT COUNT(*) FROM chat_log WHERE consolidated = 0 AND session_id = 'old-few'").Scan(&oldPending)
+	if recentPending != 10 {
+		t.Fatalf("recent-many must stay unconsolidated (active conversation), %d of 10 rows consolidated", 10-recentPending)
+	}
+	if oldPending != 0 {
+		t.Fatalf("old-few should be fully consolidated, %d rows still pending", oldPending)
 	}
 }
 
@@ -562,6 +621,10 @@ func TestConsolidateDueLimitsLLMCallsPerPass(t *testing.T) {
 	for _, session := range []string{"a", "b"} {
 		mem.LogChat("user", "remember this", session, "test")
 		mem.LogChat("assistant", "noted", session, "test")
+	}
+	// Age rows back so they clear the recency gate (CTX-015).
+	for _, session := range []string{"a", "b"} {
+		db.Exec("UPDATE chat_log SET created_at = datetime('now','-2 hours') WHERE session_id = ?", session)
 	}
 	mem.ConsolidateDue()
 	if calls != 1 {

@@ -419,14 +419,32 @@ Exchanges:
 // ConsolidateDue distills every session with at least ConsolidateEvery
 // unconsolidated exchanges into facts + one episode. Any failure leaves the
 // rows unconsolidated for the next pass — the raw log is never lost.
+// consolidateMinAge: a session's unconsolidated history becomes eligible for
+// consolidation once its oldest unconsolidated row is at least this old. Gated
+// by recency, not a per-session row-count floor — short interactive chat
+// sessions rarely accumulate enough rows to meet a floor, so their history
+// stayed perpetually unconsolidated (witnessed: 78 rows stuck; the tool then
+// reported a fabricated "consolidated 8" on a 0-result). One hour keeps an
+// active conversation from being consolidated mid-stream while still draining
+// history on the next scheduled pass.
+const consolidateMinAge = 1 * time.Hour
+
 func (m *Memory) ConsolidateDue() int {
 	if m.client == nil || m.cfg.ConsolidateEvery <= 0 {
 		return 0
 	}
 	m.consolidateMu.Lock()
 	defer m.consolidateMu.Unlock()
-	rows, err := m.db.Query("SELECT session_id FROM chat_log WHERE consolidated = 0 GROUP BY session_id HAVING COUNT(*) >= ?",
-		m.cfg.ConsolidateEvery*2) // each exchange = user + assistant row
+	// Eligible = sessions with unconsolidated rows whose oldest unconsolidated
+	// row is at least consolidateMinAge old. Replaces the old
+	// `HAVING COUNT(*) >= ConsolidateEvery*2` floor that short chats never met
+	// (each exchange = user + assistant row, so the floor needed ~6 exchanges).
+	// Modifier is inlined (not a bound param) — SQLite treats a bound date
+	// modifier as NULL, which makes the HAVING comparison NULL and selects nothing.
+	rows, err := m.db.Query(fmt.Sprintf(`SELECT session_id FROM chat_log
+		WHERE consolidated = 0
+		GROUP BY session_id
+		HAVING MIN(created_at) <= datetime('now', '-%d hours')`, int(consolidateMinAge.Hours())))
 	if err != nil {
 		slog.Error("consolidation scan failed", "error", err)
 		return 0

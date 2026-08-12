@@ -1763,6 +1763,9 @@ func makeManageMemoryTool(mem *Memory) *Tool {
 				if n == 0 && mem.client == nil {
 					return "consolidate unavailable: no model provider configured"
 				}
+				if n == 0 {
+					return "consolidate: nothing eligible — no session has unconsolidated history old enough to consolidate (already consolidated, or all recent)."
+				}
 				return fmt.Sprintf("consolidated %d sessions into facts", n)
 			case "dedup":
 				n := mem.DedupDue()
