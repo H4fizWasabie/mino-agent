@@ -309,3 +309,48 @@ func TestParseSSEStreamAcceptsReasoningAltField(t *testing.T) {
 		t.Fatalf("Content = %+v, want reasoning-alt fallback in stream", response.Content)
 	}
 }
+
+// #159: the ":provider" routing pin is stripped from the model string on retry
+// so a dead pinned provider doesn't burn all attempts then fail over to a
+// different model. stripProviderPin must only touch the post-slash ":tag".
+func TestStripProviderPin(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"deepseek/deepseek-v4-flash-0731:deepinfra", "deepseek/deepseek-v4-flash-0731"},
+		{"deepseek/deepseek-v4-flash-0731", "deepseek/deepseek-v4-flash-0731"},
+		{"mimo-v2.5", "mimo-v2.5"},                     // no slash, no pin
+		{"deepseek-v4-flash", "deepseek-v4-flash"},      // direct-API model, no pin
+		{"o3:nightly", "o3:nightly"},                    // ':' before slash is part of id
+	}
+	for _, c := range cases {
+		if got := stripProviderPin(c.in); got != c.want {
+			t.Errorf("stripProviderPin(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// #159: a pinned model is retried unpinned after the first failure, so the
+// retry keeps the SAME model (routed to a healthy provider) instead of waiting
+// out the dead pin and then failing over to a different model.
+func TestRetryDropsProviderPin(t *testing.T) {
+	m := testManager()
+	m.providers = []ProviderConfig{{Name: "mimo", Priority: 1, Model: "deepseek/agent:dead"}}
+	var models []string
+	_, err := m.call("s", MainModel, func(_ *Client, model, _ string) (*LLMResponse, error) {
+		models = append(models, model)
+		return nil, errors.New("down") // always fail -> 3 attempts then error
+	})
+	if err == nil {
+		t.Fatal("want error when provider always down")
+	}
+	if len(models) != 3 {
+		t.Fatalf("attempts = %d, want 3", len(models))
+	}
+	if models[0] != "deepseek/agent:dead" {
+		t.Fatalf("attempt 1 should keep pin: %q", models[0])
+	}
+	for _, mdl := range models[1:] {
+		if mdl != "deepseek/agent" {
+			t.Fatalf("retry should unpin: got %q", mdl)
+		}
+	}
+}

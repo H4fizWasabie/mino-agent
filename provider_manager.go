@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -236,14 +237,22 @@ func (m *ProviderManager) callWithConfig(session string, role ModelRole, call fu
 			client.apiKey = key
 		}
 		for attempt := 0; attempt < 3; attempt++ {
-			resp, err := call(client, modelFor(p, role), p.ReasoningEffort, p)
+			// #159: on the first retry of a routed call, drop the model's
+			// ":provider" pin so OpenRouter's allow_fallbacks order routes to a
+			// healthy provider instead of burning the retry (and then failing
+			// over to a different model) on the same dead provider.
+			pmodel := modelFor(p, role)
+			if attempt >= 1 {
+				pmodel = stripProviderPin(pmodel)
+			}
+			resp, err := call(client, pmodel, p.ReasoningEffort, p)
 			if err == nil {
 				m.success(session, role, p.Name)
 				return resp, nil
 			}
 			// CTX-010: log every failure with the error string so a silent
 			// failover is diagnosable without post-hoc guessing.
-			slog.Warn("provider call failed", "provider", p.Name, "role", role, "model", modelFor(p, role), "attempt", attempt+1, "error", err)
+			slog.Warn("provider call failed", "provider", p.Name, "role", role, "model", pmodel, "attempt", attempt+1, "error", err)
 			lastErr = err
 			if attempt < 2 {
 				m.sleep(time.Duration(1<<attempt) * time.Second)
@@ -279,14 +288,19 @@ func (m *ProviderManager) callContextWithConfig(ctx context.Context, session str
 			client.apiKey = key
 		}
 		for attempt := 0; attempt < 3; attempt++ {
-			resp, err := call(client, modelFor(p, role), p.ReasoningEffort, p)
+			// #159: same unpin-on-retry as callWithConfig.
+			pmodel := modelFor(p, role)
+			if attempt >= 1 {
+				pmodel = stripProviderPin(pmodel)
+			}
+			resp, err := call(client, pmodel, p.ReasoningEffort, p)
 			if err == nil {
 				m.success(session, role, p.Name)
 				return resp, nil
 			}
 			// CTX-010: log every failure with the error string so a silent
 			// failover is diagnosable without post-hoc guessing.
-			slog.Warn("provider call failed", "provider", p.Name, "role", role, "model", modelFor(p, role), "attempt", attempt+1, "error", err)
+			slog.Warn("provider call failed", "provider", p.Name, "role", role, "model", pmodel, "attempt", attempt+1, "error", err)
 			lastErr = err
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
@@ -328,6 +342,24 @@ func modelFor(p ProviderConfig, role ModelRole) string {
 		return p.Small
 	}
 	return p.Model
+}
+
+// stripProviderPin removes the OpenRouter ":provider" routing suffix from a
+// model string (e.g. "deepseek/deepseek-v4-flash-0731:deepinfra" ->
+// "deepseek/deepseek-v4-flash-0731"). Models without a pin are unchanged.
+// Used by the retry loop (#159): on a dead pinned route, retry the SAME model
+// unpinned so OpenRouter's allow_fallbacks order routes to a healthy provider
+// instead of wasting attempts on — and then failing over from — the same dead
+// provider. Generic: applies to any provider-suffixed model, any user.
+func stripProviderPin(model string) string {
+	// OpenRouter convention: the pin is the last ":tag" AFTER the last "/"
+	// (owner/name:provider). A ':' before the last slash is part of the id.
+	lastSlash := strings.LastIndex(model, "/")
+	lastColon := strings.LastIndex(model, ":")
+	if lastSlash != -1 && lastColon > lastSlash {
+		return model[:lastColon]
+	}
+	return model
 }
 func (m *ProviderManager) key(session string, role ModelRole) string {
 	return session + ":" + string(role)
