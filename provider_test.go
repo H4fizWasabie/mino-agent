@@ -71,11 +71,25 @@ func TestCreateJSONNoRetryOnSuccess(t *testing.T) {
 
 func TestParseResponseReadsReasoningContentFallback(t *testing.T) {
 	// MiMo-style: content empty, answer in reasoning_content (legacy field)
-	resp, err := parseResponse(strings.NewReader(`{"choices":[{"message":{"content":"","reasoning_content":"the answer"},"finish_reason":"stop"}],"usage":{}}`))
+	resp, err := parseResponse(strings.NewReader(`{"choices":[{"message":{"content":"","reasoning_content":"the answer"},"finish_reason":"stop"}],"usage":{}}`), false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if resp.FinalText != "the answer" {
 		t.Fatalf("FinalText = %q, want reasoning_content fallback", resp.FinalText)
+	}
+}
+
+// #163: some OpenAI-compatible providers (e.g. qwen via OpenRouter) surface the
+// thinking trace under "reasoning" instead of DeepSeek's "reasoning_content",
+// leaving content null. Without capturing the alternate name the whole response
+// was dropped as "empty model response" — wasting the only remaining fallback.
+func TestParseResponseReadsReasoningAltField(t *testing.T) {
+	resp, err := parseResponse(strings.NewReader(`{"choices":[{"message":{"content":null,"reasoning":"the answer in thought"},"finish_reason":"stop"}],"usage":{}}`), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.FinalText != "the answer in thought" {
+		t.Fatalf("FinalText = %q, want reasoning-alt fallback", resp.FinalText)
 	}
 }

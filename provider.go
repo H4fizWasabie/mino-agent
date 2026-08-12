@@ -172,7 +172,7 @@ func (c *Client) createWithRouting(ctx context.Context, model, reasoning string,
 			c.logUsage(ctx, model, resp, startTime)
 			return resp, err
 		}
-		resp2, err := parseResponse(resp.Body)
+		resp2, err := parseResponse(resp.Body, jsonOutput)
 		c.logUsage(ctx, model, resp2, startTime)
 		return resp2, err
 	}
@@ -196,7 +196,7 @@ func (c *Client) createWithRouting(ctx context.Context, model, reasoning string,
 	return send(false)
 }
 
-func parseResponse(r io.Reader) (*LLMResponse, error) {
+func parseResponse(r io.Reader, jsonMode bool) (*LLMResponse, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
@@ -206,6 +206,10 @@ func parseResponse(r io.Reader) (*LLMResponse, error) {
 			Message struct {
 				Content   string `json:"content"`
 				Reasoning string `json:"reasoning_content"`
+				// Some OpenAI-compatible providers (e.g. qwen via OpenRouter)
+				// surface the thinking trace under "reasoning" instead of
+				// DeepSeek's "reasoning_content". Capture both (see #163).
+				ReasoningAlt string `json:"reasoning"`
 				ToolCalls []struct {
 					ID       string `json:"id"`
 					Function struct {
@@ -236,8 +240,16 @@ func parseResponse(r io.Reader) (*LLMResponse, error) {
 	choice := result.Choices[0]
 	content := choice.Message.Content
 	reasoning := choice.Message.Reasoning
-	// MiMo: answers go to reasoning, content is empty
-	if content == "" && reasoning != "" {
+	if reasoning == "" {
+		reasoning = choice.Message.ReasoningAlt
+	}
+	// MiMo: answers go to reasoning, content is empty. Some providers send
+	// thinking under "reasoning" and leave content null — without capturing
+	// both names the response was dropped wholesale as "empty model response"
+	// (2026-08-12, #163: qwen fallback streamed reasoning-only, empty content).
+	// JSON mode excludes this: a reasoning-only reply is not a JSON answer, so
+	// it must stay "empty" to trigger CreateJSON's response_format retry.
+	if !jsonMode && content == "" && reasoning != "" {
 		content = reasoning
 	}
 	blocks := make([]ContentBlock, 0)
@@ -307,6 +319,8 @@ func parseSSEStream(r io.Reader, onText func(string)) (*LLMResponse, error) {
 				Delta struct {
 					Content          string `json:"content"`
 					ReasoningContent string `json:"reasoning_content"`
+					// Some providers send thinking under "reasoning" (see #163).
+					ReasoningAlt string `json:"reasoning"`
 					ToolCalls        []struct {
 						Index    int    `json:"index"`
 						ID       string `json:"id"`
@@ -341,6 +355,9 @@ func parseSSEStream(r io.Reader, onText func(string)) (*LLMResponse, error) {
 			text := choice.Delta.Content
 			if text == "" {
 				text = choice.Delta.ReasoningContent
+			}
+			if text == "" {
+				text = choice.Delta.ReasoningAlt
 			}
 			if text != "" {
 				fullText.WriteString(text)
