@@ -103,7 +103,7 @@ Measurable: (1) a session whose previous replies exceed `inputPreviewLimit` stil
 - [CTX-011 — Stop-word anywhere stops](tickets/ctx-011-stop-anywhere.md) — **resolved** (closes #157): "its fine, stop" now cancels; questions about stopping still proceed.
 - [CTX-012 — Interrupt replies dropped on tool-call answers](tickets/ctx-012-interrupt-empty.md) — **resolved** (closes #156): no schemas in the interrupt call, plain-text instruction, snapshot-status fallback.
 - [CTX-013 — Stale workaround memory overrides the native tool](tickets/ctx-013-send-document-unpinned.md) (open, #155) — selection verified working; four stale notes taught the curl path; deleted them. No pinning — the essential set stays universal.
-- [CTX-014 — Memory facts have no freshness/staleness governance](tickets/ctx-014-memory-freshness.md) (open) — recall works, **passive/time-based freshness absent**: a stale `public_image_hosting_setup` URL drove FB photo-post failures for a week. Code-checked: `At` field exists but unwired into `entryRanking`; `Feedback` drives rejection→archive (MEM-08) but isn't recency. Gap = age `At` against now, not invent a field. First witnessed case for the OKF `stale_after` idea we skipped. Deferred: governance, not deletion.
+- [CTX-014 — Memory facts surface age at recall](tickets/ctx-014-memory-freshness.md) (resolved, #172) — live recall now appends `age: Nd` (and `(possibly stale)` past 30d) to the match rationale via the existing `At` field; ranking score untouched. Code-checked first: `At` existed but was unwired; `Feedback` only did rejection-expiry (MEM-08). First witnessed case for the OKF `stale_after` idea we skipped — and the field was already there.
 
 ## Out of scope
 

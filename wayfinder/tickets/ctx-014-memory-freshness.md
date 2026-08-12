@@ -1,6 +1,6 @@
 # Context Truth — Memory facts have no freshness/staleness governance
 
-Status: **OPEN** (wayfinder ticket, no GitHub issue yet)
+Status: **RESOLVED** (GitHub issue #172)
 
 ## Question
 
@@ -32,9 +32,17 @@ CTX-013 was four *stale instructional* notes teaching a wrong workflow; the fix 
 - Governance, not deletion: a staleness signal + recall-time flag is the right shape; purging facts on sight loses legitimate long-lived knowledge.
 - Revisit only with a concrete mechanism proposal — do not over-build now (YAGNI until a second case appears).
 
-## Acceptance criteria (to be met when scoped)
+## Resolution applied (closes #172)
 
-- [ ] Reuse the existing `At` field — **no new field needed**. The missing piece is wiring, not schema.
-- [ ] At recall, a fact whose `At` age exceeds a threshold is surfaced as *possibly-stale* (age in the match rationale), not trusted silently. (Optional: mild recency boost for fresh facts — but age-flagging is the core.)
-- [ ] Witnessing metric: when a fact's underlying reality changes, the next recall flags its age rather than acting on it blindly.
-- [ ] No GitHub issue opened yet — open one if/when this is scoped for implementation.
+- `entryRanking` (graph_memory.go) now appends the fact's age to its match rationale on the **live** graph only (`useEmbedder`): `age: Nd` past a 24h fresh grace, `age: Nd (possibly stale)` past a 30d threshold.
+- Reuses the existing `At` field — **no schema change**. The field was write-only until now.
+- Ranking score is untouched; this is purely visibility, so no recall-order or behavior regression.
+- `Feedback` (-5..+5) still drives active *rejection* expiry (MEM-08); this adds the missing *passive/time-based* freshness on top.
+- Regression test: `TestEntryRankingSurfacesStaleness` (graph_memory_freshness_test.go) — fresh fact shows no age, week-old shows `age: 6d` but not stale, >30d shows `age: Nd (possibly stale)`, and the archive path shows no age.
+
+## Acceptance criteria (met)
+
+- [x] Reuse the existing `At` field — no new field needed.
+- [x] At recall, a fact past the freshness window is surfaced as *possibly-stale* (age in the rationale), not trusted silently.
+- [x] Witnessing metric satisfied: a fact whose reality changed is now flagged by age at the next recall.
+- [x] GitHub issue #172 opened and closed by the implementing commit.

@@ -931,6 +931,14 @@ func (gm *GraphMemory) fileStamp(id string) fileStamp {
 // archive fallback (MEM-08).
 const thinLiveScore = 10
 
+// CTX-014 freshness thresholds: live recall surfaces a fact's age so the model
+// doesn't trust a stale-but-unrejected fact blindly (the FB photo-post incident
+// rode a week-old URL). freshGrace avoids noise on new facts; staleAgeThreshold
+// flags facts old enough to warrant a re-check. The At field already exists on
+// every Fact — this only wires it into the rationale; ranking score is untouched.
+const freshGrace = 24 * time.Hour
+const staleAgeThreshold = 30 * 24 * time.Hour
+
 // Remember is the graph-aware recall tool. Returns an indented tree with each
 // matched fact's why, body, and match rationale, plus its graph neighborhood.
 //
@@ -1128,6 +1136,17 @@ func (gm *GraphMemory) entryRanking(query, turn string, facts map[string]*Fact, 
 		if tw := matchedWords(turnWords, useWhen+" "+why); len(tw) > 0 {
 			score += 10 * len(tw)
 			signals = append(signals, "your words: "+strings.Join(tw, ", "))
+		}
+		// CTX-014: surface recency so a stale-but-unrejected fact isn't trusted
+		// blindly. Gated to the live graph (useEmbedder); zero At is skipped.
+		if useEmbedder && !fact.At.IsZero() {
+			if age := time.Since(fact.At); age >= freshGrace {
+				sig := fmt.Sprintf("age: %dd", int(age.Hours()/24))
+				if age > staleAgeThreshold {
+					sig += " (possibly stale)"
+				}
+				signals = append(signals, sig)
+			}
 		}
 		if score > 0 {
 			ranked = append(ranked, rankedFact{id: id, score: score, signals: signals})
