@@ -282,7 +282,7 @@ func TestNoSessionIDSentToOpenRouter(t *testing.T) {
 }
 
 func TestParseResponseReadsOpenAICompatibleCacheUsage(t *testing.T) {
-	resp, err := parseResponse(strings.NewReader(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":80,"cache_write_tokens":20}}}`))
+	resp, err := parseResponse(strings.NewReader(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":80,"cache_write_tokens":20}}}`), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,3 +294,18 @@ func TestParseResponseReadsOpenAICompatibleCacheUsage(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+// #163: the streaming path must also accept the "reasoning" field name (not
+// only "reasoning_content") for providers that send thinking under it.
+func TestParseSSEStreamAcceptsReasoningAltField(t *testing.T) {
+	var streamed strings.Builder
+	response, err := parseSSEStream(strings.NewReader("data: {\"choices\":[{\"delta\":{\"reasoning\":\"thought stream\"}}]}\n\ndata: [DONE]\n"), func(delta string) {
+		streamed.WriteString(delta)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Content) != 1 || response.Content[0].Text != "thought stream" {
+		t.Fatalf("Content = %+v, want reasoning-alt fallback in stream", response.Content)
+	}
+}
