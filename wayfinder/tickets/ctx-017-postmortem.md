@@ -2,6 +2,10 @@
 
 Status: **OPEN** (wayfinder ticket, CTX-017)
 
+## Prerequisite (shared with CTX-018, CTX-019): the brain knows it is the brain
+
+The LLM must be explicitly aware it is Mino's mind driving Mino-the-harness — that its tools, memory (facts, graph, consolidation), loop, session notes, and traces are its own body's subsystems. Without this identity block, self-repair is incoherent: reading `session_notes`/`audit.jsonl` is "snooping some app's logs," not "reading my own vital signs," and "my loop is spinning" is meaningless. The anti-lie rule (CTX-016) gets its teeth because a self-claim is a claim about the body, and the body (db, trace) is the truth. The harness supplies this identity too (a prompt block) — the brain doesn't invent being Mino; Mino tells it. This must land before any of the three levels.
+
 ## Framing (harness, not LLM)
 
 The LLM is a component, not the agent. Mino (the harness) owns providing the trace, the context, and the grounding rule. When a run fails, the harness instruments the failure and the LLM *renders* a diagnosis — but the **responsibility for a grounded diagnosis is the harness's**: it must make the trace available and enforce "cite the trace line, or label it a hypothesis."

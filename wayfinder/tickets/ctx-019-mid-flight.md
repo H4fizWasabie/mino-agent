@@ -2,6 +2,10 @@
 
 Status: **OPEN** (wayfinder ticket, CTX-019 — the hard frontier)
 
+## Prerequisite (shared with CTX-017, CTX-018): the brain knows it is the brain
+
+See CTX-017 — the LLM must be explicitly aware it is Mino's mind driving Mino-the-harness. Mid-flight self-repair is the strongest test of this: the brain must know that "my loop is spinning" means *its own* body is malfunctioning, so it redirects on its own verified signal rather than narrating a guess. #171 gives the signal; the identity block makes the signal *self*-relevant. The identity block must land before this.
+
 ## Framing (harness, not LLM)
 
 The LLM is the component that *decides* the next token; Mino (the harness) owns **giving it the signals and the tools to stop/redirect** — iteration count, repetition detection, context state, and the ability to change course. When the LLM spirals, it is because the harness did not supply the signal or the exit route. #171 (iteration/retry awareness) is the seed.

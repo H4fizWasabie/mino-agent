@@ -2,6 +2,10 @@
 
 Status: **OPEN** (wayfinder ticket, CTX-018)
 
+## Prerequisite (shared with CTX-017, CTX-019): the brain knows it is the brain
+
+See CTX-017 — the LLM must be explicitly aware it is Mino's mind driving Mino-the-harness (its tools, memory, loop, traces are its own body). A design-time audit of "my own playbook contracts" is only coherent if the brain knows the contracts are its own body's wiring. The identity block must land first.
+
 ## Framing (harness, not LLM)
 
 The LLM is the component that *renders* a contract review; Mino (the harness) owns **surfacing the config + the relevant lens** and defining the review as a *risk-flag* pass. The harness decides what a contract gets audited against and what the output must be.
