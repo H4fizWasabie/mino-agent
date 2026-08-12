@@ -24,4 +24,4 @@ This is the verify-then-claim gap at the *action* level: a tool returned 0 and t
 - [x] Existing consolidation tests updated to seed aged rows and still pass; full suite green.
 - [x] `manage_memory consolidate` returns an explicit "nothing eligible" when 0 qualify.
 - [x] GitHub issue #173 opened and closed by the implementing commit.
-- [ ] Live: next `manage_memory consolidate` on the VPS actually drains unconsolidated chat rows (activation pending deploy).
+- [x] Live (2026-08-12): on v2.8.10, `manage_memory consolidate` returned "consolidated 1 sessions into facts" and state.db consolidated went 1102→1106 (4 rows = 1 old stuck session drained past the old 12-row floor). Mino reported the actual tool return verbatim — no fabrication.
