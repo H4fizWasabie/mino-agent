@@ -303,24 +303,43 @@ func saveUpdateCache(path string, c updateCache) {
 	os.WriteFile(path, data, 0644)
 }
 
-// isNewer does naive semver comparison. Tags must be "vMAJOR.MINOR.PATCH".
+// isNewer does semver comparison with prerelease handling. Numeric parts first;
+// at the same numeric version, a release (no suffix) is newer than a
+// prerelease (rc/beta/alpha) — so v2.8.11 promotes over v2.8.11-rc4 (previously
+// the rc suffix was dropped by Sscanf and the two compared equal, leaving the
+// updater stuck on the rc). Tags must be "vMAJOR.MINOR.PATCH" with an optional
+// -prerelease suffix.
 func isNewer(a, b string) bool {
 	av := parseSemver(a)
 	bv := parseSemver(b)
 	for i := 0; i < 3; i++ {
-		if av[i] > bv[i] {
+		if av.nums[i] > bv.nums[i] {
 			return true
 		}
-		if av[i] < bv[i] {
+		if av.nums[i] < bv.nums[i] {
 			return false
 		}
+	}
+	// Same numeric part: a release beats a prerelease; two prereleases are
+	// treated as equal (rc-vs-rc promotion is not used here).
+	if av.pre == "" && bv.pre != "" {
+		return true
 	}
 	return false
 }
 
-func parseSemver(v string) [3]int {
+func parseSemver(v string) semver {
 	v = strings.TrimPrefix(v, "v")
-	var parts [3]int
-	fmt.Sscanf(v, "%d.%d.%d", &parts[0], &parts[1], &parts[2])
-	return parts
+	var s semver
+	if i := strings.IndexByte(v, '-'); i >= 0 {
+		s.pre = v[i:]
+		v = v[:i]
+	}
+	fmt.Sscanf(v, "%d.%d.%d", &s.nums[0], &s.nums[1], &s.nums[2])
+	return s
+}
+
+type semver struct {
+	nums [3]int
+	pre  string // prerelease suffix ("-rc4", "-beta1", "" = release)
 }
