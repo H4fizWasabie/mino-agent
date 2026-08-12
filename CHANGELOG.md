@@ -1,3 +1,8 @@
+## [v2.8.12] — Update & alert polish (2026-08-12)
+### Fixed
+- The self-updater now promotes a release over a same-numeric prerelease: `parseSemver` dropped the `-rc` suffix via `Sscanf`, so a binary running `v2.8.11-rc4` compared equal to the `v2.8.11` release and `mino update` said "Already up to date", forcing a manual swap. A release now beats a prerelease at the same numeric version, so `rc` → `release` promotion works cleanly. (Why: rc staging binaries are the deploy-before-release path; the updater must let the released version supersede them.)
+- The high-error-rate `[MINO ALERT]` no longer pages the owner's Telegram: it is operational detail — useful to the LLM (still in the journal and the `tool_calls` DB) but noise in the owner's DM. The silence (dead man's switch) and extension-stuck alerts stay owner-facing. (Why: a transient error spike during normal churn is self-diagnosis material for the harness, not a page for the owner.)
+
 ## [v2.8.11] — Harness self-repair: post-mortem, design-time audit, mid-flight (2026-08-12)
 ### Added
 - `post_mortem` tool + failure-evidence injection (implements CTX-017): a failed playbook run now auto-injects a bounded evidence block into the `run_playbook` result — parse-failures with iteration numbers, outcome contradictions, rewrite streaks, iteration usage, final reply — so the LLM diagnoses from evidence instead of re-scanning (which itself churned to the iteration cap). The `post_mortem` tool provides the same extraction on demand. (Why: after a failure the harness already knows what happened; telling the LLM beats making it rediscover by scanning, which burns the exact budget it's diagnosing.)
