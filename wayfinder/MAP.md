@@ -103,6 +103,7 @@ Measurable: (1) a session whose previous replies exceed `inputPreviewLimit` stil
 - [CTX-011 — Stop-word anywhere stops](tickets/ctx-011-stop-anywhere.md) — **resolved** (closes #157): "its fine, stop" now cancels; questions about stopping still proceed.
 - [CTX-012 — Interrupt replies dropped on tool-call answers](tickets/ctx-012-interrupt-empty.md) — **resolved** (closes #156): no schemas in the interrupt call, plain-text instruction, snapshot-status fallback.
 - [CTX-013 — Stale workaround memory overrides the native tool](tickets/ctx-013-send-document-unpinned.md) (open, #155) — selection verified working; four stale notes taught the curl path; deleted them. No pinning — the essential set stays universal.
+- [CTX-014 — Memory facts have no freshness/staleness governance](tickets/ctx-014-memory-freshness.md) (open) — recall works, freshness absent: a stale `public_image_hosting_setup` URL drove FB photo-post failures for a week; no `stale_after`/last-verified signal. First witnessed case for the OKF freshness field we skipped. Deferred: governance, not deletion.
 
 ## Out of scope
 
