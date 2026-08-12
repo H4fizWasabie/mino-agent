@@ -763,7 +763,23 @@ func extractToolUses(blocks []ContentBlock) []ContentBlock {
 // stage "complete" without its required output). The third return is a
 // bounded snippet of the last marker whose args could not be parsed, for
 // diagnostics (the loop logs it — without it the failure shape is invisible).
+//
+// Tolerance (2026-08-12, #158): some models under OpenRouter/provider
+// rotation emit the tool call WITHOUT the [tool_call:] prefix — bare
+// "name({...})" — which strict parsing dropped, spitting the model into a
+// retry loop until the iteration cap (observed: a FB publish call burned
+// ~20 iterations re-emitting MCP_composio_..._FLAT({...})). When no prefixed
+// marker is found, fall back to scanning bare name({json}) calls.
 func extractTextToolUses(text string) ([]ContentBlock, bool, string) {
+	uses, markerFound, failed := extractPrefixedToolUses(text)
+	if len(uses) > 0 || markerFound {
+		return uses, markerFound, failed
+	}
+	return extractBareToolUses(text)
+}
+
+// extractPrefixedToolUses scans for [tool_call: name({...})] markers.
+func extractPrefixedToolUses(text string) ([]ContentBlock, bool, string) {
 	var uses []ContentBlock
 	markerFound := false
 	failed := ""
@@ -812,6 +828,49 @@ func extractTextToolUses(text string) ([]ContentBlock, bool, string) {
 		})
 	}
 	return uses, markerFound, failed
+}
+
+// bareToolNameRe matches a bare tool-call start: an identifier immediately
+// followed by '(' and a JSON object — e.g. "bash({"command":...})" or
+// "MCP_composio_COMPOSIO_MULTI_EXECUTE_TOOL_FLAT({"arguments_json":...})".
+// Used as the tolerant fallback (see extractTextToolUses). The paren/JSON
+// shape is required so ordinary prose ("seen({"..."})") is not misread as
+// a tool call.
+var bareToolNameRe = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_:]*)\s*\(\s*(\{)`)
+
+// extractBareToolUses scans for bare name({...}) tool calls when no prefixed
+// [tool_call:] markers exist. Only emits a use when the args parse as JSON
+// and the name is identifier-shaped; anything else is left alone so prose is
+// not spuriously dispatched as a tool call.
+func extractBareToolUses(text string) ([]ContentBlock, bool, string) {
+	var uses []ContentBlock
+	for {
+		loc := bareToolNameRe.FindStringSubmatchIndex(text)
+		if loc == nil {
+			break
+		}
+		name := text[loc[2]:loc[3]]
+		braceAt := loc[4]
+		argsJSON, rest := extractBalancedJSON(text[braceAt:])
+		// Advance past this candidate regardless so the scan always moves.
+		if argsJSON != "" {
+			args, ok := parseToolArgsJSON(argsJSON)
+			if ok {
+				uses = append(uses, ContentBlock{
+					Type:  "tool_use",
+					ID:    fmt.Sprintf("txt_%d", len(uses)),
+					Name:  name,
+					Input: args,
+				})
+			}
+			text = rest
+		} else {
+			// Not a JSON object after the paren — skip the opening brace char
+			// and continue scanning onward.
+			text = text[braceAt+1:]
+		}
+	}
+	return uses, len(uses) > 0, ""
 }
 
 // markerSnippet bounds the diagnostic text so a pathological marker cannot

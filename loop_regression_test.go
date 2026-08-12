@@ -657,3 +657,63 @@ func TestVisionPromptVariants(t *testing.T) {
 		}
 	}
 }
+
+// #158: a model under provider rotation can emit a bare NAME({...}) tool call
+// WITHOUT the [tool_call:] prefix. Strict parsing dropped it, so the loop
+// pushed the model to re-emit the same shape until the iteration cap — a FB
+// publish call burned ~20 iterations this way. The tolerant fallback must
+// recover these while leaving ordinary prose alone.
+func TestExtractTextToolUsesRecoversBareMarkers(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		want string // expected tool name parsed
+	}{
+		// Exact failing shape from the VPS (FB publish, _FLAT variant).
+		{
+			"flat-bare",
+			`MCP_composio_COMPOSIO_MULTI_EXECUTE_TOOL_FLAT({"arguments_json":"{\"page_id\": \"911623135577188\"}"})`,
+			"MCP_composio_COMPOSIO_MULTI_EXECUTE_TOOL_FLAT",
+		},
+		{
+			"bash-bare",
+			`bash({"command":"ls -la"})`,
+			"bash",
+		},
+		{
+			"read-file-bare",
+			`read_file({"path":"/tmp/x"})`,
+			"read_file",
+		},
+		{
+			"prose-ignored",
+			`I will now call the tool like this: doThing("not json here"). none.`,
+			"", // args are not a JSON object -> not a tool call
+		},
+	}
+	for _, c := range cases {
+		uses, found, _ := extractTextToolUses(c.text)
+		if c.want == "" {
+			if found || len(uses) != 0 {
+				t.Errorf("%s: prose misread as tool call (found=%v uses=%d)", c.name, found, len(uses))
+			}
+			continue
+		}
+		if !found || len(uses) != 1 {
+			t.Fatalf("%s: got found=%v uses=%d, want a single %q", c.name, found, len(uses), c.want)
+		}
+		if uses[0].Name != c.want {
+			t.Fatalf("%s: name = %q, want %q", c.name, uses[0].Name, c.want)
+		}
+	}
+}
+
+// The bare fallback must not shadow the strict prefixed format, and a broken
+// bare call (args not JSON) must not be dispatched as a tool call.
+func TestExtractBareToolUsesSkipsNonJSONArgs(t *testing.T) {
+	// args is a plain string, not a JSON object -> skip, no false positive.
+	uses, found, _ := extractTextToolUses(`echo read_file("/tmp/x") to view`)
+	if found || len(uses) != 0 {
+		t.Fatalf("non-JSON bare call dispatched: found=%v uses=%d", found, len(uses))
+	}
+}
