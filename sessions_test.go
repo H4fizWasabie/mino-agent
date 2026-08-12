@@ -92,6 +92,60 @@ func TestStopMessageStopWordAnywhere(t *testing.T) {
 	}
 }
 
+func TestMarkStoppedGuidesNextTurn(t *testing.T) {
+	home := t.TempDir()
+	settings := &Settings{Home: home, ContextChars: 100000}
+	session := NewSession(settings, nil)
+
+	// Simulate a task already in progress, then a user stop.
+	session.AddExchange("proceed with both", "proceed with both", "doing it now", nil, "telegram")
+	session.MarkStopped()
+
+	// The cancellation marker must be present in history.
+	if len(session.history) != 4 {
+		t.Fatalf("history len = %d, want 4 (task pair + stop pair)", len(session.history))
+	}
+	last := session.history[len(session.history)-1].Content
+	if !strings.Contains(last, "stopped/cancelled") {
+		t.Fatalf("history lacks stop marker, last = %q", last)
+	}
+
+	// The next turn's context must carry the marker so the model does not
+	// resume the cancelled task.
+	messages, _ := session.ContextFor("sys", "what now")
+	found := false
+	for _, m := range messages {
+		if strings.Contains(m.Content, "stopped/cancelled") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("next turn context does not include the stop marker")
+	}
+}
+
+func TestMarkStoppedSurvivesRestart(t *testing.T) {
+	home := t.TempDir()
+	db := Connect(home)
+	defer db.Close()
+	settings := &Settings{Home: home, ContextChars: 100000}
+	mem := NewMemory(db, nil, settings)
+
+	first := NewSessionManager(settings, mem).Get("tg:42")
+	first.Session.AddExchange("run the task", "run the task", "ok starting", nil, "telegram")
+	first.Session.MarkStopped()
+
+	restored := NewSessionManager(settings, mem).Get("tg:42")
+	if len(restored.Session.history) != 4 {
+		t.Fatalf("restored history = %d, want 4 (marker must persist)", len(restored.Session.history))
+	}
+	last := restored.Session.history[len(restored.Session.history)-1].Content
+	if !strings.Contains(last, "stopped/cancelled") {
+		t.Fatalf("stop marker lost across restart: %q", last)
+	}
+}
+
 func TestTelegramNotificationContextSurvivesRestart(t *testing.T) {
 	home := t.TempDir()
 	db := Connect(home)

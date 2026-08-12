@@ -356,7 +356,14 @@ func authoritativeClock(now time.Time, loc *time.Location) string {
 }
 
 func (w *Core) CancelTurn(sessionID string) bool {
-	return w.Sessions.Get(sessionID).cancelTurn()
+	conversation := w.Sessions.Get(sessionID)
+	active := conversation.cancelTurn()
+	// Even when no loop is running (task already ended — e.g. iteration_limit),
+	// record the stop so the next turn doesn't resume the cancelled task.
+	conversation.mu.Lock()
+	conversation.Session.MarkStopped()
+	conversation.mu.Unlock()
+	return active
 }
 
 // cancelPhrases (CTX-005): natural cancel phrasings anywhere in the message.

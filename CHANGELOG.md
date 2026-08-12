@@ -1,4 +1,6 @@
 ## [Unreleased]
+### Fixed
+- `stop`/`cancel` now marks the session context (implements the stop-boundary fix, closes #162): `Core.CancelTurn` appends a `[System: ... stopped/cancelled ...]` marker to the session history on every stop — active loop or not — so the next user message is treated as a fresh request instead of silently resuming the cancelled task. The marker persists across restarts via the chat log. (Why: a task aborted by the circuit breaker or iteration cap left its history behind; the next message — even after a `stop` — resumed the dead task and repeated the cap loop. `CancelTurn` previously only cancelled the in-flight loop's context and never touched history, so `stop` was a pause, not a reset. Locking the history append under the conversation mutex keeps it race-free with the turn.)
 
 ## [v2.8.6] — Cancel and interrupt hardened (2026-08-11)
 ### Changed
