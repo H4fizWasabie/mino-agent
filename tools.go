@@ -826,6 +826,7 @@ func BuildRegistry(db *sql.DB, home, workspace string, mem *Memory, location ...
 	r.Register(behaves(makeMessagesTool(home), BehaviorMutate))
 	r.Register(behaves(makeSendDocumentTool(home), BehaviorMutate))
 	r.Register(behaves(makePostMortemTool(home), BehaviorObserve))
+	r.Register(behaves(makeAuditPlaybookTool(home), BehaviorObserve))
 
 	// web search (Core: search.make_tool)
 	r.Register(behaves(makeSearchTool(), BehaviorObserve))
