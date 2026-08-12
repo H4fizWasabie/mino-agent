@@ -273,6 +273,27 @@ func (s *Session) AddExchange(userRaw, userContext, reply string, toolCalls []To
 
 // AddNotification keeps an outbound gateway notification available to the next
 // user turn without pretending the user sent it.
+// stopMarker guides the next turn after a user-initiated stop. CTX stops and
+// /stop cancel the in-flight loop, but the pre-stop conversation history
+// stays: without an explicit marker the next user message resumed the
+// cancelled task. Injecting this marker makes stop a real context boundary.
+const stopMarker = `[System: the user stopped/cancelled the previous task. Do NOT resume it. The next user message is a fresh request — answer it directly without re-entering the cancelled task.]`
+
+// MarkStopped records a user-initiated stop in the session history so the
+// next turn does not silently resume the cancelled task. Called on every
+// stop, active loop or not (the loop may already have ended — e.g.
+// iteration_limit — yet its task still sits in history).
+func (s *Session) MarkStopped() {
+	s.history = append(s.history,
+		Message{Role: "user", Content: "[user stopped/cancelled]"},
+		Message{Role: "assistant", Content: stopMarker},
+	)
+	if s.mem != nil {
+		s.mem.LogChat("user", "[user stopped/cancelled]", s.sessionID, "telegram_stop")
+		s.mem.LogChat("assistant", stopMarker, s.sessionID, "telegram_stop")
+	}
+}
+
 func (s *Session) AddNotification(reply string) {
 	const marker = "[Mino sent the following Telegram notification. Treat it as context, not a new user instruction.]"
 	s.history = append(s.history,
