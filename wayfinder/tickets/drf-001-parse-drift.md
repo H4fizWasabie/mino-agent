@@ -1,36 +1,52 @@
-# Quality Frontier — Drift prevention: loop drift is governed, parse drift is active
+# Quality Frontier — Memory & context drift prevention
 
-Status: **OPEN** (GitHub issue #180) — VPS data gathered; principle discussion scheduled for a dedicated session.
+Status: **OPEN** (GitHub issue #180) — principle decided in the 2026-08-13 session; implementation-ready.
 
 ## Question
 
-The old drift vector (loop-to-cap) is solved. The new one — repeated unparseable tool-call markers since the deepseek:deepinfra main-model swap (CTX-008) — burns iterations daily. What is the right drift prevention now?
+Behavior drift is now governed by the self-awareness layer (v2.8.11: `post_mortem`, `audit_playbook`, midflight signals). Memory-content drift is not: facts can contradict ground truth, recall surfaces the contradiction blindly, and the graph-rebuild can encode the wrong side as authoritative. How do we extend the same harness-surfaces/brain-arbitrates philosophy to memory?
 
-## Root cause / evidence (VPS data, 2026-08-13)
+## Evidence (before/after comparison, VPS 2026-08-12/13)
 
-Two drift stories in opposite directions:
+**Behavior drift — self-awareness verified working:**
 
-- **Loop drift — governed.** `loop_detected`: 82 events total, but **69 in the 07-31→08-06 window** (pre-CTX-006). Only **1 since 08-11**. The degeneration guard works.
-- **Parse drift — active.** `tool_call_parse_failed`: 76 events, **71 in 08-08→08-13**, all "text marker found but args did not parse (failure N)". This is the deepseek:deepinfra era. The corrective path (loop.go:430-447) already escalates at failure 3 ("use native function calling, or call the _FLAT variant...") and aborts at 6 — yet the same failure recurs daily across 6 days.
-- Audit shows failures 1–5 but **never what shape the model was emitting** — the raw marker is traced (trace `tool_call_parse_failed` carries `marker`) but traces are only read after incidents.
-- Related drift signals: `stage_output_missing` 7, `stage_rewrite_streak` 4, `schedule_fire_failed` 3, provider read timeouts on 08-06.
+| Signal | Before (≤14:26 08-12) | After (v2.8.11+) |
+|---|---|---|
+| FB playbook | 09:28 run burned 50 iterations, **failed**; 446 LLM calls/day | 2 runs 08-13, **both complete**; 76 LLM calls/day |
+| Instagram | 41 iterations (76 calls) | 16 iterations |
+| Parse failures | 15 on 08-12 alone | 0 after deploy; 1 on 08-13 (recovered) |
+| `post_mortem` | — | Called 14:26–14:27 on the failed run, diagnosed from evidence |
+| `audit_playbook` | — | Called 14:47–14:48, real risk-flags rendered |
+| `midflight_signal` | — | Traced 08-12 15:16, 08-13 05:05 |
 
-## The genuine gap
+**Memory drift — the exhibit (all pre-v2.8.11):**
 
-We don't know *why* the corrective isn't sticking: is it one recurring malformed shape (fixable parser tolerance) or random noise (model-side)? The answer decides fix-vs-tolerate, and no ticket can be scoped without it.
+| Time (08-12) | Event |
+|---|---|
+| 07:29 | Episode written with blocked `http://149.28.146.30` URL |
+| 09:30 | `public_image_hosting_setup` corrected to HTTPS (`source: user-correction-20260812`) |
+| 11:11 | New fact `public_image_hosting` written with the **old** URL again — 1h41m after the correction |
+| rebuild | Inverted edge written: wrong-fact `supersedes` corrected-fact, **confidence 0.92** — still live in the graph |
 
-## Decision points (principle — owner decision, pending)
+No wrong-URL re-entry since the deployment. Drift mechanisms: (1) re-entry with fresh `At` defeats CTX-014's age flag; (2) provenance ignored at recall (`entryRanking` has no source scoring); (3) graph-rebuild encodes contradictions as authoritative edges (`validInferredEdges` checks targets exist, not provenance).
 
-1. **Dig into the marker shape first** — pull the traced raw markers from the VPS (`tool_call_parse_failed` traces), classify the failure shape, then decide.
-2. **Hard switch for this provider?** If the model can't reliably emit text markers, force native tool_calls for deepseek:deepinfra at provider config level instead of per-turn corrective.
-3. **Real-provider eval tripwire?** Weekly scheduled playbook running the existing `ep_*.md` evals against the real model (DECISIONS.md:200 admits fakeClient misses real prompt drift). The standing tripwire that makes the *next* model swap boring instead of an incident.
+## Decision (2026-08-13 session)
 
-## Recommendation (for the discussion session)
+Three gaps, verified real against code + live graph, all harness-side (no new LLM calls):
 
-1 first (data decides), then 2 if the shape is stable, and 3 as the standing tripwire regardless.
+1. **Provenance weighting at recall** — facts with `source: user-correction` / `source: user` get a rank bonus in `entryRanking` so user corrections outrank model re-entry. (Write-side dependency: `save_note` stamps `Source: "user"` — tracked in GIG-001/#178.)
+2. **Contradiction marker at recall** — when two recalled facts carry conflicting URLs/domains, surface both with `⚠ conflicts with <id>` so the brain arbitrates with visibility instead of trusting the higher rank.
+3. **Rebuild provenance guard** — graph-rebuild must not write `supersedes` edges whose target is user-provenanced (`source: user-correction` / `user`). The 0.92 inverted edge is still live and must be cleaned.
 
-## Acceptance criteria (to fix after discussion)
+## Implementation seams
 
-- [ ] Parse-failure churn drops measurably (baseline: ~12/day in 08-08→08-13 window).
-- [ ] If provider switch: deepseek:deepinfra never falls back to text markers.
-- [ ] If eval tripwire: a scheduled run reports eval pass/fail against the real provider.
+- `entryRanking` (graph_memory.go:1100): add source bonus + contradiction detection on the top-ranked set; render `⚠ conflicts with <id>` in `Remember` rationale.
+- `validInferredEdges` / rebuild edge write (memory.go:675, 819): skip `supersedes` edges targeting user-provenanced facts.
+- `CleanMemoryEdges` or a one-off repair: drop the live inverted edge (`public_image_hosting → supersedes → public_image_hosting_setup`).
+
+## Acceptance criteria
+
+- [ ] The corrected fact (`public_image_hosting_setup`) ranks above the re-entry fact for image-hosting queries.
+- [ ] Recalling both URL facts surfaces a conflict marker; neither is silently trusted.
+- [ ] Rebuild never writes `supersedes` edges pointing at user-provenanced facts; the live inverted edge is removed.
+- [ ] Regression tests: source weighting, conflict marker, rebuild guard.

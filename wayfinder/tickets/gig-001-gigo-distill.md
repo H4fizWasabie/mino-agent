@@ -31,6 +31,8 @@ Memory grows ~58 facts/day; routine-recurrence snapshots ("Ran X on DATE and pub
 
 **Skip:** provenance restoration (533 empty sources — cosmetic, expiry keys off `type`), generic routine-recurrence regex gate (would kill by-design run nodes).
 
+**Add (write provenance, from the 2026-08-13 drift session):** `save_note` stamps `Source: "user"` at birth — user-authored notes must be distinguishable from model-distilled facts. The recall-side use of this provenance (weighting) lives in DRF-001 (#180).
+
 ## Implementation seams (for the implementer)
 
 - `entryRanking` / `Remember` (graph_memory.go:958-1120): exclude `type: episodic` from start-node candidates; keep episodes in the facts map so BFS still traverses into them (provenance context via `attributed_to`).
@@ -44,3 +46,4 @@ Memory grows ~58 facts/day; routine-recurrence snapshots ("Ran X on DATE and pub
 - [ ] Episodic facts older than 30d move to archive automatically; `[archived]` recall still answers.
 - [ ] Only whitelisted playbooks (daily-ai-concept) produce semantic facts from distill; news/threads/facebook/instagram/gmail/reddit produce run nodes only.
 - [ ] Regression tests: recall excludes episodes as starts; distill gate honors the per-playbook flag; expiry archives old episodes only.
+- [ ] `save_note` facts carry `Source: "user"`.
