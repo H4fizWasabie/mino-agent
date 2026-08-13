@@ -174,6 +174,34 @@ func TestSaveNoteWithoutWhy(t *testing.T) {
 	}
 }
 
+// issue #178: save_note facts are stamped Source: "user" at birth so
+// user-authored facts stay distinguishable from model-distilled ones.
+func TestSaveNoteStampsUserSource(t *testing.T) {
+	home := t.TempDir()
+	memories := filepath.Join(home, "memories")
+	mem := &Memory{db: Connect(home), cfg: &Settings{Home: home, MemoriesDir: memories}, graph: NewGraphMemory(memories, nil)}
+	defer mem.db.Close()
+	tool := makeNotesTool(mem.db, mem)
+
+	if out := tool.Fn(map[string]any{"id": "user_fact", "subject": "User said this"}); !strings.Contains(out, "Saved") {
+		t.Fatalf("save failed: %q", out)
+	}
+	fact, ok := mem.graph.FindFact("user_fact")
+	if !ok {
+		t.Fatal("fact not saved")
+	}
+	if fact.Source != "user" {
+		t.Fatalf("fact.Source = %q, want \"user\"", fact.Source)
+	}
+	raw, err := os.ReadFile(filepath.Join(memories, "user_fact.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "source: user") {
+		t.Fatalf("source missing from front matter:\n%s", raw)
+	}
+}
+
 func TestBashHardFailureNoOutput(t *testing.T) {
 	tool := makeBashToolFor("", 2*time.Minute)
 	out := tool.Fn(map[string]any{"command": "exit 3"})

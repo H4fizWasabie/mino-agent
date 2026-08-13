@@ -1511,6 +1511,7 @@ func makeNotesTool(db *sql.DB, mem *Memory) *Tool {
 				Subject: subject,
 				At:      time.Now(),
 				Why:     why,
+				Source:  "user", // user-authored facts must be distinguishable from model-distilled ones (issue #178)
 				Edges:   edges,
 				Body:    content,
 			}
