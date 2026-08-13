@@ -1,6 +1,6 @@
 # Quality Frontier — Reduce garbage-in/garbage-out at the distill source
 
-Status: **OPEN** (GitHub issue #178) — principle decided in the 2026-08-13 session; implementation-ready.
+Status: **CLOSED** (GitHub issue #178) — procedural/long-term split shipped: episodes never start recall, distill semantic facts are config.md-whitelisted, episodes expire to archive after 30d, save_note stamps Source: user.
 
 ## Question
 

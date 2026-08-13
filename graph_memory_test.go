@@ -655,3 +655,59 @@ func TestRemoveSupersedesIntoUserFacts(t *testing.T) {
 		t.Fatalf("wrong edges = %+v, want depends_on + explicit supersedes kept", wrong.Edges)
 	}
 }
+
+// issue #178: episodic facts never start a recall — they stay reachable as
+// BFS neighborhood context from semantic starts.
+func TestRememberExcludesEpisodicStarts(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), nil)
+	if err := gm.RecordFact(Fact{ID: "ep_run", Type: "episodic", Subject: "Ran ai-news digest 2026-08-13", At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gm.RecordFact(Fact{ID: "news_playbook", Type: "semantic", Subject: "News playbook publishes headlines", Edges: []Edge{{Target: "ep_run", Rel: "ran"}}}); err != nil {
+		t.Fatal(err)
+	}
+	// A query that only matches the episode must come up empty, not start there.
+	if got := gm.Remember("digest 2026", ""); !strings.Contains(got, "No memories found") {
+		t.Fatalf("episodic fact became a recall start:\n%s", got)
+	}
+	// From a semantic start the episode is still visible as neighborhood.
+	got := gm.Remember("News playbook", "")
+	if !strings.Contains(got, "ep_run") {
+		t.Fatalf("episodic neighbor missing from tree:\n%s", got)
+	}
+}
+
+// issue #178: episodes older than 30d archive with reason expiry; semantic
+// facts and fresh episodes stay live; archived episodes remain answerable via
+// the archive fallback.
+func TestArchiveExpiredEpisodic(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), nil)
+	if err := gm.RecordFact(Fact{ID: "old_ep", Type: "episodic", Subject: "Old run", At: time.Now().Add(-31 * 24 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gm.RecordFact(Fact{ID: "fresh_ep", Type: "episodic", Subject: "Fresh run", At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gm.RecordFact(Fact{ID: "old_sem", Type: "semantic", Subject: "Old semantic fact", At: time.Now().Add(-31 * 24 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if n := gm.ArchiveExpiredEpisodic(time.Now().Add(-30 * 24 * time.Hour)); n != 1 {
+		t.Fatalf("archived %d, want 1", n)
+	}
+	if _, ok := gm.FindFact("old_ep"); ok {
+		t.Fatal("old episode still live")
+	}
+	if _, ok := gm.FindFact("fresh_ep"); !ok {
+		t.Fatal("fresh episode must stay live")
+	}
+	if _, ok := gm.FindFact("old_sem"); !ok {
+		t.Fatal("semantic facts never expire")
+	}
+	if _, ok := gm.archiveFactsLocked()["old_ep"]; !ok {
+		t.Fatal("expired episode not in archive")
+	}
+	// Second pass is a no-op.
+	if n := gm.ArchiveExpiredEpisodic(time.Now().Add(-30 * 24 * time.Hour)); n != 0 {
+		t.Fatalf("second pass archived %d, want 0", n)
+	}
+}

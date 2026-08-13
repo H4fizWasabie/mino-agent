@@ -691,6 +691,28 @@ func (gm *GraphMemory) ArchiveFact(fact Fact, reason string) (*Fact, error) {
 	return gm.archiveLocked(fact, reason)
 }
 
+// ArchiveExpiredEpisodic moves episodic facts older than cutoff into the
+// archive with reason "expiry" (issue #178: procedural facts age out after
+// 30 days; semantic facts never expire). Zero At is skipped — unknown age is
+// not old age. Returns the number archived.
+func (gm *GraphMemory) ArchiveExpiredEpisodic(cutoff time.Time) int {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+	var expired []Fact
+	for _, f := range gm.facts {
+		if f.Type == "episodic" && !f.At.IsZero() && f.At.Before(cutoff) {
+			expired = append(expired, *f)
+		}
+	}
+	archived := 0
+	for _, f := range expired {
+		if _, err := gm.archiveLocked(f, "expiry"); err == nil {
+			archived++
+		}
+	}
+	return archived
+}
+
 func (gm *GraphMemory) archiveLocked(fact Fact, reason string) (*Fact, error) {
 	if _, ok := gm.facts[fact.ID]; !ok {
 		return nil, fmt.Errorf("memory fact not found: %s", fact.ID)
@@ -1192,6 +1214,11 @@ func (gm *GraphMemory) entryRanking(query, turn string, facts map[string]*Fact, 
 	turnWords := memoryTokenize(turn)
 	var ranked []rankedFact
 	for id, fact := range facts {
+		// Procedural facts are traversal-only: they stay visible as BFS
+		// neighborhood context but never start a recall (issue #178).
+		if fact.Type == "episodic" {
+			continue
+		}
 		score := 0
 		subj := strings.ToLower(fact.Subject)
 		body := strings.ToLower(fact.Body)
@@ -1286,6 +1313,9 @@ func mergeEmbeddingHits(ranked []rankedFact, hits []scoredDoc, facts map[string]
 		}
 		if _, ok := facts[id]; !ok {
 			continue
+		}
+		if facts[id].Type == "episodic" {
+			continue // episodes never start a recall (issue #178)
 		}
 		embScore := int(20 * sd.score)
 		found := false
