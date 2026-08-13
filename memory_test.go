@@ -1142,3 +1142,31 @@ func TestGraphJudgmentParsesExpired(t *testing.T) {
 		t.Fatal("missing expired flag must default to false")
 	}
 }
+
+// issue #180: validInferredEdges refuses supersedes edges whose target is
+// user-provenanced, on every write path that funnels through it.
+func TestValidInferredEdgesBlocksSupersedesIntoUserFacts(t *testing.T) {
+	m := &Memory{graph: NewGraphMemory(t.TempDir(), nil)}
+	if err := m.graph.RecordFact(Fact{ID: "u", Type: "semantic", Subject: "User correction", Source: "user"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.graph.RecordFact(Fact{ID: "u2", Type: "semantic", Subject: "User note", Source: "user"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.graph.RecordFact(Fact{ID: "m", Type: "semantic", Subject: "Model fact"}); err != nil {
+		t.Fatal(err)
+	}
+	valid := m.validInferredEdges([]Edge{
+		{Target: "u", Rel: "supersedes", Confidence: 0.92},
+		{Target: "u2", Rel: "depends_on", Confidence: 0.9},
+		{Target: "m", Rel: "supersedes", Confidence: 0.95},
+	}, map[string]bool{"u": true, "u2": true, "m": true}, "graph-rebuild")
+	if len(valid) != 2 {
+		t.Fatalf("valid edges = %+v, want 2 (user-target supersedes dropped)", valid)
+	}
+	for _, e := range valid {
+		if e.Target == "u" && e.Rel == "supersedes" {
+			t.Fatalf("supersedes into user-provenanced fact passed the guard: %+v", valid)
+		}
+	}
+}
