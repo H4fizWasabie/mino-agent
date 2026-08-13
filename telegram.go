@@ -8,8 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -237,7 +237,7 @@ func handleTelegramMessage(w *Core, bot *tgbotapi.BotAPI, message *tgbotapi.Mess
 	// Interrupt routing: mid-loop queries don't wait for loop to finish
 	if query, ok := isInterrupt(text); ok && w.snapshot(sid) != nil {
 		go w.handleInterrupt(sid, query, func(reply string) {
-			sendTelegramReply(bot, chatID, "⚡ "+reply, nil)
+			sendTelegramReply(bot, chatID, "⚡ "+reply, nil, message.MessageID)
 		})
 		return
 	}
@@ -247,11 +247,26 @@ func handleTelegramMessage(w *Core, bot *tgbotapi.BotAPI, message *tgbotapi.Mess
 		if w.CancelTurn(sid) {
 			reply = "Stopped."
 		}
-		sendTelegramReply(bot, chatID, reply, nil)
+		sendTelegramReply(bot, chatID, reply, nil, message.MessageID)
 		return
 	}
 
-	bot.Send(tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping))
+	// Typing keepalive: the indicator dies after ~5s, so re-send every 4s
+	// until the turn finishes (issue #181).
+	stopTyping := make(chan struct{})
+	defer close(stopTyping)
+	go func() {
+		t := time.NewTicker(4 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-t.C:
+				bot.Send(tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping))
+			case <-stopTyping:
+				return
+			}
+		}
+	}()
 
 	// progress observer: send tool-call status to Telegram so user knows Mino is working
 	var statusMsg tgbotapi.Message
@@ -291,7 +306,7 @@ func handleTelegramMessage(w *Core, bot *tgbotapi.BotAPI, message *tgbotapi.Mess
 	if statusSent && statusMsg.MessageID != 0 {
 		bot.Send(tgbotapi.NewDeleteMessage(chatID, statusMsg.MessageID))
 	}
-	sendTelegramReply(bot, chatID, result.Reply, nil)
+	sendTelegramReply(bot, chatID, result.Reply, nil, message.MessageID)
 }
 
 func telegramChatAllowed(settings *Settings, chatID int64) bool {

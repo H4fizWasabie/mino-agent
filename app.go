@@ -213,7 +213,7 @@ func (w *Core) captureBot(bot *tgbotapi.BotAPI, chatID int64) {
 	w.notifyChatID = chatID
 	w.notifyTelegram = func(result *LoopResult) {
 		w.recordTelegramNotification(chatID, result.Reply)
-		sendTelegramReply(bot, chatID, result.Reply, nil)
+		sendTelegramReply(bot, chatID, result.Reply, nil, 0)
 	}
 }
 

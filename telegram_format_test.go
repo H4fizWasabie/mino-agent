@@ -88,3 +88,51 @@ func TestChunkHTML(t *testing.T) {
 		t.Error("chunks must reassemble to original")
 	}
 }
+
+func TestFormatTelegramHTMLGaps(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"italic", "a *word* here", "a <i>word</i> here"},
+		{"underline", "double __emphasis__", "double <u>emphasis</u>"},
+		{"spoiler", "secret ||hidden|| text", "secret <tg-spoiler>hidden</tg-spoiler> text"},
+		{"blockquote", "> quoted line", "<blockquote>quoted line</blockquote>"},
+		{"blockquote multi", "> one\n> two", "<blockquote>one\ntwo</blockquote>"},
+		{"blockquote expandable", ">! reveal on tap", "<blockquote expandable>reveal on tap</blockquote>"},
+		{"quote escapes inner", "> a < b", "<blockquote>a &lt; b</blockquote>"},
+		{"quote ends at plain line", "> one\nplain", "<blockquote>one</blockquote>\nplain"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := formatTelegramHTML(c.in, nil); got != c.want {
+				t.Errorf("got %q want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestSplitSections(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{"single", "just text", []string{"just text"}},
+		{"two sections", "part one\n---\npart two", []string{"part one", "part two"}},
+		{"trimmed", "part one\n\n---\n\npart two", []string{"part one", "part two"}},
+		{"keeps inner blanks", "a\n\nb", []string{"a\n\nb"}},
+		{"trailing divider", "text\n---", []string{"text"}},
+		{"divider only", "---", []string{""}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := splitSections(c.in)
+			if len(got) != len(c.want) {
+				t.Fatalf("splitSections(%q) = %q, want %q", c.in, got, c.want)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Fatalf("splitSections(%q) = %q, want %q", c.in, got, c.want)
+				}
+			}
+		})
+	}
+}
