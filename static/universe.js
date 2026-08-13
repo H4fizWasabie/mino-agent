@@ -21,6 +21,9 @@ const UNIVERSE_BRANCHES = ["memories","tools","system","routines","work"];
 const UNIVERSE_BRANCH_LABELS = {
   memories:"Memories", tools:"Tools", system:"System", routines:"Routines", work:"Work",
 };
+const UNIVERSE_BRANCH_COLORS = {
+  memories:"#426fbd", tools:"#75818b", system:"#65727d", routines:"#697a43", work:"#c46f31",
+};
 
 // universeBranch maps a durable node to its one primary topology branch.
 // Rules: explicit node.region first when meaningful, then the kind table;
@@ -42,12 +45,12 @@ function universeBranch(node){
 // outward. Pure presentation geometry — not part of the durable graph.
 function universeBranchAnchors(){
   return {
-    trunk:[.20,.42],
-    memories:[.48,.26],
-    tools:[.68,.10],
-    system:[.74,.34],
-    routines:[.68,.68],
-    work:[.46,.64],
+    trunk:[.18,.48],
+    memories:[.42,.31],
+    tools:[.59,.19],
+    system:[.66,.40],
+    routines:[.61,.62],
+    work:[.42,.67],
   };
 }
 
@@ -124,13 +127,17 @@ function universeNodeLink(node){
 // Values mirror universeBranchAnchors (trunk serves the Now lens); kept
 // self-contained so behavior checks can extract it standalone.
 function universeRegionCenters(){
-  return {now:[.20,.42], memory:[.48,.26], work:[.46,.64], routines:[.68,.68], system:[.74,.34]};
+  return {now:[.18,.48], memory:[.42,.31], work:[.42,.67], routines:[.61,.62], system:[.66,.40]};
 }
 function universeLandmarkCount(nodes,region,visible,currentIDs){
   return nodes.reduce((count,node)=>count+(currentIDs.has(node.id)&&visible(node)&&universeRegion(node)===region?1:0),0);
 }
 function universeBranchCount(nodes,branch,visible,currentIDs){
   return nodes.reduce((count,node)=>count+(currentIDs.has(node.id)&&visible(node)&&universeBranch(node)===branch?1:0),0);
+}
+function universeOverviewAttention(nodes){
+  const priority={blocked:0,needs_you:1,working:2,waiting:3};
+  return new Set(nodes.filter(node=>node.attention).sort((a,b)=>(priority[a.state]??4)-(priority[b.state]??4)||(b._degree||0)-(a._degree||0)||String(a.id).localeCompare(String(b.id))).slice(0,4).map(node=>node.id));
 }
 function universeLandmarkStyle(zoom){
   const overview=Math.max(0,Math.min(1,(1-zoom)/.35)),detail=Math.max(0,Math.min(1,(zoom-1)/2));
@@ -158,7 +165,7 @@ function universeAdjacency(nodes,edges){
 function universeLayout(nodes,edges=[]){
   const anchors=universeBranchAnchors();
   const adjacency=universeAdjacency(nodes,edges);
-  nodes.forEach(node=>{ node._layoutAnchor=false; node._primaryParent=null; });
+  nodes.forEach(node=>{ node._layoutAnchor=false; node._overviewVisible=false; node._overviewLabel=false; node._primaryParent=null; });
   layoutMemoryBranch(nodes,edges,adjacency,anchors.memories);
   layoutIdentityBranch(nodes,adjacency,"tools",anchors.tools,-1.25,.9,0);
   layoutIdentityBranch(nodes,adjacency,"system",anchors.system,-.35,.8,0);
@@ -189,13 +196,19 @@ function layoutMemoryBranch(nodes,edges,adjacency,anchor){
     return [id,[anchor[0]+Math.cos(angle)*radius,anchor[1]+Math.sin(angle)*radius*.72]];
   }));
   const communityHubs=new Map(communities.map(id=>[id,memories.filter(node=>node._layoutCommunity===id).sort((a,b)=>(b._degree||0)-(a._degree||0)||a.id.localeCompare(b.id))[0]?.id]));
+  const communitySizes=new Map(communities.map(id=>[id,memories.filter(node=>node._layoutCommunity===id).length]));
+  // Overview shows the eight largest communities; the full graph remains
+  // available through lenses, zoom, search, the inspector, and the a11y list.
+  const rankedCommunities=[...communities].sort((a,b)=>communitySizes.get(b)-communitySizes.get(a)||String(a).localeCompare(String(b)));
+  const overviewCommunities=new Set(rankedCommunities.slice(0,8));
+  const overviewLabels=new Set(rankedCommunities.slice(0,3));
   const communityColors=new Map(communities.map((id,index)=>[id,memoryPalette[index%memoryPalette.length]]));
   const communityCounts={};
   memories.forEach(node=>{
     const center=communityCenter.get(node._layoutCommunity)||anchor;
     node._communityColor=communityColors.get(node._layoutCommunity)||memoryPalette[0];
     if(node.id===communityHubs.get(node._layoutCommunity)){
-      node.x=center[0]; node.y=center[1]; node._layoutAnchor=true; node._primaryParent=null;
+      node.x=center[0]; node.y=center[1]; node._layoutAnchor=true; node._overviewCommunity=overviewCommunities.has(node._layoutCommunity); node._overviewVisible=node._overviewCommunity; node._overviewLabel=overviewLabels.has(node._layoutCommunity); node._primaryParent=null;
       return;
     }
     const index=communityCounts[node._layoutCommunity]||0; communityCounts[node._layoutCommunity]=index+1;
@@ -203,6 +216,9 @@ function layoutMemoryBranch(nodes,edges,adjacency,anchor){
     const radius=.05*Math.sqrt(universeRand(node.id,1));
     node.x=center[0]+Math.cos(angle)*radius;
     node.y=center[1]+Math.sin(angle)*radius*.78;
+    node._overviewCommunity=overviewCommunities.has(node._layoutCommunity);
+    node._overviewVisible=node._overviewCommunity&&node.id===communityHubs.get(node._layoutCommunity);
+    node._overviewLabel=node._overviewVisible&&overviewLabels.has(node._layoutCommunity);
     node._primaryParent=communityHubs.get(node._layoutCommunity)||null;
   });
 }
@@ -224,6 +240,8 @@ function layoutIdentityBranch(nodes,adjacency,branch,anchor,baseAngle,fanRange,s
     hub.x=anchor[0]+Math.cos(angle)*.07;
     hub.y=anchor[1]+Math.sin(angle)*.07*.8;
     hub._layoutAnchor=true;
+    hub._overviewVisible=index<2;
+    hub._overviewLabel=false;
     hub._primaryParent=null;
   });
   const depth={},parent={},fanAngle={};
@@ -283,6 +301,8 @@ function layoutWorkBranch(nodes,adjacency,anchor){
     hub.x=anchor[0]+Math.cos(angle)*.07;
     hub.y=anchor[1]+Math.sin(angle)*.07*.8;
     hub._layoutAnchor=true;
+    hub._overviewVisible=index<2;
+    hub._overviewLabel=false;
     hub._primaryParent=null;
   });
   const depth={},parent={},fanAngle={};
@@ -408,6 +428,13 @@ function initUniverse(snapshot,lens="universe"){
     return true;
   };
   const focused=node=>universeFocus(node,state.lens);
+  let overviewAttention=new Set();
+  // The overview is one authored map, not 1,117 equally loud dots. Keep the
+  // full graph in state, search, the inspector, and the accessible index, but
+  // reserve overview pixels for branch hubs and owner-attention nodes. Zoom,
+  // lenses, search, and selection progressively disclose the local graph.
+  const overviewMode=()=>state.lens==="universe"&&!state.query&&state.zoom<1.2;
+  const renderable=node=>visible(node)&&(!overviewMode()||node._overviewVisible||overviewAttention.has(node.id)||node===state.hovered||node===state.selected);
   const draw=now=>{
     if(!canvas.isConnected||universeState!==state) return;
     resize();
@@ -415,8 +442,11 @@ function initUniverse(snapshot,lens="universe"){
     ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,canvas.clientWidth,canvas.clientHeight);
     ctx.fillStyle="rgba(246,247,244,.78)";ctx.fillRect(0,0,canvas.clientWidth,canvas.clientHeight);
     const incident=state.hovered||state.selected,edgeLayers=[[],[],[]],communities=new Map();
+    const overview=overviewMode(),mobileOverview=canvas.clientWidth<720&&overview;
+    overviewAttention=universeOverviewAttention(nodes);
+    if(overview&&!mobileOverview) drawUniverseBranchLinks(ctx,state,screen,renderable);
     nodes.forEach(node=>{
-      if(node.kind!=="memory"||!visible(node)) return;
+      if(mobileOverview||node.kind!=="memory"||!renderable(node)) return;
       const key=String(node._layoutCommunity),group=communities.get(key)||[];group.push(screen(node));communities.set(key,group);
     });
     communities.forEach((points,key)=>{
@@ -428,13 +458,15 @@ function initUniverse(snapshot,lens="universe"){
       points.forEach(point=>{ctx.beginPath();ctx.moveTo(center.x,center.y);ctx.lineTo(point.x,point.y);ctx.strokeStyle=palette[index].replace(".035", ".18").replace(".032", ".16");ctx.lineWidth=.65;ctx.stroke();});
     });
     state.edges.forEach(edge=>{
-      const a=nodeMap[edge.source],b=nodeMap[edge.target];if(!visible(a)||!visible(b)) return;
+      if(mobileOverview) return;
+      const a=nodeMap[edge.source],b=nodeMap[edge.target];if(!renderable(a)||!renderable(b)) return;
       const backbone=a._primaryParent===b.id||b._primaryParent===a.id;
       const sameMemory=a.kind==="memory"&&b.kind==="memory"&&a._layoutCommunity===b._layoutCommunity;
       const endpointProminent=a.kind!=="memory"||b.kind!=="memory"||sameMemory;
       const hot=incident&&(a===incident||b===incident);
       if(!hot&&!backbone&&edge.kind==="inferred") return;
       if(!hot&&!backbone&&edge.kind==="explicit"&&!endpointProminent) return;
+      if(overview&&!hot&&!backbone) return;
       const layer=hot?2:(backbone&&(edge.kind==="structural"||edge.kind==="explicit")?1:0);edgeLayers[layer].push({edge,a,b,hot,backbone});
     });
     edgeLayers.forEach((layer,index)=>layer.forEach(({edge,a,b,hot,backbone})=>{
@@ -449,10 +481,12 @@ function initUniverse(snapshot,lens="universe"){
       else {ctx.strokeStyle=sameMemory?"rgba(63,111,186,.06)":sameRegion?"rgba(82,104,125,.035)":"rgba(82,104,125,.02)";ctx.lineWidth=sameMemory?.5:.38;}
       ctx.setLineDash([]);ctx.stroke();
     }));
-    let visibleCount=0;
+    let visibleCount=0,renderedCount=0;
     nodes.forEach(node=>{
       if(!visible(node)) return;visibleCount++;
-      const p=screen(node),isFocused=focused(node),r=universeNodeRadius(node)*(node===state.selected?1.55:1),color=universeNodeColor(node),degree=state.degrees[node.id]||0,prominent=node.kind!=="memory"||degree>=4;
+      if(mobileOverview) return;
+      if(!renderable(node)) return;renderedCount++;
+      const p=screen(node),isFocused=focused(node),baseRadius=universeNodeRadius(node),r=baseRadius*(node===state.selected?1.55:overview&&(node._overviewVisible||overviewAttention.has(node.id))?1.45:1),color=universeNodeColor(node),degree=state.degrees[node.id]||0,prominent=overview?(node._overviewVisible||overviewAttention.has(node.id)):node.kind!=="memory"||degree>=4;
       const active=state.activities.some(a=>a.nodeID===node.id&&now-a.started<4200),born=node._born&&now-node._born<2600,reduced=matchMedia("(prefers-reduced-motion: reduce)").matches;
       if((active||born||node.attention)&&!reduced){
         const pulse=r+(active||born?5:3)+Math.sin(now/(active||born?260:620))*(active||born?2:.8);ctx.beginPath();ctx.arc(p.x,p.y,pulse,0,Math.PI*2);ctx.strokeStyle=active?"rgba(32,126,105,.42)":born?"rgba(53,104,193,.36)":"rgba(181,60,66,.2)";ctx.lineWidth=1;ctx.stroke();
@@ -461,8 +495,9 @@ function initUniverse(snapshot,lens="universe"){
       if(prominent){ctx.beginPath();ctx.arc(p.x,p.y,r+2.2,0,Math.PI*2);ctx.strokeStyle=`${color}66`;ctx.lineWidth=1;ctx.stroke();}
       if(node.attention){ctx.strokeStyle="#b53c42";ctx.lineWidth=1.5;ctx.stroke();}
       ctx.globalAlpha=1;
-      if(node._layoutAnchor&&node.kind!=="memory"&&!state.hovered&&!state.selected){
-        const maxLabel=canvas.clientWidth<600?17:23,label=node.label.length>maxLabel?node.label.slice(0,maxLabel-1)+"…":node.label;
+      const showLabel=(overview&&(node._overviewLabel||overviewAttention.has(node.id)))||(!overview&&node._layoutAnchor);
+      if(showLabel&&!state.hovered&&!state.selected){
+        const maxLabel=overview?(canvas.clientWidth<600?18:24):(canvas.clientWidth<600?17:23),label=node.label.length>maxLabel?node.label.slice(0,maxLabel-1)+"…":node.label;
         ctx.font="650 10px ui-sans-serif,system-ui";ctx.fillStyle="#28323a";
         const labelY=canvas.clientWidth<600&&node.x>.45&&node.x<.66?p.y+18:p.y+4;
         if(node.x>.66){ctx.textAlign="right";ctx.fillText(label,p.x-11,labelY);}else if(node.x>.45){ctx.textAlign="center";ctx.fillText(label,p.x,labelY);}else{ctx.textAlign="left";ctx.fillText(label,p.x+11,labelY);}ctx.textAlign="start";
@@ -472,7 +507,8 @@ function initUniverse(snapshot,lens="universe"){
         const width=ctx.measureText(label).width+14;ctx.fillStyle="rgba(250,251,249,.96)";ctx.strokeStyle="rgba(105,115,120,.25)";ctx.lineWidth=1;ctx.beginPath();ctx.roundRect(p.x+10,p.y-13,width,24,6);ctx.fill();ctx.stroke();ctx.fillStyle="#172028";ctx.fillText(label,p.x+17,p.y+3);
       }
     });
-    drawUniverseScaffold(ctx,state,screen,visible);
+    if(mobileOverview) drawMobileUniverseOverview(ctx,state,canvas,visible);
+    else drawUniverseScaffold(ctx,state,screen,visible,overview);
     state.activities=state.activities.filter(activity=>now-activity.started<4200);
     state.activities.forEach(activity=>{
       const node=nodeMap[activity.nodeID];if(!node||!visible(node))return;const end=screen(node),age=(now-activity.started)/1800,t=Math.min(1,age),start={x:canvas.clientWidth*.5,y:16};
@@ -482,7 +518,7 @@ function initUniverse(snapshot,lens="universe"){
       state.timeline=Math.min(1,(now-state.playStarted)/24000);syncUniverseTimeline();
       if(state.timeline>=1){state.playing=false;document.getElementById("universe-play").innerHTML='<span aria-hidden="true">↺</span> Replay history';}
     }
-    const count=document.getElementById("universe-visible-count");if(count)count.textContent=`${visibleCount.toLocaleString()} visible`;
+    const count=document.getElementById("universe-visible-count");if(count)count.textContent=mobileOverview?`5 branches · ${visibleCount.toLocaleString()} total`:overview?`${renderedCount.toLocaleString()} shown · ${visibleCount.toLocaleString()} total`:`${visibleCount.toLocaleString()} visible`;
     state.raf=requestAnimationFrame(draw);
   };
   state.draw=draw;state.screen=screen;state.visible=visible;
@@ -512,22 +548,57 @@ function initUniverse(snapshot,lens="universe"){
   renderUniverseIndex();syncUniverseTimeline();requestAnimationFrame(draw);
 }
 
+function drawMobileUniverseOverview(ctx,state,canvas,visible){
+  state.landmarkBoxes=[];
+  const origin={x:canvas.clientWidth*.18,y:canvas.clientHeight*.49};
+  const positions={memories:[.47,.35],tools:[.73,.25],system:[.79,.46],routines:[.73,.64],work:[.45,.64]};
+  const screenPoint=point=>({x:canvas.clientWidth*point[0],y:canvas.clientHeight*point[1]});
+  const originPoint=screenPoint([.18,.49]);
+  const lensOfMobile={memories:"memory",tools:"system",system:"system",routines:"routines",work:"work"};
+  ctx.save();
+  UNIVERSE_BRANCHES.forEach(branch=>{
+    const point=screenPoint(positions[branch]),color=UNIVERSE_BRANCH_COLORS[branch],count=universeBranchCount(state.nodes,branch,visible,state.currentNodeIDs),label=`${UNIVERSE_BRANCH_LABELS[branch].toUpperCase()} · ${count.toLocaleString()}`;
+    ctx.beginPath();ctx.moveTo(originPoint.x,originPoint.y);ctx.quadraticCurveTo((originPoint.x+point.x)/2,point.y,point.x,point.y);ctx.strokeStyle=`${color}66`;ctx.lineWidth=1.4;ctx.setLineDash([4,6]);ctx.stroke();ctx.setLineDash([]);
+    ctx.beginPath();ctx.arc(point.x,point.y,13,0,Math.PI*2);ctx.fillStyle="rgba(246,247,244,.96)";ctx.fill();ctx.strokeStyle=color;ctx.lineWidth=1.8;ctx.stroke();ctx.beginPath();ctx.arc(point.x,point.y,4,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();
+    ctx.font="700 9px ui-monospace,SFMono-Regular,Menlo,monospace";ctx.textAlign="center";ctx.fillStyle=color;ctx.fillText(label,point.x,point.y+27);
+    state.landmarkBoxes.push({region:lensOfMobile[branch],x:point.x-26,y:point.y-26,width:52,height:52});
+  });
+  ctx.beginPath();ctx.arc(origin.x,origin.y,17,0,Math.PI*2);ctx.fillStyle="rgba(246,247,244,.98)";ctx.fill();ctx.strokeStyle="#28323a";ctx.lineWidth=2;ctx.stroke();ctx.beginPath();ctx.arc(origin.x,origin.y,5,0,Math.PI*2);ctx.fillStyle="#28323a";ctx.fill();
+  ctx.font="700 9px ui-monospace,SFMono-Regular,Menlo,monospace";ctx.textAlign="center";ctx.fillStyle="#28323a";ctx.fillText("MINO",origin.x,origin.y-25);
+  state.landmarkBoxes.push({region:"now",x:origin.x-28,y:origin.y-28,width:56,height:56});
+  ctx.restore();
+}
+
+function drawUniverseBranchLinks(ctx,state,screen,renderable){
+  const anchors=universeBranchAnchors();
+  ctx.save();
+  UNIVERSE_BRANCHES.forEach(branch=>{
+    const anchor=anchors[branch],origin=screen({x:anchor[0],y:anchor[1]}),color=UNIVERSE_BRANCH_COLORS[branch]||"#65727d";
+    state.nodes.filter(node=>universeBranch(node)===branch&&node._overviewVisible&&renderable(node)).forEach(node=>{
+      const target=screen(node),distance=Math.max(1,Math.hypot(target.x-origin.x,target.y-origin.y));
+      ctx.beginPath();ctx.moveTo(origin.x,origin.y);ctx.quadraticCurveTo((origin.x+target.x)/2,(origin.y+target.y)/2-distance*.12,target.x,target.y);
+      ctx.strokeStyle=`${color}55`;ctx.lineWidth=1.2;ctx.setLineDash([]);ctx.stroke();
+    });
+  });
+  ctx.restore();
+}
+
 // drawUniverseScaffold renders the identity scaffold (issue #182 layer 2):
 // the synthetic Mino trunk, presentation branch anchors, and quiet guide
 // lines. Scaffold is presentation-only — never in node counts, the a11y
 // index, search, or the durable edge array. Lens landmarks remain clickable.
-function drawUniverseScaffold(ctx,state,screen,visible){
+function drawUniverseScaffold(ctx,state,screen,visible,overview=false){
   state.landmarkBoxes=[];
   const anchors=universeBranchAnchors(),style=universeLandmarkStyle(state.zoom),currentIDs=state.currentNodeIDs;
   const trunk={x:anchors.trunk[0],y:anchors.trunk[1]};
   const guidePoints=[];
   UNIVERSE_BRANCHES.forEach(branch=>{const a=anchors[branch];guidePoints.push(a);});
   ctx.save();
-  ctx.globalAlpha=style.alpha*.55;
-  guidePoints.forEach(a=>{
-    const p0=screen({x:trunk.x,y:trunk.y}),p1=screen({x:a[0],y:a[1]});
+  ctx.globalAlpha=overview?.9:style.alpha*.55;
+  guidePoints.forEach((a,index)=>{
+    const p0=screen({x:trunk.x,y:trunk.y}),p1=screen({x:a[0],y:a[1]}),branch=UNIVERSE_BRANCHES[index];
     ctx.beginPath();ctx.moveTo(p0.x,p0.y);ctx.quadraticCurveTo(p0.x+(p1.x-p0.x)*.4,p1.y,p1.x,p1.y);
-    ctx.strokeStyle="rgba(40,50,58,.16)";ctx.lineWidth=1;ctx.setLineDash([3,6]);ctx.stroke();
+    ctx.strokeStyle=overview?`${UNIVERSE_BRANCH_COLORS[branch]}66`:"rgba(40,50,58,.16)";ctx.lineWidth=overview?1.4:1;ctx.setLineDash(overview?[5,7]:[3,6]);ctx.stroke();
   });
   ctx.setLineDash([]);
   const p=screen({x:trunk.x,y:trunk.y});
@@ -543,14 +614,14 @@ function drawUniverseScaffold(ctx,state,screen,visible){
     const a=anchors[branch],lens=lensOf[branch],q=screen({x:a[0],y:a[1]});
     const count=universeBranchCount(state.nodes,branch,visible,currentIDs);
     const label=`${UNIVERSE_BRANCH_LABELS[branch].toUpperCase()} · ${count.toLocaleString()}`;
-    const color=branch==="tools"?"#75818b":(regionColors[lens]||"#65727d");
-    ctx.beginPath();ctx.arc(q.x,q.y,style.radius+4,0,Math.PI*2);ctx.strokeStyle=`${color}38`;ctx.lineWidth=1;ctx.stroke();
-    ctx.beginPath();ctx.arc(q.x,q.y,style.radius,0,Math.PI*2);ctx.fillStyle="rgba(246,247,244,.9)";ctx.fill();ctx.strokeStyle=color;ctx.lineWidth=1.4;ctx.stroke();
-    ctx.beginPath();ctx.arc(q.x,q.y,3,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();
-    ctx.font=`700 ${style.fontSize}px ui-monospace,SFMono-Regular,Menlo,monospace`;ctx.textAlign="center";ctx.textBaseline="middle";
+    const color=UNIVERSE_BRANCH_COLORS[branch]||regionColors[lens]||"#65727d";
+    ctx.beginPath();ctx.arc(q.x,q.y,style.radius+4,0,Math.PI*2);ctx.strokeStyle=`${color}${overview?"55":"38"}`;ctx.lineWidth=overview?1.4:1;ctx.stroke();
+    ctx.beginPath();ctx.arc(q.x,q.y,style.radius,0,Math.PI*2);ctx.fillStyle="rgba(246,247,244,.94)";ctx.fill();ctx.strokeStyle=color;ctx.lineWidth=overview?1.8:1.4;ctx.stroke();
+    ctx.beginPath();ctx.arc(q.x,q.y,overview?4:3,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();
+    ctx.font=`700 ${overview?style.fontSize+1:style.fontSize}px ui-monospace,SFMono-Regular,Menlo,monospace`;ctx.textAlign="center";ctx.textBaseline="middle";
     const labelY=q.y+style.radius+13;
     ctx.lineWidth=4;ctx.lineJoin="round";ctx.strokeStyle="rgba(246,247,244,.94)";ctx.strokeText(label,q.x,labelY);ctx.fillStyle=color;ctx.fillText(label,q.x,labelY);
-    state.landmarkBoxes.push({region:lens,x:q.x-22,y:q.y-22,width:44,height:44});
+    state.landmarkBoxes.push({region:lens,x:q.x-26,y:q.y-26,width:52,height:52});
   });
   ctx.restore();
 }
