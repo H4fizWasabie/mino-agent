@@ -23,6 +23,12 @@ const (
 // ponytail: hardcoded HTTP timeout, upgrade if GitHub gets slow
 var updateClient = &http.Client{Timeout: 30 * time.Second}
 
+// The release binary download gets its own, longer window (issue #177): the
+// 30s check timeout also capped the 22MB body read, so `mino update` hit
+// "download: context deadline exceeded" on slow links. Client.Timeout covers
+// the whole exchange including the io.Copy below.
+var downloadClient = &http.Client{Timeout: 5 * time.Minute}
+
 // updateCache is the on-disk cache for update checks (rate-limit friendly).
 type updateCache struct {
 	LastCheck time.Time `json:"last_check"`
@@ -86,7 +92,7 @@ func DoUpdate() error {
 	}
 
 	fmt.Printf("Downloading %s...\n", tag)
-	resp, err := updateClient.Get(assetURL)
+	resp, err := downloadClient.Get(assetURL)
 	if err != nil {
 		return fmt.Errorf("download: %w", err)
 	}

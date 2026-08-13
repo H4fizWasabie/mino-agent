@@ -869,6 +869,11 @@ func TestDistillOutputsDue(t *testing.T) {
 	db := Connect(dir)
 	defer db.Close()
 	db.Exec("INSERT INTO session_artifacts (path, session_id, label, size) VALUES (?, 'scheduled-threads-ai-learning', 'threads-ai-learning output', 78)", outputPath)
+	// Whitelist the playbook for semantic distill (issue #178) so the
+	// semantic-fact path in this test stays exercisable.
+	pbCfg := filepath.Join(dir, "playbooks", "threads-ai-learning")
+	os.MkdirAll(pbCfg, 0755)
+	os.WriteFile(filepath.Join(pbCfg, "config.md"), []byte("description: Daily Threads takeaways\ndistill_semantic: true\n"), 0644)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -925,6 +930,46 @@ func TestDistillOutputsDue(t *testing.T) {
 	db.QueryRow("SELECT distilled FROM session_artifacts WHERE path = ?", outputPath2).Scan(&distilled)
 	if distilled != 0 {
 		t.Fatal("failed artifact must stay undistilled for retry")
+	}
+}
+
+// issue #178: a playbook without the distill_semantic whitelist flag writes
+// the episodic run node but NOT the model-proposed semantic facts.
+func TestDistillGateSkipsSemanticFactsWhenNotWhitelisted(t *testing.T) {
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "results", "scheduled-ai-news", "1", "post.md")
+	os.MkdirAll(filepath.Dir(outputPath), 0755)
+	os.WriteFile(outputPath, []byte("Routine news digest"), 0644)
+	db := Connect(dir)
+	defer db.Close()
+	db.Exec("INSERT INTO session_artifacts (path, session_id, label, size) VALUES (?, 'scheduled-ai-news', 'ai-news output', 21)", outputPath)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"run\":{\"id\":\"ep_ai_news_2026_08_13\",\"subject\":\"Posted ai-news digest\",\"body\":\"Daily digest posted\",\"edges\":[]},\"facts\":[{\"id\":\"transient_headline\",\"subject\":\"Marina Chin heads NSC panel\",\"edges\":[]}]}"}}]}`)
+	}))
+	defer server.Close()
+	pm := &ProviderManager{
+		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
+		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
+		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
+		sleep: func(time.Duration) {}, now: time.Now,
+	}
+	gm := NewGraphMemory(filepath.Join(dir, "memories"), nil)
+	m := &Memory{db: db, client: pm, cfg: &Settings{Home: dir, MemoriesDir: filepath.Join(dir, "memories")}, graph: gm}
+	if n := m.DistillOutputsDue(); n != 1 {
+		t.Fatalf("distilled %d, want 1 (run node still written)", n)
+	}
+	if _, ok := gm.FindFact("ep_ai_news_2026_08_13"); !ok {
+		t.Fatal("run node missing")
+	}
+	if _, ok := gm.FindFact("transient_headline"); ok {
+		t.Fatal("semantic fact written for a non-whitelisted playbook")
+	}
+	var distilled int
+	db.QueryRow("SELECT distilled FROM session_artifacts WHERE path = ?", outputPath).Scan(&distilled)
+	if distilled != 1 {
+		t.Fatal("artifact not marked distilled")
 	}
 }
 
@@ -1069,5 +1114,33 @@ func TestGraphJudgmentParsesExpired(t *testing.T) {
 	}
 	if out.Facts[1].Expired {
 		t.Fatal("missing expired flag must default to false")
+	}
+}
+
+// issue #180: validInferredEdges refuses supersedes edges whose target is
+// user-provenanced, on every write path that funnels through it.
+func TestValidInferredEdgesBlocksSupersedesIntoUserFacts(t *testing.T) {
+	m := &Memory{graph: NewGraphMemory(t.TempDir(), nil)}
+	if err := m.graph.RecordFact(Fact{ID: "u", Type: "semantic", Subject: "User correction", Source: "user"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.graph.RecordFact(Fact{ID: "u2", Type: "semantic", Subject: "User note", Source: "user"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.graph.RecordFact(Fact{ID: "m", Type: "semantic", Subject: "Model fact"}); err != nil {
+		t.Fatal(err)
+	}
+	valid := m.validInferredEdges([]Edge{
+		{Target: "u", Rel: "supersedes", Confidence: 0.92},
+		{Target: "u2", Rel: "depends_on", Confidence: 0.9},
+		{Target: "m", Rel: "supersedes", Confidence: 0.95},
+	}, map[string]bool{"u": true, "u2": true, "m": true}, "graph-rebuild")
+	if len(valid) != 2 {
+		t.Fatalf("valid edges = %+v, want 2 (user-target supersedes dropped)", valid)
+	}
+	for _, e := range valid {
+		if e.Target == "u" && e.Rel == "supersedes" {
+			t.Fatalf("supersedes into user-provenanced fact passed the guard: %+v", valid)
+		}
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -32,6 +33,13 @@ type Fact struct {
 	Feedback int       `yaml:"feedback,omitempty"`
 	Edges    []Edge    `yaml:"edge"`
 	Body     string    `yaml:"-"` // everything after front matter
+}
+
+// userProvenancedSource reports whether a Source value marks user authorship:
+// save_note stamps "user" (issue #178); corrections stamp "user-correction"
+// with an optional date suffix (e.g. "user-correction-20260812").
+func userProvenancedSource(s string) bool {
+	return s == "user" || strings.HasPrefix(s, "user-correction")
 }
 
 type Edge struct {
@@ -677,6 +685,28 @@ func (gm *GraphMemory) ArchiveFact(fact Fact, reason string) (*Fact, error) {
 	return gm.archiveLocked(fact, reason)
 }
 
+// ArchiveExpiredEpisodic moves episodic facts older than cutoff into the
+// archive with reason "expiry" (issue #178: procedural facts age out after
+// 30 days; semantic facts never expire). Zero At is skipped — unknown age is
+// not old age. Returns the number archived.
+func (gm *GraphMemory) ArchiveExpiredEpisodic(cutoff time.Time) int {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+	var expired []Fact
+	for _, f := range gm.facts {
+		if f.Type == "episodic" && !f.At.IsZero() && f.At.Before(cutoff) {
+			expired = append(expired, *f)
+		}
+	}
+	archived := 0
+	for _, f := range expired {
+		if _, err := gm.archiveLocked(f, "expiry"); err == nil {
+			archived++
+		}
+	}
+	return archived
+}
+
 func (gm *GraphMemory) archiveLocked(fact Fact, reason string) (*Fact, error) {
 	if _, ok := gm.facts[fact.ID]; !ok {
 		return nil, fmt.Errorf("memory fact not found: %s", fact.ID)
@@ -810,6 +840,44 @@ func (gm *GraphMemory) RemoveMutualInferredEdges() int {
 		fact.Edges = filtered
 		if err := gm.writeFile(*fact); err == nil {
 			gm.files[fact.ID+".md"] = gm.fileStamp(fact.ID)
+		}
+	}
+	if removed > 0 {
+		gm.saveIndex()
+	}
+	return removed
+}
+
+// userProvenanced reports whether the fact was authored by the user.
+func (gm *GraphMemory) userProvenanced(id string) bool {
+	gm.mu.RLock()
+	defer gm.mu.RUnlock()
+	f, ok := gm.facts[id]
+	return ok && userProvenancedSource(f.Source)
+}
+
+// RemoveSupersedesIntoUserFacts drops inferred supersedes edges whose target
+// is user-provenanced — the one-off repair for inverted edges the rebuild
+// wrote before the guard existed (issue #180). Runs from clean-memory-edges.
+func (gm *GraphMemory) RemoveSupersedesIntoUserFacts() int {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+	removed := 0
+	for _, fact := range gm.facts {
+		filtered := fact.Edges[:0]
+		for _, edge := range fact.Edges {
+			target := gm.facts[edge.Target]
+			if edge.Kind == "inferred" && edge.Rel == "supersedes" && target != nil && userProvenancedSource(target.Source) {
+				removed++
+				continue
+			}
+			filtered = append(filtered, edge)
+		}
+		if len(filtered) != len(fact.Edges) {
+			fact.Edges = filtered
+			if err := gm.writeFile(*fact); err == nil {
+				gm.files[fact.ID+".md"] = gm.fileStamp(fact.ID)
+			}
 		}
 	}
 	if removed > 0 {
@@ -974,6 +1042,7 @@ func (gm *GraphMemory) Remember(query, turn string) string {
 	if len(starts) > 3 {
 		starts = starts[:3]
 	}
+	markConflictSignals(starts, facts)
 
 	// Step 2: BFS traversal from start nodes
 	maxDepth := 2
@@ -1014,6 +1083,49 @@ func (gm *GraphMemory) Remember(query, turn string) string {
 		return fmt.Sprintf("No memories found for: %s", query)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// urlHostRe captures the host of an http(s) URL — the unit the conflict
+// marker compares (issue #180).
+var urlHostRe = regexp.MustCompile(`https?://([^/\s"'\)\]>]+)`)
+
+// markConflictSignals flags pairs of top-ranked facts that carry different URL
+// domains: each gets "⚠ conflicts with <id>" in its match rationale so the
+// brain arbitrates the contradiction instead of trusting rank (issue #180).
+func markConflictSignals(starts []rankedFact, facts map[string]*Fact) {
+	hosts := make(map[string]map[string]bool, len(starts))
+	for _, s := range starts {
+		if f, ok := facts[s.id]; ok {
+			hosts[s.id] = extractHosts(f.Subject + " " + f.Body)
+		}
+	}
+	for i := range starts {
+		for j := i + 1; j < len(starts); j++ {
+			hi, hj := hosts[starts[i].id], hosts[starts[j].id]
+			if len(hi) == 0 || len(hj) == 0 || shareAny(hi, hj) {
+				continue
+			}
+			starts[i].signals = append(starts[i].signals, "⚠ conflicts with "+starts[j].id)
+			starts[j].signals = append(starts[j].signals, "⚠ conflicts with "+starts[i].id)
+		}
+	}
+}
+
+func extractHosts(s string) map[string]bool {
+	hosts := make(map[string]bool)
+	for _, m := range urlHostRe.FindAllStringSubmatch(strings.ToLower(s), -1) {
+		hosts[m[1]] = true
+	}
+	return hosts
+}
+
+func shareAny(a, b map[string]bool) bool {
+	for k := range a {
+		if b[k] {
+			return true
+		}
+	}
+	return false
 }
 
 // oneLine flattens a fact field to a single space-joined line, truncated to max
@@ -1095,6 +1207,11 @@ func (gm *GraphMemory) entryRanking(query, turn string, facts map[string]*Fact, 
 	turnWords := memoryTokenize(turn)
 	var ranked []rankedFact
 	for id, fact := range facts {
+		// Procedural facts are traversal-only: they stay visible as BFS
+		// neighborhood context but never start a recall (issue #178).
+		if fact.Type == "episodic" {
+			continue
+		}
 		score := 0
 		subj := strings.ToLower(fact.Subject)
 		body := strings.ToLower(fact.Body)
@@ -1141,11 +1258,18 @@ func (gm *GraphMemory) entryRanking(query, turn string, facts map[string]*Fact, 
 				signals = append(signals, sig)
 			}
 		}
+		// issue #180: user authorship outranks model re-entry of the same
+		// knowledge — a correction must not lose to a newer distill fact.
+		if userProvenancedSource(fact.Source) {
+			score += 30
+			signals = append(signals, "user-provenanced")
+		}
 		if score > 0 {
 			ranked = append(ranked, rankedFact{id: id, score: score, signals: signals})
 		}
 	}
 	sort.Slice(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
+
 	return ranked
 }
 

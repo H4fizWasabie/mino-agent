@@ -1,6 +1,6 @@
 # Quality Frontier — Memory & context drift prevention
 
-Status: **OPEN** (GitHub issue #180) — principle decided in the 2026-08-13 session; implementation-ready.
+Status: **CLOSED** (GitHub issue #180) — provenance weighting, conflict markers, and the rebuild supersedes guard shipped; clean-memory-edges repairs inverted edges.
 
 ## Question
 
