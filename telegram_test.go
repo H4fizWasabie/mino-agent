@@ -2,11 +2,13 @@ package main
 
 import (
 	"encoding/json"
-	"net/http"
+	"fmt"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -187,5 +189,48 @@ func TestDeliverOutboxFallsBackWithoutParseMode(t *testing.T) {
 	}
 	if rest, _ := os.ReadDir(outbox); len(rest) != 0 {
 		t.Fatalf("outbox not drained after fallback")
+	}
+}
+
+// issue #181: a reply containing a --- divider arrives as separate messages,
+// each threaded to the previous one (the caller's message for the first).
+func TestSendTelegramReplySectionsThreaded(t *testing.T) {
+	type sentMsg struct {
+		text             string
+		replyToMessageID int
+		messageID        int
+	}
+	var sent []sentMsg
+	nextID := 100
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		nextID++
+		if r.FormValue("text") == "" {
+			w.Write([]byte(`{"ok":true,"result":{"message_id":` + fmt.Sprint(nextID) + `,"chat":{"id":1},"date":1}}`))
+			return // tgbotapi's own getMe request — not a reply section
+		}
+		id, _ := strconv.Atoi(r.FormValue("reply_to_message_id"))
+		sent = append(sent, sentMsg{r.FormValue("text"), id, nextID})
+		w.Write([]byte(`{"ok":true,"result":{"message_id":` + fmt.Sprint(nextID) + `,"chat":{"id":1},"date":1}}`))
+	}))
+	defer srv.Close()
+	bot, err := tgbotapi.NewBotAPIWithAPIEndpoint("test-token", srv.URL+"/bot%s/%s")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sendTelegramReply(bot, 42, "first section\n---\nsecond section", nil, 7)
+
+	if len(sent) != 2 {
+		t.Fatalf("sent %d messages, want 2: %+v", len(sent), sent)
+	}
+	if sent[0].replyToMessageID != 7 {
+		t.Fatalf("first section reply_to = %d, want the caller's message 7", sent[0].replyToMessageID)
+	}
+	if sent[1].replyToMessageID != sent[0].messageID {
+		t.Fatalf("second section reply_to = %d, want first section's message id %d", sent[1].replyToMessageID, sent[0].messageID)
+	}
+	if sent[0].text != "first section" || sent[1].text != "second section" {
+		t.Fatalf("section texts = %+v", sent)
 	}
 }
