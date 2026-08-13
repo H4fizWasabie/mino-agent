@@ -26,3 +26,6 @@ extensions/cost-watch/mino-cost-watch
 # release artifacts moved to repo root by build-release.sh
 /minowrap
 /threads-extension
+/cost-watch
+/minowrap
+/threads-extension
