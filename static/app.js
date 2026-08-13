@@ -313,21 +313,6 @@ const turnCard = t => `<div class="card">
   <div class="meta">${esc((t.ts||"").replace("T"," ").slice(0,19))} · ${secs(t.latency_ms)} · ${t.iterations??"?"} iter · ${money(t.cost||0)}${t.consolidation?` · consolidated ${t.consolidation.new_facts} fact(s)`:""}</div>
 </div>`;
 
-function executionTurn(t, index){
-  const llms = t.llm_calls || [], tools = t.tools || [];
-  const tokensIn = t.tokens_in || llms.reduce((n,x)=>n+(x.in||0),0);
-  const tokensOut = t.tokens_out || llms.reduce((n,x)=>n+(x.out||0),0);
-  const when = (t.ts||"").replace("T"," ").slice(0,19) || "unknown time";
-  const toolSteps = tools.length ? `<div class="execution-stage"><span class="stage-node tool-node">⌘</span><div class="stage-copy"><span class="stage-label">ACT</span><strong>${tools.length} tool call${tools.length===1?"":"s"}</strong>
-    <div class="execution-tools">${tools.map(x=>`<details><summary><code>${esc(x.tool)}</code><span>${esc(Object.keys(x.args||{}).join(" · ")||"no arguments")}</span></summary><pre>${esc(JSON.stringify(x.args||{},null,2))}</pre></details>`).join("")}</div></div></div>` : "";
-  return `<article class="execution-turn ${index===0?"latest":""}"><header><div><span class="turn-number">${String(index+1).padStart(2,"0")}</span><span class="turn-time">${esc(when)}</span></div><span class="turn-state"><i></i> complete</span></header>
-    <div class="turn-prompt"><span>USER INPUT</span><strong>${esc(t.user_message||"No prompt recorded")}</strong></div>
-    <div class="execution-path"><div class="execution-stage"><span class="stage-node">→</span><div class="stage-copy"><span class="stage-label">RECEIVE</span><strong>Context assembled</strong><small>session history · working context · available tools</small></div></div>
-      <div class="execution-stage"><span class="stage-node model-node">✦</span><div class="stage-copy"><span class="stage-label">REASON</span><strong>${llms.length||t.iterations||1} model pass${(llms.length||t.iterations||1)===1?"":"es"}</strong><small>${tokensIn.toLocaleString()} tokens in · ${tokensOut.toLocaleString()} out</small></div></div>
-      ${toolSteps}<div class="execution-stage"><span class="stage-node reply-node">✓</span><div class="stage-copy response-copy"><span class="stage-label">RESPOND</span><details ${index===0?"open":""}><summary>View final response</summary><div class="r">${renderMarkdown(stripTools(t.reply||""))}</div></details></div></div></div>
-    <footer><span>${secs(t.latency_ms)} elapsed</span><span>${t.iterations ?? (llms.length || 1)} iterations</span><span>${money(t.cost||0)}</span></footer></article>`;
-}
-
 const table = (heads, rows) => rows.length
   ? `<div class="card" style="padding:4px 8px"><table><tr>${heads.map(h=>`<th>${h}</th>`).join("")}</tr>${rows.join("")}</table></div>`
   : `<div class="card empty">nothing here yet</div>`;
@@ -1141,9 +1126,8 @@ async function loadResponsibilityDetail(id){
 function systemView(d, sub){
   sub=sub||"overview";
   const section=sub.startsWith("tool")||sub==="mcp"?"tools":sub.startsWith("database-")?"database":sub.startsWith("files-")?"files":sub;
-  const tabs=[["overview","Overview"],["runtime","Runtime"],["tools","Tools"],["database","Database"],["files","Files"],["settings","Settings"]];
+  const tabs=[["overview","Overview"],["tools","Tools"],["database","Database"],["files","Files"],["settings","Settings"]];
   const h=subtabBar("system",tabs,section);
-  if(sub==="runtime") return h+`<section class="system-intro"><h2>Runtime and execution</h2><p>The machinery behind owner outcomes. Trace activity stays here until you choose to inspect it.</p></section><section class="overview-cover">${archSVG(d)}</section>`+VIEWS.loop(d);
   if(sub==="tools") return h+VIEWS.tools(d,"available");
   if(sub==="tool-results") return h+VIEWS.tools(d,"results");
   if(sub==="mcp") return h+VIEWS.tools(d,"mcp");
@@ -1198,14 +1182,6 @@ const VIEWS = {
   conversations(d){ return VIEWS.gateway(d); },
   system(d, sub){ return systemView(d,sub); },
   overview(d){ return universeView(U,"universe"); },
-  loop(d){
-    const turns=d.turns||[], calls=turns.reduce((n,t)=>n+(t.llm_calls||[]).length,0), tools=turns.reduce((n,t)=>n+(t.tools||[]).length,0);
-    const avg=turns.length?turns.reduce((n,t)=>n+(t.iterations||1),0)/turns.length:0;
-    return `<section class="loop-hero"><div><span class="section-kicker">AGENT EXECUTION</span><h2>Every turn, step by step.</h2><p>Follow input through context, model reasoning, tool action, and the final response.</p></div><div class="loop-summary"><span class="runtime-kicker"><i></i> TRACE LIVE</span><strong>${turns.length} recent turns</strong><small>${calls} model passes · ${tools} tool calls</small></div></section>
-      <div class="loop-metrics"><div><strong>${turns.length}</strong><span>traced turns</span></div><div><strong>${calls}</strong><span>model passes</span></div><div><strong>${tools}</strong><span>tool calls</span></div><div><strong>${avg.toFixed(1)}</strong><span>avg iterations</span></div></div>
-      <div class="overview-section-head"><div><span class="section-kicker">TIMELINE</span><h2>Recent executions</h2></div><span class="section-note">newest first · expand responses and tool arguments</span></div>
-      ${turns.length?`<div class="execution-timeline">${turns.map(executionTurn).join("")}</div>`:`<div class="surface-empty"><span>◌</span><strong>No executions yet</strong><p>Send a message in the chat dock to create the first traced turn.</p></div>`}`;
-  },
   memory(d, sub){
     sub = sub || "overview";
     const tabs = [["overview","Overview"],["semantic","Knowledge",(d.facts||[]).length],
@@ -1341,7 +1317,7 @@ function canonicalRoute(){
   else if(raw==="today") route=["universe","now"];
   else if(raw==="work") route=["universe","work"];
   else if(raw==="gateway"||raw==="chat") route=["conversations",null];
-  else if(raw==="loop") route=["system","runtime"];
+  else if(raw==="loop") route=["system","traces"];
   else if(raw==="tools") route=["system",sub==="results"?"tool-results":sub==="mcp"?"mcp":"tools"];
   else if(raw==="database") route=["system",sub?`database-${sub}`:"database"];
   else if(raw==="files") route=["system",sub?`files-${sub}`:"files"];

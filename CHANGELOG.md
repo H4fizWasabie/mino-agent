@@ -1,3 +1,7 @@
+## [Unreleased]
+### Fixed
+- System → Runtime subtab removed (closes #174): the subtab crashed the dashboard with `archSVG is not defined` — a legacy "dossier" SVG generator whose call site survived the Living Field refactor (`36493af`) after the function itself was deleted. The subtab, its dead `VIEWS.loop`/`executionTurn` renderers, and the `#loop → system/runtime` route alias are removed; the old `#loop` hash now redirects to the surviving Ops → Traces surface, and `TestDashboardNavigationAndLegacyHashContract` asserts the new redirect. (Why: the Runtime subtab's only content was the deleted SVG map plus the trace timeline, which is superseded by Ops → Traces — an unreachable tab should be cut, not left crashing on the only route that reached it.)
+
 ## [v2.8.12] — Update & alert polish (2026-08-12)
 ### Fixed
 - The self-updater now promotes a release over a same-numeric prerelease: `parseSemver` dropped the `-rc` suffix via `Sscanf`, so a binary running `v2.8.11-rc4` compared equal to the `v2.8.11` release and `mino update` said "Already up to date", forcing a manual swap. A release now beats a prerelease at the same numeric version, so `rc` → `release` promotion works cleanly. (Why: rc staging binaries are the deploy-before-release path; the updater must let the released version supersede them.)

@@ -124,7 +124,7 @@ func TestDashboardNavigationAndLegacyHashContract(t *testing.T) {
 		`else if(raw==="today") route=["universe","now"]`,
 		`else if(raw==="work") route=["universe","work"]`,
 		`else if(raw==="gateway"||raw==="chat") route=["conversations",null]`,
-		`else if(raw==="loop") route=["system","runtime"]`,
+		`else if(raw==="loop") route=["system","traces"]`,
 		`else if(raw==="tools") route=["system",sub==="results"?"tool-results":sub==="mcp"?"mcp":"tools"]`,
 		`else if(raw==="database") route=["system",sub?` + "`database-${sub}`" + `:"database"]`,
 		`else if(raw==="files") route=["system",sub?` + "`files-${sub}`" + `:"files"]`,
