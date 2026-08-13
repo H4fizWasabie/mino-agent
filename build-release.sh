@@ -50,10 +50,11 @@ echo ""
 echo "Building extensions..."
 (cd extensions/minowrap && go build -o minowrap .) && mv extensions/minowrap/minowrap ./minowrap
 (cd extensions/threads && go build -o threads-extension .) && mv extensions/threads/threads-extension ./threads-extension
+(cd extensions/cost-watch && go build -o cost-watch .) && mv extensions/cost-watch/cost-watch ./cost-watch
 
 # Checksums so the VPS self-updater can verify the linux/amd64 binary
 # before swapping it in (CD via release assets).
-sha256sum mino-linux-amd64 mino-linux-arm64 mino-darwin-amd64 mino-darwin-arm64 mino-windows-amd64.exe minowrap threads-extension > SHA256SUMS.txt
+sha256sum mino-linux-amd64 mino-linux-arm64 mino-darwin-amd64 mino-darwin-arm64 mino-windows-amd64.exe minowrap threads-extension cost-watch > SHA256SUMS.txt
 
 echo ""
 echo "Done. Upload these to the GitHub release:"
