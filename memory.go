@@ -1085,6 +1085,9 @@ func (m *Memory) judgeFactEdges(fact Fact, all []Fact) (int, *Fact, bool) {
 	resp, err := m.client.CreateJSON("graph-rebuild", SmallModel,
 		[]Message{{Role: "user", Content: fmt.Sprintf(graphJudgmentPrompt, claims.String())}}, 1600, "")
 	if err != nil {
+		// Loud, not silent: a failing ticker retries the same facts forever
+		// with zero log lines, indistinguishable from not running (issue #188).
+		slog.Warn("judgment model call failed", "fact", fact.ID, "error", err)
 		return 0, nil, false
 	}
 	text := resp.FinalText
@@ -1097,6 +1100,7 @@ func (m *Memory) judgeFactEdges(fact Fact, all []Fact) (int, *Fact, bool) {
 	}
 	out, err := parseGraphJudgmentResponse(text)
 	if err != nil {
+		slog.Warn("judgment response invalid", "fact", fact.ID, "error", err)
 		return 0, nil, false
 	}
 	inferred := make([]Edge, 0, len(out.Edges))

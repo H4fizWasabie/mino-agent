@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1142,5 +1144,31 @@ func TestValidInferredEdgesBlocksSupersedesIntoUserFacts(t *testing.T) {
 		if e.Target == "u" && e.Rel == "supersedes" {
 			t.Fatalf("supersedes into user-provenanced fact passed the guard: %+v", valid)
 		}
+	}
+}
+
+// issue #188: judgment failures must be loud — a failing ticker retrying the
+// same facts silently is indistinguishable from not running.
+func TestJudgeFactEdgesLogsModelFailure(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	server.Close() // calls fail with connection refused
+	pm := &ProviderManager{
+		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
+		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
+		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
+		sleep: func(time.Duration) {}, now: time.Now,
+	}
+	gm := NewGraphMemory(t.TempDir(), nil)
+	gm.RecordFact(Fact{ID: "a", Type: "semantic", Subject: "Fact A"})
+	gm.RecordFact(Fact{ID: "b", Type: "semantic", Subject: "Fact B"})
+	m := &Memory{client: pm, graph: gm}
+	m.JudgeChangedFacts()
+	if !strings.Contains(buf.String(), "judgment model call failed") {
+		t.Fatalf("judgment failure not logged:\n%s", buf.String())
 	}
 }

@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Fixed
+- Silent failures made loud (closes #188): the dashboard's `http.ListenAndServe` error is no longer discarded — a bind conflict logs the error and exits non-zero instead of looking like a clean stop (found when a second instance on an occupied port printed "Mino is ready!" and exited 0); edge-judgment LLM-call and parse failures now log the fact id, so a failing 5-minute ticker is visible in the journal instead of retrying the same facts forever with zero lines. `TestServeDashboardReportsBindConflict` and `TestJudgeFactEdgesLogsModelFailure` lock both. (Why: a dead service that looks healthy is the worst failure mode — both paths cost real debugging time on the v2.9.0 VPS regression session.)
+
 ## [v2.9.0] — Quality Frontier: memory floor rebuilt, Telegram & Universe polish (2026-08-13)
 ### Changed
 - Telegram delivery enriched with crow-agent borrowings (closes #181): replies split on `---` divider lines into separate messages, each threaded to the previous one (the user's message for the first) so multi-part answers read as one chain; `formatTelegramHTML` now renders italic, underline, `tg-spoiler`, and blockquote (incl. `>!` expandable); the typing indicator keeps alive on a 4s ticker instead of dying ~5s into long turns. The outbox dispatch path is untouched (plain text, no threads). (Why: final answers containing a horizontal-rule divider arrived as one wall of text with a literal `---`, and long turns looked dead because the typing indicator expired.)
