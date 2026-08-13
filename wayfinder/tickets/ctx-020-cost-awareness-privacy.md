@@ -1,6 +1,6 @@
 # Harness — Cost awareness & privacy: cost-watch feeds the brain, model-agnostic
 
-Status: **OPEN** (wayfinder ticket, CTX-020)
+Status: **IMPLEMENTED** (config live on VPS; code on master, rides the next release)
 
 ## Framing (harness, not LLM)
 
@@ -60,13 +60,23 @@ The watcher stays a generic engine; Mino adjusts its *settings*, not its code �
 - **Catalogue is reference, not decision-maker**: cheapest ≠ appropriate; Mino compares and proposes, harness policy + owner decide.
 - **Scraped prices are untrusted estimates**: flagged as approximate, with `scraped_at`; never override `usage.jsonl`'s `cost_usd`.
 
+## Implementation (2026-08-13)
+
+- **Config swap live on the VPS**: OpenRouter main (allowed set DeepInfra/Together/Fireworks/Cloudflare, no pin), direct DeepSeek dropped, effort high. Verified: usage.jsonl now records the openrouter slug with provider-reported cost.
+- **allow_fallbacks** configurable (default false = privacy-safe): a curated order never falls back to arbitrary hosts (DeepSeek's own endpoint is in the trains bucket).
+- **policyPrices → seed + prices.json override** (`priceMapFor`); `usageCostWith` threads the config table through run/month/day spend + `costSince`.
+- **system_check** cost block (month/today + unpriced + catalogue snapshot) — live-verified: Mino reported `month=$2.4420 today=$0.0794` verbatim.
+- **Per-run cost** in run_playbook results; **daily cost_state trace** in the monthly check.
+- **cost-watch extension**: fetches OpenRouter endpoints for each configured model, persists `cost-catalogue.json` (28 entries live: DeepInfra=zdr, DeepSeek=trains, others=unknown), hot-reloads config each cycle, `cost_watch_refresh` tool. Flags curated in `/etc/mino-cost-watch.json`.
+- Tests: main 529 pass + extension 2 (configured-models + catalogue round-trip).
+
 ## Acceptance criteria
 
-- [ ] `providers.json` on the VPS: OpenRouter main (allowed set of 6, no provider pin), direct DeepSeek dropped; runs work without `MINO_DEEPSEEK_KEY`.
-- [ ] `system_check` reports month/today/per-run spend + unpriced count + catalogue snapshot.
-- [ ] `run_playbook` results carry the run's cost.
-- [ ] Daily cost observation lands in the trace + session notes without paging the owner below thresholds.
-- [ ] `cost-catalogue.json` is produced from the OpenRouter endpoints API for config-derived targets (no hardcoded model list), hot-reloads on config edit, and carries the `zdr|trains|unknown` flag per provider (unverified = `unknown`, ranked below verified).
-- [ ] Fallback pricing is config-driven (hardcoded `policyPrices` removed or reduced to a default seed).
-- [ ] No routing path sends data to a `trains` provider.
-- [ ] Tests for the new cost surface + catalogue fallback logic.
+- [x] `providers.json` on the VPS: OpenRouter main (allowed set of 6, no provider pin), direct DeepSeek dropped; runs work without `MINO_DEEPSEEK_KEY`.
+- [x] `system_check` reports month/today/per-run spend + unpriced count + catalogue snapshot.
+- [x] `run_playbook` results carry the run's cost.
+- [x] Daily cost observation lands in the trace + session notes without paging the owner below thresholds.
+- [x] `cost-catalogue.json` is produced from the OpenRouter endpoints API for config-derived targets (no hardcoded model list), hot-reloads on config edit, and carries the `zdr|trains|unknown` flag per provider (unverified = `unknown`, ranked below verified).
+- [x] Fallback pricing is config-driven (hardcoded `policyPrices` removed or reduced to a default seed).
+- [x] No routing path sends data to a `trains` provider.
+- [x] Tests for the new cost surface + catalogue fallback logic.
