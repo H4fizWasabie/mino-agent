@@ -725,6 +725,11 @@ func (m *Memory) validInferredEdges(edges []Edge, candidates map[string]bool, so
 		if edge.Target == "" || edge.Rel == "" || edge.Rel == "related_to" || edge.Confidence < 0.85 || !candidates[edge.Target] || (edge.Kind != "" && edge.Kind != "inferred") || contradictory[edge.Target] {
 			continue
 		}
+		// issue #180: the rebuild must never encode a model re-entry as
+		// superseding a user-authored correction.
+		if edge.Rel == "supersedes" && m.graph.userProvenanced(edge.Target) {
+			continue
+		}
 		key := edge.Target + "\x00" + edge.Rel
 		if seen[key] {
 			continue
@@ -1416,7 +1421,8 @@ func CleanMemoryEdges(s *Settings) {
 	defer db.Close()
 	m := NewMemory(db, nil, s)
 	removed := m.graph.RemoveMutualInferredEdges()
-	fmt.Printf("Removed %d contradictory inferred edges\n", removed)
+	repaired := m.graph.RemoveSupersedesIntoUserFacts()
+	fmt.Printf("Removed %d contradictory inferred edges, %d inverted supersedes edges\n", removed, repaired)
 }
 
 func DeduplicateMemory(s *Settings) {
