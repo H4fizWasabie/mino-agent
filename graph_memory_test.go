@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGraphMemoryRecordAndRemember(t *testing.T) {
@@ -582,5 +583,131 @@ func TestGraphMemoryLenientTimestampSelfHeals(t *testing.T) {
 	// Second parse of the healed file succeeds without warnings.
 	if _, err := gm.readFile(path); err != nil {
 		t.Fatalf("healed file still fails to parse: %v", err)
+	}
+}
+
+// issue #180: a user correction outranks a model re-entry of the same
+// knowledge, even when the re-entry is newer.
+func TestEntryRankingPrefersUserProvenance(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), nil)
+	if err := gm.RecordFact(Fact{ID: "hosting_reentry", Type: "semantic", Subject: "Image hosting runs on the legacy box", At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gm.RecordFact(Fact{ID: "hosting_correction", Type: "semantic", Subject: "Image hosting setup corrected to HTTPS", Source: "user-correction-20260812", At: time.Now().Add(-48 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	starts := gm.entryRanking("image hosting", "", gm.facts, true)
+	if len(starts) == 0 || starts[0].id != "hosting_correction" {
+		t.Fatalf("top start = %+v, want the user-corrected fact", starts)
+	}
+}
+
+// issue #180: two recalled facts carrying different URL domains surface a
+// conflict marker on both instead of silently trusting rank.
+func TestRememberMarksConflictingURLs(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), nil)
+	if err := gm.RecordFact(Fact{ID: "hosting_a", Type: "semantic", Subject: "Image hosting", Body: "Runs at http://149.28.146.30"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gm.RecordFact(Fact{ID: "hosting_b", Type: "semantic", Subject: "Image hosting setup", Body: "Serves at https://images.example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	got := gm.Remember("image hosting", "")
+	if !strings.Contains(got, "⚠ conflicts with hosting_b") || !strings.Contains(got, "⚠ conflicts with hosting_a") {
+		t.Fatalf("conflict markers missing:\n%s", got)
+	}
+}
+
+// issue #180: same-domain facts are not flagged as conflicting.
+func TestRememberSameDomainNotConflicting(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), nil)
+	if err := gm.RecordFact(Fact{ID: "a", Type: "semantic", Subject: "Docs", Body: "See https://docs.example.com/one"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gm.RecordFact(Fact{ID: "b", Type: "semantic", Subject: "More docs", Body: "See https://docs.example.com/two"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := gm.Remember("docs", ""); strings.Contains(got, "⚠ conflicts") {
+		t.Fatalf("false conflict on same domain:\n%s", got)
+	}
+}
+
+// issue #180: the repair drops inferred supersedes edges pointing at
+// user-provenanced facts and leaves other edges alone.
+func TestRemoveSupersedesIntoUserFacts(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), nil)
+	// Record the target first: RecordFact drops edges to unknown facts.
+	if err := gm.RecordFact(Fact{ID: "right", Type: "semantic", Subject: "Corrected claim", Source: "user-correction-20260812"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gm.RecordFact(Fact{ID: "wrong", Type: "semantic", Subject: "Wrong claim", Edges: []Edge{
+		{Target: "right", Rel: "supersedes", Kind: "inferred", Confidence: 0.92},
+		{Target: "right", Rel: "depends_on", Kind: "inferred", Confidence: 0.9},
+		{Target: "right", Rel: "supersedes", Kind: "explicit"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if n := gm.RemoveSupersedesIntoUserFacts(); n != 1 {
+		t.Fatalf("removed %d, want 1", n)
+	}
+	wrong, _ := gm.FindFact("wrong")
+	if len(wrong.Edges) != 2 {
+		t.Fatalf("wrong edges = %+v, want depends_on + explicit supersedes kept", wrong.Edges)
+	}
+}
+
+// issue #178: episodic facts never start a recall — they stay reachable as
+// BFS neighborhood context from semantic starts.
+func TestRememberExcludesEpisodicStarts(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), nil)
+	if err := gm.RecordFact(Fact{ID: "ep_run", Type: "episodic", Subject: "Ran ai-news digest 2026-08-13", At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gm.RecordFact(Fact{ID: "news_playbook", Type: "semantic", Subject: "News playbook publishes headlines", Edges: []Edge{{Target: "ep_run", Rel: "ran"}}}); err != nil {
+		t.Fatal(err)
+	}
+	// A query that only matches the episode must come up empty, not start there.
+	if got := gm.Remember("digest 2026", ""); !strings.Contains(got, "No memories found") {
+		t.Fatalf("episodic fact became a recall start:\n%s", got)
+	}
+	// From a semantic start the episode is still visible as neighborhood.
+	got := gm.Remember("News playbook", "")
+	if !strings.Contains(got, "ep_run") {
+		t.Fatalf("episodic neighbor missing from tree:\n%s", got)
+	}
+}
+
+// issue #178: episodes older than 30d archive with reason expiry; semantic
+// facts and fresh episodes stay live; archived episodes remain answerable via
+// the archive fallback.
+func TestArchiveExpiredEpisodic(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), nil)
+	if err := gm.RecordFact(Fact{ID: "old_ep", Type: "episodic", Subject: "Old run", At: time.Now().Add(-31 * 24 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gm.RecordFact(Fact{ID: "fresh_ep", Type: "episodic", Subject: "Fresh run", At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gm.RecordFact(Fact{ID: "old_sem", Type: "semantic", Subject: "Old semantic fact", At: time.Now().Add(-31 * 24 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if n := gm.ArchiveExpiredEpisodic(time.Now().Add(-30 * 24 * time.Hour)); n != 1 {
+		t.Fatalf("archived %d, want 1", n)
+	}
+	if _, ok := gm.FindFact("old_ep"); ok {
+		t.Fatal("old episode still live")
+	}
+	if _, ok := gm.FindFact("fresh_ep"); !ok {
+		t.Fatal("fresh episode must stay live")
+	}
+	if _, ok := gm.FindFact("old_sem"); !ok {
+		t.Fatal("semantic facts never expire")
+	}
+	if _, ok := gm.archiveFactsLocked()["old_ep"]; !ok {
+		t.Fatal("expired episode not in archive")
+	}
+	// Second pass is a no-op.
+	if n := gm.ArchiveExpiredEpisodic(time.Now().Add(-30 * 24 * time.Hour)); n != 0 {
+		t.Fatalf("second pass archived %d, want 0", n)
 	}
 }

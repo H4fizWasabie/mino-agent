@@ -1,6 +1,6 @@
 # Quality Frontier — Remove embeddings entirely; FTS5 + essentials + triggers become the floor
 
-Status: **OPEN** (GitHub issue #179) — principle decided in the 2026-08-13 session; implementation-ready.
+Status: **CLOSED** (GitHub issue #179) — embeddings removed across the codebase; FTS5 tool discovery, essentials, keyword graph candidates, and skill triggers are the retrieval floor. `memory_embeddings` dropped via schema v7.
 
 ## Question
 

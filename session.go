@@ -134,11 +134,8 @@ func (s *Session) buildSystem(userMessage, source string, includePlaybookRouting
 		}
 
 		if includePlaybookRouting {
-			// Playbook routing: always keyword-match first (fast), then refine with embeddings
-			playbookName, playbookDesc, playbookScore := MatchPlaybook(s.settings.Home, userMessage, nil) // keyword first
-			if playbookName == "" && s.mem.embedder != nil {
-				playbookName, playbookDesc, playbookScore = MatchPlaybook(s.settings.Home, userMessage, s.mem.embedder)
-			}
+			// Playbook routing is keyword-based (issue #179: embeddings removed).
+			playbookName, playbookDesc, playbookScore := MatchPlaybook(s.settings.Home, userMessage)
 			if playbookName != "" && playbookScore >= 0.3 {
 				// Explicit command: the user named the playbook ("run the daily news
 				// playbook") or asked for it directly. No decision layer — the playbook

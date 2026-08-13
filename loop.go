@@ -60,9 +60,8 @@ func RunLoop(
 	obs Observer,
 	stream bool,
 	traceHome string,
-	es *EmbeddingStore,
 ) *LoopResult {
-	return RunLoopContext(context.Background(), client, sessionID, system, messages, tools, maxIter, maxTokens, obs, stream, traceHome, es)
+	return RunLoopContext(context.Background(), client, sessionID, system, messages, tools, maxIter, maxTokens, obs, stream, traceHome)
 }
 
 type traceTagKey struct{}
@@ -261,7 +260,6 @@ func RunLoopContext(
 	obs Observer,
 	stream bool,
 	traceHome string,
-	es *EmbeddingStore,
 ) *LoopResult {
 	if ctx == nil {
 		ctx = context.Background()
@@ -312,7 +310,7 @@ func RunLoopContext(
 	// cached 64/10671 tokens). Selection still happens against the full context
 	// available at turn start, so specialist tools for the task are included.
 	oneTurnText := lastTurnContext(messages)
-	schemas := tools.SchemasForContext(sessionID, toolSelectionContext(system, messages), oneTurnText, es)
+	schemas := tools.SchemasForContext(sessionID, toolSelectionContext(system, messages), oneTurnText)
 	schemaChars := 0
 	schemaNames := make([]string, 0, len(schemas))
 	for _, s := range schemas {

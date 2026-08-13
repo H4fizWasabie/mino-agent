@@ -72,19 +72,10 @@ func NewCore() *Core {
 	mem.graph.StartReconciler(5 * time.Second)
 	mem.CleanupArtifacts()
 
-	// embedding store (OpenRouter, Phase 3)
-	embKey := os.Getenv("MINO_OPENROUTER_KEY")
-	embModel := envOr("MINO_EMBED_MODEL", "openai/text-embedding-3-large")
-	if embKey != "" {
-		mem.embedder = NewEmbeddingStore(db, embKey, embModel)
-		mem.graph.SetEmbedder(mem.embedder)
-		for _, entry := range PruneRecentFixes(s.Home, 7*24*time.Hour) {
-			mem.embedder.Remove("working_memory", entry)
-		}
-	} else {
-		PruneRecentFixes(s.Home, 7*24*time.Hour)
-	}
-	mem.skills = NewSkillLoader(s.Home, mem.embedder)
+	// Working-memory pruning is the only embedding-store leftover; it now only
+	// trims the file (issue #179 removed the store itself).
+	PruneRecentFixes(s.Home, 7*24*time.Hour)
+	mem.skills = NewSkillLoader(s.Home)
 	tools := BuildRegistry(db, s.Home, s.Workspace, mem, s.Location())
 	tools.SetMaxToolDescChars(s.MaxToolDescChars)           // schema payload description cap
 	tools.SetLogDB(db)                                      // enable tool_calls table logging
@@ -97,15 +88,6 @@ func NewCore() *Core {
 				time.Sleep(6 * time.Hour)
 				if n := mem.ConsolidateDue(); n > 0 {
 					slog.Info("consolidation", "new_facts", n)
-				}
-			}
-		})
-		safeGo("dedup", func() { // dedup — 6-hour, offset +30min from consolidation
-			time.Sleep(30 * time.Minute)
-			for {
-				time.Sleep(6 * time.Hour)
-				if n := mem.DedupDue(); n > 0 {
-					slog.Info("dedup", "merged_clusters", n)
 				}
 			}
 		})
@@ -331,16 +313,11 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 		messages[len(messages)-1].Images = images
 	}
 
-	var es *EmbeddingStore
-	if w.Memory != nil {
-		es = w.Memory.embedder
-	}
 	result := RunLoopContext(
 		ctx,
 		w.Client, conversation.Session.sessionID, system, messages, w.Tools,
 		w.Settings.MaxIter, w.Settings.MaxTokens, obs, stream,
 		w.Settings.Home,
-		es,
 	)
 
 	conversation.Session.AddExchange(userMessage, userContext, result.Reply, result.ToolCalls, source)

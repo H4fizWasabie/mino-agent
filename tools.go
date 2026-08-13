@@ -74,9 +74,8 @@ type Registry struct {
 	logDB          *sql.DB    // optional: if set, ExecuteContext logs to tool_calls table
 	auditFile      *os.File   // optional: append-only JSONL audit log
 	auditMu        sync.Mutex // guards auditFile writes
-	searchDB       *sql.DB    // optional: FTS5 index for context-conditioned tool selection
-	searchMu       sync.Mutex
-	toolEmbeddings map[string][]float32
+	searchDB *sql.DB    // optional: FTS5 index for context-conditioned tool selection
+	searchMu sync.Mutex
 
 	// Per-session tool union capped at schemaUnionCap: a tool stays selected
 	// once chosen so the `tools` array in the request payload stabilizes
@@ -142,14 +141,11 @@ func (r *Registry) CloseAuditLog() {
 }
 
 func NewRegistry() *Registry {
-	return &Registry{tools: make(map[string]*Tool), toolEmbeddings: make(map[string][]float32)}
+	return &Registry{tools: make(map[string]*Tool)}
 }
 
 func (r *Registry) Register(t *Tool) {
 	r.tools[t.Name] = t
-	r.searchMu.Lock()
-	delete(r.toolEmbeddings, t.Name)
-	r.searchMu.Unlock()
 	r.syncToolCatalog()
 }
 
@@ -261,7 +257,7 @@ var toolFamilies = [][]string{
 // oneTurnText is the last user message + last assistant reply — used for semantic
 // embedding and MCP keyword gating so the signal is task-specific, not diluted by
 // full history and system prompt noise.
-func (r *Registry) SchemasForContext(sessionID string, fullCtx string, oneTurnText string, es *EmbeddingStore) []ToolDef {
+func (r *Registry) SchemasForContext(sessionID string, fullCtx string, oneTurnText string) []ToolDef {
 	if r.searchDB == nil {
 		return r.Schemas()
 	}
@@ -288,13 +284,9 @@ func (r *Registry) SchemasForContext(sessionID string, fullCtx string, oneTurnTe
 		add(name)
 	}
 
-	// Built-in tools: keyword FTS5 on full context + semantic on one-turn window
+	// Built-in tools: keyword FTS5 on full context is the single discovery
+	// layer (issue #179: semantic selection removed).
 	for _, name := range r.searchToolNames(fullCtx) {
-		if !strings.HasPrefix(name, "MCP_") {
-			add(name)
-		}
-	}
-	for _, name := range r.semanticToolNames(oneTurnText, es) {
 		if !strings.HasPrefix(name, "MCP_") {
 			add(name)
 		}
@@ -501,69 +493,6 @@ func (r *Registry) searchToolNames(contextText string) []string {
 		if rows.Scan(&name) == nil {
 			names = append(names, name)
 		}
-	}
-	return names
-}
-
-func (r *Registry) semanticToolNames(contextText string, es *EmbeddingStore) []string {
-	if es == nil || strings.TrimSpace(contextText) == "" {
-		return nil
-	}
-	r.searchMu.Lock()
-	pending := make([]string, 0)
-	for name, tool := range r.tools {
-		if strings.HasPrefix(name, "MCP_") {
-			continue
-		}
-		if len(r.toolEmbeddings[name]) == 0 {
-			pending = append(pending, name+" — "+tool.Description)
-		}
-	}
-	r.searchMu.Unlock()
-	if len(pending) > 0 {
-		if embeddings, err := es.EmbedBatch(pending); err == nil {
-			r.searchMu.Lock()
-			for i, text := range pending {
-				if i < len(embeddings) {
-					name := strings.SplitN(text, " — ", 2)[0]
-					r.toolEmbeddings[name] = embeddings[i]
-				}
-			}
-			r.searchMu.Unlock()
-		}
-	}
-	query, err := es.Embed(contextText)
-	if err != nil || len(query) == 0 {
-		return nil
-	}
-	type candidate struct {
-		name  string
-		score float64
-	}
-	var candidates []candidate
-	r.searchMu.Lock()
-	for name, embedding := range r.toolEmbeddings {
-		if score := cosineSimilarity(query, embedding); score >= 0.40 {
-			candidates = append(candidates, candidate{name, score})
-		}
-	}
-	r.searchMu.Unlock()
-	// Name tiebreak keeps the order deterministic: candidates are collected
-	// from a map (random iteration), and this order feeds the per-session
-	// union's eviction tiebreak — a tie in cosine score must not pick a
-	// different tool turn to turn.
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].score != candidates[j].score {
-			return candidates[i].score > candidates[j].score
-		}
-		return candidates[i].name < candidates[j].name
-	})
-	if len(candidates) > 8 {
-		candidates = candidates[:8]
-	}
-	names := make([]string, len(candidates))
-	for i, candidate := range candidates {
-		names[i] = candidate.name
 	}
 	return names
 }
@@ -1511,16 +1440,12 @@ func makeNotesTool(db *sql.DB, mem *Memory) *Tool {
 				Subject: subject,
 				At:      time.Now(),
 				Why:     why,
+				Source:  "user", // user-authored facts must be distinguishable from model-distilled ones (issue #178)
 				Edges:   edges,
 				Body:    content,
 			}
 			if err := mem.graph.RecordFact(fact); err != nil {
 				return fmt.Sprintf("Error saving: %v", err)
-			}
-
-			// Also index for embedding similarity
-			if mem.embedder != nil {
-				mem.embedder.IndexFact(id, fact)
 			}
 			if why != "" {
 				return fmt.Sprintf("Saved: %s — %s (why: %s) — stored in memories/%s.md", subject, content, why, id)
@@ -1774,11 +1699,9 @@ func makeManageMemoryTool(mem *Memory) *Tool {
 				}
 				return fmt.Sprintf("consolidated %d session(s) into facts (unconsolidated rows %d → %d)", n, before, after)
 			case "dedup":
-				n := mem.DedupDue()
-				if n == 0 && mem.embedder == nil {
-					return "dedup unavailable: no embedding store configured"
-				}
-				return fmt.Sprintf("deduplicated %d fact clusters", n)
+				// issue #179: embedding clustering removed — consolidation is the
+				// single merge path; answer honestly instead of reporting 0 clusters.
+				return "dedup is superseded by consolidate — run manage_memory consolidate to merge duplicates into facts"
 			case "rebuild_edges":
 				n, err := mem.RebuildGraphEdges()
 				if err != nil {
@@ -1813,9 +1736,6 @@ func makeManageMemoryTool(mem *Memory) *Tool {
 				if _, err := mem.graph.DeleteFact(fact.ID); err != nil {
 					return fmt.Sprintf("Error forgetting: %v", err)
 				}
-				if mem.embedder != nil {
-					mem.embedder.RemoveFact(fact.ID)
-				}
 				return fmt.Sprintf("Forgot: %s (removed from memories/%s.md)", fact.Subject, fact.ID)
 			}
 			if action == "correct" {
@@ -1823,9 +1743,6 @@ func makeManageMemoryTool(mem *Memory) *Tool {
 				fact.Feedback = 0
 				if err := mem.graph.ReplaceFact(*fact); err != nil {
 					return fmt.Sprintf("Error correcting: %v", err)
-				}
-				if mem.embedder != nil {
-					mem.embedder.IndexFact(fact.ID, *fact)
 				}
 				return fmt.Sprintf("Corrected fact about %s (memories/%s.md updated)", subject, fact.ID)
 			}
@@ -1839,9 +1756,6 @@ func makeManageMemoryTool(mem *Memory) *Tool {
 					return fmt.Sprintf("Error recording feedback: %v", err)
 				}
 				if action == "reject" {
-					if mem.embedder != nil {
-						mem.embedder.RemoveFact(fact.ID)
-					}
 					return fmt.Sprintf("Archived: %s (rejected as outdated — still answerable via remember, tagged [archived])", updated.Subject)
 				}
 				return fmt.Sprintf("Recorded %s feedback for %s", action, subject)
@@ -1925,16 +1839,9 @@ func makeWorkingMemoryTool(home string, mem *Memory) *Tool {
 		Fn: func(args map[string]any) string {
 			section, _ := args["section"].(string)
 			content, _ := args["content"].(string)
-			for _, expired := range PruneRecentFixes(home, 7*24*time.Hour) {
-				if mem.embedder != nil {
-					mem.embedder.Remove("working_memory", expired)
-				}
-			}
+			PruneRecentFixes(home, 7*24*time.Hour)
 			if !AppendWorkingMemory(home, section, content) {
 				return fmt.Sprintf("Working memory already contains [%s]: %s", section, content)
-			}
-			if mem.embedder != nil {
-				mem.embedder.Index("working_memory", content)
 			}
 			return fmt.Sprintf("Added to working memory [%s]: %s (working_memory.md)", section, content)
 		},
@@ -1956,9 +1863,6 @@ func makePatternTool(home string, mem *Memory) *Tool {
 			rule, _ := args["rule"].(string)
 			if !AddPattern(home, rule) {
 				return "Pattern already saved: " + rule
-			}
-			if mem.embedder != nil {
-				mem.embedder.Index("patterns", rule)
 			}
 			return fmt.Sprintf("Pattern saved: %s (patterns.md)", rule)
 		},

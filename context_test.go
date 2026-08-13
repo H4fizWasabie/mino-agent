@@ -382,7 +382,7 @@ func TestLoopHardStopsAfterThreeDetections(t *testing.T) {
 		script[i] = scriptedResp([]ContentBlock{toolBlock("probe", map[string]any{"n": i})}, "tool_use")
 	}
 	client := &fakeClient{script: script}
-	result := RunLoopContext(context.Background(), client, "loop-stop", "", []Message{{Role: "user", Content: "go"}}, tools, 20, 100, nil, false, "", nil)
+	result := RunLoopContext(context.Background(), client, "loop-stop", "", []Message{{Role: "user", Content: "go"}}, tools, 20, 100, nil, false, "")
 	if result.Status != "loop" {
 		t.Fatalf("status = %q, want loop (reply=%q)", result.Status, result.Reply)
 	}
@@ -407,7 +407,7 @@ func TestLoopExecutesModelRequestedToolsWithoutDedupState(t *testing.T) {
 		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
 	}}
 
-	result := RunLoopContext(context.Background(), client, "simple-loop", "", []Message{{Role: "user", Content: "probe twice"}}, tools, 5, 100, nil, false, t.TempDir(), nil)
+	result := RunLoopContext(context.Background(), client, "simple-loop", "", []Message{{Role: "user", Content: "probe twice"}}, tools, 5, 100, nil, false, t.TempDir())
 	if result.Status != "complete" || result.Reply != "done" {
 		t.Fatalf("result = %#v", result)
 	}
@@ -483,7 +483,7 @@ func TestContextDiagTraceLogsRealSchemaBytes(t *testing.T) {
 	tools.Register(&Tool{Name: "read_file", Description: strings.Repeat("d", 2000), Schema: map[string]any{"type": "object", "properties": map[string]any{"p": map[string]any{"type": "string", "description": strings.Repeat("x", 1500)}}}})
 	tools.Register(&Tool{Name: "search_web", Description: "s", Schema: map[string]any{"type": "object"}})
 	client := &fakeClient{script: []*LLMResponse{scriptedResp([]ContentBlock{textBlock("done")}, "stop")}}
-	result := RunLoopContext(context.Background(), client, "diag-bytes", "", []Message{{Role: "user", Content: "go"}}, tools, 3, 100, nil, false, home, nil)
+	result := RunLoopContext(context.Background(), client, "diag-bytes", "", []Message{{Role: "user", Content: "go"}}, tools, 3, 100, nil, false, home)
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete", result.Status)
 	}
@@ -605,7 +605,7 @@ func TestLoopConvertsViewImageToVisionText(t *testing.T) {
 		scriptedResp([]ContentBlock{textBlock("a red bicycle leaning against a brick wall")}, "stop"),
 		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
 	}}
-	result := RunLoopContext(context.Background(), client, "vision-loop", "", []Message{{Role: "user", Content: "look"}}, tools, 5, 100, nil, false, "", nil)
+	result := RunLoopContext(context.Background(), client, "vision-loop", "", []Message{{Role: "user", Content: "look"}}, tools, 5, 100, nil, false, "")
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete (reply=%q)", result.Status, result.Reply)
 	}
@@ -657,7 +657,7 @@ func TestLoopLeavesNonImageToolResultsUntouched(t *testing.T) {
 		scriptedResp([]ContentBlock{toolBlock("probe", map[string]any{})}, "tool_use"),
 		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
 	}}
-	result := RunLoopContext(context.Background(), client, "plain-tool-loop", "", []Message{{Role: "user", Content: "go"}}, tools, 5, 100, nil, false, "", nil)
+	result := RunLoopContext(context.Background(), client, "plain-tool-loop", "", []Message{{Role: "user", Content: "go"}}, tools, 5, 100, nil, false, "")
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete", result.Status)
 	}
@@ -685,7 +685,7 @@ func TestLoopDegradesFailedVisionCallToErrorResult(t *testing.T) {
 		scriptedResp([]ContentBlock{toolBlock("view_image", map[string]any{"path": img})}, "tool_use"),
 		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
 	}}}
-	result := RunLoopContext(context.Background(), client, "vision-fail-loop", "", []Message{{Role: "user", Content: "look"}}, tools, 5, 100, nil, false, "", nil)
+	result := RunLoopContext(context.Background(), client, "vision-fail-loop", "", []Message{{Role: "user", Content: "look"}}, tools, 5, 100, nil, false, "")
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete (reply=%q)", result.Status, result.Reply)
 	}

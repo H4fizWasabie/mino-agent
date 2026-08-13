@@ -407,12 +407,6 @@ func handleMemoryAPI(w http.ResponseWriter, r *http.Request) {
 					http.Error(w, err.Error(), http.StatusNotFound)
 					return
 				}
-				if dashCore.Memory.embedder != nil {
-					if fact, found := dashCore.Memory.graph.FindFact(graphID); found {
-						fact.Body = body.Content
-						dashCore.Memory.embedder.IndexFact(graphID, *fact)
-					}
-				}
 				json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 				return
 			}
@@ -424,13 +418,10 @@ func handleMemoryAPI(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "invalid fact id", http.StatusBadRequest)
 				return
 			}
-			fact, err := dashCore.Memory.graph.DeleteFact(factID)
+			_, err := dashCore.Memory.graph.DeleteFact(factID)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusNotFound)
 				return
-			}
-			if dashCore.Memory.embedder != nil {
-				dashCore.Memory.embedder.RemoveFact(fact.ID)
 			}
 			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 			return
@@ -440,11 +431,7 @@ func handleMemoryAPI(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "invalid episode id", http.StatusBadRequest)
 				return
 			}
-			if fact, err := dashCore.Memory.graph.DeleteFact(episodeID); err == nil {
-				if dashCore.Memory.embedder != nil {
-					dashCore.Memory.embedder.RemoveFact(episodeID)
-					dashCore.Memory.embedder.Remove("episode", fact.Subject)
-				}
+			if _, err := dashCore.Memory.graph.DeleteFact(episodeID); err == nil {
 				json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 				return
 			}
@@ -674,7 +661,7 @@ func skillCatalog(home string) []map[string]any {
 }
 
 func loadSkillCatalog(home string) []map[string]any {
-	sl := NewSkillLoader(home, nil)
+	sl := NewSkillLoader(home)
 	var out []map[string]any
 	for _, sk := range sl.Catalog() {
 		rel, err := filepath.Rel(home, sk.Source)

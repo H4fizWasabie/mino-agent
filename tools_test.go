@@ -174,6 +174,34 @@ func TestSaveNoteWithoutWhy(t *testing.T) {
 	}
 }
 
+// issue #178: save_note facts are stamped Source: "user" at birth so
+// user-authored facts stay distinguishable from model-distilled ones.
+func TestSaveNoteStampsUserSource(t *testing.T) {
+	home := t.TempDir()
+	memories := filepath.Join(home, "memories")
+	mem := &Memory{db: Connect(home), cfg: &Settings{Home: home, MemoriesDir: memories}, graph: NewGraphMemory(memories, nil)}
+	defer mem.db.Close()
+	tool := makeNotesTool(mem.db, mem)
+
+	if out := tool.Fn(map[string]any{"id": "user_fact", "subject": "User said this"}); !strings.Contains(out, "Saved") {
+		t.Fatalf("save failed: %q", out)
+	}
+	fact, ok := mem.graph.FindFact("user_fact")
+	if !ok {
+		t.Fatal("fact not saved")
+	}
+	if fact.Source != "user" {
+		t.Fatalf("fact.Source = %q, want \"user\"", fact.Source)
+	}
+	raw, err := os.ReadFile(filepath.Join(memories, "user_fact.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "source: user") {
+		t.Fatalf("source missing from front matter:\n%s", raw)
+	}
+}
+
 func TestBashHardFailureNoOutput(t *testing.T) {
 	tool := makeBashToolFor("", 2*time.Minute)
 	out := tool.Fn(map[string]any{"command": "exit 3"})
@@ -358,14 +386,14 @@ func TestSchemasForContextCappedUnion(t *testing.T) {
 	}
 
 	// Turn 1: 13 essentials (send_document added, CTX-013) + 6 explicit = 19, under the cap.
-	first := names(r.SchemasForContext("s1", "", "use special_101 special_102 special_103 special_104 special_105 special_106 now", nil))
+	first := names(r.SchemasForContext("s1", "", "use special_101 special_102 special_103 special_104 special_105 special_106 now"))
 	if len(first) != 19 {
 		t.Fatalf("turn 1: %d schemas, want 19: %v", len(first), first)
 	}
 	hasAll(t, first, essentialNamesSorted...)
 
 	// Turn 2: 6 new explicit tools → union 23 → evict the 3 oldest explicit.
-	second := names(r.SchemasForContext("s1", "", "use special_107 special_108 special_109 special_110 special_111 special_112 now", nil))
+	second := names(r.SchemasForContext("s1", "", "use special_107 special_108 special_109 special_110 special_111 special_112 now"))
 	if len(second) != schemaUnionCap {
 		t.Fatalf("turn 2: %d schemas, want cap %d", len(second), schemaUnionCap)
 	}
@@ -380,13 +408,13 @@ func TestSchemasForContextCappedUnion(t *testing.T) {
 	}
 
 	// Turn 3: identical to turn 2 → identical output (prefix-cache stability).
-	third := names(r.SchemasForContext("s1", "", "use special_107 special_108 special_109 special_110 special_111 special_112 now", nil))
+	third := names(r.SchemasForContext("s1", "", "use special_107 special_108 special_109 special_110 special_111 special_112 now"))
 	if !reflect.DeepEqual(second, third) {
 		t.Fatalf("unstable output across identical turns:\n%v\n%v", second, third)
 	}
 
 	// A different session starts its own union.
-	other := names(r.SchemasForContext("s2", "", "use special_107 special_108 special_109 special_110 special_111 special_112 now", nil))
+	other := names(r.SchemasForContext("s2", "", "use special_107 special_108 special_109 special_110 special_111 special_112 now"))
 	if len(other) != 19 {
 		t.Fatalf("session s2 inherited union: %d schemas, want 19", len(other))
 	}
