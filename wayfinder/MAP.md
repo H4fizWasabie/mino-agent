@@ -71,7 +71,7 @@ Memory growth is bounded at the source (distill acceptance), recall carries no d
 
 ## Frontier (open tickets)
 
-- [GIG-001 — GIGO at the distill source](tickets/gig-001-gigo-distill.md) (GitHub #178, open) — 810 facts/14d (~58/day), routine-recurrence snapshots stored as durable facts; acceptance criteria live in prompt prose, not code. Discussion scheduled (separate session).
+- [GIG-001 — GIGO at the distill source](tickets/gig-001-gigo-distill.md) (GitHub #178, open) — **principle decided 2026-08-13**: procedural/long-term split via existing `type` field (episodic = traversal-only + 30d expiry; semantic = protected); per-playbook distill gate (semantic ON: daily-ai-concept only); provenance + regex gate skipped. Implementation-ready.
 - [EMB-001 — Embedding recall priority](tickets/emb-001-embedding-recall.md) (GitHub #179, open) — 833 cached vectors, 80 remembers, 0 similarity contributions; keyword + why/use_when carried 79/80. Discussion scheduled (separate session).
 - [DRF-001 — Drift prevention](tickets/drf-001-parse-drift.md) (GitHub #180, open) — loop drift governed (1 event since 08-11); parse drift active (71 `tool_call_parse_failed` in 08-08→08-13, deepseek:deepinfra era). Discussion scheduled (separate session).
 - [TGM-001 — Telegram enrichment](tickets/tgm-001-telegram-enrichment.md) (GitHub #181, open) — scope decided: `---` section split, reply threading, italic/underline/spoiler/blockquote, typing keepalive; crow-specific pieces skipped.
