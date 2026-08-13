@@ -293,14 +293,18 @@ func (m *Memory) DistillOutputsDue() int {
 			slog.Warn("distill run write failed", "run", sid, "error", err)
 			continue
 		}
-		for _, f := range out.Facts {
-			if f.ID == "" || f.Subject == "" {
-				continue
-			}
-			f.Type = "semantic"
-			f.At = time.Now().UTC()
-			if err := m.graph.RecordFact(f); err != nil {
-				slog.Warn("distill fact write failed", "fact", f.ID, "error", err)
+		// Semantic facts distill only from playbooks whose config.md whitelists
+		// them (issue #178): routine runs post run nodes, not durable facts.
+		if m.cfg != nil && playbookDistillSemantic(m.cfg.Home, artifactPlaybookName(sid, byRun[sid][0].label)) {
+			for _, f := range out.Facts {
+				if f.ID == "" || f.Subject == "" {
+					continue
+				}
+				f.Type = "semantic"
+				f.At = time.Now().UTC()
+				if err := m.graph.RecordFact(f); err != nil {
+					slog.Warn("distill fact write failed", "fact", f.ID, "error", err)
+				}
 			}
 		}
 		for _, a := range byRun[sid] {
@@ -309,6 +313,34 @@ func (m *Memory) DistillOutputsDue() int {
 		written++ // one run = one node
 	}
 	return written
+}
+
+// artifactPlaybookName recovers the playbook name an artifact row was
+// recorded under: scheduled runs carry it in the session id, manual runs in
+// the label ("<name> output").
+func artifactPlaybookName(sessionID, label string) string {
+	if name := strings.TrimPrefix(sessionID, "scheduled-"); name != sessionID {
+		return name
+	}
+	return strings.TrimSuffix(label, " output")
+}
+
+// playbookDistillSemantic reports whether the playbook's config.md whitelists
+// semantic-fact distillation. Default false: only explicitly whitelisted
+// playbooks (e.g. daily-ai-concept) produce semantic facts from distill —
+// routine runs post run nodes only (issue #178).
+func playbookDistillSemantic(home, name string) bool {
+	data, err := os.ReadFile(filepath.Join(home, "playbooks", name, "config.md"))
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		parts := strings.SplitN(strings.TrimSpace(line), ":", 2)
+		if len(parts) == 2 && parts[0] == "distill_semantic" && strings.TrimSpace(parts[1]) == "true" {
+			return true
+		}
+	}
+	return false
 }
 
 // availableFactIDs returns a prompt-safe list of existing fact IDs.
@@ -889,6 +921,11 @@ func (m *Memory) RebuildGraphEdges() (int, error) {
 // MaintainGraph is the scheduled full maintenance pass: re-infer all edges,
 // resolve mirrored pairs, cluster, and label communities. Returns counts.
 func (m *Memory) MaintainGraph() (int, int, error) {
+	// Deterministic lifecycle first: expired episodes leave the live graph
+	// before the rebuild judges them (issue #178).
+	if archived := m.graph.ArchiveExpiredEpisodic(time.Now().Add(-staleAgeThreshold)); archived > 0 {
+		slog.Info("archived expired episodic facts", "count", archived)
+	}
 	edges, err := m.RebuildGraphEdges()
 	if err != nil {
 		// Deterministic steps must still run: a failed LLM batch means some
