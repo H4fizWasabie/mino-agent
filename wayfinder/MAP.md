@@ -109,6 +109,7 @@ Measurable: (1) a session whose previous replies exceed `inputPreviewLimit` stil
   - [CTX-017 — Post-mortem: Mino diagnoses its own failures from its own traces](tickets/ctx-017-postmortem.md) (open) — trace-cited diagnosis, or labeled hypothesis (CTX-016 applies to self-narrative). Lowest risk; the natural next build.
   - [CTX-018 — Design-time: Mino audits its own playbook contracts](tickets/ctx-018-design-time-review.md) (open) — risk-flags, not assertions; the FB churn fix made preemptive.
   - [CTX-019 — Mid-flight: Mino provides stop/redirect signals](tickets/ctx-019-mid-flight.md) (open, hard frontier) — act on the verified signal; self-explanation is provisional. #171 is the seed.
+- [CTX-020 — Cost awareness & privacy: cost-watch feeds the brain](tickets/ctx-020-cost-awareness-privacy.md) (open) — Mino is blind to its own spend (usage.jsonl only pages the owner). Scope: privacy swap (OpenRouter/DeepInfra main, drop direct DeepSeek — config-only); system_check cost block; per-run cost; daily cost observation; and a model-agnostic cost catalogue (targets derived from the user's providers.json, cost-watch reads an editable hot-reloaded config Mino maintains itself, hardcoded policyPrices moves to config). Privacy is a hard constraint, cost a soft preference — never route to a `trains` provider.
 
 ## Out of scope
 
