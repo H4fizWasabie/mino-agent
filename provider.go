@@ -62,6 +62,7 @@ type Client struct {
 	client          *http.Client
 	usageLogPath    string
 	providerRouting []string // openrouter provider routing, e.g. ["DigitalOcean"]
+	allowFallbacks  bool     // may fall back outside the routing list (default false = privacy-safe)
 }
 
 func NewClient(apiKey, baseURL string) *Client {
@@ -123,7 +124,7 @@ func (c *Client) createWithRouting(ctx context.Context, model, reasoning string,
 	if len(routing) > 0 {
 		payload["provider"] = map[string]any{
 			"order":           routing,
-			"allow_fallbacks": true,
+			"allow_fallbacks": c.allowFallbacks,
 		}
 	}
 	if sessionID != "" {

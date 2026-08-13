@@ -12,18 +12,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
 // modelPrice is USD per million tokens. Cache is the cache_read rate.
 type modelPrice struct {
-	In, Out, Cache float64
+	In    float64 `json:"in"`
+	Out   float64 `json:"out"`
+	Cache float64 `json:"cache"`
 }
 
-// policyPrices covers the policy models (main+small deepseek; hy3 row kept as a
+// seedPrices covers the policy models (main+small deepseek; hy3 row kept as a
 // fallback+vision qwen) at the prices locked in REL-01. Unlisted models price
 // at $0 and count as "unpriced" so a report never silently omits spend.
-var policyPrices = map[string]modelPrice{
+var seedPrices = map[string]modelPrice{
 	"tencent/hy3:tencent":                       {In: 0.132, Out: 0.528, Cache: 0.033},
 	"deepseek/deepseek-v4-flash-0731:deepinfra": {In: 0.08, Out: 0.18, Cache: 0.016},
 	"qwen/qwen3.7-flash":                        {In: 0.03, Out: 0.13, Cache: 0.006},
@@ -35,15 +38,21 @@ const (
 )
 
 // usageCost prices one usage.jsonl record. Real provider-reported USD wins
-// (issue #76): usage.jsonl is the source of truth for spend, the policy
-// table is only a fallback for providers that omit cost. The second return
+// (issue #76): usage.jsonl is the source of truth for spend, the price table
+// is only a fallback for providers that omit cost. The second return
 // is false when the record carries neither.
 func usageCost(r map[string]any) (float64, bool) {
+	return usageCostWith(r, seedPrices)
+}
+
+// usageCostWith is usageCost against an explicit price map (CTX-020: the
+// config-driven table from priceMapFor).
+func usageCostWith(r map[string]any, prices map[string]modelPrice) (float64, bool) {
 	if c, ok := r["cost_usd"].(float64); ok && c > 0 {
 		return c, true
 	}
 	model, _ := r["model"].(string)
-	p, ok := policyPrices[model]
+	p, ok := prices[model]
 	if !ok {
 		return 0, false
 	}
@@ -56,6 +65,102 @@ func usageCost(r map[string]any) (float64, bool) {
 	return (f("in")*p.In + f("cache_read")*p.Cache + f("out")*p.Out) / 1e6, true
 }
 
+// priceMapFor merges the built-in seed with the user's prices.json (if any) so
+// fallback pricing is config-driven — a user's models price from THEIR table,
+// never from ours (CTX-020). prices.json shape: {"model/slug": {"in":..,"out":..,"cache":..}}.
+func priceMapFor(home string) map[string]modelPrice {
+	m := map[string]modelPrice{}
+	for k, v := range seedPrices {
+		m[k] = v
+	}
+	data, err := os.ReadFile(filepath.Join(home, "prices.json"))
+	if err != nil {
+		return m
+	}
+	var custom map[string]modelPrice
+	if json.Unmarshal(data, &custom) == nil {
+		for k, v := range custom {
+			m[k] = v
+		}
+	}
+	return m
+}
+
+// daySpendUSD sums priced usage records for the current day (in loc).
+func daySpendUSD(home string, loc *time.Location, now time.Time) (float64, int) {
+	now = now.In(loc)
+	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	end := start.AddDate(0, 0, 1)
+	cost, unpriced := 0.0, 0
+	prices := priceMapFor(home)
+	for _, r := range usageRecords(home) {
+		ts, _ := r["ts"].(string)
+		t, err := time.Parse(time.RFC3339, ts)
+		if err != nil || t.Before(start) || !t.Before(end) {
+			continue
+		}
+		if c, ok := usageCostWith(r, prices); ok {
+			cost += c
+		} else {
+			unpriced++
+		}
+	}
+	return cost, unpriced
+}
+
+// costSince sums priced usage records at/after a time (all sessions) — the
+// per-run cost estimate shown in run_playbook results (CTX-020).
+func costSince(home string, since time.Time) (float64, bool) {
+	cutoff := since.Format(time.RFC3339)
+	cost := 0.0
+	found := false
+	prices := priceMapFor(home)
+	for _, r := range usageRecords(home) {
+		ts, _ := r["ts"].(string)
+		if ts < cutoff {
+			continue
+		}
+		if c, ok := usageCostWith(r, prices); ok {
+			cost += c
+			found = true
+		}
+	}
+	return cost, found
+}
+
+// costCatalogueSummary returns a brief snapshot of cost-catalogue.json (written
+// by the cost-watch extension) or "" when absent. Schema (CTX-020):
+// {"scraped_at": RFC3339, "entries": [{"model", "provider", "in", "out", "data_handling"}]}
+// with in/out in USD per 1M tokens and data_handling in zdr|trains|unknown.
+func costCatalogueSummary(home string) string {
+	data, err := os.ReadFile(filepath.Join(home, "cost-catalogue.json"))
+	if err != nil {
+		return ""
+	}
+	var cat struct {
+		ScrapedAt string `json:"scraped_at"`
+		Entries   []struct {
+			Model       string  `json:"model"`
+			Provider    string  `json:"provider"`
+			In          float64 `json:"in"`
+			Out         float64 `json:"out"`
+			DataHandling string `json:"data_handling"`
+		} `json:"entries"`
+	}
+	if json.Unmarshal(data, &cat) != nil {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d providers @ %s", len(cat.Entries), cat.ScrapedAt)
+	for i, e := range cat.Entries {
+		if i >= 6 {
+			break
+		}
+		fmt.Fprintf(&b, "; %s $%.3f/$%.3f per 1M [%s]", e.Provider, e.In, e.Out, e.DataHandling)
+	}
+	return b.String()
+}
+
 // runCostUSD prices one scheduled run's usage: every record tagged with the
 // run's session (scheduled-<name>) written at or after the fire time. The
 // second return is false when no priced record was found.
@@ -63,13 +168,14 @@ func runCostUSD(home, session string, since time.Time) (float64, bool) {
 	cutoff := since.Format(time.RFC3339)
 	cost := 0.0
 	found := false
+	prices := priceMapFor(home)
 	for _, r := range usageRecords(home) {
 		sid, _ := r["session_id"].(string)
 		ts, _ := r["ts"].(string)
 		if sid != session || ts < cutoff {
 			continue
 		}
-		if c, ok := usageCost(r); ok {
+		if c, ok := usageCostWith(r, prices); ok {
 			cost += c
 			found = true
 		}
@@ -83,6 +189,7 @@ func monthSpendUSD(home string, loc *time.Location, now time.Time) (float64, int
 	now = now.In(loc)
 	cost := 0.0
 	unpriced := 0
+	prices := priceMapFor(home)
 	start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc)
 	end := start.AddDate(0, 1, 0)
 	for _, r := range usageRecords(home) {
@@ -91,7 +198,7 @@ func monthSpendUSD(home string, loc *time.Location, now time.Time) (float64, int
 		if err != nil || t.Before(start) || !t.Before(end) {
 			continue
 		}
-		if c, ok := usageCost(r); ok {
+		if c, ok := usageCostWith(r, prices); ok {
 			cost += c
 		} else {
 			unpriced++
@@ -141,6 +248,10 @@ func checkMonthlyCostOnce(core *Core, now time.Time) {
 			loc = core.Settings.Location()
 		}
 		spend, unpriced := monthSpendUSD(home, loc, now)
+		// CTX-020: daily LLM-visible cost state — the brain wakes cost-aware
+		// even below the page threshold (system_check reads the same numbers).
+		today, _ := daySpendUSD(home, loc, now)
+		logTrace(home, "cost_state", map[string]any{"month": spend, "today": today, "unpriced": unpriced})
 		if spend > monthCostCeiling {
 			st.AlertedMonth = month
 			msg := fmt.Sprintf("💰 Month spend $%.2f — over the $%g review trigger. Re-review the Brain Policy (REL-01).", spend, monthCostCeiling)

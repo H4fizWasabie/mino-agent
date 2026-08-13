@@ -35,6 +35,7 @@ const (
 var (
 	providersPath = "/home/mino/.mino/providers.json"
 	runLocksDir   = "/home/mino/.mino/run-locks"
+	cataloguePath = "/home/mino/.mino/cost-catalogue.json"
 )
 
 type modelConfig struct {
@@ -44,10 +45,27 @@ type modelConfig struct {
 }
 
 type config struct {
-	Listen   string                 `json:"listen"`
-	Port     int                    `json:"port"`
-	Models   map[string]modelConfig `json:"models"`
-	Telegram string                 `json:"telegram_chat_id"`
+	Listen               string                 `json:"listen"`
+	Port                 int                    `json:"port"`
+	Models               map[string]modelConfig `json:"models"`
+	Telegram             string                 `json:"telegram_chat_id"`
+	CatalogueRefreshMin  int                    `json:"catalogue_refresh_minutes"` // 0 = default 60
+	DataHandling         map[string]string      `json:"data_handling"`            // provider -> zdr|trains|unknown
+}
+
+// catalogueEntry is one provider's price for a model (CTX-020). In/Out are
+// USD per 1M tokens; DataHandling is curated (zdr|trains|unknown), never scraped.
+type catalogueEntry struct {
+	Model        string  `json:"model"`
+	Provider     string  `json:"provider"`
+	In           float64 `json:"in"`
+	Out          float64 `json:"out"`
+	DataHandling string  `json:"data_handling"`
+}
+
+type catalogue struct {
+	ScrapedAt string           `json:"scraped_at"`
+	Entries   []catalogueEntry `json:"entries"`
 }
 
 func defaultConfig() *config {
@@ -82,6 +100,12 @@ func loadConfig() *config {
 		}
 		for k, v := range extra.Models {
 			cfg.Models[k] = v
+		}
+		if extra.CatalogueRefreshMin > 0 {
+			cfg.CatalogueRefreshMin = extra.CatalogueRefreshMin
+		}
+		if len(extra.DataHandling) > 0 {
+			cfg.DataHandling = extra.DataHandling
 		}
 	}
 	return cfg
@@ -279,6 +303,101 @@ func writeJSON(w http.ResponseWriter, code int, payload any) {
 	w.Write(body)
 }
 
+// --- catalogue (CTX-020) --------------------------------------------------
+
+// fetchCatalogue fetches the OpenRouter endpoints API for each OpenRouter-hosted
+// model in providers.json and returns every hosting provider's live price plus a
+// curated data-handling flag (zdr|trains|unknown). Model-agnostic: the targets
+// are whatever the user configured, never a hardcoded list. Prices are the
+// API's own per-token USD scaled to per-1M.
+func fetchCatalogue(cfg *config) (catalogue, error) {
+	cat := catalogue{ScrapedAt: time.Now().UTC().Format(time.RFC3339)}
+	models, err := configuredOpenRouterModels()
+	if err != nil {
+		return cat, err
+	}
+	for _, slug := range models {
+		body, err := fetch("https://openrouter.ai/api/v1/models/" + slug + "/endpoints")
+		if err != nil {
+			continue // one model failing must not kill the whole catalogue
+		}
+		var resp struct {
+			Data struct {
+				Endpoints []struct {
+					Name    string `json:"name"`
+					Pricing struct {
+						Prompt     string `json:"prompt"`
+						Completion string `json:"completion"`
+					} `json:"pricing"`
+				} `json:"endpoints"`
+			} `json:"data"`
+		}
+		if json.Unmarshal([]byte(body), &resp) != nil {
+			continue
+		}
+		for _, ep := range resp.Data.Endpoints {
+			provider := ep.Name
+			if i := strings.Index(provider, " | "); i >= 0 {
+				provider = provider[:i]
+			}
+			in, _ := strconv.ParseFloat(ep.Pricing.Prompt, 64)
+			out, _ := strconv.ParseFloat(ep.Pricing.Completion, 64)
+			flag := cfg.DataHandling[provider]
+			if flag == "" {
+				flag = "unknown" // curated elsewhere; never scraped (verify-then-claim)
+			}
+			cat.Entries = append(cat.Entries, catalogueEntry{
+				Model:        slug,
+				Provider:     provider,
+				In:           in * 1e6,
+				Out:          out * 1e6,
+				DataHandling: flag,
+			})
+		}
+	}
+	return cat, nil
+}
+
+// configuredOpenRouterModels returns the model slugs from providers.json that
+// are OpenRouter-hosted (contain a "/" — the openrouter slug shape). Direct-API
+// models (no slash) have no endpoints listing and are skipped.
+func configuredOpenRouterModels() ([]string, error) {
+	data, err := os.ReadFile(providersPath)
+	if err != nil {
+		return nil, err
+	}
+	var f struct {
+		Providers []struct {
+			Model string `json:"model"`
+		} `json:"providers"`
+	}
+	if json.Unmarshal(data, &f) != nil {
+		return nil, fmt.Errorf("invalid providers.json")
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, p := range f.Providers {
+		if p.Model != "" && strings.Contains(p.Model, "/") && !seen[p.Model] {
+			seen[p.Model] = true
+			out = append(out, p.Model)
+		}
+	}
+	return out, nil
+}
+
+// saveCatalogue writes the catalogue atomically to cost-catalogue.json.
+func saveCatalogue(cat catalogue) error {
+	data, err := json.MarshalIndent(cat, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := cataloguePath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, cataloguePath)
+}
+
 func main() {
 	cfg := loadConfig()
 	if len(os.Args) > 1 && os.Args[1] == "--check" {
@@ -330,6 +449,24 @@ func main() {
 		writeJSON(w, 200, map[string]any{"result": result})
 	})
 	addr := fmt.Sprintf("%s:%d", cfg.Listen, cfg.Port)
+	// CTX-020: catalogue refresh loop — hot-reloads the config each cycle so
+	// Mino's edits to cost-watch's settings apply without a restart, then
+	// persists the fresh price catalogue for the harness's system_check.
+	go func() {
+		for {
+			fresh := loadConfig()
+			if cat, err := fetchCatalogue(fresh); err == nil {
+				if err := saveCatalogue(cat); err != nil {
+					fmt.Println("catalogue save failed:", err)
+				}
+			}
+			min := fresh.CatalogueRefreshMin
+			if min <= 0 {
+				min = 60
+			}
+			time.Sleep(time.Duration(min) * time.Minute)
+		}
+	}()
 	fmt.Println("cost-watch listening on", addr)
 	http.ListenAndServe(addr, mux)
 }
@@ -344,6 +481,16 @@ func executeTool(cfg *config, tool string, args map[string]any) (string, error) 
 	case "cost_watch_check":
 		_, flags := checkModels(cfg)
 		return statusText(cfg) + "\n" + fmt.Sprintf("%v", flags), nil
+	case "cost_watch_refresh":
+		// CTX-020: on-demand catalogue refresh (also runs periodically).
+		cat, err := fetchCatalogue(cfg)
+		if err != nil {
+			return "", err
+		}
+		if err := saveCatalogue(cat); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("catalogue refreshed: %d entries at %s", len(cat.Entries), cat.ScrapedAt), nil
 	default:
 		return "", fmt.Errorf("unknown tool %s", tool)
 	}

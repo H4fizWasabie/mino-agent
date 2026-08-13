@@ -40,7 +40,7 @@ func TestPolicyPricesCoverPolicyModels(t *testing.T) {
 		{"qwen/qwen3.7-flash", 0.03, 0.13},
 	}
 	for _, tc := range cases {
-		p, ok := policyPrices[tc.model]
+		p, ok := seedPrices[tc.model]
 		if !ok {
 			t.Fatalf("policy model %q missing from price table", tc.model)
 		}
@@ -229,5 +229,34 @@ func TestPolicyProvidersFile(t *testing.T) {
 	cands := m.candidates("t", VisionModel)
 	if len(cands) != 1 || cands[0].Name != "qwen-fallback" {
 		t.Fatalf("vision candidates = %v, want only qwen-fallback", cands)
+	}
+}
+
+// CTX-020: fallback pricing is config-driven — prices.json overrides the seed
+// for the user's models; the seed stays for models not in config.
+func TestPriceMapForConfigOverride(t *testing.T) {
+	home := t.TempDir()
+	os.WriteFile(filepath.Join(home, "prices.json"),
+		[]byte(`{"deepseek/deepseek-v4-flash-0731:deepinfra":{"in":0.05,"out":0.10,"cache":0.01}}`), 0644)
+	m := priceMapFor(home)
+	if got := m["deepseek/deepseek-v4-flash-0731:deepinfra"].In; got != 0.05 {
+		t.Fatalf("config override not applied: in=%v", got)
+	}
+	if got := m["qwen/qwen3.7-flash"].In; got != 0.03 {
+		t.Fatalf("seed lost for unlisted model: in=%v", got)
+	}
+}
+
+// CTX-020: the system_check catalogue snapshot reads cost-catalogue.json.
+func TestCostCatalogueSummary(t *testing.T) {
+	home := t.TempDir()
+	os.WriteFile(filepath.Join(home, "cost-catalogue.json"),
+		[]byte(`{"scraped_at":"2026-08-13T00:00:00Z","entries":[{"model":"m","provider":"DeepInfra","in":0.08,"out":0.18,"data_handling":"zdr"}]}`), 0644)
+	s := costCatalogueSummary(home)
+	if !strings.Contains(s, "DeepInfra") || !strings.Contains(s, "zdr") {
+		t.Fatalf("summary wrong: %s", s)
+	}
+	if costCatalogueSummary(t.TempDir()) != "" {
+		t.Fatal("absent catalogue should be empty summary")
 	}
 }

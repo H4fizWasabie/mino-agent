@@ -38,6 +38,7 @@ type ProviderConfig struct {
 	TextOnly        bool     `json:"text_only"`                        // provider rejects image input; skipped for vision turns
 	ProviderRouting []string `json:"provider_routing,omitempty"`       // openrouter: force specific providers
 	SmallRouting    []string `json:"small_provider_routing,omitempty"` // openrouter route for background calls
+	AllowFallbacks  bool     `json:"allow_fallbacks,omitempty"`       // openrouter: may fall back OUTSIDE the routing list (default false = privacy-safe: only the listed hosts)
 }
 
 type providerFile struct {
@@ -116,6 +117,7 @@ func NewProviderManager(home string, legacy *Settings, authStore *AuthStore) (*P
 		c := NewClient(key, p.BaseURL)
 		c.usageLogPath = filepath.Join(home, "usage.jsonl")
 		c.providerRouting = p.ProviderRouting
+		c.allowFallbacks = p.AllowFallbacks
 		m.providers = append(m.providers, p)
 		m.clients[p.Name] = c
 		m.state[p.Name] = &providerState{}
@@ -568,6 +570,7 @@ func (m *ProviderManager) ReloadProviders(home string) error {
 		c := NewClient(key, p.BaseURL)
 		c.usageLogPath = filepath.Join(home, "usage.jsonl")
 		c.providerRouting = p.ProviderRouting
+		c.allowFallbacks = p.AllowFallbacks
 		m.clients[p.Name] = c
 		m.state[p.Name] = &providerState{}
 		m.providers = append(m.providers, p)

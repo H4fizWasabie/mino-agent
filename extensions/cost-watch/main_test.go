@@ -150,3 +150,46 @@ func TestCheckFlagsSpikeWithoutTouchingProviders(t *testing.T) {
 		t.Fatal("a price spike must never rewrite providers.json")
 	}
 }
+
+// CTX-020: catalogue targets derive from the user's providers.json — only
+// OpenRouter-hosted slugs (contain "/"); direct-API models have no endpoints
+// listing and are skipped. Nothing hardcoded.
+func TestConfiguredOpenRouterModels(t *testing.T) {
+	old := providersPath
+	defer func() { providersPath = old }()
+	providersPath = filepath.Join(t.TempDir(), "providers.json")
+	os.WriteFile(providersPath, []byte(`{"providers":[
+		{"model":"deepseek/deepseek-v4-flash-0731"},
+		{"model":"qwen/qwen3.7-flash"},
+		{"model":"direct-api-model"}
+	]}`), 0644)
+	models, err := configuredOpenRouterModels()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 2 || models[0] != "deepseek/deepseek-v4-flash-0731" || models[1] != "qwen/qwen3.7-flash" {
+		t.Fatalf("got %v, want only the two openrouter slugs", models)
+	}
+}
+
+// CTX-020: the catalogue persists and round-trips with the data-handling flag.
+func TestSaveCatalogueRoundTrip(t *testing.T) {
+	old := cataloguePath
+	defer func() { cataloguePath = old }()
+	cataloguePath = filepath.Join(t.TempDir(), "cost-catalogue.json")
+	cat := catalogue{ScrapedAt: "2026-08-13T00:00:00Z", Entries: []catalogueEntry{
+		{Model: "deepseek/deepseek-v4-flash-0731", Provider: "DeepInfra", In: 0.08, Out: 0.18, DataHandling: "zdr"},
+		{Model: "deepseek/deepseek-v4-flash-0731", Provider: "DeepSeek", In: 0.14, Out: 0.28, DataHandling: "trains"},
+	}}
+	if err := saveCatalogue(cat); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(cataloguePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	if !strings.Contains(s, "DeepInfra") || !strings.Contains(s, "zdr") || !strings.Contains(s, "trains") {
+		t.Fatalf("catalogue file wrong: %s", s)
+	}
+}

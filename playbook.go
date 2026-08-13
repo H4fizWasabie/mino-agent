@@ -1025,16 +1025,28 @@ func makeSystemCheckTool(db *sql.DB, home string) *Tool {
 				b.WriteString("recent_errors: none\n")
 			}
 			fmt.Fprintf(&b, "pending_reminders: %d\nplaybooks: %d\ncrontab: %s", pending, len(playbooks), cron)
+			// CTX-020: cost awareness — real spend (truth) + catalogue (reference).
+			loc := time.Local
+			month, unpriced := monthSpendUSD(home, loc, time.Now())
+			today, _ := daySpendUSD(home, loc, time.Now())
+			fmt.Fprintf(&b, "\ncost: month=$%.4f today=$%.4f (%d unpriced calls)", month, today, unpriced)
+			if cat := costCatalogueSummary(home); cat != "" {
+				fmt.Fprintf(&b, "\ncatalogue: %s", cat)
+			}
 			return b.String()
 		},
 	}
 }
 
-func formatPlaybookResult(home string, result *PlaybookResult) string {
+func formatPlaybookResult(home string, result *PlaybookResult, since time.Time) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("## Playbook: %s — %s\n\n", result.Name, result.Status))
 	b.WriteString(fmt.Sprintf("Stages completed: %d\n", result.StagesRun))
 	b.WriteString(fmt.Sprintf("Tokens used: %d in / %d out\n", result.TokensIn, result.TokensOut))
+	// CTX-020: per-run cost so the LLM sees what each run cost immediately.
+	if cost, ok := costSince(home, since); ok {
+		b.WriteString(fmt.Sprintf("Run cost: $%.4f (usage.jsonl)\n", cost))
+	}
 	if len(result.Outputs) > 0 {
 		b.WriteString("Outputs:\n")
 		for _, output := range result.Outputs {
