@@ -14,6 +14,42 @@ const UNIVERSE_LENSES = {
   routines:{label:"Routines",copy:"Playbooks, schedules, and recurring responsibility."},
   system:{label:"System",copy:"Skills, tools, and runtime foundations."},
 };
+// Presentation branches (issue #182): identity branches, NOT persisted entities.
+// The synthetic Mino trunk and branch anchors are derived in memory only and are
+// never added to /api/universe, persisted, counted as nodes, or treated as edges.
+const UNIVERSE_BRANCHES = ["memories","tools","system","routines","work"];
+const UNIVERSE_BRANCH_LABELS = {
+  memories:"Memories", tools:"Tools", system:"System", routines:"Routines", work:"Work",
+};
+
+// universeBranch maps a durable node to its one primary topology branch.
+// Rules: explicit node.region first when meaningful, then the kind table;
+// unknown kinds land on Work as an inspectable Other — never silently dropped.
+function universeBranch(node){
+  const regionBranch = {memory:"memories", system:"system", routines:"routines", work:"work", tools:"tools"};
+  if(node.kind==="memory") return "memories";
+  if(node.kind==="tool") return "tools";
+  if(node.kind==="skill") return "system";
+  if(node.kind==="playbook"||node.kind==="schedule"||node.kind==="reminder") return "routines";
+  if(node.region && regionBranch[node.region]) return regionBranch[node.region];
+  if(node.kind==="responsibility"||node.kind==="conversation") return "work";
+  if(node.kind==="artifact") return node.region==="system" ? "system" : "work";
+  return "work";
+}
+
+// universeBranchAnchors returns the deterministic scaffold positions: the
+// synthetic Mino trunk left-of-center, identity branches fanning right and
+// outward. Pure presentation geometry — not part of the durable graph.
+function universeBranchAnchors(){
+  return {
+    trunk:[.20,.42],
+    memories:[.48,.26],
+    tools:[.68,.10],
+    system:[.74,.34],
+    routines:[.68,.68],
+    work:[.46,.64],
+  };
+}
 
 function universeView(snapshot, lens="universe"){
   lens=UNIVERSE_LENSES[lens]?lens:"universe";
@@ -83,66 +119,239 @@ function universeNodeLink(node){
   if(node.kind==="artifact") return "#system/files";
   return "#system/database-reminders";
 }
+
+// universeRegionCenters maps a lens to its scaffold anchor for camera focus.
+// Values mirror universeBranchAnchors (trunk serves the Now lens); kept
+// self-contained so behavior checks can extract it standalone.
 function universeRegionCenters(){
-  return {now:[.49,.18],memory:[.5,.51],work:[.73,.3],routines:[.77,.71],system:[.22,.71]};
+  return {now:[.20,.42], memory:[.48,.26], work:[.46,.64], routines:[.68,.68], system:[.74,.34]};
 }
 function universeLandmarkCount(nodes,region,visible,currentIDs){
   return nodes.reduce((count,node)=>count+(currentIDs.has(node.id)&&visible(node)&&universeRegion(node)===region?1:0),0);
+}
+function universeBranchCount(nodes,branch,visible,currentIDs){
+  return nodes.reduce((count,node)=>count+(currentIDs.has(node.id)&&visible(node)&&universeBranch(node)===branch?1:0),0);
 }
 function universeLandmarkStyle(zoom){
   const overview=Math.max(0,Math.min(1,(1-zoom)/.35)),detail=Math.max(0,Math.min(1,(zoom-1)/2));
   return {alpha:.94-detail*.54,radius:11+overview*5-detail*2,fontSize:9+overview*1.5-detail};
 }
 function universeDefaultZoom(width){return width<720?.78:1;}
+
+// --- Branching field layout (issue #182) ---
+// Deterministic, topology-led: synthetic trunk → identity branch anchors →
+// real-edge BFS trees per branch. Hubs by connectivity, stable ID tie-breaks,
+// hash jitter only (no Math.random, no force simulation). Disconnected
+// components get seeded non-overlapping slots. Same snapshot = same positions.
+
+function universeAdjacency(nodes,edges){
+  const adjacency=Object.fromEntries(nodes.map(node=>[node.id,[]]));
+  edges.forEach(edge=>{
+    if(adjacency[edge.source]&&adjacency[edge.target]){
+      adjacency[edge.source].push(edge.target);
+      adjacency[edge.target].push(edge.source);
+    }
+  });
+  return adjacency;
+}
+
 function universeLayout(nodes,edges=[]){
-  const centers={...universeRegionCenters(),conversations:[.25,.28]};
-  const memoryPalette=["#84b58e","#a77bd0","#72b6c2","#e8b65d","#e47f72","#88a5d5","#d29cc6"];
+  const anchors=universeBranchAnchors();
+  const adjacency=universeAdjacency(nodes,edges);
+  nodes.forEach(node=>{ node._layoutAnchor=false; node._primaryParent=null; });
+  layoutMemoryBranch(nodes,edges,adjacency,anchors.memories);
+  layoutIdentityBranch(nodes,adjacency,"tools",anchors.tools,-1.25,.9,0);
+  layoutIdentityBranch(nodes,adjacency,"system",anchors.system,-.35,.8,0);
+  layoutIdentityBranch(nodes,adjacency,"routines",anchors.routines,.35,.9,0);
+  layoutWorkBranch(nodes,adjacency,anchors.work);
+}
+
+// Memory branch: communities are the sub-branches. Reuses the existing
+// stable derivation (single-community BFS anchors) with the memories anchor
+// as the branch origin. Communities fan outward; leaves ring their hubs.
+function layoutMemoryBranch(nodes,edges,adjacency,anchor){
   const memories=nodes.filter(node=>node.kind==="memory"),stored=[...new Set(memories.map(node=>node.community))];
   if(memories.length>24&&stored.length<=1){
-    const memoryIDs=new Set(memories.map(node=>node.id)),adjacency=Object.fromEntries(memories.map(node=>[node.id,[]]));
-    edges.forEach(edge=>{if(memoryIDs.has(edge.source)&&memoryIDs.has(edge.target)){adjacency[edge.source].push(edge.target);adjacency[edge.target].push(edge.source);}});
+    const memoryIDs=new Set(memories.map(node=>node.id));
     const anchorCount=Math.min(16,Math.max(7,Math.round(Math.sqrt(memories.length)*.7)));
     const anchors=[...memories].sort((a,b)=>adjacency[b.id].length-adjacency[a.id].length||a.id.localeCompare(b.id)).slice(0,anchorCount);
     const queue=[];anchors.forEach((node,index)=>{node._layoutCommunity=index;queue.push(node.id);});
     for(let cursor=0;cursor<queue.length;cursor++){
       const id=queue[cursor],community=nodes.find(node=>node.id===id)?._layoutCommunity;
-      adjacency[id].sort().forEach(neighbor=>{const node=memories.find(item=>item.id===neighbor);if(node._layoutCommunity==null){node._layoutCommunity=community;queue.push(neighbor);}});
+      adjacency[id].sort().forEach(neighbor=>{const node=memories.find(item=>item.id===neighbor);if(node&&node._layoutCommunity==null){node._layoutCommunity=community;queue.push(neighbor);}});
     }
     memories.forEach(node=>{if(node._layoutCommunity==null)node._layoutCommunity=universeHash(node.id)%anchorCount;});
   }else memories.forEach(node=>{node._layoutCommunity=node.community;});
+  const memoryPalette=["#84b58e","#a77bd0","#72b6c2","#e8b65d","#e47f72","#88a5d5","#d29cc6"];
   const communities=[...new Set(memories.map(node=>node._layoutCommunity))].sort((a,b)=>String(a).localeCompare(String(b)));
   const communityCenter=new Map(communities.map((id,index)=>{
-    const angle=index*2.399963, radius=.1+.28*Math.sqrt((index+.5)/Math.max(1,communities.length));
-    return [id,[centers.memory[0]+Math.cos(angle)*radius,centers.memory[1]+Math.sin(angle)*radius*.72]];
+    const angle=-1.15+index*2.399963, radius=.09+.2*Math.sqrt((index+.5)/Math.max(1,communities.length));
+    return [id,[anchor[0]+Math.cos(angle)*radius,anchor[1]+Math.sin(angle)*radius*.72]];
   }));
-  const communityAnchors=new Map(communities.map(id=>[id,memories.filter(node=>node._layoutCommunity===id).sort((a,b)=>(b._degree||0)-(a._degree||0)||a.id.localeCompare(b.id))[0]?.id]));
+  const communityHubs=new Map(communities.map(id=>[id,memories.filter(node=>node._layoutCommunity===id).sort((a,b)=>(b._degree||0)-(a._degree||0)||a.id.localeCompare(b.id))[0]?.id]));
   const communityColors=new Map(communities.map((id,index)=>[id,memoryPalette[index%memoryPalette.length]]));
-  const responsibilities=nodes.filter(node=>node.kind==="responsibility");
-  const responsibilityAnchors=responsibilities.sort((a,b)=>(b.attention?1:0)-(a.attention?1:0)||(b._degree||0)-(a._degree||0)||a.id.localeCompare(b.id)).slice(0,Math.min(3,responsibilities.length));
-  const responsibilityAnchorIDs=new Set(responsibilityAnchors.map(node=>node.id));
-  const regionCounts={};
   const communityCounts={};
-  nodes.forEach(node=>{node._layoutAnchor=false;});
-  nodes.forEach(node=>{
-    const region=universeRegion(node), index=regionCounts[region]||0;
-    regionCounts[region]=index+1;
-    if(node.kind==="responsibility"&&responsibilityAnchorIDs.has(node.id)){
-      const anchorIndex=responsibilityAnchors.findIndex(anchor=>anchor.id===node.id),span=Math.max(1,responsibilityAnchors.length-1);
-      node.x=.34+.38*(anchorIndex/span);node.y=.46+Math.sin(anchorIndex*1.7)*.035;node._layoutAnchor=true;return;
+  memories.forEach(node=>{
+    const center=communityCenter.get(node._layoutCommunity)||anchor;
+    node._communityColor=communityColors.get(node._layoutCommunity)||memoryPalette[0];
+    if(node.id===communityHubs.get(node._layoutCommunity)){
+      node.x=center[0]; node.y=center[1]; node._layoutAnchor=true; node._primaryParent=null;
+      return;
     }
-    let center=centers[region]||centers.work, spread=region==="memory"?.095:.105, localIndex=index;
-    if(node.kind==="memory"){
-      center=communityCenter.get(node._layoutCommunity)||centers.memory;
-      node._communityColor=communityColors.get(node._layoutCommunity)||memoryPalette[0];
-      if(node.id===communityAnchors.get(node._layoutCommunity)){node.x=center[0];node.y=center[1];node._layoutAnchor=true;return;}
-      localIndex=communityCounts[node._layoutCommunity]||0;communityCounts[node._layoutCommunity]=localIndex+1;
-    }
-    const angle=localIndex*2.399963+universeRand(node.id)*.45;
-    const radius=spread*Math.sqrt(universeRand(node.id,1));
+    const index=communityCounts[node._layoutCommunity]||0; communityCounts[node._layoutCommunity]=index+1;
+    const angle=index*2.399963+universeRand(node.id)*.45;
+    const radius=.05*Math.sqrt(universeRand(node.id,1));
     node.x=center[0]+Math.cos(angle)*radius;
     node.y=center[1]+Math.sin(angle)*radius*.78;
+    node._primaryParent=communityHubs.get(node._layoutCommunity)||null;
   });
 }
+
+// Generic identity branch: degree-ranked hubs fan around the branch anchor;
+// a BFS over real edges grows the tree downstream. Disconnected nodes attach
+// to a hash-chosen hub; isolated components occupy seeded slots so they never
+// overlap. baseAngle orients the fan (0 = right, -π/2 = up, π/2 = down).
+function layoutIdentityBranch(nodes,adjacency,branch,anchor,baseAngle,fanRange,slot){
+  const branchNodes=nodes.filter(node=>universeBranch(node)===branch);
+  if(branchNodes.length===0) return;
+  const sorted=[...branchNodes].sort((a,b)=>(b._degree||0)-(a._degree||0)||a.id.localeCompare(b.id));
+  const hubCount=Math.min(6,Math.max(1,Math.round(Math.sqrt(branchNodes.length)*.6)));
+  const hubs=sorted.slice(0,hubCount);
+  const hubSet=new Set(hubs.map(node=>node.id));
+  hubs.forEach((hub,index)=>{
+    const angle=baseAngle+(index-(hubCount-1)/2)*(fanRange/Math.max(1,hubCount-1));
+    hub._fanAngle=angle;
+    hub.x=anchor[0]+Math.cos(angle)*.07;
+    hub.y=anchor[1]+Math.sin(angle)*.07*.8;
+    hub._layoutAnchor=true;
+    hub._primaryParent=null;
+  });
+  const depth={},parent={},fanAngle={};
+  const queue=[];
+  hubs.forEach(hub=>{ depth[hub.id]=0; parent[hub.id]=null; fanAngle[hub.id]=hub._fanAngle; queue.push(hub.id); });
+  for(let cursor=0;cursor<queue.length;cursor++){
+    const id=queue[cursor], here=depth[id];
+    const kids=[...new Set(adjacency[id])].filter(kid=>depth[kid]===undefined&&branchNodes.some(n=>n.id===kid)).sort();
+    kids.forEach(kid=>{ depth[kid]=here+1; parent[kid]=id; queue.push(kid); });
+  }
+  // Unreachable nodes: attach deterministically to a hash hub; isolated
+  // components (no real edges at all) get seeded slots beside the branch.
+  const reachable=new Set(Object.keys(depth));
+  const isolated=[];
+  branchNodes.forEach(node=>{
+    if(reachable.has(node.id)) return;
+    if(adjacency[node.id].length===0){ isolated.push(node); return; }
+    const hub=hubs[universeHash(node.id)%hubCount];
+    depth[node.id]=1; parent[node.id]=hub.id; reachable.add(node.id);
+  });
+  branchNodes.forEach(node=>{
+    if(!reachable.has(node.id)) return;
+    if(hubSet.has(node.id)) return;
+    const p=parent[node.id], d=depth[node.id];
+    const siblings=queue.filter(oid=>parent[oid]===p&&depth[oid]===d).length||1;
+    const index=queue.filter(oid=>parent[oid]===p&&depth[oid]===d&&oid<node.id).length;
+    const spread=Math.max(.14,.55/(d*.8+1));
+    const angle=fanAngle[p]+(index-(siblings-1)/2)*spread;
+    const radius=.055+Math.min(d,6)*.048;
+    node.x=anchor[0]+Math.cos(angle)*radius+(universeRand(node.id)-.5)*.018;
+    node.y=anchor[1]+Math.sin(angle)*radius*.8+(universeRand(node.id,1)-.5)*.018;
+    fanAngle[node.id]=angle;
+    node._primaryParent=p;
+  });
+  isolated.forEach((node,index)=>{
+    const block=Math.floor(index/56),within=index%56;
+    const row=Math.floor(within/8),col=within%8;
+    node.x=anchor[0]+.05+block*.08+col*.035+(universeRand(node.id)-.5)*.02;
+    node.y=anchor[1]+.08+row*.04+(universeRand(node.id,1)-.5)*.02;
+    node._primaryParent=null;
+  });
+}
+
+// Work branch: attention-first responsibilities are the hubs (they are what
+// Mino is doing), then connectivity. Same branching geometry as the generic
+// identity branches, fanning right and downward from the work anchor.
+function layoutWorkBranch(nodes,adjacency,anchor){
+  const branchNodes=nodes.filter(node=>universeBranch(node)==="work");
+  if(branchNodes.length===0) return;
+  const sorted=[...branchNodes].sort((a,b)=>(b.attention?1:0)-(a.attention?1:0)||(b._degree||0)-(a._degree||0)||a.id.localeCompare(b.id));
+  const hubCount=Math.min(4,Math.max(1,Math.round(Math.sqrt(branchNodes.length)*.5)));
+  const hubs=sorted.slice(0,hubCount);
+  const hubSet=new Set(hubs.map(node=>node.id));
+  hubs.forEach((hub,index)=>{
+    const angle=.15+(index-(hubCount-1)/2)*.8;
+    hub._fanAngle=angle;
+    hub.x=anchor[0]+Math.cos(angle)*.07;
+    hub.y=anchor[1]+Math.sin(angle)*.07*.8;
+    hub._layoutAnchor=true;
+    hub._primaryParent=null;
+  });
+  const depth={},parent={},fanAngle={};
+  const queue=[];
+  hubs.forEach(hub=>{ depth[hub.id]=0; parent[hub.id]=null; fanAngle[hub.id]=hub._fanAngle; queue.push(hub.id); });
+  for(let cursor=0;cursor<queue.length;cursor++){
+    const id=queue[cursor], here=depth[id];
+    const kids=[...new Set(adjacency[id])].filter(kid=>depth[kid]===undefined&&branchNodes.some(n=>n.id===kid)).sort();
+    kids.forEach(kid=>{ depth[kid]=here+1; parent[kid]=id; queue.push(kid); });
+  }
+  const reachable=new Set(Object.keys(depth));
+  const isolated=[];
+  branchNodes.forEach(node=>{
+    if(reachable.has(node.id)) return;
+    if(adjacency[node.id].length===0){ isolated.push(node); return; }
+    const hub=hubs[universeHash(node.id)%hubCount];
+    depth[node.id]=1; parent[node.id]=hub.id; reachable.add(node.id);
+  });
+  branchNodes.forEach(node=>{
+    if(!reachable.has(node.id)||hubSet.has(node.id)) return;
+    const p=parent[node.id], d=depth[node.id];
+    const siblings=queue.filter(oid=>parent[oid]===p&&depth[oid]===d).length||1;
+    const index=queue.filter(oid=>parent[oid]===p&&depth[oid]===d&&oid<node.id).length;
+    const spread=Math.max(.14,.55/(d*.8+1));
+    const angle=fanAngle[p]+(index-(siblings-1)/2)*spread;
+    const radius=.055+Math.min(d,6)*.048;
+    node.x=anchor[0]+Math.cos(angle)*radius+(universeRand(node.id)-.5)*.018;
+    node.y=anchor[1]+Math.sin(angle)*radius*.8+(universeRand(node.id,1)-.5)*.018;
+    fanAngle[node.id]=angle;
+    node._primaryParent=p;
+  });
+  isolated.forEach((node,index)=>{
+    const block=Math.floor(index/56),within=index%56;
+    const row=Math.floor(within/8),col=within%8;
+    node.x=anchor[0]+.05+block*.08+col*.035+(universeRand(node.id)-.5)*.02;
+    node.y=anchor[1]+.08+row*.04+(universeRand(node.id,1)-.5)*.02;
+    node._primaryParent=null;
+  });
+}
+
+// universePlaceNode positions ONE new node additively: beside its best
+// connected existing neighbor, or on a seeded branch growth ring when it has
+// none. Existing positions are never touched, so live merges and playback
+// never reorganize the field (issue #182 layout contract rule 7).
+function universePlaceNode(node,state){
+  const anchors=universeBranchAnchors();
+  const branch=universeBranch(node);
+  const anchor=anchors[branch]||anchors.work;
+  let best=null;
+  state.edges.forEach(edge=>{
+    let other=null;
+    if(edge.source===node.id) other=state.nodeMap[edge.target];
+    else if(edge.target===node.id) other=state.nodeMap[edge.source];
+    if(other&&other.x!==undefined&&(!best||(other._degree||0)>(best._degree||0))) best=other;
+  });
+  if(best){
+    const angle=universeRand(node.id)*Math.PI*2, distance=.028+.018*universeRand(node.id,1);
+    node.x=best.x+Math.cos(angle)*distance;
+    node.y=best.y+Math.sin(angle)*distance;
+    node._primaryParent=best.id;
+  }else{
+    const k=universeHash(node.id)%64, ring=.08+.03*Math.floor(k/16);
+    node.x=anchor[0]+Math.cos((k%16)/16*Math.PI*2)*ring+(universeRand(node.id)-.5)*.02;
+    node.y=anchor[1]+Math.sin((k%16)/16*Math.PI*2)*ring*.8+(universeRand(node.id,1)-.5)*.02;
+    node._primaryParent=null;
+  }
+  node._layoutAnchor=false;
+}
+
 function universeNodeRadius(node){
   if(node.kind==="memory") return node.state==="episodic"?3.3:2.5;
   if(node.kind==="responsibility") return node._layoutAnchor?6.2:4.8;
@@ -220,20 +429,23 @@ function initUniverse(snapshot,lens="universe"){
     });
     state.edges.forEach(edge=>{
       const a=nodeMap[edge.source],b=nodeMap[edge.target];if(!visible(a)||!visible(b)) return;
+      const backbone=a._primaryParent===b.id||b._primaryParent===a.id;
       const sameMemory=a.kind==="memory"&&b.kind==="memory"&&a._layoutCommunity===b._layoutCommunity;
       const endpointProminent=a.kind!=="memory"||b.kind!=="memory"||sameMemory;
       const hot=incident&&(a===incident||b===incident);
-      if(!hot&&edge.kind==="inferred"&&!sameMemory) return;
-      if(!hot&&edge.kind==="explicit"&&!endpointProminent) return;
-      const layer=hot?2:(edge.kind==="structural"||edge.kind==="explicit"?1:0);edgeLayers[layer].push({edge,a,b,hot});
+      if(!hot&&!backbone&&edge.kind==="inferred") return;
+      if(!hot&&!backbone&&edge.kind==="explicit"&&!endpointProminent) return;
+      const layer=hot?2:(backbone&&(edge.kind==="structural"||edge.kind==="explicit")?1:0);edgeLayers[layer].push({edge,a,b,hot,backbone});
     });
-    edgeLayers.forEach((layer,index)=>layer.forEach(({edge,a,b,hot})=>{
+    edgeLayers.forEach((layer,index)=>layer.forEach(({edge,a,b,hot,backbone})=>{
       const pa=screen(a),pb=screen(b),focus=focused(a)&&focused(b),sameRegion=universeRegion(a)===universeRegion(b),sameMemory=a.kind==="memory"&&b.kind==="memory"&&a._layoutCommunity===b._layoutCommunity;
       const distance=Math.max(1,Math.hypot(pb.x-pa.x,pb.y-pa.y)),bend=((universeHash(a.id+"|"+b.id)%2000)/1000-.5)*Math.min(70,distance*.2),normal={x:-(pb.y-pa.y)/distance*bend,y:(pb.x-pa.x)/distance*bend};
       ctx.beginPath();ctx.moveTo(pa.x,pa.y);ctx.quadraticCurveTo((pa.x+pb.x)/2+normal.x,(pa.y+pb.y)/2+normal.y,pb.x,pb.y);
       if(hot) {ctx.strokeStyle="rgba(36,98,192,.92)";ctx.lineWidth=2;}
-      else if(edge.kind==="structural") {ctx.strokeStyle=focus?"rgba(184,105,47,.64)":"rgba(184,105,47,.22)";ctx.lineWidth=1.25;}
-      else if(edge.kind==="explicit") {ctx.strokeStyle=focus?"rgba(47,101,184,.28)":"rgba(47,101,184,.08)";ctx.lineWidth=.85;}
+      else if(backbone&&edge.kind==="structural") {ctx.strokeStyle=focus?"rgba(184,105,47,.64)":"rgba(184,105,47,.22)";ctx.lineWidth=1.25;}
+      else if(backbone&&edge.kind==="explicit") {ctx.strokeStyle=focus?"rgba(47,101,184,.28)":"rgba(47,101,184,.08)";ctx.lineWidth=.85;}
+      else if(edge.kind==="explicit") {ctx.strokeStyle=focus?"rgba(47,101,184,.16)":"rgba(47,101,184,.05)";ctx.lineWidth=.7;}
+      else if(edge.kind==="inferred") {ctx.strokeStyle=sameMemory?"rgba(63,111,186,.05)":sameRegion?"rgba(82,104,125,.03)":"rgba(82,104,125,.018)";ctx.lineWidth=.45;}
       else {ctx.strokeStyle=sameMemory?"rgba(63,111,186,.06)":sameRegion?"rgba(82,104,125,.035)":"rgba(82,104,125,.02)";ctx.lineWidth=sameMemory?.5:.38;}
       ctx.setLineDash([]);ctx.stroke();
     }));
@@ -260,19 +472,7 @@ function initUniverse(snapshot,lens="universe"){
         const width=ctx.measureText(label).width+14;ctx.fillStyle="rgba(250,251,249,.96)";ctx.strokeStyle="rgba(105,115,120,.25)";ctx.lineWidth=1;ctx.beginPath();ctx.roundRect(p.x+10,p.y-13,width,24,6);ctx.fill();ctx.stroke();ctx.fillStyle="#172028";ctx.fillText(label,p.x+17,p.y+3);
       }
     });
-    const landmarkStyle=universeLandmarkStyle(state.zoom),regionColors={now:"#b53c42",memory:"#426fbd",work:"#c46f31",routines:"#697a43",system:"#65727d"};
-    state.landmarkBoxes=[];
-    Object.entries(universeRegionCenters()).forEach(([region,center])=>{
-      const p=screen({x:center[0],y:center[1]}),count=universeLandmarkCount(nodes,region,visible,state.currentNodeIDs),label=`${UNIVERSE_LENSES[region].label.toUpperCase()} · ${count.toLocaleString()}`,color=regionColors[region];
-      ctx.save();ctx.globalAlpha=landmarkStyle.alpha;
-      ctx.beginPath();ctx.arc(p.x,p.y,landmarkStyle.radius+4,0,Math.PI*2);ctx.strokeStyle=`${color}38`;ctx.lineWidth=1;ctx.stroke();
-      ctx.beginPath();ctx.arc(p.x,p.y,landmarkStyle.radius,0,Math.PI*2);ctx.fillStyle="rgba(246,247,244,.9)";ctx.fill();ctx.strokeStyle=color;ctx.lineWidth=1.4;ctx.stroke();
-      ctx.beginPath();ctx.arc(p.x,p.y,3,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();
-      ctx.font=`700 ${landmarkStyle.fontSize}px ui-monospace,SFMono-Regular,Menlo,monospace`;ctx.textAlign="center";ctx.textBaseline="middle";
-      const labelY=p.y+landmarkStyle.radius+13;
-      ctx.lineWidth=4;ctx.lineJoin="round";ctx.strokeStyle="rgba(246,247,244,.94)";ctx.strokeText(label,p.x,labelY);ctx.fillStyle=color;ctx.fillText(label,p.x,labelY);ctx.restore();
-      state.landmarkBoxes.push({region,x:p.x-22,y:p.y-22,width:44,height:44});
-    });
+    drawUniverseScaffold(ctx,state,screen,visible);
     state.activities=state.activities.filter(activity=>now-activity.started<4200);
     state.activities.forEach(activity=>{
       const node=nodeMap[activity.nodeID];if(!node||!visible(node))return;const end=screen(node),age=(now-activity.started)/1800,t=Math.min(1,age),start={x:canvas.clientWidth*.5,y:16};
@@ -312,6 +512,49 @@ function initUniverse(snapshot,lens="universe"){
   renderUniverseIndex();syncUniverseTimeline();requestAnimationFrame(draw);
 }
 
+// drawUniverseScaffold renders the identity scaffold (issue #182 layer 2):
+// the synthetic Mino trunk, presentation branch anchors, and quiet guide
+// lines. Scaffold is presentation-only — never in node counts, the a11y
+// index, search, or the durable edge array. Lens landmarks remain clickable.
+function drawUniverseScaffold(ctx,state,screen,visible){
+  state.landmarkBoxes=[];
+  const anchors=universeBranchAnchors(),style=universeLandmarkStyle(state.zoom),currentIDs=state.currentNodeIDs;
+  const trunk={x:anchors.trunk[0],y:anchors.trunk[1]};
+  const guidePoints=[];
+  UNIVERSE_BRANCHES.forEach(branch=>{const a=anchors[branch];guidePoints.push(a);});
+  ctx.save();
+  ctx.globalAlpha=style.alpha*.55;
+  guidePoints.forEach(a=>{
+    const p0=screen({x:trunk.x,y:trunk.y}),p1=screen({x:a[0],y:a[1]});
+    ctx.beginPath();ctx.moveTo(p0.x,p0.y);ctx.quadraticCurveTo(p0.x+(p1.x-p0.x)*.4,p1.y,p1.x,p1.y);
+    ctx.strokeStyle="rgba(40,50,58,.16)";ctx.lineWidth=1;ctx.setLineDash([3,6]);ctx.stroke();
+  });
+  ctx.setLineDash([]);
+  const p=screen({x:trunk.x,y:trunk.y});
+  ctx.beginPath();ctx.arc(p.x,p.y,style.radius+5,0,Math.PI*2);ctx.strokeStyle="rgba(40,50,58,.28)";ctx.lineWidth=1;ctx.stroke();
+  ctx.beginPath();ctx.arc(p.x,p.y,style.radius,0,Math.PI*2);ctx.fillStyle="rgba(246,247,244,.94)";ctx.fill();ctx.strokeStyle="#28323a";ctx.lineWidth=1.6;ctx.stroke();
+  ctx.beginPath();ctx.arc(p.x,p.y,3.4,0,Math.PI*2);ctx.fillStyle="#28323a";ctx.fill();
+  ctx.font=`700 ${style.fontSize+1}px ui-monospace,SFMono-Regular,Menlo,monospace`;ctx.textAlign="center";ctx.textBaseline="middle";
+  ctx.lineWidth=4;ctx.lineJoin="round";ctx.strokeStyle="rgba(246,247,244,.94)";ctx.strokeText("MINO",p.x,p.y-style.radius-11);ctx.fillStyle="#28323a";ctx.fillText("MINO",p.x,p.y-style.radius-11);
+  state.landmarkBoxes.push({region:"now",x:p.x-24,y:p.y-24,width:48,height:48});
+  const lensOf={memories:"memory",tools:"system",system:"system",routines:"routines",work:"work"};
+  const regionColors={memory:"#426fbd",work:"#c46f31",routines:"#697a43",system:"#65727d"};
+  UNIVERSE_BRANCHES.forEach(branch=>{
+    const a=anchors[branch],lens=lensOf[branch],q=screen({x:a[0],y:a[1]});
+    const count=universeBranchCount(state.nodes,branch,visible,currentIDs);
+    const label=`${UNIVERSE_BRANCH_LABELS[branch].toUpperCase()} · ${count.toLocaleString()}`;
+    const color=branch==="tools"?"#75818b":(regionColors[lens]||"#65727d");
+    ctx.beginPath();ctx.arc(q.x,q.y,style.radius+4,0,Math.PI*2);ctx.strokeStyle=`${color}38`;ctx.lineWidth=1;ctx.stroke();
+    ctx.beginPath();ctx.arc(q.x,q.y,style.radius,0,Math.PI*2);ctx.fillStyle="rgba(246,247,244,.9)";ctx.fill();ctx.strokeStyle=color;ctx.lineWidth=1.4;ctx.stroke();
+    ctx.beginPath();ctx.arc(q.x,q.y,3,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();
+    ctx.font=`700 ${style.fontSize}px ui-monospace,SFMono-Regular,Menlo,monospace`;ctx.textAlign="center";ctx.textBaseline="middle";
+    const labelY=q.y+style.radius+13;
+    ctx.lineWidth=4;ctx.lineJoin="round";ctx.strokeStyle="rgba(246,247,244,.94)";ctx.strokeText(label,q.x,labelY);ctx.fillStyle=color;ctx.fillText(label,q.x,labelY);
+    state.landmarkBoxes.push({region:lens,x:q.x-22,y:q.y-22,width:44,height:44});
+  });
+  ctx.restore();
+}
+
 function syncUniverseTimeline(){
   const state=universeState;if(!state)return;
   const range=document.getElementById("universe-range"),label=document.getElementById("universe-time"),live=document.getElementById("universe-live");
@@ -342,14 +585,26 @@ function universeUpdate(snapshot){
   U=snapshot;const state=universeState;if(!state||!document.getElementById("universe-canvas"))return;
   const incoming=new Map((snapshot.nodes||[]).map(node=>[node.id,node])),now=performance.now();
   state.currentNodeIDs=new Set(incoming.keys());
+  const freshNodes=[];
   incoming.forEach((fresh,id)=>{
     const node=state.nodeMap[id];
     if(node){Object.assign(node,fresh);node._time=universeTimeValue(node);}
-    else {const added={...fresh,_time:universeTimeValue(fresh),_born:now};state.nodes.push(added);state.nodeMap[id]=added;universeKnown.add(id);}
+    else {const added={...fresh,_time:universeTimeValue(fresh),_born:now};state.nodes.push(added);state.nodeMap[id]=added;universeKnown.add(id);freshNodes.push(added);}
   });
   state.edges=(snapshot.edges||[]).filter(edge=>state.nodeMap[edge.source]&&state.nodeMap[edge.target]);
-  state.snapshot=snapshot;state.degrees=universeDegrees(state.nodes,state.edges);state.nodes.forEach(node=>node._degree=state.degrees[node.id]||0);const dated=state.nodes.map(n=>n._time).filter(Number.isFinite);if(dated.length){state.earliest=Math.min(...dated);state.latest=Math.max(...dated);}
-  universeLayout(state.nodes,state.edges);const live=document.getElementById("universe-live-count");if(live)live.textContent=(snapshot.activity||[]).length;
+  state.snapshot=snapshot;state.degrees=universeDegrees(state.nodes,state.edges);state.nodes.forEach(node=>node._degree=state.degrees[node.id]||0);
+  // Stable positions (issue #182 rule 7): only nodes without a position are
+  // placed; existing nodes never move, so polls and playback never reorganize.
+  freshNodes.forEach(node=>{ if(node.x===undefined) universePlaceNode(node,state); });
+  state.nodes.forEach(node=>{
+    if(node.kind==="memory"&&node._layoutCommunity===undefined){
+      const neighbors=state.edges.filter(e=>e.source===node.id||e.target===node.id).map(e=>state.nodeMap[e.source===node.id?e.target:e.source]).filter(n=>n.kind==="memory"&&n._layoutCommunity!==undefined);
+      node._layoutCommunity=neighbors[0]?neighbors[0]._layoutCommunity:(node.community!==undefined&&node.community!==null?node.community:universeHash(node.id)%16);
+      node._communityColor=["#84b58e","#a77bd0","#72b6c2","#e8b65d","#e47f72","#88a5d5","#d29cc6"][universeHash(String(node._layoutCommunity))%7];
+    }
+  });
+  const dated=state.nodes.map(n=>n._time).filter(Number.isFinite);if(dated.length){state.earliest=Math.min(...dated);state.latest=Math.max(...dated);}
+  const live=document.getElementById("universe-live-count");if(live)live.textContent=(snapshot.activity||[]).length;
   renderUniverseIndex();
 }
 function universeActivity(event){

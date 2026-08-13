@@ -67,6 +67,78 @@ func TestDashboardSessionMenuCapturesAsyncAnchor(t *testing.T) {
 	}
 }
 
+func TestUniverseBranchingFieldLayout(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required for universe layout checks")
+	}
+	const harness = `
+const fs=require("fs");
+const src=fs.readFileSync(process.argv[1],"utf8");
+eval(src);
+function equal(got,want,label){if(got!==want) throw new Error(label+": got "+got+", want "+want)}
+// branch mapping: explicit region first, then kind table; unknown kinds stay visible under work
+equal(universeBranch({kind:"memory"}),"memories","memory kind");
+equal(universeBranch({kind:"tool"}),"tools","tool kind");
+equal(universeBranch({kind:"skill"}),"system","skill kind");
+equal(universeBranch({kind:"playbook"}),"routines","playbook kind");
+equal(universeBranch({kind:"schedule"}),"routines","schedule kind");
+equal(universeBranch({kind:"reminder"}),"routines","reminder kind");
+equal(universeBranch({kind:"responsibility"}),"work","responsibility kind");
+equal(universeBranch({kind:"conversation"}),"work","conversation kind");
+equal(universeBranch({kind:"artifact"}),"work","artifact defaults to work");
+equal(universeBranch({kind:"artifact",region:"system"}),"system","system-scoped artifact");
+equal(universeBranch({kind:"tool",region:"system"}),"tools","tool kind beats blanket region");
+equal(universeBranch({kind:"future_kind"}),"work","unknown kind never dropped");
+// scaffold: trunk left-of-center, branches fan right
+equal(src.includes("Math.random("),false,"layout must be deterministic (no Math.random)");
+const anchors=universeBranchAnchors();
+equal(anchors.trunk[0]<0.5,true,"trunk left-of-center");
+for(const b of ["memories","tools","system","routines","work"]){
+  if(!(anchors[b][0]>anchors.trunk[0])) throw new Error(b+" anchor must fan right of trunk");
+}
+// deterministic layout: same snapshot produces identical positions
+equal(src.includes("function universeHash(text)"),true,"hash contract");
+equal(src.includes("function universeLayout(nodes,edges=[])"),true,"layout signature contract");
+const nodes=[];
+for(let i=0;i<80;i++) nodes.push({id:"m"+i,kind:"memory",community:0,label:"m"+i});
+for(let i=0;i<12;i++) nodes.push({id:"t"+i,kind:"tool",label:"t"+i});
+for(let i=0;i<8;i++) nodes.push({id:"p"+i,kind:"playbook",label:"p"+i});
+nodes.push({id:"u1",kind:"future_kind",label:"u1"});
+const edges=[];
+for(let i=1;i<80;i++) edges.push({source:"m0",target:"m"+i});
+for(let i=0;i<8;i++) edges.push({source:"t0",target:"t"+((i+1)%12)});
+const run1=nodes.map(n=>({...n}));
+universeLayout(nodes,edges);
+const first=nodes.map(n=>n.x+","+n.y).join("|");
+nodes.forEach(n=>{if(n.x===undefined||n.y===undefined||!Number.isFinite(n.x)||!Number.isFinite(n.y)) throw new Error("unpositioned node "+n.id)});
+const run2=run1.map(n=>({...n}));
+universeLayout(run2,edges);
+equal(first,run2.map(n=>n.x+","+n.y).join("|"),"same snapshot same positions");
+// stable positions: placing a new node never moves existing ones
+equal(src.includes("node.x===undefined"),true,"additive placement guard");
+equal(src.includes("function universePlaceNode(node,state){"),true,"additive placer");
+equal(src.includes("function universeBranch(node){"),true,"branch mapping helper");
+equal(src.includes("_primaryParent"),true,"backbone parent knowledge");
+const before=nodes.map(n=>n.x+","+n.y).join("|");
+const st={edges:[],nodeMap:Object.fromEntries(nodes.map(n=>[n.id,n]))};
+const fresh={id:"new1",kind:"tool",label:"new"};
+universePlaceNode(fresh,st);
+if(fresh.x===undefined||!Number.isFinite(fresh.x)) throw new Error("new node unpositioned");
+equal(before,nodes.map(n=>n.x+","+n.y).join("|"),"new node never moves existing positions");
+// degraded cases: zero nodes, one node
+equal(src.includes("if(branchNodes.length===0) return;"),true,"empty branch degrades");
+const solo=[{id:"only",kind:"memory",community:0,label:"only"}];
+universeLayout(solo,[]);
+equal(Number.isFinite(solo[0].x)&&Number.isFinite(solo[0].y),true,"single node positions");
+console.log("universe branching field layout: ok");
+`
+	cmd := exec.Command(node, "-e", harness, filepath.Join("static", "universe.js"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("universe branching field layout failed: %v\n%s", err, out)
+	}
+}
+
 func TestDashboardViewsSurviveUnchangedPollingRefresh(t *testing.T) {
 	script, err := staticFiles.ReadFile("static/app.js")
 	if err != nil {
@@ -227,7 +299,7 @@ function extract(name){
   }
   throw new Error("unterminated "+name);
 }
-const names=["universeHash","universeRand","universeRegion","universeFocus","universeNodeLink","universeRegionCenters","universeLandmarkCount","universeLandmarkStyle","universeDefaultZoom","universeLayout","universeCenterRegion","focusUniverseRegion"];
+const names=["universeHash","universeRand","universeRegion","universeFocus","universeNodeLink","universeRegionCenters","universeLandmarkCount","universeLandmarkStyle","universeDefaultZoom","universeLayout","universeCenterRegion","focusUniverseRegion","universeBranch","universeBranchAnchors","universeAdjacency","layoutMemoryBranch","layoutIdentityBranch","layoutWorkBranch"];
 const box={location:{hash:"#universe"},universePendingRegion:null};vm.runInNewContext(names.map(extract).join("\n"),box);
 function assert(ok,label){if(!ok)throw new Error(label)}
 assert(box.universeHash("memory:a")===box.universeHash("memory:a"),"stable hash");
