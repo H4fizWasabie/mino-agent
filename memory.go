@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -21,7 +20,6 @@ type Memory struct {
 	skills        *SkillLoader
 	client        *ProviderManager
 	cfg           *Settings
-	embedder      *EmbeddingStore
 	graph         *GraphMemory
 	consolidateMu sync.Mutex
 }
@@ -523,7 +521,7 @@ func (m *Memory) consolidateSession(sid string) int {
 		return 0
 	}
 
-	// Embeddings select a bounded candidate set; they never create edges.
+	// Keyword narrowing selects a bounded candidate set; it never creates edges.
 	availableIDs := m.graphCandidates(log.String())
 
 	// ponytail: cap the prompt — DeepSeek v4 flash enters an endless reasoning
@@ -584,9 +582,6 @@ func (m *Memory) consolidateSession(sid string) int {
 			continue
 		}
 		written++
-		if m.embedder != nil {
-			m.embedder.IndexFact(f.ID, fact)
-		}
 	}
 	episodeWritten := false
 	if !placeholder(distilled.Episode) {
@@ -601,9 +596,6 @@ func (m *Memory) consolidateSession(sid string) int {
 		}
 		if err := m.graph.RecordFact(epFact); err == nil {
 			episodeWritten = true
-			if m.embedder != nil {
-				m.embedder.Index("episode", distilled.Episode)
-			}
 		}
 	}
 	if written == 0 && !episodeWritten {
@@ -658,18 +650,48 @@ func parseConsolidationResponse(text string) (distilledMemory, error) {
 
 func (m *Memory) graphCandidates(text string) graphCandidateSet {
 	set := graphCandidateSet{ids: make(map[string]bool)}
-	if m.embedder == nil {
-		return set
+	facts := m.graph.Facts()
+	byID := make(map[string]Fact, len(facts))
+	for _, f := range facts {
+		byID[f.ID] = f
 	}
-	for _, hit := range m.embedder.SearchScored(text, 8) {
-		if !strings.HasPrefix(hit.doc.Source, "fact:") {
-			continue
-		}
-		id := strings.TrimPrefix(hit.doc.Source, "fact:")
-		set.ids[id] = true
-		set.prompt += fmt.Sprintf("- %s (%s)\n", id, hit.doc.Content)
+	for _, c := range keywordCandidates(text, facts, 8, "") {
+		set.ids[c.ID] = true
+		set.prompt += fmt.Sprintf("- %s (%s)\n", c.ID, byID[c.ID].Subject+": "+byID[c.ID].Body)
 	}
 	return set
+}
+
+// graphCandidate is one candidate fact for an edge-judgment batch, scored by
+// keyword overlap — the embedding-free replacement for similarity search
+// (issue #179).
+type graphCandidate struct {
+	ID    string
+	Score float64
+}
+
+// keywordCandidates narrows the candidate set for the rebuild/judgment passes
+// by keyword overlap with the claim text — subject word 10, body word 3, the
+// same signal family entryRanking uses, so rebuild and recall see the same
+// relevance shape (issue #179).
+func keywordCandidates(claim string, facts []Fact, limit int, selfID string) []graphCandidate {
+	words := memoryTokenize(strings.ToLower(claim))
+	var out []graphCandidate
+	for _, f := range facts {
+		if f.ID == selfID {
+			continue
+		}
+		score := 10*len(matchedWords(words, strings.ToLower(f.Subject))) +
+			3*len(matchedWords(words, strings.ToLower(f.Body)))
+		if score > 0 {
+			out = append(out, graphCandidate{ID: f.ID, Score: float64(score)})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out
 }
 
 func (m *Memory) validInferredEdges(edges []Edge, candidates map[string]bool, source string) []Edge {
@@ -753,23 +775,17 @@ func parseGraphJudgmentResponse(text string) (graphJudgment, error) {
 }
 
 func (m *Memory) RebuildGraphEdges() (int, error) {
-	if m.client == nil || m.embedder == nil {
-		return 0, fmt.Errorf("graph rebuild requires provider and embedding store")
+	if m.client == nil {
+		return 0, fmt.Errorf("graph rebuild requires a provider")
 	}
 	facts := m.graph.Facts()
-	// Backfill embeddings for facts that never got vectors (migrated facts,
-	// installs where the embedder was configured later). Without a vector a
-	// fact is invisible to GraphCandidates and can never gain edges.
-	for _, fact := range facts {
-		if !m.embedder.HasFactEmbedding(fact.ID) {
-			m.embedder.IndexFact(fact.ID, fact)
-		}
-	}
-	rekeyed := m.embedder.RekeyFacts(facts)
-	candidates := m.embedder.GraphCandidates(facts, 6)
 	byID := make(map[string]Fact, len(facts))
 	for _, fact := range facts {
 		byID[fact.ID] = fact
+	}
+	candidates := make(map[string][]graphCandidate, len(facts))
+	for _, fact := range facts {
+		candidates[fact.ID] = keywordCandidates(fact.Subject+" "+fact.Body, facts, 6, fact.ID)
 	}
 	var ids []string
 	for id := range candidates {
@@ -856,7 +872,7 @@ func (m *Memory) RebuildGraphEdges() (int, error) {
 					// fact stays answerable via remember's archive fallback. A failed
 					// archive leaves the fact live for the next pass.
 					if _, err := m.graph.ArchiveFact(fact, "judgment: why no longer holds"); err == nil {
-						m.embedder.RemoveFact(sourceID)
+
 						continue
 					}
 				}
@@ -872,9 +888,6 @@ func (m *Memory) RebuildGraphEdges() (int, error) {
 		for _, fact := range facts {
 			m.graph.MarkJudged(fact.ID)
 		}
-	}
-	if rekeyed > 0 {
-		slog.Info("graph embeddings rekeyed", "facts", rekeyed)
 	}
 	removed := m.graph.RemoveMutualInferredEdges()
 	if removed > 0 {
@@ -1000,7 +1013,7 @@ func (m *Memory) JudgeChangedFacts() int {
 }
 
 // judgeFactEdges runs one small-model judgment pass for a single SOURCE fact
-// against its embedding candidates (from GraphCandidates over all facts, as in
+// against its keyword candidates (from keywordCandidates over all facts, as in
 // RebuildGraphEdges). Returns the number of inferred edges, the fact to write,
 // and whether the judgment succeeded. A nil fact with ok=true means the expiry
 // judgment archived the fact (MEM-08) — the caller marks it judged without
@@ -1010,11 +1023,7 @@ func (m *Memory) JudgeChangedFacts() int {
 // the fact is still marked judged. Only failures (no candidates, LLM/parse/write
 // errors) leave the fact unjudged for retry.
 func (m *Memory) judgeFactEdges(fact Fact, all []Fact) (int, *Fact, bool) {
-	if m.embedder == nil {
-		return 0, nil, false
-	}
-	candidates := m.embedder.GraphCandidates(all, 6)
-	ids := candidates[fact.ID]
+	ids := keywordCandidates(fact.Subject+" "+fact.Body, all, 6, fact.ID)
 	if len(ids) == 0 {
 		return 0, nil, false
 	}
@@ -1071,9 +1080,6 @@ func (m *Memory) judgeFactEdges(fact Fact, all []Fact) (int, *Fact, bool) {
 			// MEM-08: the judgment says the why no longer holds — archive, never
 			// delete. The caller marks the fact judged without writing it live.
 			if _, err := m.graph.ArchiveFact(fact, "judgment: why no longer holds"); err == nil {
-				if m.embedder != nil {
-					m.embedder.RemoveFact(fact.ID)
-				}
 				return 0, nil, true
 			}
 		}
@@ -1085,226 +1091,6 @@ func (m *Memory) judgeFactEdges(fact Fact, all []Fact) (int, *Fact, bool) {
 		}
 	}
 	return len(inferred), &fact, true
-}
-
-// --- Dedup (background, every 6h, offset from consolidation) ---
-
-const dedupPrompt = `Merge these duplicate facts from a knowledge graph.
-They say the same thing with slightly different wording.
-Produce ONE clean fact preserving all unique information.
-Keep the best existing ID.
-
-Duplicate facts:
-%s
-
-Reply with ONLY this JSON:
-{"id": "keep_one_existing_id", "subject": "<merged one-sentence subject>", "content": "<merged body, 1-3 sentences>"}`
-
-// DedupDue clusters near-duplicate facts by embedding similarity and
-// merges each cluster into one clean fact via the small model.
-func (m *Memory) DedupDue() int {
-	if m.embedder == nil || m.client == nil {
-		return 0
-	}
-
-	// Get existing fact embeddings. Claims without vectors join a later pass
-	// after their normal write path indexes them; dedup never creates an API
-	// request burst just to start a maintenance run.
-	docs := m.embedder.DocsBySource("fact")
-	if len(docs) < 2 {
-		return 0
-	}
-
-	// Cluster by cosine similarity > 0.85
-	clusters := clusterDocs(docs, 0.85)
-
-	merged := 0
-	limit := 5 // ponytail: cap per run, backlog drains over later passes
-	for _, cluster := range clusters {
-		if len(cluster) < 2 || merged >= limit {
-			continue
-		}
-		if m.mergeCluster(cluster) {
-			merged++
-		}
-	}
-	return merged
-}
-
-// mergeCluster sends duplicate facts to the small model for merging,
-// then replaces them with the merged result.
-// filterMergedEdges keeps only edges whose target still exists and is not the
-// merged fact itself — the merge deletes sibling facts, so edges pointing at
-// them (or at the survivor) would dangle or self-loop.
-func filterMergedEdges(edges []Edge, existing map[string]*Fact, keepID string) []Edge {
-	out := edges[:0]
-	for _, e := range edges {
-		if e.Target == keepID {
-			continue
-		}
-		if _, ok := existing[e.Target]; !ok {
-			continue
-		}
-		out = append(out, e)
-	}
-	return out
-}
-
-func (m *Memory) mergeCluster(docs []embeddedDoc) bool {
-	m.graph.mu.Lock()
-	// Map content → fact ID
-	contentToID := make(map[string]string)
-	var facts []*Fact
-	seenFacts := make(map[string]bool)
-	for _, d := range docs {
-		if strings.HasPrefix(d.Source, "fact:") {
-			id := strings.TrimPrefix(d.Source, "fact:")
-			if fact, ok := m.graph.facts[id]; ok && !seenFacts[id] {
-				seenFacts[id] = true
-				facts = append(facts, fact)
-				continue
-			}
-		}
-		// Find the fact by matching content against subject+body
-		for id, f := range m.graph.facts {
-			candidate := f.Subject + ": " + f.Body
-			if candidate == d.Content && !seenFacts[id] {
-				contentToID[d.Content] = id
-				seenFacts[id] = true
-				facts = append(facts, f)
-				break
-			}
-		}
-	}
-	m.graph.mu.Unlock()
-
-	if len(facts) < 2 {
-		return false
-	}
-
-	// Build prompt
-	var sb strings.Builder
-	for _, f := range facts {
-		sb.WriteString(fmt.Sprintf("ID: %s\nSubject: %s\nBody: %s\n\n", f.ID, f.Subject, f.Body))
-	}
-
-	resp, err := m.client.Create("dedup", SmallModel,
-		[]Message{{Role: "user", Content: fmt.Sprintf(dedupPrompt, sb.String())}}, 600, "", nil)
-	if err != nil {
-		return false
-	}
-	text := resp.FinalText
-	if text == "" {
-		for _, b := range resp.Content {
-			if b.Type == "text" {
-				text += b.Text
-			}
-		}
-	}
-	start, end := strings.Index(text, "{"), strings.LastIndex(text, "}")
-	if start < 0 || end <= start {
-		return false
-	}
-	var merged struct {
-		ID      string `json:"id"`
-		Subject string `json:"subject"`
-		Content string `json:"content"`
-	}
-	if json.Unmarshal([]byte(text[start:end+1]), &merged) != nil {
-		return false
-	}
-	if merged.ID == "" || merged.Subject == "" {
-		return false
-	}
-	if _, ok := m.graph.facts[merged.ID]; !ok {
-		return false
-	}
-
-	// Collect edges from all merged facts
-	m.graph.mu.Lock()
-	var allEdges []Edge
-	seenEdges := make(map[string]bool)
-	for _, f := range facts {
-		for _, e := range f.Edges {
-			key := e.Target + e.Rel
-			if !seenEdges[key] {
-				allEdges = append(allEdges, e)
-				seenEdges[key] = true
-			}
-		}
-	}
-
-	// Delete old .md files (except the one we're keeping)
-	for _, f := range facts {
-		if f.ID == merged.ID {
-			continue
-		}
-		os.Remove(filepath.Join(m.graph.dir, f.ID+".md"))
-		delete(m.graph.facts, f.ID)
-		delete(m.graph.files, f.ID+".md")
-		m.embedder.RemoveFact(f.ID)
-		m.embedder.Remove("fact", f.Subject+": "+f.Body)
-	}
-	allEdges = filterMergedEdges(allEdges, m.graph.facts, merged.ID)
-
-	// Write merged fact. The survivor keeps its why/use_when so dedup never
-	// destroys provenance; the 6h rebuild refreshes both for the new body.
-	mergedFact := Fact{
-		ID:      merged.ID,
-		Type:    "semantic",
-		Subject: merged.Subject,
-		At:      time.Now(),
-		Edges:   allEdges,
-		Body:    merged.Content,
-		Why:     m.graph.facts[merged.ID].Why,
-		UseWhen: m.graph.facts[merged.ID].UseWhen,
-	}
-	m.graph.facts[merged.ID] = &mergedFact
-	m.graph.writeFile(mergedFact)
-	m.graph.saveIndex()
-	m.embedder.IndexFact(merged.ID, mergedFact)
-	m.graph.mu.Unlock()
-
-	return true
-}
-
-// clusterDocs groups documents by cosine similarity using union-find.
-func clusterDocs(docs []embeddedDoc, threshold float64) [][]embeddedDoc {
-	n := len(docs)
-	parent := make([]int, n)
-	for i := range parent {
-		parent[i] = i
-	}
-	var find func(int) int
-	find = func(x int) int {
-		if parent[x] != x {
-			parent[x] = find(parent[x])
-		}
-		return parent[x]
-	}
-	union := func(a, b int) {
-		parent[find(a)] = find(b)
-	}
-
-	for i := 0; i < n; i++ {
-		for j := i + 1; j < n; j++ {
-			if cosineSimilarity(docs[i].Embedding, docs[j].Embedding) > threshold {
-				union(i, j)
-			}
-		}
-	}
-
-	groups := make(map[int][]embeddedDoc)
-	for i, doc := range docs {
-		root := find(i)
-		groups[root] = append(groups[root], doc)
-	}
-
-	var out [][]embeddedDoc
-	for _, g := range groups {
-		out = append(out, g)
-	}
-	return out
 }
 
 // MigrateMissingFacts reads facts from SQLite that are not yet in the graph
@@ -1336,12 +1122,6 @@ func RebuildMemoryEdges(s *Settings) {
 		return
 	}
 	m := NewMemory(db, client, s)
-	key := os.Getenv("MINO_OPENROUTER_KEY")
-	if key == "" {
-		fmt.Fprintln(os.Stderr, "graph edge rebuild requires MINO_OPENROUTER_KEY")
-		return
-	}
-	m.embedder = NewEmbeddingStore(db, key, envOr("MINO_EMBED_MODEL", "openai/text-embedding-3-large"))
 	n, err := m.RebuildGraphEdges()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "graph edge rebuild incomplete: %v\n", err)
@@ -1361,12 +1141,6 @@ func MaintainMemory(s *Settings) {
 		return
 	}
 	m := NewMemory(db, client, s)
-	key := os.Getenv("MINO_OPENROUTER_KEY")
-	if key == "" {
-		fmt.Fprintln(os.Stderr, "graph maintenance requires MINO_OPENROUTER_KEY")
-		return
-	}
-	m.embedder = NewEmbeddingStore(db, key, envOr("MINO_EMBED_MODEL", "openai/text-embedding-3-large"))
 	edges, communities, err := m.MaintainGraph()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "graph maintenance incomplete: %v\n", err)
@@ -1382,26 +1156,6 @@ func CleanMemoryEdges(s *Settings) {
 	fmt.Printf("Removed %d contradictory inferred edges\n", removed)
 }
 
-func DeduplicateMemory(s *Settings) {
-	db := Connect(s.Home)
-	defer db.Close()
-	authStore := LoadAuthStore(s.Home)
-	client, err := NewProviderManager(s.Home, s, authStore)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "deduplication unavailable: %v\n", err)
-		return
-	}
-	m := NewMemory(db, client, s)
-	key := os.Getenv("MINO_OPENROUTER_KEY")
-	if key == "" {
-		fmt.Fprintln(os.Stderr, "deduplication requires MINO_OPENROUTER_KEY")
-		return
-	}
-	m.embedder = NewEmbeddingStore(db, key, envOr("MINO_EMBED_MODEL", "openai/text-embedding-3-large"))
-	merged := m.DedupDue()
-	fmt.Printf("Deduplicated %d graph clusters\n", merged)
-}
-
 func ConsolidateMemory(s *Settings) {
 	db := Connect(s.Home)
 	defer db.Close()
@@ -1412,12 +1166,6 @@ func ConsolidateMemory(s *Settings) {
 		return
 	}
 	m := NewMemory(db, client, s)
-	key := os.Getenv("MINO_OPENROUTER_KEY")
-	if key == "" {
-		fmt.Fprintln(os.Stderr, "consolidation requires MINO_OPENROUTER_KEY")
-		return
-	}
-	m.embedder = NewEmbeddingStore(db, key, envOr("MINO_EMBED_MODEL", "openai/text-embedding-3-large"))
 	written := m.ConsolidateDue()
 	fmt.Printf("Consolidated %d durable graph facts\n", written)
 }

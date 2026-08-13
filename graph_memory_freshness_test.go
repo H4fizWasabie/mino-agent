@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -42,4 +43,18 @@ func TestEntryRankingSurfacesStaleness(t *testing.T) {
 	if hasSignal(archived, "old", "age:") {
 		t.Errorf("archive path must not surface age; archived=%+v", archived)
 	}
+}
+
+func hasSignal(ranked []rankedFact, id, want string) bool {
+	for _, r := range ranked {
+		if r.id != id {
+			continue
+		}
+		for _, sig := range r.signals {
+			if strings.Contains(sig, want) {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -23,7 +23,7 @@ triggers:
 2. Generate report
 3. Save to reports/`), 0600)
 
-	sl := NewSkillLoader(home, nil)
+	sl := NewSkillLoader(home)
 	hits := sl.Match("generate a procurement report")
 	if len(hits) != 1 || hits[0].Name != "test-skill" {
 		t.Fatalf("trigger match failed: %d hits", len(hits))
@@ -43,7 +43,7 @@ triggers:
 
 func TestSkillCreateAndLifecycle(t *testing.T) {
 	home := t.TempDir()
-	sl := NewSkillLoader(home, nil)
+	sl := NewSkillLoader(home)
 	if err := sl.Create("my-report", "Generate weekly reports", []string{"report", "weekly"}, "# Steps\n1. Do it"); err != nil {
 		t.Fatal(err)
 	}
@@ -105,21 +105,21 @@ triggers:
 Generate the image.`), 0600)
 
 	// Explicit trigger loads an on-demand skill.
-	sl := NewSkillLoader(home, nil)
+	sl := NewSkillLoader(home)
 	hits := sl.Match("run a purchase history for March")
 	if len(hits) != 1 || hits[0].Name != "procura" {
 		t.Fatalf("explicit trigger should load on-demand skill, got %d hits", len(hits))
 	}
 
 	// Fuzzy word-overlap (no trigger/description) must NOT auto-load an on-demand skill.
-	sl2 := NewSkillLoader(home, nil)
+	sl2 := NewSkillLoader(home)
 	hits = sl2.Match("check the purchase stock levels please")
 	if len(hits) != 0 {
 		t.Fatalf("on-demand skill auto-loaded on fuzzy overlap (issues #170): %d hits", len(hits))
 	}
 
 	// An auto:true skill IS loaded by fuzzy word-overlap.
-	sl3 := NewSkillLoader(home, nil)
+	sl3 := NewSkillLoader(home)
 	hits = sl3.Match("create an image for the post")
 	if len(hits) != 1 || hits[0].Name != "image-gen" {
 		t.Fatalf("auto skill should fuzzy-load, got %d hits", len(hits))

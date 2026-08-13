@@ -106,7 +106,7 @@ func extractSection(raw, heading string) string {
 // runPlaybookStageLoop is an internal seam: production uses the canonical loop;
 // focused run-state tests can substitute a deterministic stage outcome.
 var runPlaybookStageLoop = func(ctx context.Context, client LLMClient, sessionID, system string, messages []Message, tools *Registry, maxIterations, maxTokens int, obs Observer, traceHome string) *LoopResult {
-	return RunLoopContext(ctx, client, sessionID, system, messages, tools, maxIterations, maxTokens, obs, true, traceHome, nil)
+	return RunLoopContext(ctx, client, sessionID, system, messages, tools, maxIterations, maxTokens, obs, true, traceHome)
 }
 
 func loadPlaybookWorkspace(home, name string) (*PlaybookWorkspace, error) {

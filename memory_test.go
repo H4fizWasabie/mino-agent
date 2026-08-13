@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -35,10 +34,6 @@ func TestDashboardDataIncludesSoul(t *testing.T) {
 	}
 	db := Connect(home)
 	defer db.Close()
-	if _, err := db.Exec("INSERT INTO memory_embeddings (source, content, embedding) VALUES (?, ?, ?)", "fact", "demo", strings.Repeat("x", 900)); err != nil {
-		t.Fatal(err)
-	}
-
 	previous := dashCore
 	dashCore = &Core{
 		Settings: &Settings{Home: home, Provider: "test", Model: "test", ConsolidateEvery: 6},
@@ -81,9 +76,6 @@ func TestDashboardDataIncludesSoul(t *testing.T) {
 	for _, table := range response.DB.Tables {
 		if table.Sample == nil {
 			t.Fatalf("database sample for %s must be an empty array, not null", table.Name)
-		}
-		if table.Name == "memory_embeddings" && len(table.Sample) == 1 && len(table.Sample[0]["embedding"].(string)) > 503 {
-			t.Fatal("database sample returned an unbounded embedding")
 		}
 	}
 	if response.ActiveTasks == nil {
@@ -175,17 +167,10 @@ func TestGraphRebuildDoesNotEraseEdgesOnEmptyResponse(t *testing.T) {
 	if err := gm.RecordFact(Fact{ID: "target", Type: "semantic", Subject: "Target"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := gm.RecordFact(Fact{ID: "source", Type: "semantic", Subject: "Source", Body: "Source", Edges: []Edge{{Target: "target", Rel: "depends_on", Kind: "inferred", Confidence: 0.95, Source: "consolidation"}}}); err != nil {
+	if err := gm.RecordFact(Fact{ID: "source", Type: "semantic", Subject: "Source targets Target", Body: "Source", Edges: []Edge{{Target: "target", Rel: "depends_on", Kind: "inferred", Confidence: 0.95, Source: "consolidation"}}}); err != nil {
 		t.Fatal(err)
 	}
-	m := &Memory{
-		client: pm,
-		graph:  gm,
-		embedder: &EmbeddingStore{docs: []embeddedDoc{
-			{Source: "fact:source", Embedding: []float32{1, 0}},
-			{Source: "fact:target", Embedding: []float32{0.9, 0.1}},
-		}},
-	}
+	m := &Memory{client: pm, graph: gm}
 	if _, err := m.RebuildGraphEdges(); err == nil {
 		t.Fatal("empty rebuild response was accepted")
 	}
@@ -637,37 +622,6 @@ func TestConsolidateDueLimitsLLMCallsPerPass(t *testing.T) {
 	}
 }
 
-func TestFilterMergedEdges(t *testing.T) {
-	existing := map[string]*Fact{
-		"keep":     {},
-		"survivor": {},
-	}
-	tests := []struct {
-		name  string
-		edges []Edge
-		keep  string
-		want  []string
-	}{
-		{name: "drops self-edges", edges: []Edge{{Target: "keep"}, {Target: "survivor"}}, keep: "keep", want: []string{"survivor"}},
-		{name: "drops dangling", edges: []Edge{{Target: "deleted"}, {Target: "survivor"}}, keep: "keep", want: []string{"survivor"}},
-		{name: "keeps valid cross-fact edges", edges: []Edge{{Target: "survivor"}}, keep: "keep", want: []string{"survivor"}},
-		{name: "empty stays empty", edges: nil, keep: "keep", want: nil},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := filterMergedEdges(tt.edges, existing, tt.keep)
-			if len(got) != len(tt.want) {
-				t.Fatalf("filtered = %+v, want %v", got, tt.want)
-			}
-			for i := range got {
-				if got[i].Target != tt.want[i] {
-					t.Fatalf("filtered = %+v, want %v", got, tt.want)
-				}
-			}
-		})
-	}
-}
-
 func TestManageMemorySelfMaintenanceActions(t *testing.T) {
 	home := t.TempDir()
 	db := Connect(home)
@@ -682,12 +636,16 @@ func TestManageMemorySelfMaintenanceActions(t *testing.T) {
 		t.Fatalf("status = %q", got)
 	}
 
-	// maintenance actions without provider/embedder report unavailability clearly
-	for _, action := range []string{"consolidate", "dedup", "rebuild_edges"} {
+	// maintenance actions without a provider report unavailability clearly
+	for _, action := range []string{"consolidate", "rebuild_edges"} {
 		got := tool.Fn(map[string]any{"action": action})
 		if !strings.Contains(got, "unavailable") && !strings.Contains(got, "requires") {
 			t.Fatalf("%s = %q, want clear unavailability message", action, got)
 		}
+	}
+	// dedup points at consolidate (issue #179: embedding clustering removed)
+	if got := tool.Fn(map[string]any{"action": "dedup"}); !strings.Contains(got, "consolidate") {
+		t.Fatalf("dedup = %q, want the consolidate pointer", got)
 	}
 
 	// clean_edges: pure graph, no provider needed
@@ -710,35 +668,18 @@ func TestManageMemorySelfMaintenanceActions(t *testing.T) {
 	}
 }
 
-func TestGraphRebuildBackfillsMissingEmbeddings(t *testing.T) {
-	// RebuildGraphEdges must embed facts lacking vectors BEFORE GraphCandidates,
-	// else migrated facts are invisible to edge inference.
-	// The embedder calls the package-level httpClient (hardcoded OpenRouter
-	// URL), so swap it to route embedding requests to the local test server.
-	// Also covers MEM-02: the rebuild writes why/use_when from the judgment
-	// contract and keeps the original Source (provenance survives).
+func TestGraphRebuildKeywordCandidatesAndProvenance(t *testing.T) {
+	// issue #179: the rebuild's candidate set is keyword overlap, not
+	// embeddings — a claim must still reach the judgment pass and write
+	// why/use_when from the judgment contract while keeping the original
+	// Source (provenance survives).
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		body, _ := io.ReadAll(r.Body)
-		if strings.Contains(string(body), "text-embedding") {
-			fmt.Fprint(w, `{"data":[{"embedding":[0.1,0.2,0.3]}]}`)
-			return
-		}
-		// Non-empty edges payload: an empty one counts as a failed batch and
-		// makes RebuildGraphEdges return an error. This edge targets nobody,
-		// so it is rejected by the allowed-candidates filter and writes nothing.
+		// The edge targets nobody, so the allowed-candidates filter rejects it
+		// and writes nothing; the facts entry still carries why/use_when.
 		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"edges\":[{\"source\":\"orphan\",\"target\":\"nobody\",\"rel\":\"depends_on\",\"confidence\":0.9}],\"facts\":[{\"id\":\"orphan\",\"why\":\"refined why\",\"use_when\":[\"when user asks about orphans\",\"orphan talk\"]}]}"}}]}`)
 	}))
 	defer server.Close()
-	old := httpClient
-	httpClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		// Rewrite the hardcoded OpenRouter host to the local test server.
-		r2 := r.Clone(r.Context())
-		r2.URL.Scheme = "http"
-		r2.URL.Host = strings.TrimPrefix(server.URL, "http://")
-		return server.Client().Transport.RoundTrip(r2)
-	})}
-	defer func() { httpClient = old }()
 	pm := &ProviderManager{
 		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
 		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
@@ -748,12 +689,11 @@ func TestGraphRebuildBackfillsMissingEmbeddings(t *testing.T) {
 	dir := t.TempDir()
 	gm := NewGraphMemory(filepath.Join(dir, "memories"), nil)
 	gm.RecordFact(Fact{ID: "orphan", Type: "semantic", Subject: "Orphan fact", Body: "Body", Why: "seed why", Source: "session:test"})
-	m := &Memory{client: pm, graph: gm, embedder: NewEmbeddingStore(Connect(dir), "test-key", "openai/text-embedding-3-large")}
-	if _, err := m.RebuildGraphEdges(); err != nil {
-		t.Fatalf("rebuild failed: %v", err)
-	}
-	if !m.embedder.HasFactEmbedding("orphan") {
-		t.Fatal("fact was not embedded during rebuild")
+	// The candidate: keyword overlap with the claim ("orphan" + "fact").
+	gm.RecordFact(Fact{ID: "orphan_related", Type: "semantic", Subject: "Orphan fact partner"})
+	m := &Memory{client: pm, graph: gm}
+	if n, err := m.RebuildGraphEdges(); err != nil || n != 0 {
+		t.Fatalf("rebuild = %d, %v; want 0 edges, nil error", n, err)
 	}
 	fact, _ := gm.FindFact("orphan")
 	if fact.Source != "session:test" {
@@ -811,10 +751,7 @@ func TestJudgeChangedFacts(t *testing.T) {
 	gm := NewGraphMemory(filepath.Join(dir, "memories"), nil)
 	gm.RecordFact(Fact{ID: "a", Type: "semantic", Subject: "Fact A"})
 	gm.RecordFact(Fact{ID: "b", Type: "semantic", Subject: "Fact B"})
-	m := &Memory{client: pm, graph: gm, embedder: &EmbeddingStore{docs: []embeddedDoc{
-		{Source: "fact:a", Embedding: []float32{1, 0}},
-		{Source: "fact:b", Embedding: []float32{0.9, 0.1}},
-	}}}
+	m := &Memory{client: pm, graph: gm}
 	// Pass 1: b gets judged, edge written, marked.
 	if n := m.JudgeChangedFacts(); n != 1 {
 		t.Fatalf("judged %d facts, want 1", n)
@@ -845,7 +782,7 @@ func TestJudgeChangedFacts(t *testing.T) {
 	}
 	gm2 := NewGraphMemory(filepath.Join(dir, "memories2"), nil)
 	gm2.RecordFact(Fact{ID: "c", Type: "semantic", Subject: "Fact C"})
-	m2 := &Memory{client: pm2, graph: gm2, embedder: &EmbeddingStore{docs: []embeddedDoc{}}}
+	m2 := &Memory{client: pm2, graph: gm2}
 	if n := m2.JudgeChangedFacts(); n != 0 {
 		t.Fatalf("failed pass returned %d, want 0 (retry next pass)", n)
 	}
@@ -871,9 +808,8 @@ func TestJudgeChangedFactsKeepsWhyOnPartialResponse(t *testing.T) {
 	dir := t.TempDir()
 	gm := NewGraphMemory(filepath.Join(dir, "memories"), nil)
 	gm.RecordFact(Fact{ID: "c", Type: "semantic", Subject: "Fact C", Why: "seed why", UseWhen: []string{"old trigger"}})
-	m := &Memory{client: pm, graph: gm, embedder: &EmbeddingStore{docs: []embeddedDoc{
-		{Source: "fact:c", Embedding: []float32{1, 0}},
-	}}}
+	gm.RecordFact(Fact{ID: "d", Type: "semantic", Subject: "Fact C companion"})
+	m := &Memory{client: pm, graph: gm}
 	if n := m.JudgeChangedFacts(); n != 0 {
 		t.Fatalf("judged %d edges, want 0 (empty edges, fact still judged)", n)
 	}
@@ -907,10 +843,7 @@ func TestJudgeChangedFactsSkipsConcurrentJudgment(t *testing.T) {
 		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
 		sleep: func(time.Duration) {}, now: time.Now,
 	}
-	m := &Memory{client: pm, graph: gm, embedder: &EmbeddingStore{docs: []embeddedDoc{
-		{Source: "fact:d", Embedding: []float32{1, 0}},
-		{Source: "fact:e", Embedding: []float32{0.9, 0.1}},
-	}}}
+	m := &Memory{client: pm, graph: gm}
 	if n := m.JudgeChangedFacts(); n != 0 {
 		t.Fatalf("judged %d edges, want 0 (6h pass already owns the facts)", n)
 	}
@@ -1043,19 +976,15 @@ func TestMaintainGraphClustersOnPartialRebuild(t *testing.T) {
 	dir := t.TempDir()
 	gm := NewGraphMemory(filepath.Join(dir, "memories"), nil)
 	for _, f := range []Fact{
-		{ID: "a", Type: "semantic", Subject: "A", Edges: []Edge{{Target: "b", Rel: "related", Kind: "explicit"}}},
-		{ID: "b", Type: "semantic", Subject: "B", Edges: []Edge{{Target: "a", Rel: "related", Kind: "explicit"}}},
-		{ID: "c", Type: "semantic", Subject: "C"},
+		{ID: "a", Type: "semantic", Subject: "Alpha talks Beta", Edges: []Edge{{Target: "b", Rel: "related", Kind: "explicit"}}},
+		{ID: "b", Type: "semantic", Subject: "Beta talks Alpha", Edges: []Edge{{Target: "a", Rel: "related", Kind: "explicit"}}},
+		{ID: "c", Type: "semantic", Subject: "Gamma alone"},
 	} {
 		if err := gm.RecordFact(f); err != nil {
 			t.Fatal(err)
 		}
 	}
-	m := &Memory{client: pm, graph: gm, embedder: &EmbeddingStore{docs: []embeddedDoc{
-		{Source: "fact:a", Embedding: []float32{1, 0}},
-		{Source: "fact:b", Embedding: []float32{0.9, 0.1}},
-		{Source: "fact:c", Embedding: []float32{0.5, 0.5}},
-	}}}
+	m := &Memory{client: pm, graph: gm}
 	edges, communities, err := m.MaintainGraph()
 	if err == nil {
 		t.Fatal("partial rebuild must still surface its error")

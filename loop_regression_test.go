@@ -20,7 +20,7 @@ func TestLoopReturnsWhenClientDisconnectsMidProviderCall(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan *LoopResult, 1)
 	go func() {
-		done <- RunLoopContext(ctx, blocking, "wedge", "", []Message{{Role: "user", Content: "go"}}, tools, 10, 100, nil, false, "", nil)
+		done <- RunLoopContext(ctx, blocking, "wedge", "", []Message{{Role: "user", Content: "go"}}, tools, 10, 100, nil, false, "")
 	}()
 	select {
 	case <-started:
@@ -106,7 +106,7 @@ func TestLoopPushesOnUnparseableMarker(t *testing.T) {
 		scriptedResp([]ContentBlock{textBlock(`[tool_call: bash({broken})]`)}, "stop"),
 		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
 	}}
-	result := RunLoopContext(context.Background(), client, "marker-loop", "", []Message{{Role: "user", Content: "go"}}, tools, 5, 100, nil, false, "", nil)
+	result := RunLoopContext(context.Background(), client, "marker-loop", "", []Message{{Role: "user", Content: "go"}}, tools, 5, 100, nil, false, "")
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete (loop must continue after the push)", result.Status)
 	}
@@ -158,7 +158,7 @@ func TestStageLoopRequiresOutputBeforeComplete(t *testing.T) {
 		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
 	}}
 	ctx := context.WithValue(context.Background(), stageOutputsKey{}, []string{out})
-	result := RunLoopContext(ctx, client, "stage-contract", "", []Message{{Role: "user", Content: "run stage"}}, tools, 10, 100, nil, false, "", nil)
+	result := RunLoopContext(ctx, client, "stage-contract", "", []Message{{Role: "user", Content: "run stage"}}, tools, 10, 100, nil, false, "")
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete", result.Status)
 	}
@@ -186,7 +186,7 @@ func TestLoopNoPushOutsideStage(t *testing.T) {
 	client := &fakeClient{script: []*LLMResponse{
 		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
 	}}
-	result := RunLoopContext(context.Background(), client, "plain-loop", "", []Message{{Role: "user", Content: "hi"}}, tools, 5, 100, nil, false, "", nil)
+	result := RunLoopContext(context.Background(), client, "plain-loop", "", []Message{{Role: "user", Content: "hi"}}, tools, 5, 100, nil, false, "")
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete on first turn outside a stage", result.Status)
 	}
@@ -214,7 +214,7 @@ func TestLoopSurfacesMalformedNativeArgs(t *testing.T) {
 		scriptedResp([]ContentBlock{toolBlock("probe", map[string]any{"__raw_arguments__": "{broken json"})}, "tool_use"),
 		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
 	}}
-	result := RunLoopContext(context.Background(), client, "native-args", "", []Message{{Role: "user", Content: "go"}}, tools, 5, 100, nil, false, "", nil)
+	result := RunLoopContext(context.Background(), client, "native-args", "", []Message{{Role: "user", Content: "go"}}, tools, 5, 100, nil, false, "")
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete", result.Status)
 	}
@@ -242,7 +242,7 @@ func TestStageRewriteStreakTripwire(t *testing.T) {
 	}
 	client.script = append(client.script, scriptedResp([]ContentBlock{textBlock("done")}, "stop"))
 	ctx := context.WithValue(context.Background(), traceTagKey{}, map[string]string{"playbook": "p", "stage": "01-x"})
-	result := RunLoopContext(ctx, client, "rewrite-loop", "", []Message{{Role: "user", Content: "go"}}, tools, 20, 100, nil, false, "", nil)
+	result := RunLoopContext(ctx, client, "rewrite-loop", "", []Message{{Role: "user", Content: "go"}}, tools, 20, 100, nil, false, "")
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete", result.Status)
 	}
@@ -281,7 +281,7 @@ func TestStageRewriteStreakAllowsInterleavedReads(t *testing.T) {
 	}
 	client.script = append(client.script, scriptedResp([]ContentBlock{textBlock("done")}, "stop"))
 	ctx := context.WithValue(context.Background(), traceTagKey{}, map[string]string{"playbook": "p", "stage": "01-x"})
-	result := RunLoopContext(ctx, client, "interleaved", "", []Message{{Role: "user", Content: "go"}}, tools, 20, 100, nil, false, "", nil)
+	result := RunLoopContext(ctx, client, "interleaved", "", []Message{{Role: "user", Content: "go"}}, tools, 20, 100, nil, false, "")
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete", result.Status)
 	}
@@ -320,7 +320,7 @@ func TestLoopPushesOnUnverifiedMutationClaim(t *testing.T) {
 		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
 	}}
 	msgs := []Message{{Role: "user", Content: "remove that from your memory"}}
-	result := RunLoopContext(context.Background(), client, "mutation-loop", "", msgs, tools, 5, 100, nil, false, "", nil)
+	result := RunLoopContext(context.Background(), client, "mutation-loop", "", msgs, tools, 5, 100, nil, false, "")
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete", result.Status)
 	}
@@ -350,7 +350,7 @@ func TestLoopCorrectsContradictedFailureClaim(t *testing.T) {
 		scriptedResp([]ContentBlock{textBlock("Checking the result again — it did land. Done.")}, "stop"),
 	}}
 	msgs := []Message{{Role: "user", Content: "fix the file"}}
-	result := RunLoopContext(context.Background(), client, "osv03-loop", "", msgs, tools, 5, 100, nil, false, "", nil)
+	result := RunLoopContext(context.Background(), client, "osv03-loop", "", msgs, tools, 5, 100, nil, false, "")
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete", result.Status)
 	}
@@ -379,7 +379,7 @@ func TestLoopCorrectsContradictedSuccessClaim(t *testing.T) {
 		scriptedResp([]ContentBlock{textBlock("Retrying with the right permissions.")}, "stop"),
 	}}
 	msgs := []Message{{Role: "user", Content: "fix the file"}}
-	result := RunLoopContext(context.Background(), client, "osv03-loop2", "", msgs, tools, 5, 100, nil, false, "", nil)
+	result := RunLoopContext(context.Background(), client, "osv03-loop2", "", msgs, tools, 5, 100, nil, false, "")
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete", result.Status)
 	}
@@ -417,7 +417,7 @@ func TestLoopNoPushOnConsistentOutcomes(t *testing.T) {
 			}
 			script = append(script, scriptedResp([]ContentBlock{textBlock(tc.reply)}, "stop"))
 			client := &fakeClient{script: script}
-			result := RunLoopContext(context.Background(), client, "osv03-ctrl", "", []Message{{Role: "user", Content: "fix the file"}}, tools, 5, 100, nil, false, "", nil)
+			result := RunLoopContext(context.Background(), client, "osv03-ctrl", "", []Message{{Role: "user", Content: "fix the file"}}, tools, 5, 100, nil, false, "")
 			if result.Status != "complete" {
 				t.Fatalf("status = %q, want complete", result.Status)
 			}
@@ -436,7 +436,7 @@ func TestLoopNoPushOnPlainCompletion(t *testing.T) {
 		scriptedResp([]ContentBlock{textBlock("Good morning! How can I help?")}, "stop"),
 	}}
 	msgs := []Message{{Role: "user", Content: "hello mino"}}
-	result := RunLoopContext(context.Background(), client, "plain-loop", "", msgs, tools, 5, 100, nil, false, "", nil)
+	result := RunLoopContext(context.Background(), client, "plain-loop", "", msgs, tools, 5, 100, nil, false, "")
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete", result.Status)
 	}
@@ -454,7 +454,7 @@ func TestLoopNoMutationPushInsideStage(t *testing.T) {
 	}}
 	msgs := []Message{{Role: "user", Content: "run stage"}}
 	ctx := context.WithValue(context.Background(), stageOutputsKey{}, []string{})
-	result := RunLoopContext(ctx, client, "stage-mutation", "", msgs, tools, 5, 100, nil, false, "", nil)
+	result := RunLoopContext(ctx, client, "stage-mutation", "", msgs, tools, 5, 100, nil, false, "")
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete", result.Status)
 	}
@@ -472,7 +472,7 @@ func TestLoopAbortsAfterSixConsecutiveParseFailures(t *testing.T) {
 		script = append(script, scriptedResp([]ContentBlock{textBlock("[tool_call: bash({broken)")}, "stop"))
 	}
 	client := &fakeClient{script: script}
-	result := RunLoopContext(context.Background(), client, "parse-loop", "", []Message{{Role: "user", Content: "go"}}, tools, 10, 100, nil, false, "", nil)
+	result := RunLoopContext(context.Background(), client, "parse-loop", "", []Message{{Role: "user", Content: "go"}}, tools, 10, 100, nil, false, "")
 	if result.Status != "error" {
 		t.Fatalf("status = %q, want error", result.Status)
 	}
@@ -504,7 +504,7 @@ func TestLoopAbortsAfterSixTotalParseFailuresWithInterleavedSuccesses(t *testing
 		script = append(script, scriptedResp([]ContentBlock{toolBlock("echo", map[string]any{"n": float64(i)})}, "tool_use"))
 	}
 	client := &fakeClient{script: script}
-	result := RunLoopContext(context.Background(), client, "parse-alternating", "", []Message{{Role: "user", Content: "go"}}, tools, 30, 100, nil, false, "", nil)
+	result := RunLoopContext(context.Background(), client, "parse-alternating", "", []Message{{Role: "user", Content: "go"}}, tools, 30, 100, nil, false, "")
 	if result.Status != "error" {
 		t.Fatalf("status = %q, want error (7 broken markers in 14 iterations)", result.Status)
 	}
@@ -522,7 +522,7 @@ func TestLoopEscalatesParsePushAfterThreeFailures(t *testing.T) {
 		scriptedResp([]ContentBlock{textBlock("[tool_call: bash({broken)")}, "stop"),
 		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
 	}}
-	result := RunLoopContext(context.Background(), client, "parse-escalate", "", []Message{{Role: "user", Content: "go"}}, tools, 10, 100, nil, false, "", nil)
+	result := RunLoopContext(context.Background(), client, "parse-escalate", "", []Message{{Role: "user", Content: "go"}}, tools, 10, 100, nil, false, "")
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete", result.Status)
 	}
@@ -550,7 +550,7 @@ func TestLoopParseCounterResetsOnSuccess(t *testing.T) {
 		scriptedResp([]ContentBlock{textBlock("[tool_call: bash({broken)")}, "stop"),
 		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
 	}}
-	result := RunLoopContext(context.Background(), client, "parse-reset", "", []Message{{Role: "user", Content: "go"}}, tools, 10, 100, nil, false, "", nil)
+	result := RunLoopContext(context.Background(), client, "parse-reset", "", []Message{{Role: "user", Content: "go"}}, tools, 10, 100, nil, false, "")
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete (counter reset by the executed tool)", result.Status)
 	}
@@ -766,7 +766,7 @@ func TestLoopIterationAwarenessRepeatedTool(t *testing.T) {
 	}
 	script = append(script, scriptedResp([]ContentBlock{textBlock("done")}, "stop"))
 	client := &fakeClient{script: script}
-	RunLoopContext(context.Background(), client, "awareness", "", []Message{{Role: "user", Content: "go"}}, tools, 20, 100, nil, false, "", nil)
+	RunLoopContext(context.Background(), client, "awareness", "", []Message{{Role: "user", Content: "go"}}, tools, 20, 100, nil, false, "")
 
 	found := false
 	for _, msgs := range client.messages {
@@ -794,7 +794,7 @@ func TestLoopLogsMidflightRedirectSignal(t *testing.T) {
 	script = append(script, scriptedResp([]ContentBlock{textBlock("done")}, "stop"))
 	client := &fakeClient{script: script}
 	home := t.TempDir()
-	RunLoopContext(context.Background(), client, "awareness", "", []Message{{Role: "user", Content: "go"}}, tools, 20, 100, nil, false, home, nil)
+	RunLoopContext(context.Background(), client, "awareness", "", []Message{{Role: "user", Content: "go"}}, tools, 20, 100, nil, false, home)
 
 	found := false
 	files, _ := filepath.Glob(filepath.Join(home, "traces", "*.jsonl"))

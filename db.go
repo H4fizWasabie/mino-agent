@@ -11,7 +11,7 @@ import (
 
 // CurrentSchemaVersion is incremented when the schema changes in a way
 // that needs explicit migration. Add a migration function in runMigrations().
-const CurrentSchemaVersion = 6
+const CurrentSchemaVersion = 7
 
 // Simplified schema — single statements, no triggers with embedded semicolons.
 var schemaStatements = []string{
@@ -41,12 +41,6 @@ var schemaStatements = []string{
 		session_id TEXT DEFAULT 'default',
 		source TEXT DEFAULT 'cli',
 		created_at TEXT DEFAULT (datetime('now'))
-	)`,
-	`CREATE TABLE IF NOT EXISTS memory_embeddings (
-		source TEXT NOT NULL,
-		content TEXT NOT NULL,
-		embedding TEXT NOT NULL,
-		PRIMARY KEY (source, content)
 	)`,
 	`CREATE TABLE IF NOT EXISTS session_artifacts (
 		path TEXT PRIMARY KEY,
@@ -175,6 +169,12 @@ func runMigrations(db *sql.DB) {
 	if current < 6 {
 		db.Exec("ALTER TABLE session_artifacts ADD COLUMN distilled INTEGER NOT NULL DEFAULT 0")
 		current = 6
+	}
+	// v7: embeddings removed (issue #179) — the store and all its consumers
+	// are dead; FTS5 + essentials + triggers are the retrieval floor.
+	if current < 7 {
+		db.Exec("DROP TABLE IF EXISTS memory_embeddings")
+		current = 7
 	}
 
 	if current != from {

@@ -89,112 +89,69 @@ func ListPlaybooks(home string) []string {
 	return names
 }
 
-// MatchPlaybook finds the best playbook for a prompt using embeddings.
-// Returns name, description, and score. Falls back to keyword match.
-func MatchPlaybook(home, prompt string, es *EmbeddingStore) (string, string, float64) {
+// MatchPlaybook finds the best playbook for a prompt by keyword overlap
+// against name, description, and stage content (issue #179: embeddings
+// removed; keyword matching is the routing floor). Returns name, description,
+// and score (0.3 = weak hint, 0.5+ = strong auto-run).
+func MatchPlaybook(home, prompt string) (string, string, float64) {
 	playbooks := ListPlaybooks(home)
 	if len(playbooks) == 0 {
 		return "", "", 0
 	}
-
-	// if no embedding store, return best match by keyword overlap
-	if es == nil {
-		promptLower := strings.ToLower(prompt)
-		promptWords := make(map[string]bool)
-		for _, w := range strings.Fields(promptLower) {
-			if len(w) >= 3 {
-				promptWords[w] = true
-			}
+	promptLower := strings.ToLower(prompt)
+	promptWords := make(map[string]bool)
+	for _, w := range strings.Fields(promptLower) {
+		if len(w) >= 3 {
+			promptWords[w] = true
 		}
-		bestName, bestDesc, bestScore := "", "", 0.0
-		for _, name := range playbooks {
-			pb, err := loadPlaybookWorkspace(home, name)
-			if err != nil {
-				continue
-			}
-			// search description + name + all stage content
-			searchText := strings.ToLower(pb.Description + " " + name)
-			for _, s := range pb.Stages {
-				searchText += " " + strings.ToLower(s.Context)
-			}
-			textWords := make(map[string]bool)
-			for _, w := range strings.Fields(searchText) {
-				if len(w) >= 3 {
-					textWords[w] = true
-				}
-			}
-			// count overlapping words
-			overlap := 0
-			for w := range promptWords {
-				if textWords[w] {
-					overlap++
-				}
-			}
-			// also check if prompt contains playbook name directly
-			if strings.Contains(promptLower, strings.ToLower(name)) {
-				overlap += 2 // boost for direct name match
-			}
-			// substring check: does any prompt word appear as substring in searchText?
-			for w := range promptWords {
-				if strings.Contains(searchText, w) {
-					overlap++
-				}
-			}
-			if overlap > 0 && float64(overlap) > bestScore {
-				bestName, bestDesc, bestScore = name, pb.Description, float64(overlap)
-			}
-		}
-		if bestName != "" {
-			// Score reflects match strength: 0.3 = weak (hint), 0.5+ = strong (auto-run)
-			score := math.Min(1.0, bestScore/10.0)
-			if score < 0.3 {
-				score = 0.3 // minimum for any match
-			}
-			return bestName, bestDesc, score
-		}
-		return "", "", 0
 	}
-
-	// embed prompt and compare against playbook descriptions
-	promptEmb, err := es.Embed(prompt)
-	if err != nil {
-		return "", "", 0
-	}
-
-	type candidate struct {
-		name  string
-		desc  string
-		score float64
-	}
-	var candidates []candidate
-
+	bestName, bestDesc, bestScore := "", "", 0.0
 	for _, name := range playbooks {
 		pb, err := loadPlaybookWorkspace(home, name)
 		if err != nil {
 			continue
 		}
-		descEmb, err := es.Embed(pb.Description)
-		if err != nil {
-			continue
+		// search description + name + all stage content
+		searchText := strings.ToLower(pb.Description + " " + name)
+		for _, s := range pb.Stages {
+			searchText += " " + strings.ToLower(s.Context)
 		}
-		score := cosineSimilarity(promptEmb, descEmb)
-		if score > 0.3 {
-			candidates = append(candidates, candidate{name: name, desc: pb.Description, score: score})
+		textWords := make(map[string]bool)
+		for _, w := range strings.Fields(searchText) {
+			if len(w) >= 3 {
+				textWords[w] = true
+			}
+		}
+		// count overlapping words
+		overlap := 0
+		for w := range promptWords {
+			if textWords[w] {
+				overlap++
+			}
+		}
+		// also check if prompt contains playbook name directly
+		if strings.Contains(promptLower, strings.ToLower(name)) {
+			overlap += 2 // boost for direct name match
+		}
+		// substring check: does any prompt word appear as substring in searchText?
+		for w := range promptWords {
+			if strings.Contains(searchText, w) {
+				overlap++
+			}
+		}
+		if overlap > 0 && float64(overlap) > bestScore {
+			bestName, bestDesc, bestScore = name, pb.Description, float64(overlap)
 		}
 	}
-
-	if len(candidates) == 0 {
-		return "", "", 0
-	}
-
-	// return best match
-	best := candidates[0]
-	for _, c := range candidates[1:] {
-		if c.score > best.score {
-			best = c
+	if bestName != "" {
+		// Score reflects match strength: 0.3 = weak (hint), 0.5+ = strong (auto-run)
+		score := math.Min(1.0, bestScore/10.0)
+		if score < 0.3 {
+			score = 0.3 // minimum for any match
 		}
+		return bestName, bestDesc, score
 	}
-	return best.name, best.desc, best.score
+	return "", "", 0
 }
 
 // CreateExamplePlaybook scaffolds a minimal playbook for testing.
