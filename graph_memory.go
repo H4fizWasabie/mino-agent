@@ -63,7 +63,6 @@ type GraphMemory struct {
 	labels      map[string]string
 	parseWarned map[string]bool // ids already warned on (once per process run)
 	cfg         *Settings
-	embedder    *EmbeddingStore
 }
 
 // --- Index cache types ---
@@ -98,11 +97,6 @@ type index struct {
 
 func (gm *GraphMemory) indexPath() string {
 	return filepath.Join(gm.dir, "index.json")
-}
-
-// SetEmbedder wires the embedding store for semantic fallback in remember().
-func (gm *GraphMemory) SetEmbedder(e *EmbeddingStore) {
-	gm.embedder = e
 }
 
 func NewGraphMemory(dir string, cfg *Settings) *GraphMemory {
@@ -1203,13 +1197,12 @@ func edgeTraversable(edge Edge) bool {
 
 // entryRanking scores every fact in the given set on three free signals —
 // substring match on subject/body, why/use_when overlap with the query, and
-// why/use_when overlap with the active turn — then merges embedding similarity
-// (20×cosine) when the free ranking leaves room in the top-3. Weights: subject
-// word 10, body word 3, exact subject 100, why/use_when word 10 per signal.
-// Returns matches best-first with the per-signal breakdown (MEM-04 renders it
-// as the match rationale). useEmbedder gates the embedding merge: it only
-// applies to the live graph (archived facts carry no vectors).
-func (gm *GraphMemory) entryRanking(query, turn string, facts map[string]*Fact, useEmbedder bool) []rankedFact {
+// why/use_when overlap with the active turn. Weights: subject word 10, body
+// word 3, exact subject 100, why/use_when word 10 per signal. Returns matches
+// best-first with the per-signal breakdown (MEM-04 renders it as the match
+// rationale). liveGraph gates the CTX-014 age signal: it only applies to live
+// recall (archived facts carry no freshness promise).
+func (gm *GraphMemory) entryRanking(query, turn string, facts map[string]*Fact, liveGraph bool) []rankedFact {
 	queryWords := memoryTokenize(query)
 	turnWords := memoryTokenize(turn)
 	var ranked []rankedFact
@@ -1255,8 +1248,8 @@ func (gm *GraphMemory) entryRanking(query, turn string, facts map[string]*Fact, 
 			signals = append(signals, "your words: "+strings.Join(tw, ", "))
 		}
 		// CTX-014: surface recency so a stale-but-unrejected fact isn't trusted
-		// blindly. Gated to the live graph (useEmbedder); zero At is skipped.
-		if useEmbedder && !fact.At.IsZero() {
+		// blindly. Gated to the live graph; zero At is skipped.
+		if liveGraph && !fact.At.IsZero() {
 			if age := time.Since(fact.At); age >= freshGrace {
 				sig := fmt.Sprintf("age: %dd", int(age.Hours()/24))
 				if age > staleAgeThreshold {
@@ -1277,61 +1270,6 @@ func (gm *GraphMemory) entryRanking(query, turn string, facts map[string]*Fact, 
 	}
 	sort.Slice(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
 
-	// Embedding similarity fills vocabulary gaps only when the free ranking is
-	// thin (room in the top-3) — keeps the per-remember embed API call bounded.
-	if len(ranked) < 3 && useEmbedder && gm.embedder != nil {
-		ranked = mergeEmbeddingHits(ranked, gm.embedder.SearchScored(query, 8), facts)
-	}
-	return ranked
-}
-
-// mergeThreshold sits below the measured natural-paraphrase similarity
-// (~0.5 for text-embedding-3-large) so close phrasings actually merge;
-// oblique queries (~0.27 measured) stay filtered (issue #141).
-const mergeThreshold = 0.4
-
-// mergeEmbeddingHits merges embedding hits into the keyword ranking: hits at
-// or above mergeThreshold join (or boost) ranked facts with a
-// "similarity: 0.xx" signal; stale vectors (unknown fact id) are dropped.
-// Extracted from entryRanking so the gate is unit-testable without the
-// embedding API (issue #141).
-func mergeEmbeddingHits(ranked []rankedFact, hits []scoredDoc, facts map[string]*Fact) []rankedFact {
-	for _, sd := range hits {
-		if sd.score < mergeThreshold {
-			continue
-		}
-		id := ""
-		if strings.HasPrefix(sd.doc.Source, "fact:") {
-			id = strings.TrimPrefix(sd.doc.Source, "fact:")
-		} else {
-			for fid, f := range facts { // legacy "fact" sources: map by content
-				if f.Subject+": "+f.Body == sd.doc.Content {
-					id = fid
-					break
-				}
-			}
-		}
-		if _, ok := facts[id]; !ok {
-			continue
-		}
-		if facts[id].Type == "episodic" {
-			continue // episodes never start a recall (issue #178)
-		}
-		embScore := int(20 * sd.score)
-		found := false
-		for i := range ranked {
-			if ranked[i].id == id {
-				ranked[i].score += embScore
-				ranked[i].signals = append(ranked[i].signals, fmt.Sprintf("similarity: %.2f", sd.score))
-				found = true
-				break
-			}
-		}
-		if !found {
-			ranked = append(ranked, rankedFact{id: id, score: embScore, signals: []string{fmt.Sprintf("similarity: %.2f", sd.score)}})
-		}
-	}
-	sort.Slice(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
 	return ranked
 }
 

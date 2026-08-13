@@ -305,7 +305,6 @@ var promptAssemblySeams = []string{
 	"truncateWorkspaceInput",
 	"workspaceInputPath",
 	"cleanPlaybookRequest",
-	"mergeEmbeddingHits",
 	"verifyWorkspaceStageOutputs",
 	"alertScheduleHealth",
 }

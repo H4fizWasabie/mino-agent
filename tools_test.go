@@ -386,14 +386,14 @@ func TestSchemasForContextCappedUnion(t *testing.T) {
 	}
 
 	// Turn 1: 13 essentials (send_document added, CTX-013) + 6 explicit = 19, under the cap.
-	first := names(r.SchemasForContext("s1", "", "use special_101 special_102 special_103 special_104 special_105 special_106 now", nil))
+	first := names(r.SchemasForContext("s1", "", "use special_101 special_102 special_103 special_104 special_105 special_106 now"))
 	if len(first) != 19 {
 		t.Fatalf("turn 1: %d schemas, want 19: %v", len(first), first)
 	}
 	hasAll(t, first, essentialNamesSorted...)
 
 	// Turn 2: 6 new explicit tools → union 23 → evict the 3 oldest explicit.
-	second := names(r.SchemasForContext("s1", "", "use special_107 special_108 special_109 special_110 special_111 special_112 now", nil))
+	second := names(r.SchemasForContext("s1", "", "use special_107 special_108 special_109 special_110 special_111 special_112 now"))
 	if len(second) != schemaUnionCap {
 		t.Fatalf("turn 2: %d schemas, want cap %d", len(second), schemaUnionCap)
 	}
@@ -408,13 +408,13 @@ func TestSchemasForContextCappedUnion(t *testing.T) {
 	}
 
 	// Turn 3: identical to turn 2 → identical output (prefix-cache stability).
-	third := names(r.SchemasForContext("s1", "", "use special_107 special_108 special_109 special_110 special_111 special_112 now", nil))
+	third := names(r.SchemasForContext("s1", "", "use special_107 special_108 special_109 special_110 special_111 special_112 now"))
 	if !reflect.DeepEqual(second, third) {
 		t.Fatalf("unstable output across identical turns:\n%v\n%v", second, third)
 	}
 
 	// A different session starts its own union.
-	other := names(r.SchemasForContext("s2", "", "use special_107 special_108 special_109 special_110 special_111 special_112 now", nil))
+	other := names(r.SchemasForContext("s2", "", "use special_107 special_108 special_109 special_110 special_111 special_112 now"))
 	if len(other) != 19 {
 		t.Fatalf("session s2 inherited union: %d schemas, want 19", len(other))
 	}

@@ -1,3 +1,5 @@
+Status: **CLOSED** — obsolete with issue #179: the semantic tuning surface (threshold/dilution wars over embedding similarity) was removed with the embeddings themselves.
+
 ## Resolution
 
 **Embedding input:** last user message + last assistant reply (~500-2000 chars). One-turn window captures conversational signal without system prompt noise.
