@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -317,5 +318,18 @@ func TestTraceLLMInputsParsesIterationTokens(t *testing.T) {
 	got := traceLLMInputs(home)
 	if len(got) != 2 || got[0] != 32346 || got[1] != 33304 {
 		t.Fatalf("traceLLMInputs = %v, want [32346 33304]", got)
+	}
+}
+
+// issue #188: a bind conflict must surface as an error, not a silent exit —
+// the wrapper returns ListenAndServe's error so RunDashboard can fail loud.
+func TestServeDashboardReportsBindConflict(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	if err := serveDashboard(l.Addr().String()); err == nil {
+		t.Fatal("bind conflict on an occupied port must return an error")
 	}
 }

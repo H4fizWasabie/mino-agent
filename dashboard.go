@@ -84,7 +84,19 @@ func RunDashboard(w *Core) {
 	} else {
 		fmt.Printf("\n  Mino is ready!\n  Open: %s\n\n", url)
 	}
-	http.ListenAndServe(addr, nil)
+	if err := serveDashboard(addr); err != nil {
+		// A bind conflict must be loud: an exited dashboard that looks like a
+		// clean stop is how a dead instance runs unnoticed (issue #188).
+		slog.Error("dashboard server failed", "error", err)
+		os.Exit(1)
+	}
+}
+
+// serveDashboard runs the HTTP server and returns the error instead of
+// discarding it (issue #188) — testable, and the caller decides how loud
+// the failure is.
+func serveDashboard(addr string) error {
+	return http.ListenAndServe(addr, nil)
 }
 
 func registerDashboardRoutes(mux *http.ServeMux, memDir string) {
