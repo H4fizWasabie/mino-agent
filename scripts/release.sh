@@ -35,6 +35,11 @@ if [ -n "$(git status --porcelain)" ]; then
 	exit 1
 fi
 
+# 1b. push master + the tag BEFORE building: a release created from an
+# unpushed tag silently points at the remote's old HEAD (v2.9.1 lesson).
+git push origin master >/dev/null
+git push origin "$VERSION" >/dev/null
+
 # 2. build the release assets (all platforms + extensions + SHA256SUMS)
 ./build-release.sh "$VERSION"
 
