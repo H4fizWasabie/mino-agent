@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"html"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -1397,6 +1398,11 @@ func makeMessagesTool(home string) *Tool {
 		Fn: func(args map[string]any) string {
 			to, _ := args["to"].(string)
 			msg, _ := args["message"].(string)
+			// The model sometimes emits JSON-escaped newlines (literal \n) in the
+			// message text — observed 2026-08-14: the FB playbook's Telegram report
+			// arrived with literal "\n\n" between paragraphs. Normalize at the
+			// tool boundary so every channel gets real line breaks.
+			msg = strings.ReplaceAll(msg, `\n`, "\n")
 			queueOutbox(home, to, msg)
 			path := filepath.Join(home, "outbox", fmt.Sprintf("msg_%s.txt", to))
 			return fmt.Sprintf("Message to %s drafted at %s", to, path)
@@ -1551,10 +1557,11 @@ func fetchURL(rawURL string) string {
 	// Preserves tables, headings, links, lists — LLM understands and burns fewer tokens.
 	// Falls back to plain-text stripping if markitdown is unavailable or fails.
 	if md := markitdownHTML(text); md != "" {
-		return md
+		return html.UnescapeString(md)
 	}
 	text = reHTML.ReplaceAllString(text, " ")
 	text = reSpace.ReplaceAllString(text, " ")
+	text = html.UnescapeString(text) // &amp; &lt; &#8217; etc — observed raw in the fallback (2026-08-14)
 	text = strings.TrimSpace(text)
 	if len(text) > 30000 {
 		text = text[:30000] + "\n... (truncated)"

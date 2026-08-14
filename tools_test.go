@@ -464,3 +464,41 @@ func TestRewriteBashWithRTK(t *testing.T) {
 		})
 	}
 }
+
+// The literal-"\n" Telegram report class (2026-08-14): the model emitted
+// JSON-escaped newlines in send_message args; the tool must normalize them so
+// the outbox carries real line breaks.
+func TestSendMessageNormalizesLiteralNewlines(t *testing.T) {
+	home := t.TempDir()
+	tool := makeMessagesTool(home)
+	got := tool.Fn(map[string]any{"to": "abah", "message": "Line1\\n\\nLine2"})
+	if !strings.Contains(got, "drafted") {
+		t.Fatalf("unexpected result: %q", got)
+	}
+	data, err := os.ReadFile(filepath.Join(home, "outbox", "msg_abah.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "Line1\n\nLine2" {
+		t.Fatalf("outbox message = %q, want real newlines", string(data))
+	}
+}
+
+// The entity-escape fallback class (2026-08-14): the plain-text fallback left
+// &amp; &lt; &#8217; raw; unescape after tag stripping.
+func TestFetchURLFallbackUnescapesEntities(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, "<html><body><p>AT&amp;T &lt;b&gt;bold&lt;/b&gt; &#8217;quoted&#8217;</p></body></html>")
+	}))
+	defer srv.Close()
+	got := fetchURL(srv.URL)
+	for _, want := range []string{"AT&T", "<b>bold</b>", "\u2019quoted\u2019"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("fallback output missing %q: %q", want, got)
+		}
+	}
+	if strings.Contains(got, "&amp;") {
+		t.Fatalf("raw entity survived: %q", got)
+	}
+}

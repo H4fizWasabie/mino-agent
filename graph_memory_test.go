@@ -711,3 +711,45 @@ func TestArchiveExpiredEpisodic(t *testing.T) {
 		t.Fatalf("second pass archived %d, want 0", n)
 	}
 }
+
+// The double front-matter class (2026-08-14, reproduced live twice): a caller
+// embeds the whole file — front-matter included — in the body. RecordFact must
+// strip the leading block so the written file carries exactly one front-matter.
+func TestRecordFactStripsEmbeddedFrontMatterFromBody(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), &Settings{TopK: 2})
+	body := "---\nid: ai_concept_function_calling\ntype: semantic\nsubject: 'AI concept'\n---\n\nThe real concept prose."
+	err := gm.RecordFact(Fact{ID: "ai_concept_function_calling", Type: "semantic", Subject: "AI concept: function calling", At: time.Now(), Source: "user", Body: body})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(gm.dir, "ai_concept_function_calling.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(got)
+	if strings.Count(s, "---\n") != 2 { // exactly one opening + one closing delimiter
+		t.Fatalf("double front-matter still possible:\n%s", s)
+	}
+	if !strings.Contains(s, "The real concept prose") {
+		t.Fatalf("prose lost after strip:\n%s", s)
+	}
+	// round-trip: the file must parse back as one fact
+	f, err := gm.parseFrontMatter(got)
+	if err != nil || f.ID != "ai_concept_function_calling" {
+		t.Fatalf("parse failed: %v %+v", err, f)
+	}
+}
+
+func TestStripLeadingFrontMatter(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"---\na: 1\n---\n\nprose", "prose"},
+		{"---\nid: x\n---", ""},
+		{"plain prose", "plain prose"},
+		{"---\nno closing delimiter", "---\nno closing delimiter"},
+	}
+	for _, c := range cases {
+		if got := stripLeadingFrontMatter(c.in); got != c.want {
+			t.Errorf("strip(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

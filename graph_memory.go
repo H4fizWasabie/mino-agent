@@ -541,6 +541,13 @@ func (gm *GraphMemory) RecordFact(fact Fact) error {
 	// Drop edges that reference non-existent facts
 	fact.Edges = gm.validEdges(fact.Edges)
 
+	// A caller (save_note) sometimes embeds the whole file — front-matter
+	// included — in the body, which would produce a double front-matter and
+	// break indexing (observed 2026-08-14 twice, both times self-healed by the
+	// model; the harness should never write the bug). A body that opens with a
+	// YAML front-matter block is never legitimate prose.
+	fact.Body = stripLeadingFrontMatter(fact.Body)
+
 	if err := gm.writeFile(fact); err != nil {
 		return err
 	}
@@ -1626,4 +1633,22 @@ func slugify(s string) string {
 		result = result[:60]
 	}
 	return result
+}
+
+// stripLeadingFrontMatter removes a YAML front-matter block that a caller
+// mistakenly embedded at the start of a fact body. The graph's own writer
+// emits the front-matter; a body that opens with "---\n" is a double-write
+// (observed 2026-08-14 via save_note content carrying the whole file).
+// Returns the body unchanged when no closing delimiter exists — a lone "---"
+// divider is left alone.
+func stripLeadingFrontMatter(body string) string {
+	s := strings.TrimSpace(body)
+	if !strings.HasPrefix(s, "---\n") {
+		return body
+	}
+	end := strings.Index(s, "\n---")
+	if end < 0 {
+		return body
+	}
+	return strings.TrimSpace(s[end+4:])
 }
