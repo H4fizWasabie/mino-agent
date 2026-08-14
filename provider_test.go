@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -131,5 +133,25 @@ func TestCodexModelsComeFromOAuthConfig(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"models"`) {
 		t.Fatal("oauth.d/codex.json must carry the model list (PRV-001)")
+	}
+}
+
+// Wedge guard (2026-08-14): provider requests must declare identity encoding —
+// the transport's gzip layer is what ate the body-close that should have
+// unblocked a stalled read (the h2+gzip deadlock that wedged a live session
+// until a service restart).
+func TestProviderRequestsIdentityEncoding(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			t.Fatalf("request accepts gzip: %q — the wedge guard is missing", r.Header.Get("Accept-Encoding"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer srv.Close()
+	client := NewClient("test-key", srv.URL)
+	resp, err := client.create(context.Background(), "test-model", "", []Message{{Role: "user", Content: "hi"}}, 100, "", nil, false, false, nil)
+	if err != nil || resp.FinalText != "ok" {
+		t.Fatalf("call failed: err=%v resp=%+v", err, resp)
 	}
 }

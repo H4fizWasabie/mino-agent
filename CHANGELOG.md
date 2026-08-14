@@ -1,3 +1,8 @@
+## [v2.10.1] — Session-wedge hotfix (2026-08-14)
+
+### Fixed
+- Session-wedge hotfix (2026-08-14, found live 30 minutes after v2.10.0 shipped): provider requests now declare `Accept-Encoding: identity` — the loop's buffered LLM reads no longer sit behind the transport's gzip decompressor. A gzip-stalled body could block `io.ReadAll` forever, immune to both ctx cancellation and the 120s client timeout (the h2+gzip close deadlock): during the DRF-002 live pass, a stall inside a daily-ai-concept run left the session mutex held for 19 minutes and required a service restart to recover (goroutine dump: `parseResponse → io.ReadAll → http2gzipReader → inflate`). With identity encoding the decompressor never enters the read path, so the existing cancel/timeout machinery works as designed and a stall becomes a normal provider error (retry/failover) instead of a wedged session. `TestProviderRequestsIdentityEncoding` locks the header. (Why: the wedge class is the worst failure mode for an agent — a session that silently stops responding; the h2+gzip deadlock defeated both cancellation mechanisms, so the fix removes the gzip layer rather than adding a third mechanism that the same deadlock could swallow.)
+
 ## [v2.10.0] — Staleness enforcement, harness hardening & live-verification fixes (2026-08-14)
 
 ### Fixed

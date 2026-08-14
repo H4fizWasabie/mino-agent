@@ -86,6 +86,13 @@ func (c *Client) Stream(model string, messages []Message, maxTokens int, system 
 	return c.create(context.Background(), model, "", messages, maxTokens, system, tools, true, false, onText)
 }
 
+// Wedge guard (2026-08-14): the loop's buffered LLM reads must not sit behind
+// the transport's gzip decompressor — a gzip-stalled body can block io.ReadAll
+// forever, immune to both ctx cancellation and the client timeout (the
+// h2+gzip close deadlock wedged a live session until restart). Requests
+// declare identity encoding so the decompressor never enters the read path
+// and the existing timeout/cancel mechanisms work as designed.
+
 func (c *Client) create(ctx context.Context, model, reasoning string, messages []Message, maxTokens int, system string, tools []ToolDef, stream, jsonOutput bool, onText func(string)) (*LLMResponse, error) {
 	return c.createWithRouting(ctx, model, reasoning, messages, maxTokens, system, tools, stream, jsonOutput, onText, c.providerRouting, "")
 }
@@ -161,6 +168,11 @@ func (c *Client) createWithRouting(ctx context.Context, model, reasoning string,
 		req, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		// Wedge guard (2026-08-14): identity encoding — never let the transport's
+		// gzip layer sit between the cancel/timeout machinery and the body read
+		// (the h2+gzip close deadlock). Responses are a few KB; bandwidth is
+		// irrelevant, a hang is not.
+		req.Header.Set("Accept-Encoding", "identity")
 
 		resp, err := c.client.Do(req)
 		if err != nil {
