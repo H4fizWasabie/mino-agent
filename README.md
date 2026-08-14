@@ -21,8 +21,8 @@ One binary. One SQLite file. Your own AI assistant.
 - **Guardrails** — prefers specialized tools over bash, workspace boundary enforcement
 - **MCP + Extensions** — plug in external tools via HTTP or stdio
 
-📋 **[DECISIONS.md](DECISIONS.md)** — architecture decisions, philosophy, and what NOT to build.
-📋 **[CONFIG.md](CONFIG.md)** — every config file, who writes/reads it, the provider↔files mapping.
+📋 **[docs/decisions.md](docs/decisions.md)** — architecture decisions, philosophy, and what NOT to build.
+📋 **[docs/config.md](docs/config.md)** — every config file, who writes/reads it, the provider↔files mapping.
 📋 **[CHANGELOG.md](CHANGELOG.md)** — release history.
 
 ## Quickstart
@@ -266,7 +266,7 @@ gets an isolated workspace with verified outputs: a stage only passes when its
 declared outputs were written by that stage's own tool calls. Read-only stages
 retry on failure; destructive stages fail loud and never double-execute.
 Playbooks are autonomous-only — if a task needs the owner mid-way, it is a
-conversation, not a playbook. See [PLAYBOOKS_DESIGN.md](PLAYBOOKS_DESIGN.md).
+conversation, not a playbook. See [docs/playbooks-design.md](docs/playbooks-design.md).
 
 ## Free AI stack
 

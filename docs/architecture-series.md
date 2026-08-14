@@ -2,7 +2,7 @@
 
 > Historical note: this series documents the pre-playbook Mino architecture.
 > The current `feat/playbooks` design is documented in
-> `PLAYBOOKS_DESIGN.md`; references below to completion protocols, tool
+> `playbooks-design.md`; references below to completion protocols, tool
 > filtering, checkpoints, and schedulers are retained as history.
 
 > Already posted: [#1 — The 95-line loop](#1-the-95-line-agent-loop) · [#2 — The completion protocol](#2-the-completion-protocol)

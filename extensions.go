@@ -1,6 +1,6 @@
 package main
 
-// Extension protocol per DECISIONS.md §8:
+// Extension protocol per docs/decisions.md §8:
 //   GET  /tools     → [{"name": "...", "schema": {...}}]
 //   POST /execute   → {"tool": "...", "args": {...}} → {"result": "..."}
 //   GET  /check     → {"alert": bool, "message": "..."}

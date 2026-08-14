@@ -4,7 +4,7 @@ Mino keeps it simple. Less code = less bugs.
 
 ## Process rules
 
-All process rules live in **[rules.md](rules.md)** — issue-first, release gating, version control, public-facing discipline, testing. Read it before opening a PR. Coding style lives in **[coding-conventions.md](coding-conventions.md)**.
+All process rules live in **[docs/rules.md](docs/rules.md)** — issue-first, release gating, version control, public-facing discipline, testing. Read it before opening a PR. Coding style lives in **[docs/coding-conventions.md](docs/coding-conventions.md)**.
 
 The short version:
 
@@ -17,7 +17,7 @@ The short version:
 
 ## Setup
 
-Read **[DECISIONS.md](DECISIONS.md)** before contributing. It explains the architecture, philosophy, and what NOT to build.
+Read **[docs/decisions.md](docs/decisions.md)** before contributing. It explains the architecture, philosophy, and what NOT to build.
 
 ```bash
 git clone https://github.com/H4fizWasabie/mino-agent

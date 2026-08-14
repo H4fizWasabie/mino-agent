@@ -1,3 +1,8 @@
+## [Unreleased]
+
+### Changed
+- Docs relocated into `docs/` (closes #192): the 12 root-level design/process files move to kebab-case names under `docs/` (DESIGN.md→docs/design.md, DECISIONS.md→docs/decisions.md, ROADMAP.md→docs/roadmap.md, DASHBOARD_DESIGN.md→docs/dashboard-design.md, PLAYBOOKS_DESIGN.md→docs/playbooks-design.md, CONFIG.md→docs/config.md, CONTEXT.md→docs/context.md, HANDOFF.md→docs/handoff.md, PRODUCT.md→docs/product.md, SOUL.md→docs/soul.md, rules.md→docs/rules.md, coding-conventions.md→docs/coding-conventions.md), keeping GitHub-convention files (README, LICENSE, CHANGELOG, AGENTS, CONTRIBUTING) at root. Every cross-reference updated — AGENTS.md index links (anchors preserved; `TestAgentsIndexLinksResolve` passes), README, CONTRIBUTING, internal doc cross-refs, wayfinder tickets, Go file comments — so `git mv` preserves history and nothing dangles. (Why: the root listing mixed docs with code; a single `docs/` home makes the repo navigable and the AGENTS.md index mechanical verification keeps the links honest.)
+
 ## [v2.10.2] — Observability heartbeat, boot reconciliation & universe density (2026-08-14)
 
 ### Fixed

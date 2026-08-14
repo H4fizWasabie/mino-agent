@@ -1,6 +1,6 @@
 package main
 
-// Adapters — DECISIONS.md §3-4: working memory and patterns.
+// Adapters — docs/decisions.md §3-4: working memory and patterns.
 // File-based adapters.
 
 import (

@@ -2,7 +2,7 @@
 
 > The current `feat/playbooks` branch supersedes the earlier scheduler,
 > checkpoint, completion-protocol, and tool-filter architecture with numbered
-> filesystem playbooks. See `PLAYBOOKS_DESIGN.md` for the current model.
+> filesystem playbooks. See `playbooks-design.md` for the current model.
 
 ## Current playbook runtime
 
@@ -21,10 +21,10 @@
 ## Historical Go-port record
 
 > The status and checklist below document the earlier Go port and are retained
-> as history. For current behavior, follow `PLAYBOOKS_DESIGN.md`,
-> `DECISIONS.md`, and the playbook files.
+> as history. For current behavior, follow `playbooks-design.md`,
+> `decisions.md`, and the playbook files.
 
-> Mino → Go port complete. Dashboard works. Memory works. Ready for DECISIONS.md iterations.
+> Mino → Go port complete. Dashboard works. Memory works. Ready for decisions.md iterations.
 
 ## What was built
 

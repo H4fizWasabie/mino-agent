@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Alert checker — DECISIONS.md §18.1: error rate and dead man's switch.
+// Alert checker — docs/decisions.md §18.1: error rate and dead man's switch.
 // Runs on the Scheduler goroutine, checks every 5 minutes.
 //
 // Two conditions:

@@ -21,7 +21,7 @@ Three distinct mechanisms, all in `playbook.go`:
 ## Context
 
 - AGENTS.md names "schedules dying" as the canonical urgent-bug class: *"🔴 Urgent — a bug actively breaking something (e.g. schedules dying) → release immediately."* The project already knows this failure mode hurts.
-- DECISIONS.md §11 documents Telegram message loss during downtime as a **deliberate** tradeoff. There is no equivalent section for schedule loss — this is **undecided, not chosen**.
+- docs/decisions.md §11 documents Telegram message loss during downtime as a **deliberate** tradeoff. There is no equivalent section for schedule loss — this is **undecided, not chosen**.
 - The visibility machinery already exists and works for fired-but-failed runs: `logTrace("schedule_fire_failed", ...)` + `core.auditLog` (playbook.go:1109-1113). Only the never-fired case is invisible.
 
 ## Confirmation (verified against playbook.go @ 2d5f7b5c)

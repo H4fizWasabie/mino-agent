@@ -49,7 +49,7 @@ and must remain useful on desktop and mobile.
 The product name is Mino. Existing logo assets under `static/assets/` remain
 authoritative. Voice is concise, calm, owner-oriented, and explicit about
 uncertainty, evidence, and recovery. The accepted dashboard direction is
-documented in `DASHBOARD_DESIGN.md` as Nowfield.
+documented in `dashboard-design.md` as Nowfield.
 
 ## Evidence on Hand
 

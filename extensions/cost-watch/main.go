@@ -1,7 +1,7 @@
 // mino cost-watch — the price guardian.
 //
 // Scrapes OpenRouter model pages for per-provider pricing, exposes the mino
-// extension protocol (DECISIONS.md §8), and runs an hourly autonomous check
+// extension protocol (docs/decisions.md §8), and runs an hourly autonomous check
 // that alerts on Telegram when a promotional price expires. Alert-only by
 // policy (REL-01, issue #128): it pages the owner — it never changes the
 // brain. Model changes are human decisions.

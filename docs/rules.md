@@ -82,7 +82,7 @@ Behavioral guidelines that bias toward caution over speed. For trivial tasks, us
 
 ## Scope discipline
 
-- **No feature creep.** Check DECISIONS.md §9 (What NOT to build) before proposing anything new.
+- **No feature creep.** Check decisions.md §9 (What NOT to build) before proposing anything new.
 - **Phase-gated.** We're building in 5 phases. Don't build Phase 4 features in Phase 2.
 - **One task per PR.** If it takes more than an afternoon, split it.
 

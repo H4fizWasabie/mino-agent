@@ -44,5 +44,5 @@ Classification is a pure function (`classifySchedule(s, now, allowLate)`) — oc
 ## Out of scope
 
 - Changing the 1-minute ticker cadence or timezone semantics
-- Webhook-mode Telegram (separate decision, DECISIONS §11)
+- Webhook-mode Telegram (separate decision, docs/decisions.md §11)
 - Missed-run alerting *policies* (always notify; per-schedule opt-out can come later)

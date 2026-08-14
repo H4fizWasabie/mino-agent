@@ -1,6 +1,6 @@
 package main
 
-// MCP bridge (Model Context Protocol, DECISIONS.md §8).
+// MCP bridge (Model Context Protocol, docs/decisions.md §8).
 // Pure Go — loads server configs from ~/.mino/mcp.d/, connects via stdio
 // or HTTP (SSE/StreamableHTTP), discovers tools, and registers them
 // prefixed as MCP_<server>_<tool>.
