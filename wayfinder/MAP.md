@@ -172,3 +172,19 @@ A provider or model swap is a config edit, not a code change: no `name ==` branc
 
 - Provider stack rewrite (routing/circuit-breaker behavior is settled, #159 stays)
 - Multi-owner anything
+
+# Mino Observability & Reliability — Wayfinder Map
+
+## Destination
+
+A stuck or failing Mino pages the owner within minutes, not hours; a crash leaves reconcilable state, not orphans; and every background path either completes, logs, or pages — diagnosis comes from the journal, never from accident.
+
+## Frontier (open tickets)
+
+- [OBS-001 — Observability & log coverage](tickets/obs-001-observability-and-log-coverage.md) (GitHub #191, open) — trace-freshness heartbeat (page on 15 min of trace silence; the 5-min edge-judgment ticker is the free signal — would have caught the 08-14 wedge in minutes), boot reconciliation of `running`-stuck runs, and a log-coverage inventory (every path completes/logs/pages). No new metrics infra — the trace journal is the log.
+
+## Out of scope
+
+- New observability sinks/dashboards
+- The 6h dead-man's switch semantics (slow backstop stays)
+- The DRF-001 judgment gap (verification ≠ visibility)
