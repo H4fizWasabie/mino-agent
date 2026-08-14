@@ -111,7 +111,7 @@ func TestCodexOAuthRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := &ProviderManager{authStore: store}
-	key, err := manager.resolveKey(ProviderConfig{Name: "codex"})
+	key, err := manager.resolveKey(ProviderConfig{Name: "codex", Transport: "codex"})
 	if err != nil || key != access {
 		t.Fatalf("refresh: key=%q err=%v", key, err)
 	}
@@ -150,6 +150,7 @@ func TestCodexResponsesTransport(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(token, server.URL+"/codex")
+	client.transport = "codex" // PRV-001: declared, not sniffed from the URL
 	var streamed strings.Builder
 	response, err := client.create(context.Background(), "gpt-5.6-sol", "high", []Message{{Role: "user", Content: "hello"}}, 100, "system", []ToolDef{{Name: "read_file"}}, true, false, func(delta string) { streamed.WriteString(delta) })
 	if err != nil {

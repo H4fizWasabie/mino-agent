@@ -165,7 +165,7 @@ A provider or model swap is a config edit, not a code change: no `name ==` branc
 
 ## Frontier (open tickets)
 
-- [PRV-001 — Provider/model coupling](tickets/prv-001-provider-coupling.md) (GitHub #190, open) — seam inventory: codex transport branch (provider.go:94), hardcoded `codexModels` + `normalizeProvider` name special-case, dashboard `"codex"` literals, codex OAuth refresh branch, residual reasoning-field parsing. Direction: transport-family adapter from config, model lists → policy file, per-transport response field map. Not a rewrite.
+- [PRV-001 — Provider/model coupling](tickets/prv-001-provider-coupling.md) (**resolved**, #190) — explicit `transport` field (openai/anthropic/codex) declared in providers.json; URL sniffing, hardcoded codex model lists, and dashboard name literals removed. Model-list change = oauth.d edit.
 
 ## Out of scope
 

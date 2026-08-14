@@ -13,7 +13,12 @@ import (
 	"time"
 )
 
-func TestLoadProvidersRestoresCodexChoices(t *testing.T) {
+// PRV-001: loadProviders is a pure config read — model lists are NOT injected
+// from Go constants anymore; the codex login flow (EnsureProvider) writes
+// models/transport into providers.json from oauth.d config. An explicit
+// config carries through untouched; an empty one stays empty (the UI refresh
+// fixes it on the next login).
+func TestLoadProvidersDoesNotInjectModels(t *testing.T) {
 	home := t.TempDir()
 	data, _ := json.Marshal(providerFile{Providers: []ProviderConfig{{
 		Name: "codex", BaseURL: "https://chatgpt.com/backend-api/codex", Model: "gpt-5.5",
@@ -25,11 +30,8 @@ func TestLoadProvidersRestoresCodexChoices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(providers) != 1 || len(providers[0].Models) != 4 {
-		t.Fatalf("models = %#v", providers[0].Models)
-	}
-	if len(providers[0].ReasoningLevels) != 5 || providers[0].ReasoningLevels[3] != "high" {
-		t.Fatalf("reasoning levels = %#v", providers[0].ReasoningLevels)
+	if len(providers) != 1 || len(providers[0].Models) != 0 {
+		t.Fatalf("models = %#v, want none injected (config is the truth, PRV-001)", providers[0].Models)
 	}
 }
 

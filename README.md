@@ -132,6 +132,10 @@ forces the same set. By default Mino never falls back outside that list
 (`allow_fallbacks: true` opts into arbitrary hosts — keep it off for
 privacy-safe routing).
 
+Optional `transport` field declares the wire family explicitly — `openai`
+(default), `anthropic`, or `codex` — it is never guessed from the URL. The
+Codex OAuth login writes it automatically.
+
 ```json
 {
   "providers": [

@@ -36,6 +36,7 @@ type ProviderConfig struct {
 	SmallReasoning  string   `json:"small_reasoning_effort,omitempty"`
 	ReasoningLevels []string `json:"reasoning_levels,omitempty"`
 	TextOnly        bool     `json:"text_only"`                        // provider rejects image input; skipped for vision turns
+	Transport       string   `json:"transport,omitempty"`              // wire family: "openai" (default) | "anthropic" | "codex" — declared, never sniffed (PRV-001)
 	ProviderRouting []string `json:"provider_routing,omitempty"`       // openrouter: force specific providers
 	SmallRouting    []string `json:"small_provider_routing,omitempty"` // openrouter route for background calls
 	AllowFallbacks  bool     `json:"allow_fallbacks,omitempty"`       // openrouter: may fall back OUTSIDE the routing list (default false = privacy-safe: only the listed hosts)
@@ -43,24 +44,6 @@ type ProviderConfig struct {
 
 type providerFile struct {
 	Providers []ProviderConfig `json:"providers"`
-}
-
-var codexModels = []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5", "gpt-5.6-luna"}
-var codexReasoningLevels = []string{"default", "low", "medium", "high", "xhigh"}
-
-// Keep an existing VPS configuration compatible with the current Codex UI.
-// This avoids requiring a fresh OAuth login just to refresh model metadata.
-func normalizeProvider(p ProviderConfig) ProviderConfig {
-	if p.Name != "codex" {
-		return p
-	}
-	if len(p.Models) == 0 {
-		p.Models = append([]string(nil), codexModels...)
-	}
-	if len(p.ReasoningLevels) == 0 {
-		p.ReasoningLevels = append([]string(nil), codexReasoningLevels...)
-	}
-	return p
 }
 
 type providerState struct {
@@ -115,6 +98,7 @@ func NewProviderManager(home string, legacy *Settings, authStore *AuthStore) (*P
 		}
 		c := NewClient(key, p.BaseURL)
 		c.usageLogPath = filepath.Join(home, "usage.jsonl")
+		c.transport = p.Transport
 		c.providerRouting = p.ProviderRouting
 		c.allowFallbacks = p.AllowFallbacks
 		m.providers = append(m.providers, p)
@@ -139,9 +123,6 @@ func loadProviders(home string, legacy *Settings) ([]ProviderConfig, error) {
 	var file providerFile
 	if err := json.Unmarshal(data, &file); err != nil || len(file.Providers) == 0 {
 		return nil, fmt.Errorf("invalid providers.json")
-	}
-	for i := range file.Providers {
-		file.Providers[i] = normalizeProvider(file.Providers[i])
 	}
 	return file.Providers, nil
 }
@@ -198,7 +179,7 @@ func (m *ProviderManager) resolveKey(p ProviderConfig) (string, error) {
 		if !ok {
 			return "", nil
 		}
-		if p.Name == "codex" && entry.Type == "oauth" && entry.Refresh != "" && entry.ExpiresAt <= time.Now().Add(time.Minute).Unix() {
+		if p.Transport == "codex" && entry.Type == "oauth" && entry.Refresh != "" && entry.ExpiresAt <= time.Now().Add(time.Minute).Unix() {
 			m.authMu.Lock()
 			defer m.authMu.Unlock()
 			entry, _ = m.authStore.GetEntry(p.Name)
@@ -517,6 +498,7 @@ func (m *ProviderManager) ReloadProviders(home string) error {
 		key, _ := m.resolveKey(p)
 		c := NewClient(key, p.BaseURL)
 		c.usageLogPath = filepath.Join(home, "usage.jsonl")
+		c.transport = p.Transport
 		c.providerRouting = p.ProviderRouting
 		c.allowFallbacks = p.AllowFallbacks
 		m.clients[p.Name] = c

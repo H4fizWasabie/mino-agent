@@ -59,6 +59,7 @@ type Message struct {
 type Client struct {
 	apiKey          string
 	baseURL         string
+	transport       string // wire family: "" / "openai" | "anthropic" | "codex" (declared in providers.json, PRV-001)
 	client          *http.Client
 	usageLogPath    string
 	providerRouting []string // openrouter provider routing, e.g. ["DigitalOcean"]
@@ -443,7 +444,7 @@ type ToolDef struct {
 // --- Anthropic Messages API adapter ---
 
 func (c *Client) isAnthropic() bool {
-	return strings.Contains(c.baseURL, "anthropic.com")
+	return c.transport == "anthropic"
 }
 
 func (c *Client) createAnthropic(ctx context.Context, model string, messages []Message, maxTokens int, system string, tools []ToolDef, stream bool, onText func(string)) (*LLMResponse, error) {

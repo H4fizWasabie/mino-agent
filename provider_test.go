@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -91,5 +92,44 @@ func TestParseResponseReadsReasoningAltField(t *testing.T) {
 	}
 	if resp.FinalText != "the answer in thought" {
 		t.Fatalf("FinalText = %q, want reasoning-alt fallback", resp.FinalText)
+	}
+}
+
+// PRV-001: the wire family is declared in config, never sniffed from the URL.
+// Default transport is OpenAI-compatible; "codex"/"anthropic" opt in explicitly.
+func TestClientTransportIsDeclaredNotSniffed(t *testing.T) {
+	// Default: OpenAI-compatible even for URLs that used to auto-detect.
+	c := NewClient("k", "https://chatgpt.com/backend-api/codex")
+	if c.isCodex() || c.isAnthropic() {
+		t.Fatal("transport must default to openai — URL sniffing is gone (PRV-001)")
+	}
+	// Declared codex transport wins regardless of URL.
+	c.transport = "codex"
+	if !c.isCodex() {
+		t.Fatal("declared codex transport not honored")
+	}
+	if c.isAnthropic() {
+		t.Fatal("codex transport misdetected as anthropic")
+	}
+	// Declared anthropic transport.
+	c2 := NewClient("k", "https://api.example.com")
+	c2.transport = "anthropic"
+	if !c2.isAnthropic() || c2.isCodex() {
+		t.Fatal("declared anthropic transport not honored")
+	}
+}
+
+// PRV-001: the codex model list lives in oauth.d config (written into
+// providers.json on login) — nothing hardcoded in Go survives.
+func TestCodexModelsComeFromOAuthConfig(t *testing.T) {
+	data, err := os.ReadFile("oauth.d/codex.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"transport": "codex"`) {
+		t.Fatal("oauth.d/codex.json must declare transport: codex (PRV-001)")
+	}
+	if !strings.Contains(string(data), `"models"`) {
+		t.Fatal("oauth.d/codex.json must carry the model list (PRV-001)")
 	}
 }

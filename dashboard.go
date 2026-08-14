@@ -1476,7 +1476,7 @@ func handleOAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if provider == "codex" {
+	if p := dashCore.OAuth.providerMap[provider]; p != nil && p.AuthType == "codex_device" {
 		verificationURL, userCode, deviceCode, interval, err := dashCore.OAuth.BeginCodexDeviceLogin()
 		if err != nil {
 			json.NewEncoder(w).Encode(map[string]any{"ok": false, "message": err.Error()})
@@ -1528,14 +1528,14 @@ func handleOAuthDevice(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "?device_code= required", 400)
 			return
 		}
-		if provider == "codex" {
+		if p := dashCore.OAuth.providerMap[provider]; p != nil && p.AuthType == "codex_device" {
 			done, err := dashCore.OAuth.PollCodexDeviceLogin(deviceCode)
 			if err != nil {
 				json.NewEncoder(w).Encode(map[string]any{"ok": false, "pending": true, "error": err.Error()})
 				return
 			}
 			if done {
-				dashCore.OAuth.EnsureProvider(dashCore.OAuth.providerMap["codex"])
+				dashCore.OAuth.EnsureProvider(p)
 				dashCore.Client.ReloadProviders(dashCore.Settings.Home)
 			}
 			json.NewEncoder(w).Encode(map[string]any{"ok": done, "pending": !done})

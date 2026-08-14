@@ -16,7 +16,7 @@ import (
 )
 
 func (c *Client) isCodex() bool {
-	return strings.Contains(c.baseURL, "chatgpt.com/backend-api") || strings.HasSuffix(strings.TrimRight(c.baseURL, "/"), "/codex")
+	return c.transport == "codex"
 }
 
 func codexAccountID(token string) (string, error) {

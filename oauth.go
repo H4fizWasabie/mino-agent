@@ -35,6 +35,7 @@ type OAuthProvider struct {
 	Scopes        []string       `json:"scopes"`
 	APIBaseURL    string         `json:"api_base_url"`          // where to send LLM requests
 	APIKeyURL     string         `json:"api_key_url,omitempty"` // exchange oauth token for api key (Codex)
+	Transport     string         `json:"transport,omitempty"`    // wire family written into providers.json (PRV-001)
 	Models        []string       `json:"models"`                // available models
 	Reasoning     []string       `json:"reasoning_levels,omitempty"`
 	Extra         map[string]any `json:"extra,omitempty"`
@@ -450,6 +451,9 @@ func (e *OAuthEngine) EnsureProvider(p *OAuthProvider) {
 			if len(p.Reasoning) > 0 {
 				m["reasoning_levels"] = p.Reasoning
 			}
+			if p.Transport != "" {
+				m["transport"] = p.Transport
+			}
 			if data, err := json.MarshalIndent(existing, "", "  "); err == nil {
 				os.WriteFile(providersPath, data, 0644)
 			}
@@ -464,6 +468,9 @@ func (e *OAuthEngine) EnsureProvider(p *OAuthProvider) {
 		"api_key_env": "",
 		"model":       p.Models[0],
 		"models":      p.Models,
+	}
+	if p.Transport != "" {
+		newProvider["transport"] = p.Transport
 	}
 	if len(p.Reasoning) > 0 {
 		newProvider["reasoning_levels"] = p.Reasoning

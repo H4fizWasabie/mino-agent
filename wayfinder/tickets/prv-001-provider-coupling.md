@@ -1,6 +1,6 @@
 # Provider/model coupling — transport branches, reasoning extraction, policy churn
 
-Status: **OPEN** (wayfinder ticket, PRV-001 — GitHub issue #190)
+Status: **CLOSED** (GitHub issue #190) — implemented 2026-08-14: explicit `transport` field, sniffing removed, model list config-owned. Acceptance criteria met: zero `name ==` branches in provider_manager/dashboard; a codex model-list change is an oauth.d edit; suite green (551).
 
 ## Question
 
