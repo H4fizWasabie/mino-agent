@@ -193,3 +193,24 @@ func TestSaveCatalogueRoundTrip(t *testing.T) {
 		t.Fatalf("catalogue file wrong: %s", s)
 	}
 }
+
+// Every tool executeTool can dispatch must be advertised in the extension's
+// /tools schema — a tool that exists but is not advertised is unreachable by
+// Mino (the cost_watch_refresh gap found live on the VPS, 2026-08-14).
+func TestToolSchemasAdvertiseAllDispatchableTools(t *testing.T) {
+	dispatchable := map[string]bool{
+		"cost_watch_status":  false,
+		"cost_watch_check":   false,
+		"cost_watch_refresh": false,
+	}
+	for _, s := range toolSchemas() {
+		if _, ok := dispatchable[s["name"].(string)]; ok {
+			dispatchable[s["name"].(string)] = true
+		}
+	}
+	for name, advertised := range dispatchable {
+		if !advertised {
+			t.Errorf("tool %q is dispatchable via executeTool but missing from /tools schema", name)
+		}
+	}
+}

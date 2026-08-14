@@ -1,0 +1,9 @@
+[Unit]
+Description=Mino cost-watch hourly promo check (scrape + alert)
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target

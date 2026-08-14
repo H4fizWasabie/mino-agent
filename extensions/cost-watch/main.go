@@ -293,6 +293,9 @@ func toolSchemas() []map[string]any {
 		{"name": "cost_watch_check",
 			"description": "Scrape the OpenRouter model pages NOW, refresh prices, and return them with any flags.",
 			"schema":      map[string]any{"type": "object", "properties": map[string]any{}}},
+		{"name": "cost_watch_refresh",
+			"description": "Fetch the OpenRouter endpoints price catalogue NOW and persist it (also runs hourly); returns the entry count and scrape time.",
+			"schema":      map[string]any{"type": "object", "properties": map[string]any{}}},
 	}
 }
 

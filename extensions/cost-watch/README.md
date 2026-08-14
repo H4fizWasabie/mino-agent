@@ -27,9 +27,9 @@ binary — no python, no runtime dependencies.
 go build -o cost-watch .   # static binary, no dependencies
 sudo mkdir -p /opt/mino-cost-watch
 sudo cp cost-watch /opt/mino-cost-watch/
-sudo cp cost-watch.service cost-watch-check.service cost-watch.timer /etc/systemd/system/
+sudo cp cost-watch.service cost-watch-check.service cost-watch.timer cost-watch-check.timer /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now cost-watch.service cost-watch.timer
+sudo systemctl enable --now cost-watch.service cost-watch.timer cost-watch-check.timer
 ```
 
 Then register it in `~/.mino/extensions.json`:
