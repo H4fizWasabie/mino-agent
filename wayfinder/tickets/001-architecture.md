@@ -1,5 +1,7 @@
 # Nervous System Architecture
 
+Status: **RESOLVED** (historic — decided/shipped; predates the Status-line format)
+
 ## Question
 
 How does the nervous system fit into Mino's existing Go architecture?

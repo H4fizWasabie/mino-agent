@@ -1,5 +1,7 @@
 # Telegram Async Layer
 
+Status: **RESOLVED** (historic — decided/shipped; predates the Status-line format)
+
 ## Question
 
 Wire up interrupt/async messaging to Telegram. Mino's Telegram gateway must support:

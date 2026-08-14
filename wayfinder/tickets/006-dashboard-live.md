@@ -1,5 +1,7 @@
 # Dashboard Live State
 
+Status: **RESOLVED** (historic — decided/shipped; predates the Status-line format)
+
 ## Question
 
 Wire up dashboard (web UI + SSE) to show Mino's live nervous system state:

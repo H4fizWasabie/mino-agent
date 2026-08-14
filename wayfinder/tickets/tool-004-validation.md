@@ -1,5 +1,7 @@
 ## Resolution
 
+Status: **RESOLVED** (historic — decided/shipped; predates the Status-line format)
+
 **Live VPS test.** Implementation → deploy → one test session via dashboard API → observe traces → clean up → report.
 
 **Test constraints:** single session, no guidance, no spam. Let Mino behave naturally.

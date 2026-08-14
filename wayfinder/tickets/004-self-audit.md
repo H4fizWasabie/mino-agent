@@ -1,5 +1,7 @@
 # Self-Audit System
 
+Status: **RESOLVED** (historic — decided/shipped; predates the Status-line format)
+
 ## Question
 
 Build persistent, queryable audit trail of Mino's own behavior. the owner can ask "what happened?" and Mino can explain.

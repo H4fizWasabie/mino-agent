@@ -1,5 +1,7 @@
 ## Resolution
 
+Status: **RESOLVED** (historic — decided/shipped; predates the Status-line format)
+
 **Keyword-gate:** MCP/extension tools excluded from semantic matching entirely. They only enter via keyword FTS5 search against the one-turn window (last user message + last assistant reply).
 
 **Cap:** max 3 MCP tools per request as safety net.

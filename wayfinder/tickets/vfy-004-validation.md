@@ -1,5 +1,7 @@
 ## Resolution
 
+Status: **RESOLVED** (historic — decided/shipped; predates the Status-line format)
+
 **Regression test + trace observation.** Create a test playbook, ask Mino to remove it, verify traces show:
 1. Delete + schedule cancel + crontab check (if applicable)
 2. Before final reply: read-back or system_check call

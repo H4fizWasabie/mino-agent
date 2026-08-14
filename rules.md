@@ -65,6 +65,12 @@ Behavioral guidelines that bias toward caution over speed. For trivial tasks, us
   - 🟢 **Trivial** — docs, comments, typos → commit only; they ride along with the next batch.
 - Versioning: patch `v2.3.x` = bug fixes; minor `v2.4.x` = features; major `v3.0.0` = breaking.
 - Do not propose a release for a single trivial fix; accumulate instead.
+- **Ponytail audit before each release:** dead-code/clutter sweep (deadcode, repo clutter, stale tickets). The 2026-08-14 sweep found ~1.4k lines of dead code and 14 stale tickets in one pass — pruning is a release-cycle step, not a when-you-feel-like-it one.
+
+## Documentation hygiene
+
+- **Tickets close when the work ships.** `TestWayfinderTicketsCloseOnShip` fails the suite if an OPEN wayfinder ticket references an issue the CHANGELOG records as shipped — the changelog is the shipped-work source of truth. New tickets need a Status line (`OPEN` / `CONFIRMED` / `RESOLVED` / `CLOSED` / `IMPLEMENTED`) from birth.
+- **Old changelog eras are one-line index entries.** `TestChangelogOldEraSectionsAreOneLiners` fails the suite if any pre-v2.8.0 section carries prose — full text lives in git history. When the current era gets unwieldy, move the boundary (edit the test constant) and compress.
 
 ## Testing
 

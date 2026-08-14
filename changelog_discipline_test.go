@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -108,4 +110,102 @@ var bannedPatterns = []struct {
 	{"personal data paths", regexp.MustCompile(`(?i)(/home/procura|/home/hafiz|pos_server_test)`)},
 	{"telegram session ids", regexp.MustCompile(`tg:[0-9]+`)},
 	{"currency amounts", regexp.MustCompile(`\bRM\s?[0-9]`)},
+}
+
+// Doc-hygiene (2026-08-14): a wayfinder ticket must close when its work ships.
+// Every ticket needs a Status line with a known value, and an OPEN ticket may
+// not reference a GitHub issue the CHANGELOG records as closed — the changelog
+// is the shipped-work source of truth (no network in CI). This is the
+// lifecycle half of the pruning discipline: tickets rot OPEN (found: CTX-021,
+// TGM-001, CTX-009) unless the suite fails on the drift.
+func TestWayfinderTicketsCloseOnShip(t *testing.T) {
+	changelog, err := os.ReadFile("CHANGELOG.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := filepath.Glob("wayfinder/tickets/*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no wayfinder tickets found")
+	}
+	known := map[string]bool{"OPEN": true, "CONFIRMED": true, "RESOLVED": true, "CLOSED": true, "IMPLEMENTED": true}
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := string(data)
+		status := ""
+		for _, line := range strings.Split(body, "\n") {
+			if strings.HasPrefix(line, "Status:") {
+				status = line
+				break
+			}
+		}
+		if status == "" {
+			t.Errorf("%s: missing Status line (add one: OPEN / CONFIRMED / RESOLVED / CLOSED / IMPLEMENTED)", f)
+			continue
+		}
+		val := strings.TrimSpace(strings.TrimPrefix(status, "Status:"))
+		val = strings.Trim(val, "* ")
+		word := strings.Trim(strings.Fields(val)[0], "*")
+		
+		if !known[word] {
+			t.Errorf("%s: unknown Status %q (known: OPEN/CONFIRMED/RESOLVED/CLOSED/IMPLEMENTED)", f, word)
+			continue
+		}
+		if word != "OPEN" {
+			continue
+		}
+		// OPEN tickets may not reference a shipped issue.
+		for _, iss := range regexp.MustCompile(`#(\d+)`).FindAllStringSubmatch(status, -1) {
+			if regexp.MustCompile(`closes #` + iss[1] + `\b`).Match(changelog) {
+				t.Errorf("%s: Status OPEN but issue #%s ships in CHANGELOG — close the ticket", f, iss[1])
+			}
+		}
+	}
+}
+
+// Changelog hygiene (2026-08-14): release sections from before the current
+// architecture era are one-line index entries — full prose lives in git
+// history. This keeps the file a live queue + recent-context surface instead
+// of an ever-growing archive (was 117KB, compressed 2026-08-14; the
+// discipline test scans every section either way).
+func TestChangelogOldEraSectionsAreOneLiners(t *testing.T) {
+	data, err := os.ReadFile("CHANGELOG.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var curName string
+	curLines := 0
+	finalize := func() {
+		if curName != "" && isOldEra(curName) && curLines > 2 {
+			t.Errorf("%s: pre-v2.8.0 section must be a one-line index entry (prose lives in git history)", curName)
+		}
+	}
+	headerRe := regexp.MustCompile(`^## \[(v[^\]]+)\]`)
+	for _, line := range strings.Split(string(data), "\n") {
+		if m := headerRe.FindStringSubmatch(line); m != nil {
+			finalize()
+			curName = m[1]
+			curLines = 1
+			continue
+		}
+		if curName != "" && strings.TrimSpace(line) != "" {
+			curLines++
+		}
+	}
+	finalize()
+}
+
+func isOldEra(version string) bool {
+	m := regexp.MustCompile(`^v(\d+)\.(\d+)`).FindStringSubmatch(version)
+	if m == nil {
+		return false
+	}
+	major, _ := strconv.Atoi(m[1])
+	minor, _ := strconv.Atoi(m[2])
+	return major < 2 || (major == 2 && minor < 8)
 }

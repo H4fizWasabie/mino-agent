@@ -1,5 +1,7 @@
 ## Resolution
 
+Status: **RESOLVED** (historic — decided/shipped; predates the Status-line format)
+
 **Both. SOUL.md's rule is counterproductive.**
 
 ```

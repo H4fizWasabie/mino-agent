@@ -1,5 +1,7 @@
 ## Question
 
+Status: **RESOLVED** (historic — decided/shipped; predates the Status-line format)
+
 Which tools belong in the essential set — always included for every turn? Current essentials: 15 tools. Many are never or rarely used. What should the new set be, and what's the evidence for each?
 
 ## Resolution

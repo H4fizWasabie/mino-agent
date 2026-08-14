@@ -1,5 +1,7 @@
 ## Resolution
 
+Status: **RESOLVED** (historic — decided/shipped; predates the Status-line format)
+
 **Enrich tool responses with what actually changed.** Three targets:
 
 1. **`cancel_schedule`** — return `"removed 'X' from schedules.json. N schedules remaining."` instead of generic success.

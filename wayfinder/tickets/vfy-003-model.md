@@ -1,5 +1,7 @@
 ## Resolution
 
+Status: **RESOLVED** (historic — decided/shipped; predates the Status-line format)
+
 **Not the primary fix.** Harness-level enrichment (VFY-002) is more reliable. One companion change: fix SOUL.md's counterproductive rule — `"silently verify"` → `"verify with tools before replying"`. That's it. No skill, no examples, no token bloat.
 
 ## Context

@@ -1,5 +1,7 @@
 # Loop Detection
 
+Status: **RESOLVED** (historic — decided/shipped; predates the Status-line format)
+
 ## Question
 
 Build self-awareness of cognitive loops. Mino detects when it's repeating the same pattern and self-corrects.

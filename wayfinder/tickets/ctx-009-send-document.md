@@ -1,6 +1,6 @@
 # Context Truth — Native send_document tool for Telegram file delivery
 
-Status: **OPEN** (GitHub issue #153)
+Status: **CLOSED** (GitHub issue #153) — shipped v2.8.4: native send_document tool via the outbox; token never in args.
 
 ## Question
 
