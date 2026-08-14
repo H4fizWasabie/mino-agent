@@ -171,6 +171,13 @@ function universeLayout(nodes,edges=[]){
   layoutIdentityBranch(nodes,adjacency,"system",anchors.system,-.35,.8,0);
   layoutIdentityBranch(nodes,adjacency,"routines",anchors.routines,.35,.9,0);
   layoutWorkBranch(nodes,adjacency,anchors.work);
+  // Mark nodes for overview visibility: hubs + top N% by degree
+  const totalNodes=nodes.length;
+  const overviewThreshold=Math.max(0.15, Math.min(0.25, 150/totalNodes)); // Show ~15-25% of nodes
+  nodes.forEach(node=>{
+    if(node._layoutAnchor) node._overviewVisible=true;
+    else if(node._degree >= totalNodes * overviewThreshold) node._overviewVisible=true;
+  });
 }
 
 // Memory branch: communities are the sub-branches. Reuses the existing
@@ -433,7 +440,7 @@ function initUniverse(snapshot,lens="universe"){
   // full graph in state, search, the inspector, and the accessible index, but
   // reserve overview pixels for branch hubs and owner-attention nodes. Zoom,
   // lenses, search, and selection progressively disclose the local graph.
-  const overviewMode=()=>state.lens==="universe"&&!state.query&&state.zoom<1.2;
+  const overviewMode=()=>state.lens==="universe"&&!state.query&&state.zoom<1.5;
   const renderable=node=>visible(node)&&(!overviewMode()||node._overviewVisible||overviewAttention.has(node.id)||node===state.hovered||node===state.selected);
   const draw=now=>{
     if(!canvas.isConnected||universeState!==state) return;
