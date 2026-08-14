@@ -1,4 +1,4 @@
-## [Unreleased]
+## [v2.9.1] — Silent failures, cost-watch fix, audit sweep & provider seams (2026-08-14)
 
 ### Added
 - `scripts/stage-smoke.sh` — the pre-release rehearsal (2026-08-14): boots a candidate binary against a copy of the live VPS state on a spare port, healthchecks boot/schema/universe/one scoped chat turn, then asserts the #188 bind-conflict failure is loud (exit non-zero + bind error). Side-effect-safe by construction: the staged copy drops `schedules.json` (no playbook firing) and the Telegram token (no bot polling, so it can never steal the live agent's updates or reply from a rehearsal copy); traces/audit/outbox excluded. First run against the v2.9.1 candidate: PASS on all four checks. (Why: the VPS is both stage and production — this is the rehearsal before the real performance; it doubled as the live verification of PRV-001's transport default and #188's loud bind failure before the release was cut.)
