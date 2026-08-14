@@ -1,6 +1,6 @@
 # Quality Frontier — Enrich Telegram delivery with crow-agent borrowings (not a port)
 
-Status: **OPEN** (GitHub issue #181) — scope decided in the 2026-08-13 session; ready to implement.
+Status: **CLOSED** (GitHub issue #181) — shipped in v2.9.0 (commit 4bd8774): `---` section split with reply threading, italic/underline/spoiler/blockquote in `formatTelegramHTML`, 4s typing keepalive. Live-verified 2026-08-14 on the VPS: a 5-section reply delivered as a threaded chain with zero send errors.
 
 ## Question
 

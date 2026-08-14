@@ -1,6 +1,6 @@
 # Harness — Updater: 30s client timeout too tight for the 22MB binary download
 
-Status: **OPEN** (wayfinder ticket, CTX-021 — GitHub issue #177)
+Status: **CLOSED** (GitHub issue #177) — fixed in v2.9.0 (commit e30c392): the download gets its own 5-minute client, the releases-API checks keep the 30s client. Locked by `TestDownloadTimeoutExceedsCheckTimeout`. Live-verified 2026-08-14: `mino update` on the VPS reports up to date via the 30s check path.
 
 ## Symptom
 
