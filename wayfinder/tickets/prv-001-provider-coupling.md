@@ -20,6 +20,7 @@ Every provider or model change costs changelog entries + regression tests becaus
 ## Direction (not a rewrite — a seam inventory)
 
 1. **Transport family adapter**: one internal seam for "OpenAI-compatible" vs "Codex" (client creation + response shape), selected from config (`transport:` field on ProviderConfig), not from a `name ==` string check.
+   **Decision (2026-08-14): explicit config field, not auto-detection.** `transport: "openai"` (default) or `transport: "codex"` declared in providers.json. `isCodex()` URL sniffing goes away — auto-detection is the drift source (it was the 2026-08-14 session's open decision point; explicit wins on honesty and testability: the provider file says what it is, the code never guesses).
 2. **Model lists to config**: `codexModels`/`reasoningLevels` move to the policy file (or derive from the provider's own metadata like cost-watch already does for prices).
 3. **Reasoning extraction**: keep the fallback-whichever-present parser (#163); the response parser should carry a per-transport field map, not if/else on model names.
 4. **Dashboard**: provider rendering reads config (`provider_routing`-style), not `"codex"` literals.
