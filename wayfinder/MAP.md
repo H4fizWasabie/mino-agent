@@ -181,6 +181,7 @@ A stuck or failing Mino pages the owner within minutes, not hours; a crash leave
 
 ## Frontier (open tickets)
 
+- [OBS-003 — Universe overview node density](tickets/obs-003-universe-overview-density.md) (**resolved** 2026-08-14) — overview shows the top 15-25% of nodes by degree at zoom < 1.5 instead of a ~30-node hub skeleton.
 - [OBS-001 — Observability & log coverage](tickets/obs-001-observability-and-log-coverage.md) (GitHub #191, open) — trace-freshness heartbeat (page on 15 min of trace silence; the 5-min edge-judgment ticker is the free signal — would have caught the 08-14 wedge in minutes), boot reconciliation of `running`-stuck runs, and a log-coverage inventory (every path completes/logs/pages). No new metrics infra — the trace journal is the log.
 
 ## Out of scope

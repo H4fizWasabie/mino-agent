@@ -1,5 +1,7 @@
 # OBS-003 — Universe Overview Node Density
 
+Status: **CLOSED** (shipped commit 71a9254, 2026-08-14) — overview now marks top 15-25% of nodes by degree at zoom < 1.5; the visual acceptance criteria are confirmed on the deployed dashboard.
+
 ## Problem
 
 When zoomed out on the Living Field graph (`#universe`), only ~30-40 nodes are visible out of 1,128 total. The graph looks sparse and disconnected, failing to convey the rich topology that exists.

@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Fixed
+- Universe overview node density (shipped 71a9254, OBS-003): overview now marks the top 15-25% of nodes by degree as visible and activates at zoom < 1.5 (was 1.2) — the zoomed-out Living Field shows ~200-300 nodes instead of 30-40, preserving the dense organic topology instead of a sparse hub skeleton. (Why: the overview hid >95% of the 1,128-node graph, failing to convey the network that actually exists.)
+
 ### Added
 - Observability: loop-stall heartbeat (OBS-001, first half) — the alert checker now pages when an in-flight turn produces no loop activity for `MINO_ALERT_STALL_MINUTES` (default 10): `logTrace` feeds an in-memory watcher (loop events refresh the clock, turn_start/turn_end move the in-flight counter), and background tickers (edge judgment) deliberately do NOT count — the 2026-08-14 wedge froze the loop while background traces kept flowing, so per-active-turn staleness is the signal, not global trace freshness. One page per stall episode. `TestLoopStallHeartbeat` + `TestLogTraceFeedsLoopWatch` lock it. (Why: the wedge was found by testing, not monitoring — this would have paged within 10 minutes instead of 19 silent ones.)
 - Boot reconciliation (OBS-001, second half): runs stuck in `state.json: running` across a crash are marked `interrupted` at startup (`ReconcileInterruptedRuns`, wired into Core startup) — the 2026-08-14 orphan that needed a manual `-wedge-orphan` quarantine now self-heals. `TestReconcileInterruptedRuns` locks it. (Why: crash state should reconcile, not linger in limbo.)
