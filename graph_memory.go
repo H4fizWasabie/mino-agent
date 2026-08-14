@@ -5,6 +5,7 @@ package main
 // remember() traverses the graph; FTS5 provides the entry point.
 
 import (
+	"sync/atomic"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -23,16 +24,17 @@ import (
 // --- Fact ---
 
 type Fact struct {
-	ID       string    `yaml:"id"`
-	Type     string    `yaml:"type"` // "semantic" or "episodic"
-	Subject  string    `yaml:"subject"`
-	At       time.Time `yaml:"at"`
-	Why      string    `yaml:"why,omitempty"`
-	UseWhen  []string  `yaml:"use_when,omitempty"` // GLM-written trigger phrases (MEM-02)
-	Source   string    `yaml:"source,omitempty"`
-	Feedback int       `yaml:"feedback,omitempty"`
-	Edges    []Edge    `yaml:"edge"`
-	Body     string    `yaml:"-"` // everything after front matter
+	ID         string    `yaml:"id"`
+	Type       string    `yaml:"type"` // "semantic" or "episodic"
+	Subject    string    `yaml:"subject"`
+	At         time.Time `yaml:"at"`
+	StaleAfter time.Time `yaml:"stale_after,omitempty"` // DRF-002: volatile facts declare their own expiry ("current X" facts)
+	Why        string    `yaml:"why,omitempty"`
+	UseWhen    []string  `yaml:"use_when,omitempty"` // GLM-written trigger phrases (MEM-02)
+	Source     string    `yaml:"source,omitempty"`
+	Feedback   int       `yaml:"feedback,omitempty"`
+	Edges      []Edge    `yaml:"edge"`
+	Body       string    `yaml:"-"` // everything after front matter
 }
 
 // userProvenancedSource reports whether a Source value marks user authorship:
@@ -40,6 +42,26 @@ type Fact struct {
 // with an optional date suffix (e.g. "user-correction-20260812").
 func userProvenancedSource(s string) bool {
 	return s == "user" || strings.HasPrefix(s, "user-correction")
+}
+
+// playbookDepth counts nested playbook stage runs; save_note consults it to
+// stamp model-distill facts instead of user (DRF-002).
+var playbookDepth atomic.Int32
+
+// authoritativeSource reports whether a Source value marks human or agent
+// authorship — the class that is never auto-staled (DRF-002). Agent
+// corrections are stamped "agent-correction-YYYYMMDD" (formalized 2026-08-14
+// after an agent-authored correction was witnessed live).
+func authoritativeSource(s string) bool {
+	return userProvenancedSource(s) || strings.HasPrefix(s, "agent-correction")
+}
+
+// correctionSource reports whether a Source marks an explicit correction
+// (user-correction-* or agent-correction-*). Only corrections demote
+// conflicting model facts — a plain user save states new knowledge, it does
+// not claim the old one is wrong (DRF-002).
+func correctionSource(s string) bool {
+	return strings.HasPrefix(s, "user-correction") || strings.HasPrefix(s, "agent-correction")
 }
 
 type Edge struct {
@@ -548,6 +570,28 @@ func (gm *GraphMemory) RecordFact(fact Fact) error {
 	// YAML front-matter block is never legitimate prose.
 	fact.Body = stripLeadingFrontMatter(fact.Body)
 
+	// DRF-002: an explicit correction (user-correction / agent-correction)
+	// demotes conflicting model-authored facts on the same subject — the
+	// asymmetry stays: a model re-entry never touches other facts, and a plain
+	// user save states new knowledge without claiming the old is wrong. The
+	// correction's own write happens below (it is not in gm.facts yet), so the
+	// scan only sees pre-existing facts.
+	if correctionSource(fact.Source) && fact.Subject != "" {
+		subjectWords := memoryTokenize(fact.Subject)
+		var victims []*Fact
+		for _, other := range gm.facts {
+			if authoritativeSource(other.Source) {
+				continue
+			}
+			if subjectOverlap(subjectWords, memoryTokenize(other.Subject)) >= 2 {
+				victims = append(victims, other)
+			}
+		}
+		for _, v := range victims {
+			gm.archiveLocked(*v, "superseded") // archiveLocked removes from the live map itself
+		}
+	}
+
 	if err := gm.writeFile(fact); err != nil {
 		return err
 	}
@@ -712,6 +756,39 @@ func (gm *GraphMemory) ArchiveExpiredEpisodic(cutoff time.Time) int {
 		}
 	}
 	return archived
+}
+
+// ArchiveStaleSemantic archives model-authored semantic facts past their
+// staleness point with reason "stale" (DRF-002). The staleness point is the
+// fact's declared stale_after when set (volatile facts expire on their own
+// date), else its At past the 30d backstop. Authoritative facts (user /
+// user-correction / agent-correction) are never auto-staled. Archived facts
+// stay answerable via remember's archive fallback — knowledge is demoted,
+// never destroyed. Returns the number archived.
+func (gm *GraphMemory) ArchiveStaleSemantic(cutoff time.Time) int {
+	gm.mu.Lock()
+	defer gm.mu.Unlock()
+	now := time.Now()
+	var stale []Fact
+	for _, f := range gm.facts {
+		if f.Type != "semantic" || authoritativeSource(f.Source) {
+			continue
+		}
+		if !f.StaleAfter.IsZero() {
+			if now.After(f.StaleAfter) {
+				stale = append(stale, *f)
+			}
+		} else if !f.At.IsZero() && f.At.Before(cutoff) {
+			stale = append(stale, *f)
+		}
+	}
+	n := 0
+	for _, f := range stale {
+		if _, err := gm.archiveLocked(f, "stale"); err == nil {
+			n++
+		}
+	}
+	return n
 }
 
 func (gm *GraphMemory) archiveLocked(fact Fact, reason string) (*Fact, error) {
@@ -953,16 +1030,17 @@ func (gm *GraphMemory) writeFile(fact Fact) error {
 
 func writeMarkdownFact(path string, fact Fact) error {
 	front := struct {
-		ID       string    `yaml:"id"`
-		Type     string    `yaml:"type"`
-		Subject  string    `yaml:"subject"`
-		At       time.Time `yaml:"at"`
-		Why      string    `yaml:"why,omitempty"`
-		UseWhen  []string  `yaml:"use_when,omitempty"`
-		Source   string    `yaml:"source,omitempty"`
-		Feedback int       `yaml:"feedback,omitempty"`
-		Edges    []Edge    `yaml:"edge,omitempty"`
-	}{fact.ID, fact.Type, fact.Subject, fact.At, fact.Why, fact.UseWhen, fact.Source, fact.Feedback, fact.Edges}
+		ID         string    `yaml:"id"`
+		Type       string    `yaml:"type"`
+		Subject    string    `yaml:"subject"`
+		At         time.Time `yaml:"at"`
+		StaleAfter time.Time `yaml:"stale_after,omitempty"`
+		Why        string    `yaml:"why,omitempty"`
+		UseWhen    []string  `yaml:"use_when,omitempty"`
+		Source     string    `yaml:"source,omitempty"`
+		Feedback   int       `yaml:"feedback,omitempty"`
+		Edges      []Edge    `yaml:"edge,omitempty"`
+	}{fact.ID, fact.Type, fact.Subject, fact.At, fact.StaleAfter, fact.Why, fact.UseWhen, fact.Source, fact.Feedback, fact.Edges}
 	fm, err := yaml.Marshal(front)
 	if err != nil {
 		return err
@@ -1096,26 +1174,64 @@ func (gm *GraphMemory) Remember(query, turn string) string {
 // marker compares (issue #180).
 var urlHostRe = regexp.MustCompile(`https?://([^/\s"'\)\]>]+)`)
 
-// markConflictSignals flags pairs of top-ranked facts that carry different URL
-// domains: each gets "⚠ conflicts with <id>" in its match rationale so the
-// brain arbitrates the contradiction instead of trusting rank (issue #180).
+// markConflictSignals flags pairs of top-ranked facts that either carry
+// different URL domains (issue #180) or share a subject cluster with
+// materially different bodies (DRF-002): each gets "⚠ conflicts with <id>" in
+// its match rationale so the brain arbitrates the contradiction instead of
+// trusting rank. Subject overlap is loose by design — a false flag costs one
+// glance, a missed contradiction costs a wrong fact being trusted.
 func markConflictSignals(starts []rankedFact, facts map[string]*Fact) {
 	hosts := make(map[string]map[string]bool, len(starts))
+	subjects := make(map[string]map[string]bool, len(starts))
 	for _, s := range starts {
 		if f, ok := facts[s.id]; ok {
 			hosts[s.id] = extractHosts(f.Subject + " " + f.Body)
+			subjects[s.id] = memoryTokenize(f.Subject)
 		}
 	}
 	for i := range starts {
 		for j := i + 1; j < len(starts); j++ {
 			hi, hj := hosts[starts[i].id], hosts[starts[j].id]
-			if len(hi) == 0 || len(hj) == 0 || shareAny(hi, hj) {
+			if len(hi) > 0 && len(hj) > 0 && !shareAny(hi, hj) {
+				starts[i].signals = append(starts[i].signals, "⚠ conflicts with "+starts[j].id)
+				starts[j].signals = append(starts[j].signals, "⚠ conflicts with "+starts[i].id)
 				continue
 			}
-			starts[i].signals = append(starts[i].signals, "⚠ conflicts with "+starts[j].id)
-			starts[j].signals = append(starts[j].signals, "⚠ conflicts with "+starts[i].id)
+			// DRF-002: same-subject contradiction — two top facts sharing >= 2
+			// significant subject words with materially different bodies.
+			si, sj := subjects[starts[i].id], subjects[starts[j].id]
+			if len(si) > 0 && len(sj) > 0 && subjectOverlap(si, sj) >= 2 {
+				fi, fok := facts[starts[i].id]
+				fj, gok := facts[starts[j].id]
+				if fok && gok && materiallyDifferent(fi, fj) {
+					starts[i].signals = append(starts[i].signals, "⚠ conflicts with "+starts[j].id)
+					starts[j].signals = append(starts[j].signals, "⚠ conflicts with "+starts[i].id)
+				}
+			}
 		}
 	}
+}
+
+// subjectOverlap counts shared significant words between two subject token sets.
+func subjectOverlap(a, b map[string]bool) int {
+	n := 0
+	for w := range a {
+		if b[w] {
+			n++
+		}
+	}
+	return n
+}
+
+// materiallyDifferent reports whether two facts differ in value: distinct
+// non-empty bodies, neither containing the other.
+func materiallyDifferent(a, b *Fact) bool {
+	ba := strings.ToLower(strings.TrimSpace(a.Body))
+	bb := strings.ToLower(strings.TrimSpace(b.Body))
+	if ba == "" || bb == "" {
+		return a.Subject != b.Subject
+	}
+	return ba != bb && !strings.Contains(ba, bb) && !strings.Contains(bb, ba)
 }
 
 func extractHosts(s string) map[string]bool {

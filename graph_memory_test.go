@@ -753,3 +753,106 @@ func TestStripLeadingFrontMatter(t *testing.T) {
 		}
 	}
 }
+
+// DRF-002: the 30d backstop — model-authored semantic facts past the cutoff
+// archive with reason "stale"; authoritative facts never auto-stale; a
+// declared stale_after wins over At.
+func TestArchiveStaleSemantic(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), &Settings{TopK: 2})
+	old := time.Now().Add(-40 * 24 * time.Hour)
+	fresh := time.Now().Add(-5 * 24 * time.Hour)
+	mustRecord(t, gm, Fact{ID: "old_model", Type: "semantic", Subject: "old model fact", At: old, Source: "graph-rebuild"})
+	mustRecord(t, gm, Fact{ID: "old_user", Type: "semantic", Subject: "old user fact", At: old, Source: "user"})
+	mustRecord(t, gm, Fact{ID: "fresh_model", Type: "semantic", Subject: "fresh model fact", At: fresh, Source: "model-distill"})
+	mustRecord(t, gm, Fact{ID: "declared", Type: "semantic", Subject: "declared fact", At: fresh, StaleAfter: old, Source: "graph-rebuild"})
+	mustRecord(t, gm, Fact{ID: "future_declared", Type: "semantic", Subject: "future declared fact", At: old, StaleAfter: time.Now().Add(10 * 24 * time.Hour), Source: "graph-rebuild"})
+
+	n := gm.ArchiveStaleSemantic(time.Now().Add(-30 * 24 * time.Hour))
+	if n != 2 { // old_model + declared; old_user protected, fresh/future kept
+		t.Fatalf("archived %d, want 2", n)
+	}
+	for _, gone := range []string{"old_model", "declared"} {
+		if _, ok := gm.facts[gone]; ok {
+			t.Errorf("%s still live, want archived", gone)
+		}
+	}
+	for _, kept := range []string{"old_user", "fresh_model", "future_declared"} {
+		if _, ok := gm.facts[kept]; !ok {
+			t.Errorf("%s archived, want live", kept)
+		}
+	}
+	// archive fallback still answers (never destroyed)
+	if gm.archiveFactsLocked() == nil {
+		t.Fatal("archive empty after staleness pass")
+	}
+}
+
+// DRF-002: an authoritative correction demotes conflicting model facts
+// (asymmetry: a model re-entry demotes nothing).
+func TestCorrectionDemotesConflictingModelFacts(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), &Settings{TopK: 2})
+	mustRecord(t, gm, Fact{ID: "stale_qwen", Type: "semantic", Subject: "Mino runs on qwen flash via OpenRouter with deepseek small model", Source: "graph-rebuild", At: time.Now().Add(-6 * 24 * time.Hour)})
+	mustRecord(t, gm, Fact{ID: "unrelated", Type: "semantic", Subject: "Abah supplier meeting for the PCR machine", Source: "graph-rebuild", At: time.Now()})
+
+	// User correction lands on the model-stack subject -> stale_qwen archives.
+	mustRecord(t, gm, Fact{ID: "model_stack", Type: "semantic", Subject: "current authoritative Mino model stack", Body: "main and small are deepseek flash pinned to deepinfra, fallback qwen3.7-flash", Source: "user-correction-20260814", At: time.Now()})
+	if _, ok := gm.facts["stale_qwen"]; ok {
+		t.Fatal("stale_qwen still live after user correction — demotion failed")
+	}
+	if _, ok := gm.facts["unrelated"]; !ok {
+		t.Fatal("unrelated fact archived — subject matching too loose")
+	}
+	if _, ok := gm.facts["model_stack"]; !ok {
+		t.Fatal("correction itself missing")
+	}
+
+	// Model re-entry on the same subject must demote NOTHING (asymmetry).
+	mustRecord(t, gm, Fact{ID: "model_reen", Type: "semantic", Subject: "current authoritative Mino model stack re-stated", Source: "model-distill", At: time.Now()})
+	if _, ok := gm.facts["model_stack"]; !ok {
+		t.Fatal("model re-entry demoted the user fact — asymmetry violated")
+	}
+}
+
+// DRF-002: same-subject contradictions get the conflict marker at recall.
+func TestMarkConflictSignalsSubjectBased(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), &Settings{TopK: 2})
+	mustRecord(t, gm, Fact{ID: "a", Type: "semantic", Subject: "Mino runs on qwen flash via OpenRouter", Body: "qwen is the main model", Source: "graph-rebuild", At: time.Now()})
+	mustRecord(t, gm, Fact{ID: "b", Type: "semantic", Subject: "Mino model stack uses deepseek flash main", Body: "deepseek flash is the main model", Source: "graph-rebuild", At: time.Now()})
+	ranks := gm.entryRanking("mino model", "", gm.facts, true)
+	if len(ranks) < 2 {
+		t.Fatalf("want 2 top facts, got %d", len(ranks))
+	}
+	markConflictSignals(ranks, gm.facts)
+	conflicts := 0
+	for _, r := range ranks {
+		for _, sig := range r.signals {
+			if strings.Contains(sig, "conflicts with") {
+				conflicts++
+			}
+		}
+	}
+	if conflicts < 2 {
+		t.Fatalf("same-subject contradiction not flagged: %+v", ranks)
+	}
+
+	// Unrelated subjects must not conflict.
+	gm2 := NewGraphMemory(t.TempDir(), &Settings{TopK: 2})
+	mustRecord(t, gm2, Fact{ID: "x", Type: "semantic", Subject: "Abah meeting at Qbistro on Saturday", Body: "friends meetup", Source: "graph-rebuild", At: time.Now()})
+	mustRecord(t, gm2, Fact{ID: "y", Type: "semantic", Subject: "Bair Hugger demo with supplier", Body: "medical equipment", Source: "graph-rebuild", At: time.Now()})
+	ranks2 := gm2.entryRanking("abah bair", "", gm2.facts, true)
+	markConflictSignals(ranks2, gm2.facts)
+	for _, r := range ranks2 {
+		for _, sig := range r.signals {
+			if strings.Contains(sig, "conflicts with") {
+				t.Fatalf("unrelated facts flagged as conflict: %+v", ranks2)
+			}
+		}
+	}
+}
+
+func mustRecord(t *testing.T, gm *GraphMemory, f Fact) {
+	t.Helper()
+	if err := gm.RecordFact(f); err != nil {
+		t.Fatal(err)
+	}
+}

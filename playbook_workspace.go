@@ -744,7 +744,12 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 				outPaths = append(outPaths, playbookRunOutputPath(pb, run, stage, o))
 			}
 			stageCtx = context.WithValue(stageCtx, stageOutputsKey{}, outPaths)
+			// DRF-002 provenance honesty: facts saved during a playbook run are
+			// model-distilled, not user-authored — save_note consults this
+			// counter and stamps "model-distill" instead of "user".
+			playbookDepth.Add(1)
 			stageResult := runPlaybookStageLoop(stageCtx, core.Client, sessionID, system, messages, stageTools, maxStageIterations, core.Settings.MaxTokens, obs, core.Settings.Home)
+			playbookDepth.Add(-1)
 			result.TokensIn += stageResult.TokensIn
 			result.TokensOut += stageResult.TokensOut
 			result.ToolCalls = append(result.ToolCalls, stageResult.ToolCalls...)

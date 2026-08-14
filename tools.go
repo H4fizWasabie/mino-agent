@@ -1368,9 +1368,16 @@ func makeNotesTool(db *sql.DB, mem *Memory) *Tool {
 				Subject: subject,
 				At:      time.Now(),
 				Why:     why,
-				Source:  "user", // user-authored facts must be distinguishable from model-distilled ones (issue #178)
+				Source:  "user", // save_note is the user's amanuensis (issue #178)
 				Edges:   edges,
 				Body:    content,
+			}
+			// DRF-002 provenance honesty: inside a playbook run the save is a
+			// model-distilled learning (e.g. daily-ai-concept), not a user
+			// statement — stamp it as such so user vs model facts stay
+			// distinguishable and model facts remain storable.
+			if playbookDepth.Load() > 0 {
+				fact.Source = "model-distill"
 			}
 			if err := mem.graph.RecordFact(fact); err != nil {
 				return fmt.Sprintf("Error saving: %v", err)

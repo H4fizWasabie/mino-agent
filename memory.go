@@ -934,10 +934,14 @@ func (m *Memory) RebuildGraphEdges() (int, error) {
 // MaintainGraph is the scheduled full maintenance pass: re-infer all edges,
 // resolve mirrored pairs, cluster, and label communities. Returns counts.
 func (m *Memory) MaintainGraph() (int, int, error) {
-	// Deterministic lifecycle first: expired episodes leave the live graph
-	// before the rebuild judges them (issue #178).
+	// Deterministic lifecycle first: expired episodes and stale model-authored
+	// semantic facts leave the live graph before the rebuild judges them
+	// (issue #178 episodes; DRF-002 stale semantics).
 	if archived := m.graph.ArchiveExpiredEpisodic(time.Now().Add(-staleAgeThreshold)); archived > 0 {
 		slog.Info("archived expired episodic facts", "count", archived)
+	}
+	if archived := m.graph.ArchiveStaleSemantic(time.Now().Add(-staleAgeThreshold)); archived > 0 {
+		slog.Info("archived stale semantic facts", "count", archived)
 	}
 	edges, err := m.RebuildGraphEdges()
 	if err != nil {

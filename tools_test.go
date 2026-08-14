@@ -502,3 +502,45 @@ func TestFetchURLFallbackUnescapesEntities(t *testing.T) {
 		t.Fatalf("raw entity survived: %q", got)
 	}
 }
+
+// DRF-002 provenance honesty: save_note stamps model-distill inside a playbook
+// run (the save is Mino's own learning) and user outside one.
+func TestSaveNoteStampsModelDistillInsidePlaybook(t *testing.T) {
+	home := t.TempDir()
+	gm := NewGraphMemory(filepath.Join(home, "memories"), &Settings{TopK: 2})
+	mem := &Memory{graph: gm}
+	tool := makeNotesTool(nil, mem)
+
+	// Outside a playbook: user stamp.
+	tool.Fn(map[string]any{"id": "outside_playbook", "subject": "user note outside playbook"})
+	if f := gm.facts["outside_playbook"]; f == nil || f.Source != "user" {
+		t.Fatalf("outside playbook source = %v, want user", f)
+	}
+
+	// Inside a playbook run: model-distill stamp.
+	playbookDepth.Add(1)
+	defer playbookDepth.Add(-1)
+	tool.Fn(map[string]any{"id": "inside_playbook", "subject": "concept learned during playbook run"})
+	if f := gm.facts["inside_playbook"]; f == nil || f.Source != "model-distill" {
+		t.Fatalf("inside playbook source = %v, want model-distill", f)
+	}
+}
+
+// DRF-002: stale_after round-trips through the front-matter.
+func TestStaleAfterRoundTrip(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), &Settings{TopK: 2})
+	future := time.Now().Add(30 * 24 * time.Hour)
+	mustRecord(t, gm, Fact{ID: "volatile", Type: "semantic", Subject: "current model stack", StaleAfter: future, Source: "graph-rebuild", At: time.Now()})
+	// Re-read from disk: Refresh + fact lookup must carry stale_after.
+	gm.Refresh()
+	f, ok := gm.facts["volatile"]
+	if !ok {
+		t.Fatal("fact missing after refresh")
+	}
+	if f.StaleAfter.IsZero() {
+		t.Fatal("stale_after lost in round-trip")
+	}
+	if d := future.Sub(f.StaleAfter); d < 0 || d > time.Minute {
+		t.Fatalf("stale_after drifted in round-trip: %v vs %v", f.StaleAfter, future)
+	}
+}
