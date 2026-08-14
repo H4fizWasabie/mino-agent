@@ -81,7 +81,7 @@ become the state machine for that task and each stage uses the canonical loop.
 
 **Why:** Fast deterministic discovery handles common requests; embeddings improve recall without making every request pay the embedding cost. Keeping the decision inside Mino preserves follow-up context and avoids forcing ordinary questions through a workflow.
 
-**Revisit when:** Keyword routing produces frequent false positives or embedding latency becomes material.
+**Superseded (EMB-001, v2.9.0):** embeddings are removed entirely — the recall gap-fill contributed zero hits on production, dedup clustering was a silent no-op after fact rekeying, and every other consumer was dead or replaceable. The floor is FTS5 + essentials + skill triggers + keyword-narrowed graph candidates; tool descriptions were strengthened in the user's vocabulary as the data-side fix.
 
 ---
 
@@ -302,8 +302,8 @@ Two tiers by confidence:
 As of 2026-07-31, `feat/memory-graph` is the canonical next-generation Mino
 branch and the intended production path. It supersedes the earlier flat
 SQLite-only semantic-memory implementation while retaining SQLite for
-operational state, chat history, episodes, embeddings, audit records, and
-diagnostics.
+operational state, chat history, episodes, audit records, and
+diagnostics. (Embeddings were later removed entirely — EMB-001, v2.9.0; the `memory_embeddings` table was dropped via schema v7.)
 
 Semantic claims are authoritative Markdown graph facts under the configured
 memories directory. The canonical runtime remains one loop; bounded snapshots,

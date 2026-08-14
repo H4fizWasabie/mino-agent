@@ -7,15 +7,15 @@ One binary. One SQLite file. Your own AI assistant.
 [![GitHub stars](https://img.shields.io/github/stars/H4fizWasabie/mino-agent?style=social)](https://github.com/H4fizWasabie/mino-agent/stargazers)
 [![DeepWiki](https://img.shields.io/badge/DeepWiki-Architecture%20Docs-blue)](https://deepwiki.com/H4fizWasabie/mino-agent)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/H4fizWasabie/mino-agent)
-![Version](https://img.shields.io/badge/version-v2.3.0-blue)
+![Version](https://img.shields.io/badge/version-v2.9.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 - **Dashboard** — chat, memory, tools, database, ops
 - **Telegram** — same agent, any device
 - **Playbooks** — autonomous repeatable workflows: teach once, compile from evidence, schedule daily, verified outputs, Telegram reports
 - **Coding tools** — read, write, edit, grep, glob, git, graphify, codegraph, bash
-- **Memory** — Markdown-authoritative graph memory with self-maintenance (edge judgment, community detection, 6-hourly maintenance), SQLite operational state, auto-consolidation, one-time reminders
-- **Multi-provider** — priority, fallback, circuit breaking, and OpenRouter provider routing (including Exacto tool-call routing)
+- **Memory** — Markdown-authoritative graph memory (facts as frontmatter `.md` files) with self-maintenance (edge judgment, community detection, 6-hourly maintenance), episodic/semantic split (episodes expire to archive after 30 days; semantic facts are protected), config-whitelisted semantic distillation, FTS5 retrieval, auto-consolidation, one-time reminders
+- **Multi-provider** — priority, fallback, circuit breaking, and OpenRouter routing (model `:provider` pins + privacy-safe `provider_routing`/`allow_fallbacks`)
 - **OAuth login** — Claude, Codex (ChatGPT), GitHub Copilot, xAI/Grok
 - **Web search** — Tavily API (free tier available)
 - **Guardrails** — prefers specialized tools over bash, workspace boundary enforcement
@@ -90,7 +90,7 @@ mino
 | `MINO_CONTEXT_CHARS` | `100000` | Context window budget |
 | `TELEGRAM_BOT_TOKEN` | — | Optional Telegram bot token |
 | `TAVILY_API_KEY` | — | Web search (free key at tavily.com) |
-| `MINO_OPENROUTER_KEY` | — | OpenRouter API key for providers and embeddings |
+| `MINO_OPENROUTER_KEY` | — | OpenRouter API key |
 
 See `.env.example` for a copy-paste template.
 
@@ -125,9 +125,12 @@ Set the key in the dashboard onboarding form, or write to `~/.mino/auth.json`:
 }
 ```
 
-For OpenRouter, use the OpenRouter base URL and model slug. `:exacto` asks
-OpenRouter to prefer providers with stronger tool-calling reliability; the
-optional `provider_routing` list can pin a discounted provider route.
+For OpenRouter, use the OpenRouter base URL and model slug. The optional
+`:provider` suffix pins a discount provider route (e.g.
+`deepseek/deepseek-v4-flash-0731:deepinfra`); the `provider_routing` list
+forces the same set. By default Mino never falls back outside that list
+(`allow_fallbacks: true` opts into arbitrary hosts — keep it off for
+privacy-safe routing).
 
 ```json
 {
@@ -137,9 +140,10 @@ optional `provider_routing` list can pin a discounted provider route.
       "priority": 1,
       "base_url": "https://openrouter.ai/api/v1",
       "api_key_env": "MINO_OPENROUTER_KEY",
-      "model": "xiaomi/mimo-v2.5:exacto",
-      "small_model": "deepseek/deepseek-v4-flash",
-      "provider_routing": ["GMICloud"]
+      "model": "deepseek/deepseek-v4-flash-0731:deepinfra",
+      "small_model": "deepseek/deepseek-v4-flash-0731:deepinfra",
+      "provider_routing": ["DeepInfra"],
+      "small_provider_routing": ["DeepInfra"]
     }
   ]
 }
@@ -219,28 +223,31 @@ mino (single Go binary)
 
 main.go              — entry point, CLI routing
 app.go               — Core struct, Respond, session wiring
-loop.go              — agent loop: observe → reason → act → repeat
+loop.go              — agent loop: observe → reason → act → repeat; interruption, snapshots
 session.go           — SOUL.md, system prompt, context assembly
-memory.go            — operational SQLite state and consolidation bridge
-graph_memory.go      — Markdown-authoritative semantic graph memory
-tools.go             — built-in tools (file, bash, calendar, notes, search, image)
+memory.go            — consolidation bridge and operational state
+graph_memory.go      — Markdown-authoritative graph memory: facts, edges, judgment, communities, migration
+nerves.go            — loop snapshots, interrupts, mid-flight signals
+cost.go              — run/month spend from usage.jsonl, review triggers
+tools.go             — tool registry (file, bash, calendar, notes, search, image) + schema caps
 coding_tools.go      — read, write, edit, grep, glob, git, graphify, codegraph
 provider.go          — OpenAI + Anthropic + Codex clients, SSE streaming
-provider_manager.go  — priority, retry, fallback, circuit breaking
+provider_manager.go  — priority, retry, fallback, circuit breaking, routing pins
+codex.go             — ChatGPT-subscription (Codex) transport
 oauth.go             — PKCE + device-code OAuth, embedded provider configs
 dashboard.go         — web UI + REST API + SSE streaming
-telegram.go          — Telegram bot gateway
-mcp.go               — MCP bridge (stdio + HTTP servers, flat companions for nested-executor tools)
+dashboard_universe.go— universe graph topology (Living Field)
+telegram.go          — Telegram bot gateway (threaded section-split delivery)
+mcp.go               — MCP bridge (stdio + HTTP servers)
 skill.go             — skill loader (SKILL.md files)
 extensions.go        — HTTP extension protocol
 playbook.go          — playbook management, capture_playbook (teach → compile), scheduling
 playbook_workspace.go— playbook run engine: durable runs, write-attributed verification, retry policy
-memory.go            — operational SQLite state and consolidation bridge
-graph_memory.go      — Markdown-authoritative semantic graph memory with self-maintenance (edge judgment, communities, 6-hourly maintenance)
-adapters.go          — working memory, patterns, embeddings
+post_mortem.go       — failure-evidence extraction for failed runs (CTX-017)
+audit_playbook.go    — design-time contract risk-flags (CTX-018)
+adapters.go          — working memory and patterns
 reminder.go          — persistent one-time reminders with Telegram delivery
-eval.go              — evaluation harness for automated correctness
-db.go                — SQLite schema and migrations
+db.go                — SQLite schema and migrations (FTS5, schema v7+)
 config.go            — environment variable → Settings
 update.go            — self-update from GitHub releases (the only production deploy path; see docs/emergency-deploy.md for the manual lane)
 deploy.sh            — VPS bootstrap only (user, oauth, units, DB backup); never pushes binaries
@@ -262,7 +269,6 @@ Mino can run entirely on free tiers:
 
 - **LLM**: Any free model via OpenRouter or OpenCode Zen
 - **Image gen**: Cloudflare Workers AI (free tier, ~10k images/day) with [Pollinations.ai](https://pollinations.ai) fallback (free, no key)
-- **Embeddings**: via OpenRouter (free tier available)
 - **Web search**: Tavily (free tier: 1000 searches/month)
 - **URL fetch**: pipes HTML through readability extraction
 
@@ -280,12 +286,13 @@ Mino discovers tools via `GET /tools` and proxies calls via `POST /execute`.
 
 ### cost-watch — the price guardian
 
-Mino watches its own wallet. Scrapes OpenRouter model pages hourly for
-per-provider pricing, alerts on Telegram when a promotional price expires,
-and swaps `providers.json` down the model chain (backup + atomic restart,
-deferred while playbooks run). Deterministic scraper — no LLM, no API key.
-Ask mino *"how much am I paying for my models?"* and it answers with live
-scraped prices via `cost_watch_status` / `cost_watch_check` / `cost_watch_swap`.
+Mino watches its own wallet. Fetches the OpenRouter endpoints price catalogue
+hourly (model-agnostic — derived from your own `providers.json`, persisted to
+`cost-catalogue.json`), and a `--check` timer pages Telegram when a
+promotional price expires. **Alert-only by policy (REL-01): it pages the
+owner — it never changes the brain.** Ask mino *"how much am I paying?"* and
+it answers with live prices via `system_check`'s cost block or
+`cost_watch_status` / `cost_watch_check` / `cost_watch_refresh`.
 Install: see `extensions/cost-watch/README.md`.
 
 ### minowrap — universal tool adapter

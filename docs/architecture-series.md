@@ -94,32 +94,17 @@ The model can't bullshit its way past `os.Stat()`.
 
 > **Architecture deep-dive:** `memory.go` → `Search()`, `adapters.go` → `hybridFactCandidates()`, `scoreFact()`
 
-A lot of AI agents reach for Pinecone, Weaviate, or Chroma before they've written a single line of retrieval logic. We went the other direction.
+A lot of AI agents reach for Pinecone, Weaviate, or Chroma before they've written a single line of retrieval logic. We went the other direction — and then removed the vector layer entirely (EMB-001, v2.9.0) once production showed it contributed nothing.
 
-**Mino's search is hybrid: FTS5 (BM25 keyword search) + optional OpenRouter embeddings.**
+**Mino's retrieval floor: FTS5 (BM25 keyword search) + essentials + skill triggers + keyword-narrowed graph candidates.**
 
 **Tier 1: FTS5 (always on, zero config)**
 
-SQLite's FTS5 extension gives us BM25-ranked full-text search. It's built in, requires no API key, and handles 90% of retrieval needs. "What's the user's name?" hits `facts_fts`. "Show me the login bug" hits `episodes_fts`.
+SQLite's FTS5 extension gives us BM25-ranked full-text search. It's built in, requires no API key, and handles the retrieval needs. "What's the user's name?" hits `facts_fts`. "Show me the login bug" hits `episodes_fts`.
 
-```go
-// Semantic search via FTS5 — no vector DB needed
-func (m *Memory) Search(query string) string {
-    rows, err := m.db.Query(
-        "SELECT subject, content FROM facts_fts WHERE facts_fts MATCH ? ORDER BY rank LIMIT ?",
-        query, m.cfg.TopK,
-    )
-    // ...
-}
-```
+**Tier 2 (removed in v2.9.0): embeddings.** The `memory_embeddings` table and every consumer are gone: recall gap-fill was dead (zero similarity contributions on production), dedup clustering was a silent no-op after fact rekeying, and tool/skill semantic selection was replaceable by explicit triggers. The recall rationale still surfaces freshness (`age: Nd`) and provenance (`user-provenanced`) signals.
 
-**Tier 2: Embeddings (optional, OpenRouter)**
-
-If the user sets `MINO_OPENROUTER_KEY`, embeddings are cached in a local `memory_embeddings` SQLite table and compared via cosine similarity. No external vector service.
-
-**Tier 3: Hybrid ranking (four signals)**
-
-When both FTS5 and embeddings are available, `hybridFactCandidates()` merges results and ranks by four signals:
+**Ranking:** recall ranks keyword hits with importance, recency, and feedback signals — the same four-signal shape, minus the similarity term that never fired.
 
 ```go
 func scoreFact(hit factHit) float64 {
@@ -135,8 +120,10 @@ The weights (0.55, 0.20, 0.15, 0.10) are our current defaults — similarity mat
 
 **What we skipped:**
 - Pinecone / Weaviate / Chroma — SQLite handles it
-- Separate vector DB process — embeddings live in the same SQLite file
-- LangChain retrieval abstractions — direct SQL + cosine similarity
+- Separate vector DB process — embeddings lived in the same SQLite file until EMB-001 removed the whole layer
+- LangChain retrieval abstractions — direct SQL + FTS5
+
+**What we removed (EMB-001, v2.9.0):** the `memory_embeddings` table (schema v7) and every embedding consumer — recall gap-fill was dead (0/80 contributions on production), dedup clustering broke silently after fact rekeying, graph-rebuild candidates were replaceable by keyword narrowing, and tool/skill selection rode explicit triggers and essentials. The semantic layer was a drift vector (threshold wars, re-perturbed by every model swap), not a drift guard.
 
 **File:** [`adapters.go`](https://github.com/H4fizWasabie/mino-agent/blob/master/adapters.go#L394-L548)
 
@@ -189,11 +176,11 @@ This isn't a prompt-based "choose tools" — it's a pre-filter that reduces the 
 
 > **Architecture deep-dive:** `memory.go` → all methods, `adapters.go` → `ConsolidateDue()`
 
-Mino's memory has three pillars, all in one SQLite database:
+Mino's memory has three pillars — operational SQLite state plus two memory classes:
 
-### 1. Semantic memory (FTS5 + embeddings)
+### 1. Semantic memory (FTS5 + markdown facts)
 
-Facts about the user, their projects, preferences, people. Stored in `facts` table, searchable via `facts_fts` (BM25) and `memory_embeddings` (cosine similarity via OpenRouter). Hybrid ranking with four signals (similarity, importance, recency, feedback).
+Facts about the user, their projects, preferences, people. Stored as frontmatter `.md` files in `memories/` (subject, `type`, `at`, `source`, `use_when`), searchable via `facts_fts` (BM25) and the graph's keyword-narrowed candidates. Recall ranks by importance, recency, and feedback, and surfaces `age: Nd` freshness plus `user-provenanced` weighting. Embeddings were removed in v2.9.0 (EMB-001) after production showed every consumer dead or broken.
 
 ### 2. Episodic memory (chat log + auto-consolidation)
 

@@ -74,20 +74,20 @@ remember("Procura database")
   → FTS5 finds start node: procura_is_authoritative
   → BFS edges 2 hops
   → FTS5 fallback for terms with 0 graph hits
-  → Return subgraph (primary) + top-3 embedding matches (supplement)
+  → Return subgraph (primary) + keyword-narrowed candidates (supplement)
 ```
 
 Instead of a flat 400-token blob of duplicates, returns ~80 tokens of
 structured subgraph. LLM can `read_file` individual `.md` for depth.
 
-### Roles of FTS5 and embeddings (demoted, not removed)
+### Retrieval roles (post-EMB-001: embeddings removed, v2.9.0)
 
 | Role | Mechanism |
 |------|-----------|
 | Entry point | FTS5 finds start nodes from natural language |
-| Duplicate detection | Embedding similarity flags near-duplicate `.md` files |
-| Skill matching | Embedding (unchanged) |
-| Semantic fallback | Embedding bridges vocabulary gaps |
+| Duplicate detection | Consolidation + judgment (embedding dedup was a silent no-op — EMB-001) |
+| Skill matching | Explicit `Triggers` + `auto:` opt-in flag (#170) |
+| Vocabulary gaps | Strengthened tool/fact descriptions in the user's vocabulary (data change, not architecture) |
 | Edge discovery | Embedding similarity proposes missing edges |
 
 ### Two write paths, one function
@@ -112,7 +112,7 @@ body only when needed via `read_file`.
 2. `tools.go` — update `save_note` to write `.md` instead of INSERT
 3. Consolidation prompt — output `.md` files instead of JSON → INSERT
 4. New `memories/` directory under `~/.mino/`
-5. `adapters.go` — embedding indexer watches `memories/` directory
+5. ~~`adapters.go` — embedding indexer watches `memories/` directory~~ (removed with EMB-001, v2.9.0)
 
 ### `remember` output format (decided)
 
