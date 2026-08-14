@@ -1525,6 +1525,10 @@ var (
 	reSpace  = regexp.MustCompile(`\s+`)
 )
 
+// rtkRewriteRe matches a valid rtk rewrite: a single-line invocation that
+// routes through rtk, plain ("rtk ls ...") or compound ("cd /tmp && rtk ls").
+var rtkRewriteRe = regexp.MustCompile(`^(?:[^&\n]+ && )*rtk `)
+
 func fetchURL(rawURL string) string {
 	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
 		return fmt.Sprintf("Invalid URL: %s", rawURL)
@@ -1803,7 +1807,14 @@ func rewriteBashWithRTK(parent context.Context, command string) string {
 	ctx, cancel := context.WithTimeout(parent, time.Second)
 	defer cancel()
 	out, _ := exec.CommandContext(ctx, "rtk", "rewrite", command).Output()
-	if rewritten := strings.TrimSpace(string(out)); rewritten != "" {
+	rewritten := strings.TrimSpace(string(out))
+	// Trust the OUTPUT SHAPE, not the exit code: rtk rewrite exits 3 (not the
+	// documented 0) for valid rewrites on 0.43.0, so an exit-code check would
+	// kill the feature for everyone. Accept only single-line invocations that
+	// route through rtk — plain ("rtk ls ...") or compound ("cd /tmp && rtk ls").
+	// Usage text from an older rtk without the rewrite subcommand, or noise
+	// from a future version, must never replace the command.
+	if !strings.ContainsAny(rewritten, "\n\r") && rtkRewriteRe.MatchString(rewritten) {
 		return rewritten
 	}
 	return command

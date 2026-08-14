@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"fmt"
@@ -417,5 +418,49 @@ func TestSchemasForContextCappedUnion(t *testing.T) {
 	other := names(r.SchemasForContext("s2", "", "use special_107 special_108 special_109 special_110 special_111 special_112 now"))
 	if len(other) != 19 {
 		t.Fatalf("session s2 inherited union: %d schemas, want 19", len(other))
+	}
+}
+
+// The bash tool rewrites commands through rtk when present (token-lean
+// output). The rewrite is trusted by OUTPUT SHAPE, not exit code: rtk 0.43.0
+// exits 3 (not the documented 0) for valid rewrites, so an exit-code check
+// would disable the feature; but usage text from an older rtk without the
+// rewrite subcommand must never replace the command.
+func TestRewriteBashWithRTK(t *testing.T) {
+	stubDir := filepath.Join(t.TempDir(), "bin")
+	os.MkdirAll(stubDir, 0755)
+	stub := filepath.Join(stubDir, "rtk")
+	// The stub echoes RTK_STUB_RESPONSE and exits with RTK_STUB_CODE.
+	os.WriteFile(stub, []byte("#!/bin/sh\nprintf '%s' \"$RTK_STUB_RESPONSE\"\nexit \"${RTK_STUB_CODE:-0}\"\n"), 0755)
+
+	cases := []struct {
+		name      string
+		hasRTK    bool
+		response  string
+		code      string
+		want      string
+	}{
+		{"valid rewrite, quirky exit 3", true, "rtk ls -la /tmp", "3", "rtk ls -la /tmp"},
+		{"compound rewrite", true, "cd /tmp && rtk ls", "3", "cd /tmp && rtk ls"},
+		{"no equivalent -> empty output", true, "", "1", "ls -la /tmp"},
+		{"old rtk usage dump on stdout", true, "A high-performance CLI proxy...\nUsage: rtk [OPTIONS] <COMMAND>", "1", "ls -la /tmp"},
+		{"multiline noise", true, "rtk ls -la /tmp\nrtk git log", "3", "ls -la /tmp"},
+		{"rtk not installed", false, "", "0", "ls -la /tmp"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bin := stubDir
+			if !tc.hasRTK {
+				bin = filepath.Join(t.TempDir(), "nobin")
+				os.MkdirAll(bin, 0755)
+			}
+			t.Setenv("PATH", bin)
+			t.Setenv("RTK_STUB_RESPONSE", tc.response)
+			t.Setenv("RTK_STUB_CODE", tc.code)
+			got := rewriteBashWithRTK(context.Background(), "ls -la /tmp")
+			if got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
