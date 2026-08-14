@@ -45,8 +45,17 @@ git push origin "$VERSION" >/dev/null
 
 # 3. THE GATE: rehearse the linux-amd64 candidate against a copy of live state
 CAND="/tmp/mino-candidate-$VERSION"
-scp -q "mino-linux-amd64" "$VPS:$CAND"
-scp -q "scripts/stage-smoke.sh" "$VPS:/tmp/stage-smoke.sh"
+# The VPS link has dropped mid-scp twice (v2.10.0, v2.10.1) — retry before aborting.
+scp_retry() {
+	for attempt in 1 2 3; do
+		if scp -q "$1" "$2"; then return 0; fi
+		echo "  scp attempt $attempt failed, retrying..." >&2
+		sleep 3
+	done
+	return 1
+}
+scp_retry "mino-linux-amd64" "$VPS:$CAND" || { echo "error: cannot reach $VPS — aborting" >&2; exit 1; }
+scp_retry "scripts/stage-smoke.sh" "$VPS:/tmp/stage-smoke.sh" || { echo "error: cannot stage stage-smoke.sh" >&2; exit 1; }
 if ! ssh "$VPS" "bash /tmp/stage-smoke.sh '$CAND' 7780"; then
 	echo "error: stage-smoke FAILED — release aborted, nothing published." >&2
 	echo "       Fix, re-tag, and re-run. The live VPS was never touched." >&2
