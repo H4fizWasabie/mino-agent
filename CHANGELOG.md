@@ -1,4 +1,4 @@
-## [Unreleased]
+## [v2.10.2] — Observability heartbeat, boot reconciliation & universe density (2026-08-14)
 
 ### Fixed
 - Universe overview node density (shipped 71a9254, OBS-003): overview now marks the top 15-25% of nodes by degree as visible and activates at zoom < 1.5 (was 1.2) — the zoomed-out Living Field shows ~200-300 nodes instead of 30-40, preserving the dense organic topology instead of a sparse hub skeleton. (Why: the overview hid >95% of the 1,128-node graph, failing to convey the network that actually exists.)
