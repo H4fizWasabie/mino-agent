@@ -71,6 +71,7 @@ Behavioral guidelines that bias toward caution over speed. For trivial tasks, us
 ## Documentation hygiene
 
 - **Tickets close when the work ships.** `TestWayfinderTicketsCloseOnShip` fails the suite if an OPEN wayfinder ticket references an issue the CHANGELOG records as shipped — the changelog is the shipped-work source of truth. New tickets need a Status line (`OPEN` / `CONFIRMED` / `RESOLVED` / `CLOSED` / `IMPLEMENTED`) from birth.
+- **Release entries carry spec-limit caveats.** An umbrella like "Memory drift prevention" must not over-promise: if the shipped spec is "visibility only, ranking untouched" (CTX-014) or "backstop at 30d", the entry says so — the 2026-08-14 live session caught a claims-vs-spec gap where the umbrella read as enforcement and the spec was a whisper. The caveat lives in the release note, not just the ticket.
 - **Old changelog eras are one-line index entries.** `TestChangelogOldEraSectionsAreOneLiners` fails the suite if any pre-v2.8.0 section carries prose — full text lives in git history. When the current era gets unwieldy, move the boundary (edit the test constant) and compress.
 
 ## Testing
