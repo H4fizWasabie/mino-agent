@@ -1206,6 +1206,19 @@ func logTrace(home, eventType string, data map[string]any) {
 		traceFiles.byHome[home] = current
 	}
 	current.file.Write(append(b, '\n'))
+	// OBS-001 loop liveness: the stall heartbeat watches per-active-turn
+	// staleness. A frozen loop (2026-08-14 wedge) keeps background tickers
+	// tracing, so global trace freshness is the WRONG signal — in-flight turn
+	// with no loop activity is the right one.
+	switch eventType {
+	case "turn_start":
+		markTurnStart()
+		markLoopActivity()
+	case "turn_end":
+		markTurnEnd()
+	case "llm", "tool", "vision", "gate", "context_diag", "midflight_signal", "tool_call_parse_failed":
+		markLoopActivity()
+	}
 }
 
 func closeTrace(home string) {

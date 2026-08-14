@@ -24,10 +24,10 @@ The 2026-08-14 session killed two silent failure classes — the bind-error (#18
 
 ## Acceptance criteria
 
-- [ ] A stuck loop/session produces a page within 15 minutes of trace silence (not 6h)
-- [ ] A crashed run's `state.json` is reconciled to `interrupted` on next boot with evidence — no manual quarantine
-- [ ] The background-path inventory is written into this ticket's resolution: every path has a journal line on success and failure, and the silent ones are named and fixed
-- [ ] No new metrics infrastructure — the trace journal IS the log
+- [x] A stuck loop/session produces a page within 15 minutes of trace silence (not 6h) — **shipped**: stall heartbeat pages after `MINO_ALERT_STALL_MINUTES` (default 10) of per-active-turn silence (implemented 2026-08-14, pending release)
+- [x] A crashed run's `state.json` is reconciled to `interrupted` on next boot with evidence — no manual quarantine — **shipped**: `ReconcileInterruptedRuns` at startup (implemented 2026-08-14, pending release)
+- [ ] The background-path inventory is written into this ticket's resolution: every path has a journal line on success and failure, and the silent ones are named and fixed — **remaining frontier**
+- [x] No new metrics infrastructure — the trace journal IS the log — held throughout
 
 ## Out of scope
 

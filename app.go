@@ -178,6 +178,12 @@ func NewCore() *Core {
 	// Alert checker (§18.1): error rate + dead man's switch, every 5 minutes
 	safeGo("alert-checker", func() { checkAlerts(db, w.sendAlertMessage, 5*time.Minute, w.Settings.Location()) })
 
+	// OBS-001 boot reconciliation: runs stuck in "running" across a crash get
+	// marked "interrupted" with evidence — no manual quarantine.
+	if n := ReconcileInterruptedRuns(w.Settings.Home); n > 0 {
+		slog.Info("startup reconciliation", "interrupted_runs", n)
+	}
+
 	// Audit pruning: remove events older than 30 days, runs daily
 	safeGo("audit-prune", func() {
 		for {

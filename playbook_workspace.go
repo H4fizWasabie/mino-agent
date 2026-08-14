@@ -4,6 +4,7 @@ package main
 // A definition describes stages; each run owns its own stage outputs and state.
 
 import (
+	"log/slog"
 	"context"
 	"encoding/json"
 	"errors"
@@ -397,6 +398,65 @@ func savePlaybookRun(pb *PlaybookWorkspace, run *PlaybookRun) error {
 		return err
 	}
 	return os.Rename(tmp, filepath.Join(dir, "state.json"))
+}
+
+// writeRunStateFile persists a run's state.json atomically (tmp + rename).
+func writeRunStateFile(path string, run PlaybookRun) error {
+	data, err := json.MarshalIndent(run, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// ReconcileInterruptedRuns marks playbook runs stuck in "running" across a
+// restart as "interrupted" (OBS-001) — the 2026-08-14 orphan class: a crashed
+// run stayed state.json:"running" forever and needed a manual quarantine.
+// Returns the number reconciled.
+func ReconcileInterruptedRuns(home string) int {
+	root := filepath.Join(home, "playbooks")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		runsDir := filepath.Join(root, e.Name(), "runs")
+		rd, err := os.ReadDir(runsDir)
+		if err != nil {
+			continue
+		}
+		for _, r := range rd {
+			if !r.IsDir() {
+				continue
+			}
+			path := filepath.Join(runsDir, r.Name(), "state.json")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			var run PlaybookRun
+			if json.Unmarshal(data, &run) != nil || run.Status != "running" {
+				continue
+			}
+			run.Status = "interrupted"
+			run.UpdatedAt = time.Now().UTC()
+			if err := writeRunStateFile(path, run); err == nil {
+				n++
+			}
+		}
+	}
+	if n > 0 {
+		slog.Info("reconciled interrupted playbook runs", "count", n)
+	}
+	return n
 }
 
 func nextPlaybookStage(run *PlaybookRun) *PlaybookRunStage {

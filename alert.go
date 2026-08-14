@@ -36,6 +36,7 @@ func checkAlerts(db *sql.DB, notifyFn func(string), checkInterval time.Duration,
 			checkErrorRate(db, notifyFn)
 			checkSilence(db, notifyFn, loc)
 			checkExtensionRetryLoops(db, notifyFn)
+			checkLoopStall(notifyFn)
 		case <-alerts.stopCh:
 			return
 		}
@@ -123,5 +124,70 @@ func checkSilence(db *sql.DB, notifyFn func(string), loc *time.Location) {
 	slog.Error(msg)
 	if notifyFn != nil {
 		notifyFn(msg)
+	}
+}
+
+// --- Loop-stall heartbeat (OBS-001) ---
+//
+// The 2026-08-14 wedge froze the loop while background tickers (edge
+// judgment) kept writing traces — so global trace freshness cannot detect a
+// stuck session. The signal is per-active-turn staleness: a turn has started,
+// no loop event has been traced for MINO_ALERT_STALL_MINUTES, and the turn
+// never ended. logTrace feeds this watcher; checkAlerts pages on it.
+
+type loopWatchState struct {
+	mu           sync.Mutex
+	lastActivity time.Time
+	inFlight     int
+	alerted      bool
+}
+
+var loopWatch loopWatchState
+
+func markLoopActivity() {
+	loopWatch.mu.Lock()
+	defer loopWatch.mu.Unlock()
+	loopWatch.lastActivity = time.Now()
+}
+
+func markTurnStart() {
+	loopWatch.mu.Lock()
+	defer loopWatch.mu.Unlock()
+	loopWatch.inFlight++
+}
+
+func markTurnEnd() {
+	loopWatch.mu.Lock()
+	defer loopWatch.mu.Unlock()
+	if loopWatch.inFlight > 0 {
+		loopWatch.inFlight--
+	}
+	if loopWatch.inFlight == 0 {
+		loopWatch.alerted = false // episode resolved — allow the next page
+	}
+}
+
+// loopStalled reports whether an in-flight turn has produced no loop
+// activity for the threshold — the wedge signature.
+func loopStalled(threshold time.Duration) bool {
+	loopWatch.mu.Lock()
+	defer loopWatch.mu.Unlock()
+	return loopWatch.inFlight > 0 && time.Since(loopWatch.lastActivity) > threshold
+}
+
+// checkLoopStall pages once per stall episode: a turn is in flight, no loop
+// activity for the threshold, and we have not already paged for this episode.
+func checkLoopStall(notifyFn func(string)) {
+	minutes := envInt("MINO_ALERT_STALL_MINUTES", 10)
+	threshold := time.Duration(minutes) * time.Minute
+	loopWatch.mu.Lock()
+	stalled := loopWatch.inFlight > 0 && time.Since(loopWatch.lastActivity) > threshold
+	already := loopWatch.alerted
+	if stalled && !already {
+		loopWatch.alerted = true
+	}
+	loopWatch.mu.Unlock()
+	if stalled && !already {
+		notifyFn(fmt.Sprintf("[MINO ALERT] loop stalled: an active turn has produced no trace for %d minutes — the session may be wedged. Restart Mino if it does not recover.", minutes))
 	}
 }
