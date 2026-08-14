@@ -1,3 +1,8 @@
+## [Unreleased]
+
+### Added
+- `scripts/release.sh` — the release lane with the stage-smoke gate: from the tagged commit it builds the assets, runs `stage-smoke.sh` against a copy of the live VPS state, and only publishes if the gate passes. A smoke FAIL aborts before anything is published. CI is deliberately not wired in (no SSH surface for GitHub Actions). (Why: v2.9.1 was released by hand-assembly of the same steps; the gate is what makes "rehearse before publish" a property of the lane, not of the day.)
+
 ## [v2.9.1] — Silent failures, cost-watch fix, audit sweep & provider seams (2026-08-14)
 
 ### Added

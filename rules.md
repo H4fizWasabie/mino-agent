@@ -59,6 +59,7 @@ Behavioral guidelines that bias toward caution over speed. For trivial tasks, us
 ## Release gating
 
 - **Releases are manual and deliberate — never automatic.** Committing/pushing code does NOT ship it. A release is: tag `vX.Y.Z` → `./build-release.sh vX.Y.Z` → `gh release create` + upload assets. The VPS self-update only moves when a release exists.
+- **`./scripts/release.sh vX.Y.Z` is the release lane** (from the tagged commit, clean tree): build → `stage-smoke.sh` gate on the VPS against a copy of live state → publish. The gate is hard: a smoke FAIL aborts the release before anything is published. GitHub Actions is deliberately NOT wired in — CI gets no SSH access to the VPS (supply-chain surface); the lane stays manual and local.
 - **The `[Unreleased]` CHANGELOG section is the release queue.** Release when it is significant enough:
   - 🔴 **Urgent** — a bug actively breaking something (e.g. schedules dying) → release immediately, alone.
   - 🟡 **Batched** — 3+ accumulated fixes, or any feature, or a week has passed → cut a release.
