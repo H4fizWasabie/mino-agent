@@ -214,3 +214,33 @@ func TestToolSchemasAdvertiseAllDispatchableTools(t *testing.T) {
 		}
 	}
 }
+
+// The config must load from the mino-writable location first; /etc is the
+// legacy fallback only (CTX-020 hot-reload: the model edits its own watchdog).
+func TestLoadConfigPrefersMinoHomeOverLegacy(t *testing.T) {
+	oldCfg, oldLegacy := configPath, legacyConfigPath
+	defer func() { configPath, legacyConfigPath = oldCfg, oldLegacy }()
+
+	dir := t.TempDir()
+	homeCfg := filepath.Join(dir, "home.json")
+	legacy := filepath.Join(dir, "legacy.json")
+	os.WriteFile(homeCfg, []byte(`{"catalogue_refresh_minutes": 7}`), 0600)
+	os.WriteFile(legacy, []byte(`{"catalogue_refresh_minutes": 99}`), 0600)
+
+	configPath, legacyConfigPath = homeCfg, legacy
+	if cfg := loadConfig(); cfg.CatalogueRefreshMin != 7 {
+		t.Fatalf("home config not preferred: refresh=%d", cfg.CatalogueRefreshMin)
+	}
+
+	// Home missing -> legacy fallback.
+	configPath = filepath.Join(dir, "missing.json")
+	if cfg := loadConfig(); cfg.CatalogueRefreshMin != 99 {
+		t.Fatalf("legacy fallback not used: refresh=%d", cfg.CatalogueRefreshMin)
+	}
+
+	// Both missing -> defaults (0 = unset; the refresh loop applies 60 at use time).
+	legacyConfigPath = filepath.Join(dir, "missing2.json")
+	if cfg := loadConfig(); cfg.CatalogueRefreshMin != 0 {
+		t.Fatalf("defaults not used: refresh=%d", cfg.CatalogueRefreshMin)
+	}
+}

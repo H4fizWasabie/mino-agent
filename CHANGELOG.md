@@ -1,5 +1,8 @@
 ## [Unreleased]
 
+### Fixed
+- Config sprawl ownership fix (2026-08-14): cost-watch's config moves from the root-owned `/etc/mino-cost-watch.json` to `~/.mino/cost-watch.json` (legacy `/etc` read as fallback) — the mino user, and therefore the model, can now actually write it. This was the missing half of CTX-020's hot-reload design: the reload loop existed in code, but a root-owned /etc file made "the model edits its own watchdog" dead on arrival. `TestLoadConfigPrefersMinoHomeOverLegacy` locks the resolution order; the VPS now runs the home config with `/etc` retired to `.bak`. `CONFIG.md` added: the full file inventory (what/who writes/who reads), the one-provider-three-files mapping (providers.json route + mino.env key + auth.json credential), the generated-vs-config distinction, and the `/root/.mino` split-brain hazard. (Why: the config sprawl was assessed as a documentation problem until the ownership check showed it was a functional bug — the model's self-tuning path literally could not write its own watchdog config.)
+
 ### Added
 - `scripts/release.sh` — the release lane with the stage-smoke gate: from the tagged commit it builds the assets, runs `stage-smoke.sh` against a copy of the live VPS state, and only publishes if the gate passes. A smoke FAIL aborts before anything is published. CI is deliberately not wired in (no SSH surface for GitHub Actions). (Why: v2.9.1 was released by hand-assembly of the same steps; the gate is what makes "rehearse before publish" a property of the lane, not of the day.)
 

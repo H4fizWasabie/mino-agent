@@ -42,7 +42,9 @@ Then register it in `~/.mino/extensions.json`:
 
 Restart mino, and the tools appear: `cost_watch_status`, `cost_watch_check`.
 
-## Config (`/etc/mino-cost-watch.json`)
+## Config (`~/.mino/cost-watch.json`)
+
+Owned by the `mino` user so the model can edit its own watchdog (CTX-020 hot-reload — a root-owned `/etc` file would make that dead on arrival). Legacy installs: `/etc/mino-cost-watch.json` is still read as a fallback.
 
 ```json
 {

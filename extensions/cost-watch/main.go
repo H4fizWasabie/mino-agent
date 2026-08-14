@@ -26,16 +26,20 @@ import (
 )
 
 const (
-	configPath  = "/etc/mino-cost-watch.json"
 	minoEnvPath = "/home/mino/.mino/mino.env"
 	ua          = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36"
 )
 
 // vars so tests can point them at temp dirs
 var (
-	providersPath = "/home/mino/.mino/providers.json"
-	runLocksDir   = "/home/mino/.mino/run-locks"
-	cataloguePath = "/home/mino/.mino/cost-catalogue.json"
+	// CTX-020 hot-reload: the config must live where the mino user (and thus
+	// the model) can write it — a root-owned /etc file makes "the model edits
+	// its own watchdog" dead on arrival. Legacy installs fall back to /etc.
+	configPath        = "/home/mino/.mino/cost-watch.json"
+	legacyConfigPath  = "/etc/mino-cost-watch.json"
+	providersPath     = "/home/mino/.mino/providers.json"
+	runLocksDir       = "/home/mino/.mino/run-locks"
+	cataloguePath     = "/home/mino/.mino/cost-catalogue.json"
 )
 
 type modelConfig struct {
@@ -85,7 +89,12 @@ func loadConfig() *config {
 	cfg := defaultConfig()
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return cfg
+		// legacy install: config used to live in /etc (root-owned, not
+		// model-editable); prefer the new location when present.
+		data, err = os.ReadFile(legacyConfigPath)
+		if err != nil {
+			return cfg
+		}
 	}
 	var extra config
 	if json.Unmarshal(data, &extra) == nil {

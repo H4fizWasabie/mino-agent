@@ -22,6 +22,7 @@ One binary. One SQLite file. Your own AI assistant.
 - **MCP + Extensions** — plug in external tools via HTTP or stdio
 
 📋 **[DECISIONS.md](DECISIONS.md)** — architecture decisions, philosophy, and what NOT to build.
+📋 **[CONFIG.md](CONFIG.md)** — every config file, who writes/reads it, the provider↔files mapping.
 📋 **[CHANGELOG.md](CHANGELOG.md)** — release history.
 
 ## Quickstart
