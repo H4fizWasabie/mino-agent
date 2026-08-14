@@ -156,3 +156,18 @@ Mino's context is lean at the eager-injection layer (skills loaded by section, n
 - Context-budget telemetry (#2) — rejected; cheaper to stop-on-spin (#171) than to gauge.
 - Multi-owner trust/provenance (single-owner Mino)
 - The 30-iteration cap itself
+
+# Mino Provider Coupling — Wayfinder Map
+
+## Destination
+
+A provider or model swap is a config edit, not a code change: no `name ==` branches in the client/dashboard, no model lists in Go, one generic transport seam per family.
+
+## Frontier (open tickets)
+
+- [PRV-001 — Provider/model coupling](tickets/prv-001-provider-coupling.md) (GitHub #190, open) — seam inventory: codex transport branch (provider.go:94), hardcoded `codexModels` + `normalizeProvider` name special-case, dashboard `"codex"` literals, codex OAuth refresh branch, residual reasoning-field parsing. Direction: transport-family adapter from config, model lists → policy file, per-transport response field map. Not a rewrite.
+
+## Out of scope
+
+- Provider stack rewrite (routing/circuit-breaker behavior is settled, #159 stays)
+- Multi-owner anything
