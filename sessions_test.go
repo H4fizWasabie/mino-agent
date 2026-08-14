@@ -221,6 +221,6 @@ func fakePM(url string) *ProviderManager {
 		providers: []ProviderConfig{{Name: "fake", Priority: 1, Model: "m"}},
 		clients:   map[string]*Client{"fake": NewClient("k", url)},
 		state:     map[string]*providerState{"fake": {}},
-		sticky:    map[string]string{}, now: time.Now, sleep: func(time.Duration) {},
+		sticky:    map[string]string{}, now: time.Now,
 	}
 }

@@ -266,18 +266,5 @@ func toolName(entry string) string {
 	return entry
 }
 
-// --- Read-only tool filtering ---
-
-// ObserveOnly returns a lightweight registry copy with only BehaviorObserve tools.
-func (r *Registry) ObserveOnly() *Registry {
-	sub := &Registry{tools: make(map[string]*Tool)}
-	for name, t := range r.tools {
-		if t.Behavior == BehaviorObserve {
-			sub.tools[name] = t
-		}
-	}
-	return sub
-}
-
 // snapshotKey is the context key for the snapshot updater callback.
 type snapshotKey struct{}

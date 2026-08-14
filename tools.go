@@ -58,15 +58,6 @@ type Tool struct {
 	schemaErr      error
 }
 
-// ToAPI matches Core's to_api() — the shape for the Messages API tools=
-func (t *Tool) ToAPI() map[string]any {
-	return map[string]any{
-		"name":         t.Name,
-		"description":  t.Description,
-		"input_schema": t.Schema,
-	}
-}
-
 // --- Registry (matches Core's ToolRegistry) ---
 
 type Registry struct {
@@ -522,14 +513,6 @@ var toolSearchStopWords = map[string]bool{
 	"through": true, "user": true, "using": true, "with": true, "your": true,
 }
 
-func (r *Registry) Schema(name string) (ToolDef, bool) {
-	t, ok := r.tools[name]
-	if !ok {
-		return ToolDef{}, false
-	}
-	return r.toolDef(t), true
-}
-
 // toolDescCap bounds how much of a tool's description ships in the schema
 // payload. Composio MCP descriptions measured 261-8,770 chars (17.4k across
 // seven tools, 2026-08-10) — the head carries the selection semantics and the
@@ -583,10 +566,6 @@ func compactSchema(p map[string]any) map[string]any {
 		}
 	}
 	return out
-}
-
-func (r *Registry) Execute(name string, args map[string]any) string {
-	return r.ExecuteContext(context.Background(), name, args)
 }
 
 func (r *Registry) ExecuteContext(ctx context.Context, name string, args map[string]any) string {
@@ -951,22 +930,6 @@ type fileProof struct {
 	SHA256 string `json:"sha256"`
 }
 
-func makeSyncFileTool() *Tool {
-	ws := os.Getenv("MINO_WORKSPACE")
-	if ws == "" {
-		if cwd, err := os.Getwd(); err == nil {
-			ws = cwd
-		}
-	}
-	home := os.Getenv("MINO_HOME")
-	if home == "" {
-		if hd, err := os.UserHomeDir(); err == nil {
-			home = filepath.Join(hd, ".mino")
-		}
-	}
-	return makeSyncFileToolFor(ws, home, 5*time.Minute)
-}
-
 func makeSyncFileToolFor(workspace, home string, timeout time.Duration) *Tool {
 	run := func(ctx context.Context, args map[string]any) string {
 		if timeout <= 0 {
@@ -1051,10 +1014,6 @@ func copyLocalFile(source, destination string) error {
 	return closeErr
 }
 
-func proofForPath(path string) (fileProof, error) {
-	return proofForPathContext(context.Background(), path)
-}
-
 func proofForPathContext(ctx context.Context, path string) (fileProof, error) {
 	if host, remotePath, ok := splitRemotePath(path); ok {
 		if strings.HasPrefix(host, "-") {
@@ -1109,10 +1068,6 @@ func splitRemotePath(path string) (host, remotePath string, ok bool) {
 
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
-}
-
-func makeBashTool() *Tool {
-	return makeBashToolFor("", 2*time.Minute)
 }
 
 func makeBashToolFor(home string, timeout time.Duration) *Tool {
@@ -1213,34 +1168,6 @@ var destructiveBashPatterns = []struct {
 }
 
 // --- Workspace boundary gate (§8.1) ---
-
-// isUnderAllowedPath returns true if the path is under workspace or Mino home.
-// Always allows writes to ~/.mino/rollback/ (git rollback snapshots) and
-// /tmp/mino (Mino's own artifact/scratch space).
-func isUnderAllowedPath(path, workspace, home string) bool {
-	clean := filepath.Clean(path)
-	// root workspace means allow everything
-	if ws := filepath.Clean(workspace); ws == "/" {
-		return true
-	}
-	// always allow writes to Mino's own artifact storage
-	if strings.HasPrefix(clean, "/tmp/mino") {
-		return true
-	}
-	// always allow writes within workspace
-	if workspace != "" && strings.HasPrefix(clean, filepath.Clean(workspace)+string(os.PathSeparator)) {
-		return true
-	}
-	// always allow writes within Mino home
-	if home != "" && strings.HasPrefix(clean, filepath.Clean(home)+string(os.PathSeparator)) {
-		return true
-	}
-	// exact match on workspace or home root itself
-	if clean == filepath.Clean(workspace) || clean == filepath.Clean(home) {
-		return true
-	}
-	return false
-}
 
 var hasWhereClause = regexp.MustCompile(`(?i)\bwhere\b`)
 
@@ -1869,10 +1796,6 @@ func makePatternTool(home string, mem *Memory) *Tool {
 	}
 }
 
-func runBash(cmd string) (string, error) {
-	return runBashContext(context.Background(), 2*time.Minute, cmd)
-}
-
 func rewriteBashWithRTK(parent context.Context, command string) string {
 	if _, err := exec.LookPath("rtk"); err != nil {
 		return command
@@ -1943,16 +1866,6 @@ func readEnvFile(targetKey string) string {
 
 var httpClient = &http.Client{Timeout: 30 * time.Second}
 var imageClient = &http.Client{Timeout: 90 * time.Second}
-
-func httpGet(url string) (string, error) {
-	resp, err := httpClient.Get(url)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
-	return string(data), nil
-}
 
 // makeViewImageTool reads an image file and hands it to the vision provider.
 // The loop converts the returned data URL into a vision-model text description

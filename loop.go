@@ -768,33 +768,10 @@ func toolOutputStatus(output string) string {
 	return "ok"
 }
 
-var scpCommandPattern = regexp.MustCompile(`(?i)(?:^|[\s;&|($'"])\\?(?:[^\s;&|()]+/)?scp(?:[\s;&|()'"]|$)`)
 var copyCommandPattern = regexp.MustCompile(`(?i)(?:^|[\s;&|($'"])\\?(?:[^\s;&|()]+/)?(?:cp|scp|rsync)(?:[\s;&|()'"]|$)`)
-
-func containsSCPCommand(args map[string]any) bool {
-	command, _ := args["command"].(string)
-	return scpCommandPattern.MatchString(command)
-}
-
-func containsCopyCommand(args map[string]any) bool {
-	command, _ := args["command"].(string)
-	return isShellCopyCommand(command)
-}
 
 func isShellCopyCommand(command string) bool {
 	return copyCommandPattern.MatchString(command)
-}
-
-func includeToolSchema(schemas []ToolDef, registry *Registry, name string) []ToolDef {
-	for _, schema := range schemas {
-		if schema.Name == name {
-			return schemas
-		}
-	}
-	if schema, ok := registry.Schema(name); ok {
-		return append(schemas, schema)
-	}
-	return schemas
 }
 
 func extractText(blocks []ContentBlock) string {
@@ -1151,16 +1128,6 @@ func extractBalancedJSON(s string) (jsonStr string, remaining string) {
 		}
 	}
 	return "", s
-}
-
-func hasInvalidToolInput(uses []ContentBlock) bool {
-	for _, use := range uses {
-		args, ok := use.Input.(map[string]any)
-		if !ok || args == nil {
-			return true
-		}
-	}
-	return false
 }
 
 func lastUserContent(messages []Message) string {

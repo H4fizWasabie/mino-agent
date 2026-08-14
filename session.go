@@ -81,17 +81,6 @@ func loadSoul(home string) string {
 	return string(data)
 }
 
-// BuildSystem — Core's build_system(): returns the STATIC system prompt
-// (SOUL.md + workspace + behavior rules). Per-turn matched skills and
-// playbook routing are NOT included here: they move to the user-message
-// tail (see BuildContext) so the system prompt stays byte-stable across
-// turns and the provider's prompt-prefix cache stays warm. Time is
-// injected as user message for the same reason.
-func (s *Session) BuildSystem(userMessage, source string) string {
-	static, _ := s.buildSystem(userMessage, source, true)
-	return static
-}
-
 // BuildContext returns (static system prompt, per-turn routing block). The
 // routing block (matched skills + playbook routing) is appended to the user
 // message tail by the caller; splitting it from the system prompt keeps the

@@ -297,17 +297,6 @@ func (b *MCPBridge) Reload() {
 	}
 }
 
-// Servers returns the list of configured MCP server names.
-func (b *MCPBridge) Servers() []string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	names := make([]string, 0, len(b.servers))
-	for n := range b.servers {
-		names = append(names, n)
-	}
-	return names
-}
-
 func toolSchema(schema mcp.ToolInputSchema) map[string]any {
 	// mcp-go's ToolInputSchema wraps Properties + Required as raw maps.
 	if schema.Properties == nil {

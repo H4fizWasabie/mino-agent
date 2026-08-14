@@ -15,7 +15,7 @@ import (
 func TestBuildSystemUsesConfiguredTimezoneAndOffset(t *testing.T) {
 	home := t.TempDir()
 	s := NewSession(&Settings{Home: home, Workspace: "/srv/mino-work", Timezone: "Asia/Kuala_Lumpur"}, nil)
-	got := s.BuildSystem("what time is it?", "cli")
+	got, _ := s.BuildContext("what time is it?", "cli")
 	// Time is now injected as a user message for cache stability, not in BuildSystem.
 	if !strings.Contains(got, "LOCAL WORKSPACE (authoritative): /srv/mino-work") {
 		t.Fatalf("workspace missing: %q", got)
@@ -32,7 +32,7 @@ func TestBuildSystemUsesConfiguredTimezoneAndOffset(t *testing.T) {
 func TestBuildSystemAllowsDerivedReportsFromUntrustedContent(t *testing.T) {
 	home := t.TempDir()
 	s := NewSession(&Settings{Home: home, Workspace: "/srv/mino-work"}, nil)
-	got := s.BuildSystem("summarize today's news", "cli")
+	got, _ := s.BuildContext("summarize today's news", "cli")
 	if !strings.Contains(got, "write_file containing your own derived report is allowed") {
 		t.Fatalf("derived-report guidance missing: %q", got)
 	}
@@ -46,7 +46,7 @@ func TestBuildSystemAllowsDerivedReportsFromUntrustedContent(t *testing.T) {
 // vs calendar). Stable truths only; dynamic state stays with system_check.
 func TestBuildSystemIncludesStateMap(t *testing.T) {
 	s := NewSession(&Settings{Home: t.TempDir(), Workspace: t.TempDir()}, nil)
-	got := s.BuildSystem("hello", "cli")
+	got, _ := s.BuildContext("hello", "cli")
 	for _, want := range []string{
 		"SYSTEM STATE MAP",
 		"Reminders → SQLite",
@@ -68,7 +68,7 @@ func TestBuildSystemIncludesStateMap(t *testing.T) {
 // stated, never smoothed — the rule lives in the system prompt.
 func TestBuildSystemIncludesNumberVerificationRule(t *testing.T) {
 	s := NewSession(&Settings{Home: t.TempDir(), Workspace: t.TempDir()}, nil)
-	system := s.BuildSystem("hello", "cli")
+	system, _ := s.BuildContext("hello", "cli")
 	for _, want := range []string{"BOTH numbers", "never something to smooth over", "source of truth"} {
 		if !strings.Contains(system, want) {
 			t.Fatalf("number-verification rule missing %q from system prompt", want)
@@ -83,7 +83,7 @@ func TestBuildSystemIncludesNumberVerificationRule(t *testing.T) {
 // model or playbook.
 func TestBuildSystemIncludesVerifyThenClaimRule(t *testing.T) {
 	s := NewSession(&Settings{Home: t.TempDir(), Workspace: t.TempDir()}, nil)
-	system := s.BuildSystem("hello", "cli")
+	system, _ := s.BuildContext("hello", "cli")
 	for _, want := range []string{"Verify-then-claim", "external identifier", "did not receive verbatim", "never invent an ID"} {
 		if !strings.Contains(system, want) {
 			t.Fatalf("verify-then-claim rule missing %q from system prompt", want)

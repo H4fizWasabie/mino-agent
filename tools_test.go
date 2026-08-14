@@ -258,7 +258,7 @@ func TestToolDefCapsLongDescription(t *testing.T) {
 	r := NewRegistry()
 	long := strings.Repeat("d", 5000)
 	r.Register(&Tool{Name: "big", Description: long, Schema: map[string]any{"type": "object"}})
-	def, _ := r.Schema("big")
+	def := r.toolDef(r.tools["big"])
 	if len(def.Description) > toolDescCap+3 {
 		t.Fatalf("description = %d chars, want ≤ %d", len(def.Description), toolDescCap)
 	}
@@ -268,12 +268,12 @@ func TestToolDefCapsLongDescription(t *testing.T) {
 	// Short descriptions pass through untouched.
 	short := "pong"
 	r.Register(&Tool{Name: "small", Description: short, Schema: map[string]any{"type": "object"}})
-	if def, _ := r.Schema("small"); def.Description != short {
+	if def := r.toolDef(r.tools["small"]); def.Description != short {
 		t.Fatalf("short description altered: %q", def.Description)
 	}
 	// Operator override via MINO_MAX_TOOL_DESC_CHARS.
 	r.SetMaxToolDescChars(200)
-	if def, _ := r.Schema("big"); len(def.Description) > 203 {
+	if def := r.toolDef(r.tools["big"]); len(def.Description) > 203 {
 		t.Fatalf("override not honored: %d chars", len(def.Description))
 	}
 }

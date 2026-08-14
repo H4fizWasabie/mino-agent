@@ -141,7 +141,7 @@ func TestConsolidationUsesFakeProviderResponse(t *testing.T) {
 		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
 		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
 		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
-		sleep: func(time.Duration) {}, now: time.Now,
+		now: time.Now,
 	}
 	mem := &Memory{db: db, client: pm, cfg: &Settings{Home: home, MemoriesDir: filepath.Join(home, "memories"), ConsolidateEvery: 1}, graph: NewGraphMemory(filepath.Join(home, "memories"), nil)}
 	if got := mem.ConsolidateDue(); got != 1 {
@@ -162,7 +162,7 @@ func TestGraphRebuildDoesNotEraseEdgesOnEmptyResponse(t *testing.T) {
 		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
 		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
 		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
-		sleep: func(time.Duration) {}, now: time.Now,
+		now: time.Now,
 	}
 	dir := t.TempDir()
 	gm := NewGraphMemory(filepath.Join(dir, "memories"), nil)
@@ -464,7 +464,7 @@ func TestConsolidateDue(t *testing.T) {
 		providers: []ProviderConfig{{Name: "fake", Priority: 1, Model: "m"}},
 		clients:   map[string]*Client{"fake": NewClient("k", ts.URL)},
 		state:     map[string]*providerState{"fake": {}},
-		sticky:    map[string]string{}, now: time.Now, sleep: func(time.Duration) {},
+		sticky:    map[string]string{}, now: time.Now,
 	}, cfg)
 	seed := func(sid string, n int) {
 		for range n {
@@ -561,7 +561,7 @@ func TestConsolidateDueSelectsByRecency(t *testing.T) {
 		providers: []ProviderConfig{{Name: "fake", Priority: 1, Model: "m"}},
 		clients:   map[string]*Client{"fake": NewClient("k", ts.URL)},
 		state:     map[string]*providerState{"fake": {}},
-		sticky:    map[string]string{}, now: time.Now, sleep: func(time.Duration) {},
+		sticky:    map[string]string{}, now: time.Now,
 	}, cfg)
 	seed := func(sid string, n int) {
 		for range n {
@@ -686,7 +686,7 @@ func TestGraphRebuildKeywordCandidatesAndProvenance(t *testing.T) {
 		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
 		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
 		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
-		sleep: func(time.Duration) {}, now: time.Now,
+		now: time.Now,
 	}
 	dir := t.TempDir()
 	gm := NewGraphMemory(filepath.Join(dir, "memories"), nil)
@@ -747,7 +747,7 @@ func TestJudgeChangedFacts(t *testing.T) {
 		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
 		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
 		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
-		sleep: func(time.Duration) {}, now: time.Now,
+		now: time.Now,
 	}
 	dir := t.TempDir()
 	gm := NewGraphMemory(filepath.Join(dir, "memories"), nil)
@@ -780,7 +780,7 @@ func TestJudgeChangedFacts(t *testing.T) {
 		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server2.URL, Model: "main", Small: "small"}},
 		clients:   map[string]*Client{"fake": NewClient("test-key", server2.URL)},
 		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
-		sleep: func(time.Duration) {}, now: time.Now,
+		now: time.Now,
 	}
 	gm2 := NewGraphMemory(filepath.Join(dir, "memories2"), nil)
 	gm2.RecordFact(Fact{ID: "c", Type: "semantic", Subject: "Fact C"})
@@ -805,7 +805,7 @@ func TestJudgeChangedFactsKeepsWhyOnPartialResponse(t *testing.T) {
 		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
 		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
 		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
-		sleep: func(time.Duration) {}, now: time.Now,
+		now: time.Now,
 	}
 	dir := t.TempDir()
 	gm := NewGraphMemory(filepath.Join(dir, "memories"), nil)
@@ -843,7 +843,7 @@ func TestJudgeChangedFactsSkipsConcurrentJudgment(t *testing.T) {
 		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
 		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
 		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
-		sleep: func(time.Duration) {}, now: time.Now,
+		now: time.Now,
 	}
 	m := &Memory{client: pm, graph: gm}
 	if n := m.JudgeChangedFacts(); n != 0 {
@@ -886,7 +886,7 @@ func TestDistillOutputsDue(t *testing.T) {
 		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
 		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
 		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
-		sleep: func(time.Duration) {}, now: time.Now,
+		now: time.Now,
 	}
 	gm := NewGraphMemory(filepath.Join(dir, "memories"), nil)
 	gm.RecordFact(Fact{ID: "threads_ai_learning_playbook", Type: "semantic", Subject: "Playbook publishes daily Threads takeaways"})
@@ -923,7 +923,7 @@ func TestDistillOutputsDue(t *testing.T) {
 		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server2.URL, Model: "main", Small: "small"}},
 		clients:   map[string]*Client{"fake": NewClient("test-key", server2.URL)},
 		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
-		sleep: func(time.Duration) {}, now: time.Now,
+		now: time.Now,
 	}
 	m2 := &Memory{db: db, client: pm2, cfg: &Settings{Home: dir, MemoriesDir: filepath.Join(dir, "memories")}, graph: gm}
 	if n := m2.DistillOutputsDue(); n != 0 {
@@ -955,7 +955,7 @@ func TestDistillGateSkipsSemanticFactsWhenNotWhitelisted(t *testing.T) {
 		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
 		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
 		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
-		sleep: func(time.Duration) {}, now: time.Now,
+		now: time.Now,
 	}
 	gm := NewGraphMemory(filepath.Join(dir, "memories"), nil)
 	m := &Memory{db: db, client: pm, cfg: &Settings{Home: dir, MemoriesDir: filepath.Join(dir, "memories")}, graph: gm}
@@ -1018,7 +1018,7 @@ func TestMaintainGraphClustersOnPartialRebuild(t *testing.T) {
 		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
 		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
 		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
-		sleep: func(time.Duration) {}, now: time.Now,
+		now: time.Now,
 	}
 	dir := t.TempDir()
 	gm := NewGraphMemory(filepath.Join(dir, "memories"), nil)
@@ -1072,7 +1072,7 @@ func TestDistillOutputsDueTombstonesMissingFiles(t *testing.T) {
 		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
 		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
 		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
-		sleep: func(time.Duration) {}, now: time.Now,
+		now: time.Now,
 	}
 	gm := NewGraphMemory(filepath.Join(dir, "memories"), nil)
 	m := &Memory{db: db, client: pm, cfg: &Settings{Home: dir, MemoriesDir: filepath.Join(dir, "memories")}, graph: gm}
@@ -1161,7 +1161,7 @@ func TestJudgeFactEdgesLogsModelFailure(t *testing.T) {
 		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
 		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
 		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
-		sleep: func(time.Duration) {}, now: time.Now,
+		now: time.Now,
 	}
 	gm := NewGraphMemory(t.TempDir(), nil)
 	gm.RecordFact(Fact{ID: "a", Type: "semantic", Subject: "Fact A"})

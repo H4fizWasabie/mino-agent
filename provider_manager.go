@@ -90,7 +90,6 @@ type ProviderManager struct {
 	authStore *AuthStore
 	mu        sync.Mutex
 	authMu    sync.Mutex
-	sleep     func(time.Duration)
 	now       func() time.Time
 }
 
@@ -99,7 +98,7 @@ func NewProviderManager(home string, legacy *Settings, authStore *AuthStore) (*P
 	if err != nil {
 		return nil, err
 	}
-	m := &ProviderManager{clients: map[string]*Client{}, state: map[string]*providerState{}, sticky: map[string]string{}, preferred: map[string]providerPreference{}, authStore: authStore, sleep: time.Sleep, now: time.Now}
+	m := &ProviderManager{clients: map[string]*Client{}, state: map[string]*providerState{}, sticky: map[string]string{}, preferred: map[string]providerPreference{}, authStore: authStore, now: time.Now}
 	for _, p := range configs {
 		key := ""
 		if p.APIKeyEnv != "" {
@@ -219,59 +218,8 @@ func (m *ProviderManager) resolveKey(p ProviderConfig) (string, error) {
 	return "", nil
 }
 
-func (m *ProviderManager) call(session string, role ModelRole, call func(*Client, string, string) (*LLMResponse, error)) (*LLMResponse, error) {
-	return m.callWithConfig(session, role, func(c *Client, model, reasoning string, _ ProviderConfig) (*LLMResponse, error) {
-		return call(c, model, reasoning)
-	})
-}
-
 func (m *ProviderManager) callWithConfig(session string, role ModelRole, call func(*Client, string, string, ProviderConfig) (*LLMResponse, error)) (*LLMResponse, error) {
-	var lastErr error
-	for _, p := range m.candidates(session, role) {
-		// refresh key from env/auth.json (supports runtime key changes)
-		key, err := m.resolveKey(p)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		client := m.clients[p.Name]
-		if client != nil {
-			client.apiKey = key
-		}
-		for attempt := 0; attempt < 3; attempt++ {
-			// #159: on the first retry of a routed call, drop the model's
-			// ":provider" pin so OpenRouter's allow_fallbacks order routes to a
-			// healthy provider instead of burning the retry (and then failing
-			// over to a different model) on the same dead provider.
-			pmodel := modelFor(p, role)
-			if attempt >= 1 {
-				pmodel = stripProviderPin(pmodel)
-			}
-			resp, err := call(client, pmodel, p.ReasoningEffort, p)
-			if err == nil {
-				m.success(session, role, p.Name)
-				return resp, nil
-			}
-			// CTX-010: log every failure with the error string so a silent
-			// failover is diagnosable without post-hoc guessing.
-			slog.Warn("provider call failed", "provider", p.Name, "role", role, "model", pmodel, "attempt", attempt+1, "error", err)
-			lastErr = err
-			if attempt < 2 {
-				m.sleep(time.Duration(1<<attempt) * time.Second)
-			}
-		}
-		m.failure(session, role, p.Name)
-	}
-	if lastErr != nil {
-		return nil, fmt.Errorf("all %s providers failed: %w", role, lastErr)
-	}
-	return nil, fmt.Errorf("all %s providers failed", role)
-}
-
-func (m *ProviderManager) callContext(ctx context.Context, session string, role ModelRole, call func(*Client, string, string) (*LLMResponse, error)) (*LLMResponse, error) {
-	return m.callContextWithConfig(ctx, session, role, func(c *Client, model, reasoning string, _ ProviderConfig) (*LLMResponse, error) {
-		return call(c, model, reasoning)
-	})
+	return m.callContextWithConfig(context.Background(), session, role, call)
 }
 
 func (m *ProviderManager) callContextWithConfig(ctx context.Context, session string, role ModelRole, call func(*Client, string, string, ProviderConfig) (*LLMResponse, error)) (*LLMResponse, error) {

@@ -352,12 +352,6 @@ func (m *Memory) availableFactIDs() string {
 	return strings.Join(ids, ", ")
 }
 
-// --- Semantic search (graph-backed) ---
-
-func (m *Memory) Search(query string) string {
-	return m.graph.Remember(query, "")
-}
-
 // --- Skills (Core: procedural memory) ---
 
 func (m *Memory) MatchingSkills(message string) string {

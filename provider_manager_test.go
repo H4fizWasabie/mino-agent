@@ -49,7 +49,7 @@ func TestParseSSEStreamAcceptsReasoningContent(t *testing.T) {
 func testManager() *ProviderManager {
 	return &ProviderManager{
 		providers: []ProviderConfig{{Name: "mimo", Priority: 1, Model: "mimo"}, {Name: "backup", Priority: 2, Model: "backup"}},
-		state:     map[string]*providerState{"mimo": {}, "backup": {}}, sticky: map[string]string{}, now: func() time.Time { return time.Unix(100, 0) }, sleep: func(time.Duration) {},
+		state:     map[string]*providerState{"mimo": {}, "backup": {}}, sticky: map[string]string{}, now: func() time.Time { return time.Unix(100, 0) },
 	}
 }
 
@@ -95,7 +95,7 @@ func TestPreferredModelAndReasoningFollowProvider(t *testing.T) {
 	if got := m.ActiveReasoning("s"); got != "high" {
 		t.Fatalf("active reasoning = %q", got)
 	}
-	response, err := m.call("s", MainModel, func(_ *Client, model, reasoning string) (*LLMResponse, error) {
+	response, err := m.callWithConfig("s", MainModel, func(_ *Client, model, reasoning string, _ ProviderConfig) (*LLMResponse, error) {
 		return &LLMResponse{FinalText: model + ":" + reasoning}, nil
 	})
 	if err != nil || response.FinalText != "backup-fast:high" {
@@ -103,26 +103,30 @@ func TestPreferredModelAndReasoningFollowProvider(t *testing.T) {
 	}
 }
 
-func failCall(*Client, string, string) (*LLMResponse, error) { return nil, errors.New("down") }
+func failCall(*Client, string, string, ProviderConfig) (*LLMResponse, error) { return nil, errors.New("down") }
 
 func TestRetryBackoff(t *testing.T) {
 	m := testManager()
-	var sleeps []time.Duration
-	m.sleep = func(d time.Duration) { sleeps = append(sleeps, d) }
 	calls := 0
-	resp, err := m.call("s", MainModel, func(_ *Client, model, _ string) (*LLMResponse, error) {
+	start := time.Now()
+	resp, err := m.callWithConfig("s", MainModel, func(_ *Client, model, _ string, _ ProviderConfig) (*LLMResponse, error) {
 		calls++
 		if calls < 3 {
 			return nil, errors.New("down")
 		}
 		return &LLMResponse{FinalText: model}, nil
 	})
+	elapsed := time.Since(start)
 	if err != nil || resp.FinalText != "mimo" {
 		t.Fatalf("resp=%+v err=%v", resp, err)
 	}
-	want := []time.Duration{time.Second, 2 * time.Second}
-	if len(sleeps) != 2 || sleeps[0] != want[0] || sleeps[1] != want[1] {
-		t.Fatalf("sleeps = %v, want %v", sleeps, want)
+	// Backoff is 1s then 2s between the three attempts (timer+select path;
+	// the old m.sleep seam was removed with the call/callWithConfig split).
+	if elapsed < 3*time.Second {
+		t.Fatalf("retries did not back off: elapsed %v, want >= 3s", elapsed)
+	}
+	if calls != 3 {
+		t.Fatalf("calls = %d, want 3", calls)
 	}
 	if m.state["mimo"].failures != 0 || m.sticky[m.key("s", MainModel)] != "mimo" {
 		t.Fatalf("state=%+v sticky=%v", m.state["mimo"], m.sticky)
@@ -131,7 +135,7 @@ func TestRetryBackoff(t *testing.T) {
 
 func TestFallback(t *testing.T) {
 	m := testManager()
-	resp, err := m.call("s", MainModel, func(_ *Client, model, _ string) (*LLMResponse, error) {
+	resp, err := m.callWithConfig("s", MainModel, func(_ *Client, model, _ string, _ ProviderConfig) (*LLMResponse, error) {
 		if model == "mimo" {
 			return nil, errors.New("down")
 		}
@@ -154,7 +158,7 @@ func TestCircuitOpenAndRecovery(t *testing.T) {
 	m.now = func() time.Time { return now }
 	m.success("s", MainModel, "mimo") // sticky must clear when circuit opens
 	for range 3 {
-		if _, err := m.call("s", MainModel, failCall); err == nil {
+		if _, err := m.callWithConfig("s", MainModel, failCall); err == nil {
 			t.Fatal("want error while providers failing")
 		}
 	}
@@ -165,7 +169,7 @@ func TestCircuitOpenAndRecovery(t *testing.T) {
 		t.Fatalf("sticky not cleared: %v", m.sticky)
 	}
 	calls := 0
-	if _, err := m.call("s", MainModel, func(*Client, string, string) (*LLMResponse, error) {
+	if _, err := m.callWithConfig("s", MainModel, func(*Client, string, string, ProviderConfig) (*LLMResponse, error) {
 		calls++
 		return nil, errors.New("down")
 	}); err == nil || calls != 0 {
@@ -186,7 +190,7 @@ func visionManager() *ProviderManager {
 		state:  map[string]*providerState{"pro": {}, "omni": {}},
 		sticky: map[string]string{},
 		now:    func() time.Time { return time.Unix(100, 0) },
-		sleep:  func(time.Duration) {},
+		
 	}
 }
 
@@ -234,7 +238,7 @@ func TestVisionStickyDoesNotPoisonMain(t *testing.T) {
 func TestAllTextOnlyVisionFails(t *testing.T) {
 	m := visionManager()
 	m.providers = m.providers[:1] // only text-only pro remains
-	if _, err := m.call("s", VisionModel, failCall); err == nil {
+	if _, err := m.callWithConfig("s", VisionModel, failCall); err == nil {
 		t.Fatal("expected error when no vision-capable provider")
 	}
 }
@@ -335,7 +339,7 @@ func TestRetryDropsProviderPin(t *testing.T) {
 	m := testManager()
 	m.providers = []ProviderConfig{{Name: "mimo", Priority: 1, Model: "deepseek/agent:dead"}}
 	var models []string
-	_, err := m.call("s", MainModel, func(_ *Client, model, _ string) (*LLMResponse, error) {
+	_, err := m.callWithConfig("s", MainModel, func(_ *Client, model, _ string, _ ProviderConfig) (*LLMResponse, error) {
 		models = append(models, model)
 		return nil, errors.New("down") // always fail -> 3 attempts then error
 	})

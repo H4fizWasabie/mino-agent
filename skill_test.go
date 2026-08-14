@@ -55,7 +55,7 @@ func TestSkillCreateAndLifecycle(t *testing.T) {
 	if len(hits) != 1 || hits[0].Name != "my-report" {
 		t.Fatalf("created skill not matched: %d hits", len(hits))
 	}
-	sl.MarkStale("my-report")
+	sl.skills["my-report"].State = "stale"
 	hits = sl.Match("create the weekly report")
 	if len(hits) != 0 {
 		t.Fatalf("stale skill still matched: %d hits", len(hits))

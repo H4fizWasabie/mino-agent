@@ -154,33 +154,6 @@ func (sl *SkillLoader) Create(name, description string, triggers []string, body 
 	return nil
 }
 
-func (sl *SkillLoader) MarkStale(name string) {
-	if s, ok := sl.skills[name]; ok && s.State == "active" {
-		s.State = "stale"
-		sl.saveUsage()
-	}
-}
-
-func (sl *SkillLoader) Pin(name string) {
-	if s, ok := sl.skills[name]; ok {
-		s.State = "pinned"
-		sl.saveUsage()
-	}
-}
-
-func (sl *SkillLoader) AutoStale(days int) {
-	if days <= 0 {
-		return
-	}
-	cutoff := float64(time.Now().AddDate(0, 0, -days).Unix())
-	for _, s := range sl.skills {
-		if s.State == "active" && s.UseCount == 0 && s.CreatedAt < cutoff {
-			s.State = "stale"
-		}
-	}
-	sl.saveUsage()
-}
-
 var (
 	skillWordCache = map[string]map[string]bool{}
 	_skillWordRE   = regexp.MustCompile(`[a-z0-9]{3,}`)
