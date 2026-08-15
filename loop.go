@@ -1178,31 +1178,50 @@ func formatToolResults(results []map[string]any) string {
 	return out.String()
 }
 
-// provenanceSearchWarning (CTX-022 C) inspects the turn's earlier tool calls:
-// if a `remember` returned user-provenanced facts whose text overlaps this
-// web-search query, it returns a mid-flight warning naming the memory fact as
-// the higher-priority truth candidate. Empty when no conflict signal exists.
+// provenanceGateWarning (CTX-022 C, proactive): if recall of the query
+// returned a user-provenanced top fact, return a mid-flight warning naming it
+// as the higher-priority truth candidate. Empty when no conflict signal.
+func provenanceGateWarning(recall, query string) string {
+	if !strings.Contains(recall, "user-provenanced") {
+		return ""
+	}
+	words := memoryTokenize(query)
+	if len(matchedWords(words, recall)) == 0 {
+		return ""
+	}
+	subject := firstFactSubjectLine(recall)
+	if subject == "" {
+		return ""
+	}
+	return fmt.Sprintf("[System: provenance gate — your memory returned a user-authored fact on this topic (%s). It outranks web data unless flagged stale or superseded. Verify gaps; do not re-litigate the owner's own fact.]", subject)
+}
+
+// firstFactSubjectLine returns the first non-edge line carrying a fact id.
+func firstFactSubjectLine(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		t := strings.TrimSpace(line)
+		if strings.Contains(t, "# ") && !strings.Contains(t, "→") && !strings.Contains(t, "←") {
+			return t
+		}
+	}
+	return ""
+}
+
+// provenanceSearchWarning (CTX-022 C, reactive) inspects the turn's earlier
+// tool calls: if a `remember` returned user-provenanced facts whose text
+// overlaps this web-search query, it returns the same warning. Empty when no
+// conflict signal exists. (The proactive gate on search_web itself covers the
+// model-skipped-remember case; this covers remember-then-search.)
 func provenanceSearchWarning(calls []ToolCall, args map[string]any) string {
 	query, _ := args["query"].(string)
 	if query == "" {
 		return ""
 	}
-	words := memoryTokenize(query)
 	for _, c := range calls {
-		if c.Name != "remember" || !strings.Contains(c.Output, "user-provenanced") {
-			continue
-		}
-		// First non-edge line carrying a fact id is the top-ranked subject.
-		subject := ""
-		for _, line := range strings.Split(c.Output, "\n") {
-			t := strings.TrimSpace(line)
-			if strings.Contains(t, "# ") && !strings.Contains(t, "→") && !strings.Contains(t, "←") {
-				subject = t
-				break
+		if c.Name == "remember" {
+			if warn := provenanceGateWarning(c.Output, query); warn != "" {
+				return warn
 			}
-		}
-		if subject != "" && len(matchedWords(words, c.Output)) > 0 {
-			return fmt.Sprintf("[System: provenance gate — your memory returned a user-authored fact on this topic (%s). It outranks web data unless flagged stale or superseded. Verify gaps; do not re-litigate the owner's own fact.]", subject)
 		}
 	}
 	return ""

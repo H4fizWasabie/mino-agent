@@ -665,3 +665,31 @@ func TestStaleAfterRoundTrip(t *testing.T) {
 		t.Fatalf("stale_after drifted in round-trip: %v vs %v", f.StaleAfter, future)
 	}
 }
+
+// CTX-022 C (proactive): search_web consults the graph itself — a
+// user-provenanced fact on the query topic is named before the external
+// content, even when the model never called remember first (observed
+// 2026-08-15 live: the Agent-Reach question went straight to web and
+// repeated the wrong answer; the reactive loop gate never fired).
+func TestSearchToolProactiveProvenanceGate(t *testing.T) {
+	dir := t.TempDir()
+	gm := NewGraphMemory(dir, nil)
+	if err := gm.RecordFact(Fact{
+		ID: "repo_deleted", Type: "semantic", Source: "user",
+		Subject: "The Agent-Reach repo was deleted per request",
+		Why:     "so I know it is gone",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mem := &Memory{graph: gm}
+	tool := makeSearchTool(mem)
+	out := tool.Fn(map[string]any{"query": "Agent-Reach repo status"})
+	if !strings.Contains(out, "provenance gate") || !strings.Contains(out, "repo_deleted") {
+		t.Fatalf("proactive gate missing:\n%s", out)
+	}
+	// Non-overlapping query stays clean.
+	out2 := tool.Fn(map[string]any{"query": "weather today kuala lumpur"})
+	if strings.Contains(out2, "provenance gate") {
+		t.Fatalf("gate fired on unrelated query:\n%s", out2)
+	}
+}
