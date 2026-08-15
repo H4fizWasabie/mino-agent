@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"strconv"
 )
 
 // Mino — tools/registry.py — Core's exact tool registry pattern.
@@ -1623,9 +1624,10 @@ func makeManageMemoryTool(mem *Memory) *Tool {
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"action":  map[string]any{"type": "string", "description": "'correct', 'forget', 'confirm', 'reject' (archives immediately — active expiry), 'status', 'consolidate', 'dedup', 'rebuild_edges', 'clean_edges', 'maintain', 'judge_edges', or 'distill_outputs'"},
+				"action":  map[string]any{"type": "string", "description": "'add', 'correct', 'forget', 'confirm', 'reject' (archives immediately — active expiry), 'status', 'consolidate', 'dedup', 'rebuild_edges', 'clean_edges', 'maintain', 'judge_edges', or 'distill_outputs'"},
 				"subject": map[string]any{"type": "string", "description": "Subject (fact actions only)"},
-				"content": map[string]any{"type": "string", "description": "New content (for correct)"},
+				"content": map[string]any{"type": "string", "description": "New content (for correct/add)"},
+				"stale_after": map[string]any{"type": "string", "description": "Optional expiry for volatile facts (DRF-002): duration like '7d' or '24h', or an RFC3339 timestamp. Config-mirror facts (current stack, current schedule) MUST set a short one — the live file/tool is the truth, the fact is a dated snapshot."},
 			},
 			"required": []string{"action"},
 		},
@@ -1633,6 +1635,10 @@ func makeManageMemoryTool(mem *Memory) *Tool {
 			action, _ := args["action"].(string)
 			subject, _ := args["subject"].(string)
 			content, _ := args["content"].(string)
+			staleAfter, saErr := parseStaleAfter(args["stale_after"])
+			if saErr != nil {
+				return "Error: " + saErr.Error()
+			}
 
 			// Self-maintenance: the same passes the CLI subcommands trigger,
 			// callable by Mino itself on the live memory.
@@ -1691,6 +1697,31 @@ func makeManageMemoryTool(mem *Memory) *Tool {
 				return fmt.Sprintf("distilled %d playbook outputs", n)
 			}
 
+			if action == "add" {
+				if subject == "" {
+					return "Memory action requires a subject"
+				}
+				id := slugifyFactID(subject)
+				fact := Fact{
+					ID:         id,
+					Type:       "semantic",
+					Subject:    subject,
+					At:         time.Now(),
+					Source:     "user", // amanuensis, same authorship as save_note (#178)
+					Body:       content,
+					StaleAfter: staleAfter,
+				}
+				if playbookDepth.Load() > 0 {
+					fact.Source = "model-distill"
+				}
+				if err := mem.graph.RecordFact(fact); err != nil {
+					return fmt.Sprintf("Error adding: %v", err)
+				}
+				if !staleAfter.IsZero() {
+					return fmt.Sprintf("Added: %s — stored in memories/%s.md (expires %s)", subject, id, staleAfter.UTC().Format(time.RFC3339))
+				}
+				return fmt.Sprintf("Added: %s — stored in memories/%s.md", subject, id)
+			}
 			if subject == "" {
 				return "Memory action requires a subject"
 			}
@@ -1706,6 +1737,9 @@ func makeManageMemoryTool(mem *Memory) *Tool {
 			}
 			if action == "correct" {
 				fact.Body = content
+				if !staleAfter.IsZero() {
+					fact.StaleAfter = staleAfter
+				}
 				fact.Feedback = 0
 				if err := mem.graph.ReplaceFact(*fact); err != nil {
 					return fmt.Sprintf("Error correcting: %v", err)
@@ -2267,4 +2301,42 @@ func parseCFImage(data []byte) ([]byte, error) {
 		return nil, err
 	}
 	return img, nil
+}
+
+// parseStaleAfter converts a stale_after tool arg (duration "7d"/"24h" or
+// RFC3339 timestamp) into a time.Time. Invalid/empty input returns zero.
+func parseStaleAfter(raw any) (time.Time, error) {
+	s, _ := raw.(string)
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, nil
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+	// duration with day units: "7d" -> 7*24h
+	if strings.HasSuffix(s, "d") {
+		if n, err := strconv.Atoi(strings.TrimSuffix(s, "d")); err == nil && n > 0 {
+			return time.Now().Add(time.Duration(n) * 24 * time.Hour), nil
+		}
+	}
+	if d, err := time.ParseDuration(s); err == nil && d > 0 {
+		return time.Now().Add(d), nil
+	}
+	return time.Time{}, fmt.Errorf("invalid stale_after %q (use duration like 7d/24h or RFC3339)", s)
+}
+
+// slugifyFactID derives a stable fact id from a subject ("Current Mino stack"
+// -> "current_mino_stack"). Collisions overwrite — the subject is the key.
+func slugifyFactID(subject string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(subject) {
+		switch {
+		case r >= 'a' && r <= 'z' || r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == ' ' || r == '-' || r == '_':
+			b.WriteByte('_')
+		}
+	}
+	return strings.Trim(b.String(), "_")
 }
