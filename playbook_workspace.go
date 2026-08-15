@@ -81,6 +81,15 @@ type PlaybookRunStage struct {
 	EndedAt   time.Time `json:"ended_at,omitempty"`
 }
 
+func validWeekday(d string) bool {
+	for _, wd := range []string{"sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"} {
+		if d == wd {
+			return true
+		}
+	}
+	return false
+}
+
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
