@@ -300,7 +300,13 @@ func (m *ProviderManager) candidates(session string, role ModelRole) []ProviderC
 	defer m.mu.Unlock()
 	now := m.now()
 	var out []ProviderConfig
-	if name := m.sticky[m.key(session, role)]; name != "" && m.state[name].openUntil.Before(now) {
+	name := m.sticky[m.key(session, role)]
+	if name != "" {
+		if st := m.state[name]; st == nil || !st.openUntil.Before(now) {
+			name = "" // stale sticky (provider removed or cooling down): fall through to the normal chain
+		}
+	}
+	if name != "" {
 		for _, p := range m.providers {
 			if p.Name == name && !(role == VisionModel && p.TextOnly) {
 				if pref := m.preferred[m.key(session, role)]; pref.provider == p.Name {
@@ -487,6 +493,19 @@ func (m *ProviderManager) ReloadProviders(home string) error {
 		if !seen[name] {
 			delete(m.clients, name)
 			delete(m.state, name)
+			// drop sticky/preferred entries pointing at the removed provider
+			// so candidates() never sees a stale name (panic guard at the
+			// lookup site is the backstop; pruning is the cleanup).
+			for k, v := range m.sticky {
+				if v == name {
+					delete(m.sticky, k)
+				}
+			}
+			for k, v := range m.preferred {
+				if v.provider == name {
+					delete(m.preferred, k)
+				}
+			}
 		}
 	}
 	m.providers = m.providers[:0]
