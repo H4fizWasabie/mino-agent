@@ -1,6 +1,6 @@
 # Observability & reliability — trace-freshness heartbeat, boot reconciliation, log coverage
 
-Status: **OPEN** (wayfinder ticket, OBS-001 — GitHub issue #191)
+Status: **RESOLVED** (wayfinder ticket, OBS-001 — GitHub issue #191)
 
 ## Question
 
@@ -27,6 +27,11 @@ The 2026-08-14 session killed two silent failure classes — the bind-error (#18
 - [x] A stuck loop/session produces a page within 15 minutes of trace silence (not 6h) — **shipped**: stall heartbeat pages after `MINO_ALERT_STALL_MINUTES` (default 10) of per-active-turn silence (implemented 2026-08-14, pending release)
 - [x] A crashed run's `state.json` is reconciled to `interrupted` on next boot with evidence — no manual quarantine — **shipped**: `ReconcileInterruptedRuns` at startup (implemented 2026-08-14, pending release)
 - [ ] The background-path inventory is written into this ticket's resolution: every path has a journal line on success and failure, and the silent ones are named and fixed — **remaining frontier**
+- [x] The background-path inventory is written into this ticket's resolution — every path either completes, logs, or pages; the silent ones are named and fixed. **Inventory (2026-08-15, audit of every safeGo/ticker path):**
+  - **Covered**: graph-maintenance (Info/Warn on both outcomes); schedule-dispatcher (fire log + run outcome + missed/failed audit events + schedule-health pager); outbox-dispatcher (Info on delivery, retry on failure); alert-checker (pages by definition); audit-prune (Error on failure); provider failover (CTX-010 logs every failed call); session lifecycle (audit events).
+  - **Silent → fixed**: reminder dispatch DB query error returned silently (due reminders would never deliver, zero trace) → now slog.Error; archive-digest delivery failure retried invisibly → now slog.Warn with pending count.
+  - **Silent → accepted, ticket premise corrected**: the edge-judgment ticker logs only when n>0 — the "free trace every ~5 min" claim in this ticket's original framing does not exist when idle, and must NOT be added: v2.10.2's stall heartbeat deliberately excludes background tickers from the trace-freshness signal (a frozen loop was masked by flowing background traces), so the ticker staying quiet is the design, not a gap. The shipped heartbeat watches loop events via the logTrace watcher.
+  - **Silent → accepted**: graph-refresh (best-effort Markdown sync, no error surface by design); consolidation 0-result passes (the truthful-reporting fix from the fabricated-count incident already covers the dangerous class).
 - [x] No new metrics infrastructure — the trace journal IS the log — held throughout
 
 ## Out of scope

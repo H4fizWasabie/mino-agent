@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -157,6 +158,7 @@ func dispatchDueReminders(core *Core) {
 	}
 	rows, err := core.DB.Query("SELECT id, message FROM reminders WHERE status = 'pending' AND remind_at <= ? ORDER BY remind_at LIMIT 20", time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
+		slog.Error("reminder dispatch query failed — due reminders stay pending silently", "error", err)
 		return
 	}
 	// Collect first, then close: SetMaxOpenConns(1) means an open rows set

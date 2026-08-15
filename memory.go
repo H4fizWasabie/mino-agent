@@ -1233,6 +1233,7 @@ func (m *Memory) SendArchiveDigest() {
 	text := "🗄️ Archived memories:\n" + strings.Join(pending, "\n") +
 		"\n\nArchived facts still answer remember queries (tagged [archived]); say the word to restore any."
 	if !sendTelegramText(m.cfg.Telegram, m.cfg.TelegramChatID, text, false) {
+		slog.Warn("archive digest delivery failed — entries stay pending for retry", "pending", len(pending))
 		m.graph.AppendPendingDigest(pending)
 	}
 }
