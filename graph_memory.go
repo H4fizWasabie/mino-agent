@@ -762,11 +762,12 @@ func (gm *GraphMemory) ArchiveExpiredEpisodic(cutoff time.Time) int {
 	return archived
 }
 
-// ArchiveStaleSemantic archives model-authored semantic facts past their
-// staleness point with reason "stale" (DRF-002). The staleness point is the
-// fact's declared stale_after when set (volatile facts expire on their own
-// date), else its At past the 30d backstop. Authoritative facts (user /
-// user-correction / agent-correction) are never auto-staled. Archived facts
+// ArchiveStaleSemantic archives semantic facts past their staleness point
+// with reason "stale" (DRF-002). The staleness point is the fact's declared
+// stale_after when set (volatile facts expire on their own date — this wins
+// over authorship, #203), else its At past the 30d backstop. The 30d
+// backstop never touches authoritative facts (user / user-correction /
+// agent-correction). Archived facts
 // stay answerable via remember's archive fallback — knowledge is demoted,
 // never destroyed. Returns the number archived.
 func (gm *GraphMemory) ArchiveStaleSemantic(cutoff time.Time) int {
@@ -775,14 +776,24 @@ func (gm *GraphMemory) ArchiveStaleSemantic(cutoff time.Time) int {
 	now := time.Now()
 	var stale []Fact
 	for _, f := range gm.facts {
-		if f.Type != "semantic" || authoritativeSource(f.Source) {
+		if f.Type != "semantic" {
 			continue
 		}
+		// A declared expiry always wins, even for user/agent facts (#203): the
+		// owner (or the brain as amanuensis) explicitly marked the fact as a
+		// dated snapshot, which outranks the DRF-002 authorship exemption.
 		if !f.StaleAfter.IsZero() {
 			if now.After(f.StaleAfter) {
 				stale = append(stale, *f)
 			}
-		} else if !f.At.IsZero() && f.At.Before(cutoff) {
+			continue
+		}
+		// 30d backstop: never touches authoritative facts (user/agent
+		// corrections are near-truth until the owner says otherwise).
+		if authoritativeSource(f.Source) {
+			continue
+		}
+		if !f.At.IsZero() && f.At.Before(cutoff) {
 			stale = append(stale, *f)
 		}
 	}
