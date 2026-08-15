@@ -267,6 +267,17 @@ func RunLoopContext(
 	ctx = context.WithValue(ctx, sessionIDKey{}, sessionID)
 	ctx = context.WithValue(ctx, userMessageKey{}, lastUserContent(messages))
 
+	// Config-change push signal (#204): if providers.json changed since the
+	// last load, the FIRST turn after the change carries a re-verify notice so
+	// the brain refreshes model-stack memory facts instead of answering stale.
+	if pm, ok := client.(interface{ ConsumeConfigChange() time.Time }); ok {
+		if changed := pm.ConsumeConfigChange(); !changed.IsZero() {
+			system += fmt.Sprintf(
+				"\n[config change notice: providers.json changed at %s — re-verify model-stack memory facts (remember/model_stack) against the live file before answering model questions]",
+				changed.UTC().Format(time.RFC3339))
+		}
+	}
+
 	// Turn-boundary marker for the audit log: capture_playbook scopes its
 	// evidence to the task turn preceding the capture request.
 	if tools != nil {

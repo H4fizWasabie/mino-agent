@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -70,6 +72,11 @@ type ProviderManager struct {
 	state     map[string]*providerState
 	sticky    map[string]string
 	preferred map[string]providerPreference
+	providersHash string
+	// config-change push signal (#204): set when ReloadProviders sees the
+	// providers.json content change; consumed by the loop's next turn so the
+	// brain re-verifies model-stack memory facts instead of answering stale.
+	configChangedAt time.Time
 	authStore *AuthStore
 	mu        sync.Mutex
 	authMu    sync.Mutex
@@ -82,6 +89,7 @@ func NewProviderManager(home string, legacy *Settings, authStore *AuthStore) (*P
 		return nil, err
 	}
 	m := &ProviderManager{clients: map[string]*Client{}, state: map[string]*providerState{}, sticky: map[string]string{}, preferred: map[string]providerPreference{}, authStore: authStore, now: time.Now}
+	m.providersHash = fileHash(filepath.Join(home, "providers.json"))
 	for _, p := range configs {
 		key := ""
 		if p.APIKeyEnv != "" {
@@ -252,6 +260,26 @@ func (m *ProviderManager) callContextWithConfig(ctx context.Context, session str
 		return nil, fmt.Errorf("all %s providers failed: %w", role, lastErr)
 	}
 	return nil, fmt.Errorf("all %s providers failed", role)
+}
+
+// ConsumeConfigChange returns and clears the providers.json change time —
+// the loop calls it once per process so the first turn after a config change
+// carries the re-verify notice (never spammed).
+func (m *ProviderManager) ConsumeConfigChange() time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t := m.configChangedAt
+	m.configChangedAt = time.Time{}
+	return t
+}
+
+func fileHash(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 func routingForRole(p ProviderConfig, role ModelRole) []string {
@@ -482,8 +510,13 @@ func (m *ProviderManager) ReloadProviders(home string) error {
 	if err != nil {
 		return err
 	}
+	h := fileHash(filepath.Join(home, "providers.json"))
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if h != "" && m.providersHash != "" && h != m.providersHash {
+		m.configChangedAt = time.Now()
+	}
+	m.providersHash = h
 	// prune removed providers
 	seen := map[string]bool{}
 	for _, p := range configs {
