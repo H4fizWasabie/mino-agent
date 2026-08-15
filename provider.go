@@ -750,9 +750,17 @@ func (c *Client) logUsage(ctx context.Context, model string, resp *LLMResponse, 
 	data, _ := json.Marshal(record)
 	f, err := os.OpenFile(c.usageLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
+		// Issue #200: a silent drop here made cost accounting go blind for
+		// ~15 min on 2026-08-15 (root-owned file, mino user, no log line).
+		slog.Warn("usage log open failed, dropping record", "path", c.usageLogPath, "error", err)
 		return
 	}
 	defer f.Close()
-	f.Write(data)
-	f.Write([]byte("\n"))
+	if _, err := f.Write(data); err != nil {
+		slog.Warn("usage log write failed, dropping record", "path", c.usageLogPath, "error", err)
+		return
+	}
+	if _, err := f.Write([]byte("\n")); err != nil {
+		slog.Warn("usage log write failed, dropping record", "path", c.usageLogPath, "error", err)
+	}
 }
