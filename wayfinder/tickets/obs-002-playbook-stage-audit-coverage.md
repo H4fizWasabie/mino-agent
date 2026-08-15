@@ -1,6 +1,11 @@
 # Observability — playbook-stage tool calls don't reach audit.jsonl
 
-Status: **OPEN — implementing** (wayfinder ticket, OBS-002 — GitHub issue #193)
+Status: **RESOLVED** (wayfinder ticket, OBS-002 — GitHub issue #193)
+
+Resolved 2026-08-15, shipped in v2.10.6: `Registry.Only` now inherits the
+`auditFile`/`logDB` plumbing (shared mutex), so playbook-stage tool calls
+reach `audit.jsonl` and `tool_calls` with the scheduled session attribution.
+`TestOnlyRegistryInheritsAuditLog` locks it.
 
 ## Question
 

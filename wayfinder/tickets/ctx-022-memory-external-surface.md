@@ -1,6 +1,13 @@
 # Memory: retrieval is loop-private — external read surface + retirement semantics + provenance-gated verification
 
-Status: **OPEN — implementing** (wayfinder ticket, CTX-022 — GitHub issue #194)
+Status: **RESOLVED** (wayfinder ticket, CTX-022 — GitHub issue #194)
+
+Resolved 2026-08-15, shipped across v2.10.3→v2.10.6: Part A (`mino remember`
+CLI, `/api/memory/remember`+`path` REST, `mino-memory` MCP server),
+Part B (archive dir at init, retirement prompt semantics), Part C
+(provenance gate escalated through three live-tested rounds, ending in the
+post-reply verification pass that signs contradictions). Live-verified on
+the VPS: the Agent-Reach answer now carries the harness-signed correction.
 
 ## Question
 
