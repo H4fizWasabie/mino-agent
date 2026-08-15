@@ -57,6 +57,36 @@ rejected for visible letters/garbling (2026-08-14).
    bar" tool for one-off images you hand-prompt.
 4. **Out on free tier:** klein-9b (1,364/first MP), flux-2-dev (6,300/image).
 
+## Live test results (2026-08-15, real playbook runs + view_image judge)
+
+Same golden-key prompt, judged by the playbook's own `view_image` critic
+unless noted:
+
+| Model | Neurons/1024² | Judge verdict | Fit 15-25 gens/day |
+|---|---|---|---|
+| **flux-1-schnell** (reverted to) | ~29-58 | **PASS** (controlled golden-key test) | ✓✓ |
+| flux-2-klein-4b | ~126 | 1 pass / 4 attempts (run 2 published a post) | ✓ |
+| flux-2-klein-9b | 1,364 | REJECT — "severe pixelation/aliasing" (122KB output) | ✗ |
+| sd-xl-base-1.0 (free, unlisted) | 0 | REJECT — "garbled artifacts" | ✓ cost-wise |
+| sd-xl-lightning (free, unlisted) | 0 | REJECT — "severe garbled artifacts" | ✓ cost-wise |
+| phoenix-1.0 | 2,370 | untested | ✗ (4/day cap) |
+| lucid-origin | 2,844 | untested | ✗ (3.5/day cap) |
+| flux-2-dev | ~6,300 | untested | ✗✗ |
+
+Pattern: rejected outputs were consistently ~110-130KB (undercooked defaults);
+passing outputs ~280-350KB. Models needing explicit steps/guidance (SDXL,
+klein-9b) underperform because Mino's tool sends prompt-only. Among models
+that produce good output with prompt-only defaults (schnell, klein-4b) the
+pass rate is comparable (~1/3 per attempt); the retry loop absorbs it.
+
+**Verdict: on the free 10k-neuron tier there is no Cloudflare model that beats
+flux-1-schnell for this workload.** Every higher-quality claim costs 10-50x
+and cannot serve the daily pipeline; every free/budget fit fails the bar.
+klein-4b is the only comparable alternative (one env var away — the multipart
+support ships in the binary). The real quality unlock is off-tier: the
+OpenRouter Gemini tier-2 fallback (~$0.0015/image, already in the chain) or
+paid neurons.
+
 ## Change mechanics (tiny)
 
 - The knob is one env var: `MINO_IMAGE_MODEL=@cf/black-forest-labs/flux-2-klein-4b`
