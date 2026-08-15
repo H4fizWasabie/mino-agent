@@ -754,8 +754,9 @@ func writePlaybookFile(path, content string) error {
 
 // PlaybookSchedule is one scheduled playbook entry in ~/.mino/schedules.json.
 type PlaybookSchedule struct {
-	Name        string `json:"name"`
-	Time        string `json:"time"`                    // HH:MM local time
+	Name        string   `json:"name"`
+	Days        []string `json:"days,omitempty"` // weekday names, lowercase; empty = daily (issue #205)
+	Time        string   `json:"time"`           // HH:MM local time
 	Timezone    string `json:"timezone"`                // IANA timezone
 	LastRun     string `json:"last_run"`                // RFC3339 of last execution, empty if never
 	LastError   string `json:"last_error,omitempty"`    // last fire failure, empty when healthy
@@ -813,8 +814,9 @@ func makeSchedulePlaybookTool(home, timezone string) *Tool {
 			"type": "object",
 			"properties": map[string]any{
 				"name":     map[string]any{"type": "string", "description": "Existing playbook folder name"},
-				"time":     map[string]any{"type": "string", "description": "Daily local time in HH:MM format"},
+				"time":     map[string]any{"type": "string", "description": "Local time in HH:MM format"},
 				"timezone": map[string]any{"type": "string", "description": "IANA timezone, defaulting to Mino's configured timezone"},
+				"days":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional weekday names (lowercase, e.g. [\"sunday\"]); absent = daily. Weekly playbooks use this instead of a prompt gate."},
 			},
 			"required": []string{"name", "time"},
 		},
@@ -822,6 +824,19 @@ func makeSchedulePlaybookTool(home, timezone string) *Tool {
 			name, _ := args["name"].(string)
 			at, _ := args["time"].(string)
 			zone, _ := args["timezone"].(string)
+			var days []string
+			if raw, ok := args["days"].([]any); ok {
+				for _, d := range raw {
+					if ds, ok := d.(string); ok && ds != "" {
+						days = append(days, strings.ToLower(ds))
+					}
+				}
+			}
+			for _, d := range days {
+				if !validWeekday(d) {
+					return fmt.Sprintf("Error: invalid weekday %q (use e.g. sunday, monday)", d)
+				}
+			}
 			if zone == "" {
 				zone = timezone
 			}
@@ -847,15 +862,19 @@ func makeSchedulePlaybookTool(home, timezone string) *Tool {
 				if s.Name == name {
 					scheds[i].Time = at
 					scheds[i].Timezone = zone
+					scheds[i].Days = days
 					found = true
 					break
 				}
 			}
 			if !found {
-				scheds = append(scheds, PlaybookSchedule{Name: name, Time: at, Timezone: zone})
+				scheds = append(scheds, PlaybookSchedule{Name: name, Time: at, Timezone: zone, Days: days})
 			}
 			if err := saveSchedules(home, scheds); err != nil {
 				return fmt.Sprintf("Error saving schedule: %v", err)
+			}
+			if len(days) > 0 {
+				return fmt.Sprintf("Scheduled %s at %s (%s) on %s — stored in schedules.json. Output will appear in the dashboard under session scheduled-%s.", name, at, zone, strings.Join(days, ", "), name)
 			}
 			return fmt.Sprintf("Scheduled %s daily at %s (%s) — stored in schedules.json. Output will appear in the dashboard under session scheduled-%s.", name, at, zone, name)
 		},
@@ -1103,6 +1122,14 @@ func classifySchedule(s PlaybookSchedule, now time.Time, allowLate bool) schedul
 		return scheduleSkip
 	}
 	nowInLoc := now.In(loc)
+	// day-of-week gate (#205): a schedule with days only fires on matching
+	// weekdays (in its own timezone). Deterministic — no prompt-level gate.
+	if len(s.Days) > 0 {
+		weekday := strings.ToLower(nowInLoc.Weekday().String())
+		if !containsString(s.Days, weekday) {
+			return scheduleSkip
+		}
+	}
 	todayOcc := time.Date(nowInLoc.Year(), nowInLoc.Month(), nowInLoc.Day(), schedTime.Hour(), schedTime.Minute(), 0, 0, loc)
 	lastOcc := todayOcc
 	if nowInLoc.Before(todayOcc) {
