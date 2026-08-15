@@ -407,3 +407,50 @@ func TestReloadProvidersPrunesStickyForRemovedProvider(t *testing.T) {
 		t.Fatalf("candidates after prune = %#v, want only omni (no panic, no stale pro)", got)
 	}
 }
+
+// ISSUE-204: ReloadProviders stamps a change time when providers.json content
+// changes; ConsumeConfigChange returns it exactly once (the loop's first turn
+// after the change carries the re-verify notice).
+func TestReloadProvidersSignalsConfigChangeOnce(t *testing.T) {
+	home := t.TempDir()
+	writeProviders := func(model string) {
+		data, _ := json.Marshal(map[string]any{"providers": []map[string]any{
+			{"name": "pro", "priority": 1, "base_url": "http://x", "model": model},
+		}})
+		if err := os.WriteFile(filepath.Join(home, "providers.json"), data, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeProviders("alpha")
+	m := &ProviderManager{
+		clients:   map[string]*Client{},
+		state:     map[string]*providerState{},
+		sticky:    map[string]string{},
+		preferred: map[string]providerPreference{},
+		now:       func() time.Time { return time.Unix(100, 0) },
+	}
+	if err := m.ReloadProviders(home); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.ConsumeConfigChange(); !got.IsZero() {
+		t.Fatalf("first load must not signal a change, got %v", got)
+	}
+	writeProviders("beta")
+	if err := m.ReloadProviders(home); err != nil {
+		t.Fatal(err)
+	}
+	got := m.ConsumeConfigChange()
+	if got.IsZero() {
+		t.Fatal("config change not signaled")
+	}
+	if again := m.ConsumeConfigChange(); !again.IsZero() {
+		t.Fatalf("signal must be consumed once, got %v", again)
+	}
+	// identical reload: no new signal
+	if err := m.ReloadProviders(home); err != nil {
+		t.Fatal(err)
+	}
+	if again := m.ConsumeConfigChange(); !again.IsZero() {
+		t.Fatalf("unchanged reload must not signal, got %v", again)
+	}
+}
