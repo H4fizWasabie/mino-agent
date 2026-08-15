@@ -75,6 +75,30 @@ else
 	echo "FAIL: chat turn did not return a cost block: $(echo "$REPLY" | head -c 200)"; FAIL=1
 fi
 
+# 7. #195: removing a provider while a session is sticky to it must not
+#    panic — the session falls through to the remaining providers. Pre-fix
+#    binaries nil-deref in candidates() and the chat call fails loudly.
+STICKY_PROVIDER="mimo"
+if curl -sf -m 15 -X POST "$BASE/api/switch" -H 'Content-Type: application/json' 	-d "{\"provider\":\"$STICKY_PROVIDER\",\"model\":\"xiaomi/mimo-v2.5\",\"session\":\"stage-removal\"}" > /dev/null 2>&1; then
+	python3 - "$STAGE/providers.json" << 'PYEOF2'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["providers"] = [x for x in d["providers"] if x["name"] != "mimo"]
+json.dump(d, open(p, "w"), indent=2)
+PYEOF2
+	kill -HUP "$PID" 2>/dev/null || true
+	sleep 2
+	REPLY2=$(curl -sf -m 120 -X POST "$BASE/api/chat" -H 'Content-Type: application/json' 		-d '{"message":"Reply with exactly: removal ok","session_id":"stage-removal"}' 2>/dev/null || echo "REMOVAL-CHAT-FAILED")
+	if echo "$REPLY2" | grep -q "removal ok"; then
+		echo "PASS: provider removal while sticky does not panic (#195)"
+	else
+		echo "FAIL: sticky-provider removal: $(echo "$REPLY2" | head -c 200)"; FAIL=1
+	fi
+else
+	echo "WARN: could not switch staged session (provider missing?) — skipping #195 step"
+fi
+
 # 6. #188: candidate must FAIL LOUDLY on the occupied live port (7779)
 kill "$PID" 2>/dev/null || true
 wait "$PID" 2>/dev/null || true
