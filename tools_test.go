@@ -106,6 +106,97 @@ func TestParseCFImage(t *testing.T) {
 	}
 }
 
+// Cloudflare image models disagree on request encoding: the FLUX.2 klein
+// family requires multipart form, legacy models (flux-1-schnell) require a
+// plain JSON body. generateWithCloudflare must serve both — multipart first,
+// JSON retry only on a body-format rejection (the 400 is free: no generation
+// happens, so the fallback costs a round-trip, not neuron budget).
+func TestGenerateWithCloudflareServesBothEncodings(t *testing.T) {
+	png := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
+	envelope := `{"success":true,"result":{"image":"` + base64.StdEncoding.EncodeToString(png) + `"}}`
+
+	t.Setenv("CLOUDFLARE_API_TOKEN", "test-token")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "test-account")
+	t.Setenv("MINO_IMAGE_MODEL", "@cf/black-forest-labs/flux-2-klein-4b")
+
+	oldClient, oldBase := imageClient, cfBaseURL
+	defer func() { imageClient, cfBaseURL = oldClient, oldBase }()
+
+	t.Run("multipart model succeeds first try", func(t *testing.T) {
+		var cts []string
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			cts = append(cts, r.Header.Get("Content-Type"))
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, envelope)
+		}))
+		defer ts.Close()
+		imageClient, cfBaseURL = ts.Client(), ts.URL
+
+		out, err := generateWithCloudflare("a sunset")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(out, "via Cloudflare Workers AI") {
+			t.Fatalf("output missing provenance: %q", out)
+		}
+		if len(cts) != 1 {
+			t.Fatalf("expected exactly 1 request, got %d", len(cts))
+		}
+		if !strings.HasPrefix(cts[0], "multipart/form-data") {
+			t.Fatalf("expected multipart content-type, got %q", cts[0])
+		}
+	})
+
+	t.Run("legacy JSON model retries after multipart rejection", func(t *testing.T) {
+		var cts []string
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ct := r.Header.Get("Content-Type")
+			cts = append(cts, ct)
+			if strings.HasPrefix(ct, "multipart/") {
+				// Legacy models reject multipart bodies.
+				http.Error(w, `{"errors":[{"message":"Request body is not valid json","code":6003}]}`, 400)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, envelope)
+		}))
+		defer ts.Close()
+		imageClient, cfBaseURL = ts.Client(), ts.URL
+
+		out, err := generateWithCloudflare("a sunset")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(out, "via Cloudflare Workers AI") {
+			t.Fatalf("output missing provenance: %q", out)
+		}
+		if len(cts) != 2 {
+			t.Fatalf("expected 2 requests (multipart then JSON), got %d", len(cts))
+		}
+		if !strings.HasPrefix(cts[1], "application/json") {
+			t.Fatalf("expected JSON retry, got %q", cts[1])
+		}
+	})
+
+	t.Run("non-body errors do not trigger retry", func(t *testing.T) {
+		var calls int
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			// NSFW rejection is a content error, not a body-format error.
+			http.Error(w, `{"errors":[{"message":"AiError: Input prompt contains NSFW content.","code":3030}]}`, 400)
+		}))
+		defer ts.Close()
+		imageClient, cfBaseURL = ts.Client(), ts.URL
+
+		if _, err := generateWithCloudflare("a sunset"); err == nil {
+			t.Fatal("expected error for NSFW rejection")
+		}
+		if calls != 1 {
+			t.Fatalf("expected single request for non-body error, got %d", calls)
+		}
+	})
+}
+
 // Issue #16: a non-zero exit with stdout is a PARTIAL failure — the output
 // often contains the answer (find exits 1 on unreadable dirs while still
 // printing matches). Agents must see the output first, not "Error: exit 1".

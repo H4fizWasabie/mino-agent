@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"html"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -11,8 +10,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
@@ -1892,6 +1893,9 @@ func readEnvFile(targetKey string) string {
 var httpClient = &http.Client{Timeout: 30 * time.Second}
 var imageClient = &http.Client{Timeout: 90 * time.Second}
 
+// cfBaseURL is swappable in tests (same seam as imageClient).
+var cfBaseURL = "https://api.cloudflare.com/client/v4"
+
 // makeViewImageTool reads an image file and hands it to the vision provider.
 // The loop converts the returned data URL into a vision-model text description
 // (describeImage in loop.go); the main messages never carry image bytes.
@@ -1981,7 +1985,7 @@ type cfImageResponse struct {
 
 // generateWithCloudflare renders the prompt via Cloudflare Workers AI and
 // saves it, returning the saved path. The model is MINO_IMAGE_MODEL
-// (default @cf/leonardo/phoenix-1.0). Returns an error when the credentials
+// (default @cf/black-forest-labs/flux-1-schnell). Returns an error when the credentials
 // are missing or the call fails, so callers can fall back to pollinations.
 func generateWithCloudflare(prompt string) (string, error) {
 	token := os.Getenv("CLOUDFLARE_API_TOKEN")
@@ -2002,23 +2006,49 @@ func generateWithCloudflare(prompt string) (string, error) {
 	if model == "" {
 		model = "@cf/black-forest-labs/flux-1-schnell"
 	}
-	body, _ := json.Marshal(map[string]string{"prompt": prompt})
-	req, _ := http.NewRequest("POST", "https://api.cloudflare.com/client/v4/accounts/"+account+"/ai/run/"+model, bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := imageClient.Do(req)
+	// Newer models (FLUX.2 klein) require multipart form; legacy models
+	// (flux-1-schnell) require a plain JSON body. Try multipart first, and
+	// retry with JSON only when the API rejects the body format — the 400
+	// rejection is free (no generation, no neuron burn), so the fallback
+	// costs a round-trip, not budget.
+	endpoint := cfBaseURL + "/accounts/" + account + "/ai/run/" + model
+	run := func(body []byte, contentType string) ([]byte, string, error) {
+		req, _ := http.NewRequest("POST", endpoint, bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", contentType)
+		resp, err := imageClient.Do(req)
+		if err != nil {
+			return nil, "", err
+		}
+		defer resp.Body.Close()
+		data, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode >= 400 {
+			msg := strings.TrimSpace(string(data))
+			if len(msg) > 200 {
+				msg = msg[:200]
+			}
+			return nil, "", fmt.Errorf("cloudflare %d: %s", resp.StatusCode, msg)
+		}
+		return data, resp.Header.Get("Content-Type"), nil
+	}
+	var mp bytes.Buffer
+	w := multipart.NewWriter(&mp)
+	w.WriteField("prompt", prompt)
+	w.WriteField("width", "1024")
+	w.WriteField("height", "1024")
+	w.Close()
+	data, ct, err := run(mp.Bytes(), w.FormDataContentType())
+	if err != nil && (strings.Contains(err.Error(), "multipart") || strings.Contains(err.Error(), "not valid json")) {
+		body, _ := json.Marshal(map[string]string{"prompt": prompt})
+		data, ct, err = run(body, "application/json")
+	}
 	if err != nil {
 		return "", err
-	}
-	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("cloudflare %d: %s", resp.StatusCode, strings.TrimSpace(string(data))[:min(200, len(data))])
 	}
 	// Some models (e.g. leonardo/phoenix) return raw image bytes;
 	// others (flux) return a JSON envelope with base64.
 	img, ext := data, ""
-	if ct := resp.Header.Get("Content-Type"); strings.HasPrefix(ct, "image/") {
+	if strings.HasPrefix(ct, "image/") {
 		ext = extFor(ct)
 	} else {
 		img, err = parseCFImage(data)
