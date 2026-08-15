@@ -1,4 +1,4 @@
-# Memory: retrieval is loop-private — external read surface + retirement semantics
+# Memory: retrieval is loop-private — external read surface + retirement semantics + provenance-gated verification
 
 Status: **OPEN** (wayfinder ticket, CTX-022 — GitHub issue #194)
 
@@ -64,6 +64,35 @@ nothing about retirement semantics — no instruction that "keep as history" /
 - [ ] `memories/archive/` exists on a fresh graph init
 - [ ] Test proves archived facts are excluded from live recall
 
+## Part C — Provenance-gated verification (harness owns source weighting)
+
+The 2026-08-15 demo's wrong answer ("still actively maintained") wasn't a
+model failure — the harness misweighted the sources. The system prompt's own
+verify rule (session.go:110: "Memory may be stale; the live state is truth")
+biased the model toward web data over its user-provenanced memory fact. Under
+the MAP's harness framing ("the LLM is a component; Mino-the-harness owns the
+conditions"), every session failure is a harness gap — the prompt is harness
+text, so source weighting is harness work.
+
+### Scope C
+
+1. **Provenance clause** (prompt): the verify rule gains the missing gate —
+   user-provenanced memory outranks live/web data unless the fact is flagged
+   stale or superseded; live verification fills gaps, it does not re-litigate
+   a user-authored fact.
+2. **Post-tool signal** (loop): when `remember` returned a user-provenanced
+   fact on a subject and the model then calls `search_web` on the same
+   subject, inject a mid-flight warning naming the memory fact (the
+   nerves.go mid-flight signal pattern — act on the verified signal, never
+   silent re-narration).
+
+### Acceptance criteria C
+
+- [ ] Prompt contains the provenance gate (user-provenanced > web unless
+      flagged stale/superseded)
+- [ ] Loop warns when web search follows a user-provenanced recall on the
+      same subject
+
 ## Scope
 
 Expose the existing retrieval, nothing new:
@@ -97,6 +126,3 @@ Expose the existing retrieval, nothing new:
   verification, write discipline)
 - External write access to the graph (consolidation/judgment stay loop-private)
 - Changing the retrieval algorithm (same entryRanking/BFS)
-- The model-judgment failure from the same session (user-provenanced memory
-  fact ignored in favor of web data) — a prompt/verification-discipline item,
-  separate ticket if pursued
