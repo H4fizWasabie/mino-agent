@@ -1,6 +1,7 @@
 ## [Unreleased]
 
 ### Fixed
+- **consolidation no longer starves on restart (closes #211)**: the 6h pass slept *before* its first run, so every restart deferred consolidation another 6h — 2026-08-15: three boots (deploys), zero passes, 76 rows pending (including the owner's "you run on luna" exchange, still raw). The first pass now fires ~5 min after boot, then every 6h, and each pass logs its run (new_facts count, including 0) so "consolidation is alive" is observable instead of inferred from silence.
 - **Sticky-provider removal panic (closes #195)**: `ProviderManager.candidates` dereferenced `m.state[name].openUntil` for the session's sticky provider with no nil guard — removing a provider from `providers.json` (live trigger 2026-08-15: luna removal while sessions were sticky to it) left `m.state` pruned but `m.sticky`/`m.preferred` still pointing at the removed name, so the next vision turn or reply-verify call panicked in the HTTP handler (`candidates` → nil pointer). `candidates` now falls through to the normal chain when the sticky provider is missing or cooling down, and `ReloadProviders` prunes sticky/preferred entries for removed providers. `TestProvider*` covers the reload path. (Why: a provider removal is a routine config op — it must never be able to wedge a session with a panic.)
 ## [Unreleased]
 

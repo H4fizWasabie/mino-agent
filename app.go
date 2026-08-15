@@ -85,11 +85,16 @@ func NewCore() *Core {
 
 	if s.ConsolidateEvery > 0 {
 		safeGo("consolidation", func() { // 6-hour full consolidation pass
+			// First fire shortly after boot, then every 6h (#211): the old
+			// sleep-first loop deferred the first pass 6h past boot, so any
+			// restart (deploys, crashes) starved consolidation indefinitely —
+			// 2026-08-15: three boots, zero passes, 76 rows pending.
+			time.Sleep(5 * time.Minute)
 			for {
-				time.Sleep(6 * time.Hour)
-				if n := mem.ConsolidateDue(); n > 0 {
+				if n := mem.ConsolidateDue(); n >= 0 {
 					slog.Info("consolidation", "new_facts", n)
 				}
+				time.Sleep(6 * time.Hour)
 			}
 		})
 		safeGo("graph-maintenance", func() { // graph maintenance — 6-hour, offset +45min from consolidation
