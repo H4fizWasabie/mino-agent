@@ -360,3 +360,50 @@ func TestRetryDropsProviderPin(t *testing.T) {
 		}
 	}
 }
+
+// ISSUE-195: a sticky entry pointing at a provider removed by ReloadProviders
+// must not panic candidates() — it falls through to the normal chain.
+func TestCandidatesStickyToRemovedProviderFallsThrough(t *testing.T) {
+	m := visionManager()
+	m.sticky[m.key("s", MainModel)] = "gone" // removed provider: not in m.state
+	got := m.candidates("s", MainModel)
+	if len(got) != 2 || got[0].Name != "pro" || got[1].Name != "omni" {
+		t.Fatalf("candidates with stale sticky = %#v, want [pro omni]", got)
+	}
+}
+
+// ISSUE-195: ReloadProviders prunes sticky/preferred entries referencing
+// providers that no longer exist in providers.json.
+func TestReloadProvidersPrunesStickyForRemovedProvider(t *testing.T) {
+	home := t.TempDir()
+	write := func(models []string) {
+		provs := []map[string]any{}
+		for _, n := range models {
+			provs = append(provs, map[string]any{"name": n, "priority": 1, "base_url": "http://x", "model": n + "/m"})
+		}
+		data, _ := json.Marshal(map[string]any{"providers": provs})
+		if err := os.WriteFile(filepath.Join(home, "providers.json"), data, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write([]string{"pro", "omni"})
+	m := &ProviderManager{
+		clients:   map[string]*Client{},
+		state:     map[string]*providerState{},
+		sticky:    map[string]string{},
+		preferred: map[string]providerPreference{},
+		now:       func() time.Time { return time.Unix(100, 0) },
+	}
+	if err := m.ReloadProviders(home); err != nil {
+		t.Fatal(err)
+	}
+	m.sticky[m.key("s", MainModel)] = "pro"
+	m.preferred[m.key("s", MainModel)] = providerPreference{provider: "pro", model: "pro/m", reasoning: "high"}
+	write([]string{"omni"}) // pro removed
+	if err := m.ReloadProviders(home); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.candidates("s", MainModel); len(got) != 1 || got[0].Name != "omni" {
+		t.Fatalf("candidates after prune = %#v, want only omni (no panic, no stale pro)", got)
+	}
+}
