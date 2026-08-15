@@ -513,6 +513,7 @@ func RunLoopContext(
 		// CHEM 15) degrades just as surely as one stuck in a streak, and both
 		// must abort at the same bound.
 		toolResults := make([]map[string]any, 0)
+		provenanceWarned := false // CTX-022 C: warn once per turn
 		for _, tc := range toolUses {
 			args, _ := tc.Input.(map[string]any)
 
@@ -535,6 +536,19 @@ func RunLoopContext(
 				result.Status = "cancelled"
 				result.Reply = "Stopped."
 				return result
+			}
+			// CTX-022 C: provenance gate — when the model reaches for the web
+			// after recall returned user-provenanced facts on the same subject,
+			// inject a mid-flight warning naming the memory fact. The harness
+			// owns source weighting; the model must not re-litigate the owner's
+			// own fact against live data (2026-08-15 demo: web search overrode
+			// a user-provenanced deletion fact).
+			if tc.Name == "search_web" && !provenanceWarned {
+				if warn := provenanceSearchWarning(result.ToolCalls, args); warn != "" {
+					provenanceWarned = true
+					messages = append(messages, Message{Role: "user", Content: warn})
+					trace("provenance_gate", map[string]any{"iteration": i})
+				}
 			}
 			if tc.Name == "view_image" && strings.HasPrefix(raw, "data:image/") {
 				// T8 (map #88): the data URL is converted to vision-model text
@@ -1162,6 +1176,36 @@ func formatToolResults(results []map[string]any) string {
 		fmt.Fprintf(&out, "[tool_result tool=%v: %v]\n", r["tool"], r["content"])
 	}
 	return out.String()
+}
+
+// provenanceSearchWarning (CTX-022 C) inspects the turn's earlier tool calls:
+// if a `remember` returned user-provenanced facts whose text overlaps this
+// web-search query, it returns a mid-flight warning naming the memory fact as
+// the higher-priority truth candidate. Empty when no conflict signal exists.
+func provenanceSearchWarning(calls []ToolCall, args map[string]any) string {
+	query, _ := args["query"].(string)
+	if query == "" {
+		return ""
+	}
+	words := memoryTokenize(query)
+	for _, c := range calls {
+		if c.Name != "remember" || !strings.Contains(c.Output, "user-provenanced") {
+			continue
+		}
+		// First non-edge line carrying a fact id is the top-ranked subject.
+		subject := ""
+		for _, line := range strings.Split(c.Output, "\n") {
+			t := strings.TrimSpace(line)
+			if strings.Contains(t, "# ") && !strings.Contains(t, "→") && !strings.Contains(t, "←") {
+				subject = t
+				break
+			}
+		}
+		if subject != "" && len(matchedWords(words, c.Output)) > 0 {
+			return fmt.Sprintf("[System: provenance gate — your memory returned a user-authored fact on this topic (%s). It outranks web data unless flagged stale or superseded. Verify gaps; do not re-litigate the owner's own fact.]", subject)
+		}
+	}
+	return ""
 }
 
 type traceFile struct {

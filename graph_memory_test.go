@@ -443,6 +443,17 @@ func TestGraphMemoryCommunitiesPersist(t *testing.T) {
 	}
 }
 
+// CTX-022 B: the archive tier must exist from first boot — a missing dir made
+// the archive path dead code in practice (Agent-Reach facts were never
+// retired because nothing ever created it).
+func TestGraphMemoryInitCreatesArchiveDir(t *testing.T) {
+	dir := t.TempDir()
+	NewGraphMemory(dir, nil)
+	if _, err := os.Stat(filepath.Join(dir, "archive")); err != nil {
+		t.Fatalf("archive dir not created on init: %v", err)
+	}
+}
+
 // MEM-08 archive lifecycle: ArchiveFact moves a fact out of the live graph into
 // memories/archive/, cleans inbound edges, queues the digest line, and the
 // archived fact stays readable. Digest entries round-trip through failure.

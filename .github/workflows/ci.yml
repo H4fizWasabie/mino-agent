@@ -44,6 +44,6 @@ jobs:
 
       - name: Test extensions
         run: |
-          for ext in minowrap threads cost-watch; do
+          for ext in minowrap threads cost-watch mino-memory; do
             (cd extensions/$ext && go test -count=1 ./...)
           done

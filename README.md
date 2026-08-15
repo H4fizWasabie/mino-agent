@@ -72,6 +72,8 @@ mino
 |---------|------|
 | `mino` | Launch dashboard (default) |
 | `mino cli` | Terminal chat |
+| `mino remember "query"` | Print graph-memory recall (same output as the in-loop `remember` tool, no LLM call) — CTX-022 A |
+| `mino memory path <from> <to>` | Shortest path between two memory facts |
 | `mino version` | Show version |
 | `mino update` | Self-update from GitHub releases |
 
@@ -322,6 +324,20 @@ Drop JSON configs in `~/.mino/mcp.d/`:
 ```
 
 Tools are prefixed as `MCP_<server>_<tool>`.
+
+### mino-memory — expose the graph to any agent (CTX-022 A)
+
+Build from `extensions/mino-memory` and register:
+
+```json
+{"name": "mino-memory", "command": "/path/to/mino-memory"}
+```
+
+Exposes `memory_remember` (identical output to the in-loop `remember` tool:
+intent-ranking, BFS expansion, provenance and conflict flags) and
+`memory_path`. Read-only bridge to the dashboard's `/api/memory/remember`,
+localhost-bound — any external agent gets the same retrieval quality as mino
+itself, no memory-file scraping.
 
 ## License
 

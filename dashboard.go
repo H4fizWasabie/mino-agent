@@ -119,6 +119,8 @@ func registerDashboardRoutes(mux *http.ServeMux, memDir string) {
 	mux.HandleFunc("/api/chat", handleChat)
 	mux.HandleFunc("/api/session", handleSession)
 	mux.HandleFunc("/api/memory", handleMemoryAPI)
+	mux.HandleFunc("/api/memory/remember", handleMemoryRecallAPI)
+	mux.HandleFunc("/api/memory/path", handleMemoryPathAPI)
 	mux.HandleFunc("/api/query", handleQueryAPI)
 	mux.HandleFunc("/api/events", handleEventsAPI)
 	mux.HandleFunc("/api/nerves", handleNervesAPI)
@@ -372,6 +374,39 @@ func handleSession(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- Stub APIs (return empty/valid data so UI tabs render) ---
+
+// handleMemoryRecallAPI (CTX-022 A) — deterministic read-only retrieval
+// surface: GET /api/memory/remember?q=... returns the exact in-loop
+// `remember` output (entryRanking + archive fallback + BFS + flags), no LLM
+// call. Localhost-bound by default; no mutation.
+func handleMemoryRecallAPI(w http.ResponseWriter, r *http.Request) {
+	if dashCore.Memory == nil || dashCore.Memory.graph == nil {
+		http.Error(w, "memory unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	q := r.URL.Query().Get("q")
+	if q == "" {
+		http.Error(w, "missing q", http.StatusBadRequest)
+		return
+	}
+	why := r.URL.Query().Get("why") // optional current-turn words (MEM-03)
+	out := dashCore.Memory.graph.Remember(q, why)
+	w.Write([]byte(out))
+}
+
+// handleMemoryPathAPI (CTX-022 A) — shortest path between two facts.
+func handleMemoryPathAPI(w http.ResponseWriter, r *http.Request) {
+	if dashCore.Memory == nil || dashCore.Memory.graph == nil {
+		http.Error(w, "memory unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	from, to := r.URL.Query().Get("from"), r.URL.Query().Get("to")
+	if from == "" || to == "" {
+		http.Error(w, "missing from/to", http.StatusBadRequest)
+		return
+	}
+	w.Write([]byte(dashCore.Memory.graph.RememberPath(from, to)))
+}
 
 func handleMemoryAPI(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {

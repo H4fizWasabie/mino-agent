@@ -76,6 +76,34 @@ func main() {
 	w := NewCore()
 	defer w.Close()
 
+	// CTX-022 A: external read surface — `mino remember "query"` prints the
+	// exact in-loop retrieval output, no LLM call. Routed before the Telegram
+	// branch so it works on a telegram-configured host.
+	if len(os.Args) > 1 && os.Args[1] == "remember" {
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "usage: mino remember \"query\"")
+			os.Exit(2)
+		}
+		if w.Memory == nil || w.Memory.graph == nil {
+			fmt.Fprintln(os.Stderr, "memory unavailable")
+			os.Exit(1)
+		}
+		fmt.Println(w.Memory.graph.Remember(strings.Join(os.Args[2:], " "), ""))
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "memory" && len(os.Args) > 2 && os.Args[2] == "path" {
+		if len(os.Args) < 5 {
+			fmt.Fprintln(os.Stderr, "usage: mino memory path <from> <to>")
+			os.Exit(2)
+		}
+		if w.Memory == nil || w.Memory.graph == nil {
+			fmt.Fprintln(os.Stderr, "memory unavailable")
+			os.Exit(1)
+		}
+		fmt.Println(w.Memory.graph.RememberPath(os.Args[3], os.Args[4]))
+		return
+	}
+
 	// cost-watch's autonomous pinning rewrites providers.json and signals mino;
 	// hot-reload the routing list instead of waiting for a restart.
 	go reloadOnHUP(func() error { return w.Client.ReloadProviders(w.Settings.Home) }, hup)

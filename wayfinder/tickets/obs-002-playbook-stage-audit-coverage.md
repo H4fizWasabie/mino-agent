@@ -1,6 +1,6 @@
 # Observability — playbook-stage tool calls don't reach audit.jsonl
 
-Status: **OPEN** (wayfinder ticket, OBS-002 — GitHub issue #193)
+Status: **OPEN — implementing** (wayfinder ticket, OBS-002 — GitHub issue #193)
 
 ## Question
 

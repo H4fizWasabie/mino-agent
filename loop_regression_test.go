@@ -813,3 +813,37 @@ func TestLoopLogsMidflightRedirectSignal(t *testing.T) {
 		t.Fatal("midflight_signal repetition event was not logged to the trace (redirect must be observable for CTX-019 verification)")
 	}
 }
+
+// CTX-022 C: provenance gate — a web search whose query overlaps a turn's
+// earlier user-provenanced recall must produce a warning; non-overlapping
+// queries and recalls without user provenance must stay silent.
+func TestProvenanceGateWarnsOnSearchAfterUserFact(t *testing.T) {
+	userFact := "Mino's own GitHub repo is H4fizWasabie/mino-agent (not Agent-Reach)  # abah_mino_repo_identity\n  matched: subject: agent-reach; user-provenanced\n  → [supersedes] the owner requested deletion on 2026-08-14  # deletion_fact"
+	plainFact := "No memories found for: something else"
+
+	cases := []struct {
+		name      string
+		calls     []ToolCall
+		query     string
+		wantWarn  bool
+	}{
+		{"overlapping query warns", []ToolCall{{Name: "remember", Output: userFact}}, "Agent-Reach repo status", true},
+		{"non-overlapping query silent", []ToolCall{{Name: "remember", Output: userFact}}, "weather in kuala lumpur", false},
+		{"no user provenance silent", []ToolCall{{Name: "remember", Output: plainFact}}, "Agent-Reach repo status", false},
+		{"no prior remember silent", []ToolCall{{Name: "read_file", Output: "x"}}, "Agent-Reach repo status", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			warn := provenanceSearchWarning(c.calls, map[string]any{"query": c.query})
+			if c.wantWarn && warn == "" {
+				t.Fatal("expected provenance warning, got none")
+			}
+			if !c.wantWarn && warn != "" {
+				t.Fatalf("unexpected provenance warning: %q", warn)
+			}
+			if c.wantWarn && !strings.Contains(warn, "user-authored fact") {
+				t.Fatalf("warning missing provenance framing: %q", warn)
+			}
+		})
+	}
+}

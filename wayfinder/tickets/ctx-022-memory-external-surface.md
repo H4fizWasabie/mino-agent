@@ -1,6 +1,6 @@
 # Memory: retrieval is loop-private — external read surface + retirement semantics + provenance-gated verification
 
-Status: **OPEN** (wayfinder ticket, CTX-022 — GitHub issue #194)
+Status: **OPEN — implementing** (wayfinder ticket, CTX-022 — GitHub issue #194)
 
 ## Question
 

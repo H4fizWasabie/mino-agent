@@ -123,6 +123,10 @@ func (gm *GraphMemory) indexPath() string {
 
 func NewGraphMemory(dir string, cfg *Settings) *GraphMemory {
 	os.MkdirAll(dir, 0755)
+	// CTX-022 B: the archive tier must exist from first boot — a missing dir
+	// made the archive path dead code (the Agent-Reach facts were never
+	// retired because nothing ever created it).
+	os.MkdirAll(filepath.Join(dir, "archive"), 0755)
 	gm := &GraphMemory{dir: dir, cfg: cfg, facts: make(map[string]*Fact), files: make(map[string]fileStamp), judgedAt: make(map[string]string), communities: make(map[string]int), labels: make(map[string]string), parseWarned: make(map[string]bool)}
 	if gm.loadIndex() {
 		return gm

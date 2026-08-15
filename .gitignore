@@ -34,3 +34,4 @@ index.json
 # local secrets / stray build artifacts
 /mino.env
 /mino.exe
+extensions/mino-memory/mino-memory

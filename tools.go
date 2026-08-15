@@ -66,7 +66,7 @@ type Registry struct {
 	tools          map[string]*Tool
 	logDB          *sql.DB    // optional: if set, ExecuteContext logs to tool_calls table
 	auditFile      *os.File   // optional: append-only JSONL audit log
-	auditMu        sync.Mutex // guards auditFile writes
+	auditMu        *sync.Mutex // guards auditFile writes (shared across Only-derived registries)
 	searchDB *sql.DB    // optional: FTS5 index for context-conditioned tool selection
 	searchMu sync.Mutex
 
@@ -134,7 +134,7 @@ func (r *Registry) CloseAuditLog() {
 }
 
 func NewRegistry() *Registry {
-	return &Registry{tools: make(map[string]*Tool)}
+	return &Registry{tools: make(map[string]*Tool), auditMu: &sync.Mutex{}}
 }
 
 func (r *Registry) Register(t *Tool) {
@@ -665,6 +665,13 @@ func (t *Tool) compiledSchema() (*jsonschema.Schema, error) {
 
 func (r *Registry) Only(names ...string) *Registry {
 	out := NewRegistry()
+	// OBS-002: stage registries must inherit the audit plumbing — a fresh
+	// registry with nil logDB/auditFile made every tool call inside a
+	// playbook stage invisible to audit.jsonl and the tool_calls table
+	// (live evidence 2026-08-15: 61 images generated, 0 audit entries).
+	out.logDB = r.logDB
+	out.auditFile = r.auditFile
+	out.auditMu = r.auditMu // shared mutex: both registries may write concurrently
 	for _, name := range names {
 		if t, ok := r.tools[name]; ok {
 			out.Register(t)
