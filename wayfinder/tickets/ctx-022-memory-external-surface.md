@@ -1,4 +1,4 @@
-# Memory retrieval is loop-private — expose a deterministic read surface
+# Memory: retrieval is loop-private — external read surface + retirement semantics
 
 Status: **OPEN** (wayfinder ticket, CTX-022 — GitHub issue #194)
 
@@ -26,6 +26,43 @@ retrieval layer, and the layer is loop-gated.
 
 Companion gap: OBS-002 — playbook-stage tool calls (incl. `remember`) don't
 reach `audit.jsonl`, so even *usage* of memory inside runs is observability-opaque.
+
+## Part B — Retirement semantics: "keep as history" must mean archive, not live retention
+
+Evidence (2026-08-14 trace, cross-checked against the live conversation):
+when the owner asked to forget the Agent-Reach repo and then to "store them as
+historical record", mino deleted the repo and **left the memory facts fully
+live and rankable** — `agent_reach_tool_description` kept its active `why`
+("expands Mino's internet access capabilities") and `use_when` ("when
+evaluating cost-effective social media integrations"). The archive tier
+(`ArchiveFact`, `memories/archive/`, `[archived]` tag, thin-result-only recall)
+exists but was never engaged: `memories/archive/` has never been created on the
+VPS — the archive path is dead code in practice. Consequence: the stale live
+fact ranked in recall and produced the wrong "still actively maintained"
+answer in the 2026-08-15 demo.
+
+The system prompt tells the model when to *remember* (session.go:57) but says
+nothing about retirement semantics — no instruction that "keep as history" /
+"forget" means `manage_memory reject` on the target facts.
+
+### Scope B
+
+1. **Prompt guidance** (docs change, ~90% of the fix): beside the existing
+   remember guidance, instruct that owner retirement signals ("store as
+   historical record", "forget X") map to archiving the matching facts —
+   archive tier, never the live tier. Document that `reject` is the archival
+   mechanism for intentional history, not only for corrections.
+2. **Archive-dir init** (code, ~10%): `os.MkdirAll(archiveDir)` in
+   `NewGraphMemory` so the archive path exists from first boot.
+3. **Regression test**: reject/archive a fact, assert it is excluded from live
+   recall and surfaces only via the thin-result fallback tagged `[archived]`.
+
+### Acceptance criteria B
+
+- [ ] After an owner "keep as history" instruction, target facts are archived
+      (moved to `memories/archive/`), not left rankable
+- [ ] `memories/archive/` exists on a fresh graph init
+- [ ] Test proves archived facts are excluded from live recall
 
 ## Scope
 
