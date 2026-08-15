@@ -125,7 +125,7 @@ func (s *Session) buildSystem(userMessage, source string, includePlaybookRouting
 	// message, keeping the system-prompt prefix cache-stable.
 	if s.mem != nil && s.mem.graph != nil {
 		if facts := ownerEstablishedFacts(userMessage, s.mem.graph.Remember(userMessage, "")); facts != "" {
-			dyn = append(dyn, "OWNER-ESTABLISHED FACTS (authoritative — do not re-litigate against web data):\n"+facts)
+			dyn = append(dyn, ownerEstablishedMarker+" (authoritative — do not re-litigate against web data):\n"+facts)
 		}
 	}
 	if s.mem != nil {

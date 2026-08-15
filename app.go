@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"unicode"
@@ -326,6 +327,20 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 		w.Settings.Home,
 	)
 
+	// CTX-022 C (round 3): post-reply verification — generation is
+	// probabilistic, so the harness checks the draft reply against any
+	// owner-established facts it carried before delivery, and signs the
+	// contradiction instead of letting it ship silently. One small call per
+	// turn that carried owner facts; verification failure fails open (never
+	// blocks the reply on a check error).
+	if strings.Contains(routing, ownerEstablishedMarker) && w.Memory != nil && w.Memory.graph != nil {
+		if facts := ownerEstablishedFacts(userMessage, w.Memory.graph.Remember(userMessage, "")); facts != "" {
+			if correction := verifyReplyAgainstOwnerFacts(w.Client, facts, result.Reply, userMessage); correction != "" {
+				result.Reply += "\n\n" + correction
+			}
+		}
+	}
+
 	conversation.Session.AddExchange(userMessage, userContext, result.Reply, result.ToolCalls, source)
 	return result
 }
@@ -433,4 +448,50 @@ func (w *Core) Close() {
 		w.mcp.Close()
 	}
 	w.DB.Close()
+}
+
+// verifyReplyAgainstOwnerFacts (CTX-022 C, round 3) asks the small model
+// whether the draft reply contradicts or ignores any owner-established fact;
+// returns a harness-signed correction when it does. Fail-open: any error
+// returns "" — a verification outage never blocks the reply.
+func verifyReplyAgainstOwnerFacts(client *ProviderManager, facts, reply, question string) string {
+	if client == nil || reply == "" {
+		return ""
+	}
+	prompt := fmt.Sprintf("Owner-established facts:\n%s\n\nQuestion: %s\n\nDraft reply:\n%s\n\nDoes the draft reply contradict or ignore any owner-established fact? Reply with JSON only: {\"ok\": true} or {\"ok\": false, \"reason\": \"<one sentence>\"}.", facts, question, reply)
+	resp, err := client.CreateJSON("reply-verify", SmallModel, []Message{{Role: "user", Content: prompt}}, 300, "")
+	if err != nil {
+		slog.Warn("reply verification failed, failing open", "error", err)
+		return ""
+	}
+	ok, reason := parseVerifyResponse(resp.FinalText)
+	if ok {
+		return ""
+	}
+	if reason == "" {
+		reason = "the draft contradicts the owner's established record"
+	}
+	return fmt.Sprintf("[Memory verification — the owner's record stands: %s]", reason)
+}
+
+// parseVerifyResponse extracts the ok/reason verdict from the small model's
+// JSON reply, tolerating surrounding prose.
+func parseVerifyResponse(text string) (bool, string) {
+	start := strings.Index(text, "{")
+	if start < 0 {
+		return true, "" // no JSON verdict — assume ok
+	}
+	for end := start + 1; end <= len(text); end++ {
+		if text[end-1] != '}' || !json.Valid([]byte(text[start:end])) {
+			continue
+		}
+		var v struct {
+			OK     bool   `json:"ok"`
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal([]byte(text[start:end]), &v); err == nil {
+			return v.OK, v.Reason
+		}
+	}
+	return true, ""
 }

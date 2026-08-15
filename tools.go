@@ -1731,6 +1731,12 @@ func makeManageMemoryTool(mem *Memory) *Tool {
 	}
 }
 
+// ownerEstablishedMarker is the injection header for owner-provenanced facts
+// (CTX-022 C). One constant, used by both the injection (session.go) and the
+// post-reply verification gate (app.go) — a silent case/word drift between
+// the two made the gate dead in an earlier iteration.
+const ownerEstablishedMarker = "OWNER-ESTABLISHED FACTS"
+
 func makeUpdateSoulTool(home string) *Tool {
 	return &Tool{
 		Name:        "update_soul",
