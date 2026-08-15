@@ -30,3 +30,7 @@ extensions/cost-watch/mino-cost-watch
 /minowrap
 /threads-extension
 index.json
+
+# local secrets / stray build artifacts
+/mino.env
+/mino.exe
