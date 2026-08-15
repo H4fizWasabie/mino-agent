@@ -1742,3 +1742,71 @@ func TestFireScheduleAlertsOnFailedRun(t *testing.T) {
 	}
 	waitForRows(t, core.DB, 2)
 }
+
+// ISSUE-205: a schedule with days only fires on matching weekdays (in its
+// own timezone); absent days = daily (backward compatible).
+func TestClassifyScheduleDayGate(t *testing.T) {
+	loc := mustKL(t)
+	sunday := func(hour int) time.Time { return time.Date(2026, 8, 16, hour, 0, 0, 0, loc) } // 2026-08-16 = Sunday
+	monday := func(hour int) time.Time { return time.Date(2026, 8, 17, hour, 0, 0, 0, loc) }
+
+	s := PlaybookSchedule{Name: "weekly", Time: "13:00", Timezone: "Asia/Kuala_Lumpur", Days: []string{"sunday"}}
+
+	// Sunday 13:00 in window → fire
+	if got := classifySchedule(s, sunday(13), false); got != scheduleFire {
+		t.Fatalf("sunday in window = %v, want fire", got)
+	}
+	// Monday same time → skip
+	if got := classifySchedule(s, monday(13), false); got != scheduleSkip {
+		t.Fatalf("monday = %v, want skip", got)
+	}
+	// Monday same time, boot catch-up (allowLate) → skip too — the day gate
+	// applies before the window logic, so a missed Sunday is never fired on Monday
+	if got := classifySchedule(s, monday(14), true); got != scheduleSkip {
+		t.Fatalf("monday allowLate = %v, want skip", got)
+	}
+	// Sunday late in window (allowLate) → fire
+	if got := classifySchedule(s, sunday(14), true); got != scheduleFire {
+		t.Fatalf("sunday allowLate = %v, want fire", got)
+	}
+	// absent days = daily
+	daily := PlaybookSchedule{Name: "daily", Time: "13:00", Timezone: "Asia/Kuala_Lumpur"}
+	if got := classifySchedule(daily, monday(13), false); got != scheduleFire {
+		t.Fatalf("daily monday = %v, want fire", got)
+	}
+}
+
+// ISSUE-205: schedule_playbook accepts days and persists them; invalid
+// weekday names are rejected.
+func TestSchedulePlaybookAcceptsDays(t *testing.T) {
+	_, home := newScheduleTestCore(t)
+	dir := filepath.Join(home, "playbooks", "weekly-audit", "stages", "01-audit")
+	if err := os.MkdirAll(filepath.Join(dir, "output"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "CONTEXT.md"), []byte("# W\n\n## Outputs\n| Artifact | Path |\n| --- | --- |\n| r | output/r.md |\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "playbooks", "weekly-audit", "config.md"), []byte("status: active\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "playbooks", "weekly-audit", "CONTEXT.md"), []byte("# Weekly audit\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	tool := makeSchedulePlaybookTool(home, "Asia/Kuala_Lumpur")
+	call := func(args map[string]any) string { return tool.ContextFn(context.Background(), args) }
+	got := call(map[string]any{"name": "weekly-audit", "time": "18:00", "days": []any{"sunday"}})
+	if !strings.Contains(got, "on sunday") {
+		t.Fatalf("schedule with days = %q, want 'on sunday'", got)
+	}
+	scheds, err := loadSchedules(home)
+	if err != nil || len(scheds) != 1 {
+		t.Fatalf("schedules = %+v (err %v)", scheds, err)
+	}
+	if len(scheds[0].Days) != 1 || scheds[0].Days[0] != "sunday" {
+		t.Fatalf("persisted days = %v, want [sunday]", scheds[0].Days)
+	}
+	if got := call(map[string]any{"name": "weekly-audit", "time": "18:00", "days": []any{"someday"}}); !strings.Contains(got, "invalid weekday") {
+		t.Fatalf("bad day = %q, want rejection", got)
+	}
+}
