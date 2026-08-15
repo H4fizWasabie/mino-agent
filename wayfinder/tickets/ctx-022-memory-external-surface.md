@@ -1,6 +1,6 @@
 # Memory retrieval is loop-private — expose a deterministic read surface
 
-Status: **OPEN** (wayfinder ticket, CTX-022)
+Status: **OPEN** (wayfinder ticket, CTX-022 — GitHub issue #194)
 
 ## Question
 
