@@ -117,6 +117,17 @@ func (s *Session) buildSystem(userMessage, source string, includePlaybookRouting
 	}
 
 	var dyn []string
+	// CTX-022 C (structural): owner-established facts are a condition, not
+	// tool-result advice — the 2026-08-15 live test proved a warning inside
+	// search results can be ignored (the model repeated the wrong Agent-Reach
+	// answer with the gate warning present in both search results).
+	// User-provenanced facts for this message's topic ride with the user
+	// message, keeping the system-prompt prefix cache-stable.
+	if s.mem != nil && s.mem.graph != nil {
+		if facts := ownerEstablishedFacts(userMessage, s.mem.graph.Remember(userMessage, "")); facts != "" {
+			dyn = append(dyn, "OWNER-ESTABLISHED FACTS (authoritative — do not re-litigate against web data):\n"+facts)
+		}
+	}
 	if s.mem != nil {
 		skills := s.mem.MatchingSkills(userMessage)
 		if skills != "" {
@@ -152,6 +163,51 @@ func abs(n int) int {
 		return -n
 	}
 	return n
+}
+
+// ownerEstablishedFacts extracts the user-provenanced top facts from a
+// remember output — subject + rationale, only for facts whose match signal
+// carries user provenance AND whose text overlaps the message (the +30
+// provenance bonus recalls user facts with zero word matches; topical
+// overlap is required so unrelated turns stay clean).
+func ownerEstablishedFacts(query, recall string) string {
+	words := memoryTokenize(query)
+	var out strings.Builder
+	block := ""
+	provenanced := false
+	flush := func() {
+		if provenanced && block != "" {
+			out.WriteString(block)
+			out.WriteString("\n")
+		}
+		block, provenanced = "", false
+	}
+	for _, line := range strings.Split(recall, "\n") {
+		t := strings.TrimSpace(line)
+		if t == "" {
+			continue
+		}
+		if strings.Contains(t, "# ") && !strings.HasPrefix(t, "→") && !strings.HasPrefix(t, "←") {
+			flush()
+			block = t
+			continue
+		}
+		if strings.HasPrefix(t, "→") || strings.HasPrefix(t, "←") {
+			flush()
+			continue
+		}
+		if strings.Contains(t, "matched:") && strings.Contains(t, "user-provenanced") {
+			provenanced = true
+		}
+		if block != "" {
+			block += "\n" + t
+		}
+	}
+	flush()
+	if len(matchedWords(words, out.String())) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(out.String())
 }
 
 // explicitPlaybookCommand reports whether the user message is a direct order to

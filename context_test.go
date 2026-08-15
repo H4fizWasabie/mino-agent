@@ -721,3 +721,29 @@ func (f *failingVisionClient) Stream(session string, role ModelRole, messages []
 func (f *failingVisionClient) CreateContext(ctx context.Context, session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
 	return f.Create(session, role, messages, maxTokens, system, tools)
 }
+
+// CTX-022 C (structural): a user-provenanced fact on the message's topic is
+// injected as an OWNER-ESTABLISHED FACT riding the user message — the live
+// test proved a warning inside search results can be ignored, so the fact
+// must be a system-level condition, not tool-result advice.
+func TestBuildSystemInjectsOwnerEstablishedFacts(t *testing.T) {
+	home := t.TempDir()
+	gm := NewGraphMemory(filepath.Join(home, "memories"), nil)
+	if err := gm.RecordFact(Fact{
+		ID: "repo_deleted", Type: "semantic", Source: "user",
+		Subject: "The Agent-Reach repo was deleted per request",
+		Why:     "so I know it is gone",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := NewSession(&Settings{Home: home, Workspace: "/srv/mino-work"}, &Memory{graph: gm})
+	_, dyn := s.BuildContext("What happened to Agent-Reach?", "cli")
+	if !strings.Contains(dyn, "OWNER-ESTABLISHED FACTS") || !strings.Contains(dyn, "repo_deleted") {
+		t.Fatalf("owner facts missing from routing block: %q", dyn)
+	}
+	// Unrelated message stays clean.
+	_, dyn2 := s.BuildContext("what is the weather?", "cli")
+	if strings.Contains(dyn2, "OWNER-ESTABLISHED FACTS") {
+		t.Fatalf("owner facts leaked into unrelated turn: %q", dyn2)
+	}
+}
