@@ -17,7 +17,7 @@ only by paying a full LLM turn through the chat API, or by raw file access.
 
 | Access path | Result for the same question ("what happened to Agent-Reach?") |
 |---|---|
-| In-loop `remember` | Ranked subgraph in ONE call: top fact with full `matched:` rationale, user-provenance, conflict flags, and the `[supersedes] → Abah requested deletion… 2026-08-14` walk — every mechanism working as designed |
+| In-loop `remember` | Ranked subgraph in ONE call: top fact with full `matched:` rationale, user-provenance, conflict flags, and the `[supersedes] → the owner requested deletion of the repo on 2026-08-14` walk — every mechanism working as designed |
 | External agent (this session) | `ls \| wc -l`, `grep -h "^subject:"` across 846 files, `head` frontmatter per fact, manual edge reading — no scoring, no rationale, no traversal |
 
 Same model (deepseek-v4-flash) on both paths. The answer-quality difference was
