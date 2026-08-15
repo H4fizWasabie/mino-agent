@@ -3,10 +3,13 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
+	"os/signal"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -49,6 +52,13 @@ func main() {
 		}
 	}
 
+	// Register the HUP channel FIRST — before NewCore's slow init. A
+	// cost-watch pin arriving during boot queues in the buffer instead of
+	// terminating the process (default SIGHUP disposition); the goroutine
+	// below drains it once the provider manager exists.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+
 	// Check for updates early (before full init, so it works even without API key).
 	s := LoadSettings()
 	if latest := CheckForUpdate(s.Home); latest != "" {
@@ -65,6 +75,10 @@ func main() {
 
 	w := NewCore()
 	defer w.Close()
+
+	// cost-watch's autonomous pinning rewrites providers.json and signals mino;
+	// hot-reload the routing list instead of waiting for a restart.
+	go reloadOnHUP(func() error { return w.Client.ReloadProviders(w.Settings.Home) }, hup)
 
 	// Auto-open browser on first run (onboarding §16)
 	if needsOnboarding(w.Settings.Home) {
@@ -90,6 +104,19 @@ func main() {
 
 	// Default: dashboard
 	RunDashboard(w)
+}
+
+// reloadOnHUP reloads provider config on SIGHUP (the cost-watch pinning
+// signal). Runs until sig closes; a failed reload is logged and the loop
+// keeps listening — one bad reload must not wedge the watcher loop.
+func reloadOnHUP(reload func() error, sig <-chan os.Signal) {
+	for range sig {
+		if err := reload(); err != nil {
+			slog.Error("provider reload on SIGHUP failed", "error", err)
+			continue
+		}
+		slog.Info("providers reloaded on SIGHUP")
+	}
 }
 
 func runCLI(w *Core) {

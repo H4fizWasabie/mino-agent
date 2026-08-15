@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -191,6 +193,164 @@ func TestSaveCatalogueRoundTrip(t *testing.T) {
 	s := string(data)
 	if !strings.Contains(s, "DeepInfra") || !strings.Contains(s, "zdr") || !strings.Contains(s, "trains") {
 		t.Fatalf("catalogue file wrong: %s", s)
+	}
+}
+
+func TestDefaultConfigCuratesBaiduCacheOnly(t *testing.T) {
+	cfg := defaultConfig()
+	if cfg.DataHandling["Baidu"] != "cache_only" {
+		t.Fatalf("Baidu not curated cache_only: %q", cfg.DataHandling["Baidu"])
+	}
+	// A live config map must not clobber the default vetting.
+	dir := t.TempDir()
+	oldCfg := configPath
+	defer func() { configPath = oldCfg }()
+	configPath = filepath.Join(dir, "cost-watch.json")
+	os.WriteFile(configPath, []byte(`{"data_handling":{"DeepInfra":"zdr"}}`), 0600)
+	cfg = loadConfig()
+	if cfg.DataHandling["Baidu"] != "cache_only" {
+		t.Fatalf("default Baidu curation lost by merge: %q", cfg.DataHandling["Baidu"])
+	}
+	if cfg.DataHandling["DeepInfra"] != "zdr" {
+		t.Fatalf("custom curation lost: %q", cfg.DataHandling["DeepInfra"])
+	}
+}
+
+func TestPinOrderExcludesTrains(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.DataHandling["DeepSeek"] = "trains"
+	cfg.DataHandling["DeepInfra"] = "zdr"
+	cat := []catalogueEntry{
+		{Model: "m", Provider: "DeepSeek", In: 0.01, DataHandling: "trains"}, // cheapest but banned
+		{Model: "m", Provider: "Baidu", In: 0.08, DataHandling: "cache_only"},
+		{Model: "m", Provider: "DeepInfra", In: 0.14, DataHandling: "zdr"},
+	}
+	order := pinOrder(cfg, cat)
+	if len(order) != 2 || order[0] != "Baidu" || order[1] != "DeepInfra" {
+		t.Fatalf("order = %v, want [Baidu DeepInfra] (trains never appears)", order)
+	}
+}
+
+func TestPinOrderCapsAtMaxPins(t *testing.T) {
+	cfg := defaultConfig()
+	var cat []catalogueEntry
+	for i := 0; i < 10; i++ {
+		cat = append(cat, catalogueEntry{Model: "m", Provider: fmt.Sprintf("P%d", i), In: float64(i), DataHandling: "unknown"})
+	}
+	if order := pinOrder(cfg, cat); len(order) != maxPins {
+		t.Fatalf("order = %d entries, want %d", len(order), maxPins)
+	}
+}
+
+func TestApplyPinsRewritesRoutingAndBacksUp(t *testing.T) {
+	old := providersPath
+	defer func() { providersPath = old }()
+	providersPath = filepath.Join(t.TempDir(), "providers.json")
+	orig := []byte(`{"providers":[
+		{"name":"openrouter","priority":1,"base_url":"https://openrouter.ai/api/v1","api_key_env":"MINO_OPENROUTER_KEY","model":"deepseek/deepseek-v4-flash-0731:deepinfra","small_model":"deepseek/deepseek-v4-flash-0731:deepinfra","text_only":true,"provider_routing":["DeepInfra"],"small_provider_routing":["DeepInfra"]},
+		{"name":"qwen-fallback","priority":2,"base_url":"https://openrouter.ai/api/v1","api_key_env":"MINO_OPENROUTER_KEY","model":"qwen/qwen3.7-flash"}
+	]}`)
+	os.WriteFile(providersPath, orig, 0644)
+
+	cfg := defaultConfig()
+	cfg.DataHandling["DeepSeek"] = "trains"
+	cfg.DataHandling["DeepInfra"] = "zdr"
+	cat := catalogue{Entries: []catalogueEntry{
+		{Model: "deepseek/deepseek-v4-flash-0731", Provider: "DeepSeek", In: 0.01, DataHandling: "trains"},
+		{Model: "deepseek/deepseek-v4-flash-0731", Provider: "Baidu", In: 0.0798, DataHandling: "cache_only"},
+		{Model: "deepseek/deepseek-v4-flash-0731", Provider: "DeepInfra", In: 0.08, DataHandling: "zdr"},
+		{Model: "qwen/qwen3.7-flash", Provider: "Qwen", In: 0.03},
+	}}
+	changed, summary, err := applyPins(cfg, cat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("expected a pin change")
+	}
+	if !strings.Contains(summary, "openrouter") || strings.Contains(summary, "qwen-fallback") {
+		t.Fatalf("summary = %q: touched openrouter only, never the unpinned fallback", summary)
+	}
+	data, _ := os.ReadFile(providersPath)
+	s := string(data)
+	if strings.Contains(s, ":deepinfra") {
+		t.Fatalf("stale :suffix survived: %s", s)
+	}
+	// DeepSeek is cheapest but trains — Baidu must lead, DeepSeek must not appear.
+	var got struct {
+		Providers []struct {
+			Name                 string   `json:"name"`
+			ProviderRouting      []string `json:"provider_routing"`
+			SmallProviderRouting []string `json:"small_provider_routing"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Providers) != 2 || got.Providers[0].Name != "openrouter" {
+		t.Fatalf("providers = %+v", got.Providers)
+	}
+	want := []string{"Baidu", "DeepInfra"}
+	p := got.Providers[0]
+	if len(p.ProviderRouting) != 2 || p.ProviderRouting[0] != "Baidu" || p.ProviderRouting[1] != "DeepInfra" {
+		t.Fatalf("routing = %v, want %v", p.ProviderRouting, want)
+	}
+	if len(p.SmallProviderRouting) != 2 || p.SmallProviderRouting[0] != "Baidu" || p.SmallProviderRouting[1] != "DeepInfra" {
+		t.Fatalf("small routing = %v, want %v", p.SmallProviderRouting, want)
+	}
+	if strings.Contains(s, "DeepSeek") {
+		t.Fatalf("trains provider leaked into providers.json: %s", s)
+	}
+	if len(got.Providers[1].ProviderRouting) != 0 {
+		t.Fatalf("qwen-fallback must stay unpinned: %+v", got.Providers[1])
+	}
+	bak, err := os.ReadFile(providersPath + ".bak-pin")
+	if err != nil || string(bak) != string(orig) {
+		t.Fatalf("backup missing or wrong: %v", err)
+	}
+}
+
+func TestApplyPinsIdempotent(t *testing.T) {
+	old := providersPath
+	defer func() { providersPath = old }()
+	providersPath = filepath.Join(t.TempDir(), "providers.json")
+	orig := []byte(`{"providers":[{"name":"openrouter","model":"m","provider_routing":["A"]}]}`)
+	os.WriteFile(providersPath, orig, 0644)
+	cfg := defaultConfig()
+	cat := catalogue{Entries: []catalogueEntry{{Model: "m", Provider: "A", In: 0.1}}}
+	changed, _, err := applyPins(cfg, cat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("unchanged order must not rewrite providers.json")
+	}
+	data, _ := os.ReadFile(providersPath)
+	if string(data) != string(orig) {
+		t.Fatalf("file rewritten anyway: %s", data)
+	}
+}
+
+func TestFetchCatalogueParsesDiscount(t *testing.T) {
+	old := providersPath
+	defer func() { providersPath = old }()
+	providersPath = filepath.Join(t.TempDir(), "providers.json")
+	os.WriteFile(providersPath, []byte(`{"providers":[{"model":"deepseek/deepseek-v4-flash-0731:deepinfra"}]}`), 0644)
+	orig := fetch
+	defer func() { fetch = orig }()
+	fetch = func(url string) (string, error) {
+		return `{"data":{"endpoints":[{"name":"Baidu | deepseek","pricing":{"prompt":"0.0000000798","completion":"0.0000001596","input_cache_read":"0.00000001596","discount":0.43}}]}}`, nil
+	}
+	cat, err := fetchCatalogue(defaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cat.Entries) != 1 || cat.Entries[0].Provider != "Baidu" {
+		t.Fatalf("entries = %+v", cat.Entries)
+	}
+	e := cat.Entries[0]
+	if !approx(e.In, 0.0798) || !approx(e.Discount, 0.43) {
+		t.Fatalf("price/discount = %+v", e)
 	}
 }
 

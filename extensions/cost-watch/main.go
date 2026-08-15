@@ -1,10 +1,11 @@
 // mino cost-watch — the price guardian.
 //
-// Scrapes OpenRouter model pages for per-provider pricing, exposes the mino
-// extension protocol (docs/decisions.md §8), and runs an hourly autonomous check
-// that alerts on Telegram when a promotional price expires. Alert-only by
-// policy (REL-01, issue #128): it pages the owner — it never changes the
-// brain. Model changes are human decisions.
+// Scrapes OpenRouter per-provider pricing, exposes the mino extension protocol
+// (docs/decisions.md §8), runs an hourly autonomous check that re-pins the
+// brain's routing to the cheapest eligible host (curated `trains` providers
+// are hard-excluded; promos win by being cheap) and signals mino to hot-reload
+// via SIGHUP — silent, no owner paging. The promo-expiry pager stays for the
+// case pinning cannot fix: every eligible host above threshold.
 //
 //	GET  /tools    -> [{"name": "...", "schema": {...}}]
 //	POST /execute  -> {"tool": "...", "args": {...}} -> {"result": "..."}
@@ -19,7 +20,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -58,12 +61,15 @@ type config struct {
 }
 
 // catalogueEntry is one provider's price for a model (CTX-020). In/Out are
-// USD per 1M tokens; DataHandling is curated (zdr|trains|unknown), never scraped.
+// USD per 1M tokens; Discount is the endpoint's promo fraction (0.43 = 43% off
+// list, from the endpoints API); DataHandling is curated
+// (zdr|cache_only|trains|unknown), never scraped.
 type catalogueEntry struct {
 	Model        string  `json:"model"`
 	Provider     string  `json:"provider"`
 	In           float64 `json:"in"`
 	Out          float64 `json:"out"`
+	Discount     float64 `json:"discount"`
 	DataHandling string  `json:"data_handling"`
 }
 
@@ -81,6 +87,11 @@ func defaultConfig() *config {
 		Models: map[string]modelConfig{
 			"deepseek/deepseek-v4-flash-0731:deepinfra": {"https://openrouter.ai/deepseek/deepseek-v4-flash-0731", 0.08, 2.0},
 			"qwen/qwen3.7-flash":                        {"https://openrouter.ai/qwen/qwen3.7-flash", 0.03, 2.0},
+		},
+		DataHandling: map[string]string{
+			// Owner-vetted: retains prompts for caching, never trains (the
+			// cache_only bucket — cheaper than zdr, same no-train guarantee).
+			"Baidu": "cache_only",
 		},
 	}
 }
@@ -113,8 +124,10 @@ func loadConfig() *config {
 		if extra.CatalogueRefreshMin > 0 {
 			cfg.CatalogueRefreshMin = extra.CatalogueRefreshMin
 		}
-		if len(extra.DataHandling) > 0 {
-			cfg.DataHandling = extra.DataHandling
+		// Per-key merge so a curated map (zdr for the incumbent hosts) never
+		// clobbers defaults like Baidu's cache_only vetting.
+		for k, v := range extra.DataHandling {
+			cfg.DataHandling[k] = v
 		}
 	}
 	return cfg
@@ -338,8 +351,9 @@ func fetchCatalogue(cfg *config) (catalogue, error) {
 				Endpoints []struct {
 					Name    string `json:"name"`
 					Pricing struct {
-						Prompt     string `json:"prompt"`
-						Completion string `json:"completion"`
+						Prompt     string  `json:"prompt"`
+						Completion string  `json:"completion"`
+						Discount   float64 `json:"discount"`
 					} `json:"pricing"`
 				} `json:"endpoints"`
 			} `json:"data"`
@@ -363,6 +377,7 @@ func fetchCatalogue(cfg *config) (catalogue, error) {
 				Provider:     provider,
 				In:           in * 1e6,
 				Out:          out * 1e6,
+				Discount:     ep.Pricing.Discount,
 				DataHandling: flag,
 			})
 		}
@@ -389,12 +404,172 @@ func configuredOpenRouterModels() ([]string, error) {
 	var out []string
 	seen := map[string]bool{}
 	for _, p := range f.Providers {
-		if p.Model != "" && strings.Contains(p.Model, "/") && !seen[p.Model] {
-			seen[p.Model] = true
-			out = append(out, p.Model)
+		if p.Model != "" && strings.Contains(p.Model, "/") {
+			slug := stripProviderPin(p.Model)
+			if !seen[slug] {
+				seen[slug] = true
+				out = append(out, slug)
+			}
 		}
 	}
 	return out, nil
+}
+
+// --- autonomous pinning (rel-01 reversal, issue #128 revisited) ------------
+//
+// The 2026-08-10 alert-only restriction shipped because a broken pager (the
+// promo-expiry timer was never installed) was misread as autonomous-behavior
+// failure. The pager is fixed; price churn on a promo-driven stack goes
+// silent again unless the pin itself chases the price. So: every catalogue
+// refresh ranks eligible hosts (curated `trains` providers are hard-excluded;
+// everything else — zdr, cache_only, unknown — is eligible) and rewrites
+// provider_routing order. Promos manifest as low input prices, so price
+// sorting rides promos without a separate discount filter. Silent and
+// idempotent: no owner paging, no write when the order is unchanged.
+
+const maxPins = 5 // routing-list cap; the tail beyond this never gets traffic
+
+// eligibleForPin is the hard privacy invariant (CTX-020): a curated trains
+// provider never appears in routing, whatever its price.
+func (cfg *config) eligibleForPin(provider string) bool {
+	return cfg.DataHandling[provider] != "trains"
+}
+
+// pinOrder returns the routing order for one model slug: eligible providers
+// sorted by input price (cheapest first), capped at maxPins.
+func pinOrder(cfg *config, entries []catalogueEntry) []string {
+	var eligible []catalogueEntry
+	for _, e := range entries {
+		if cfg.eligibleForPin(e.Provider) {
+			eligible = append(eligible, e)
+		}
+	}
+	sort.SliceStable(eligible, func(i, j int) bool { return eligible[i].In < eligible[j].In })
+	if len(eligible) > maxPins {
+		eligible = eligible[:maxPins]
+	}
+	out := make([]string, len(eligible))
+	for i, e := range eligible {
+		out[i] = e.Provider
+	}
+	return out
+}
+
+// stripProviderPin removes the OpenRouter ":provider" suffix so the routing
+// list is the single source of truth — a stale suffix would override the
+// list and pin traffic to a host pinning no longer wants (the dead-:pin
+// class, mino #159).
+func stripProviderPin(model string) string {
+	lastSlash := strings.LastIndex(model, "/")
+	lastColon := strings.LastIndex(model, ":")
+	if lastSlash != -1 && lastColon > lastSlash {
+		return model[:lastColon]
+	}
+	return model
+}
+
+// applyPins rewrites routing order for provider entries that already carry a
+// pin (provider_routing / small_provider_routing or a :suffix) — unpinned
+// fallback entries stay untouched. Idempotent: changed=false when the order
+// is already what pinning wants. Backs up before writing (the swap-era
+// insurance, providers.json.bak-pin).
+func applyPins(cfg *config, cat catalogue) (changed bool, summary string, err error) {
+	data, err := os.ReadFile(providersPath)
+	if err != nil {
+		return false, "", err
+	}
+	var file map[string]any
+	if err := json.Unmarshal(data, &file); err != nil {
+		return false, "", fmt.Errorf("invalid providers.json: %w", err)
+	}
+	list, _ := file["providers"].([]any)
+	if len(list) == 0 {
+		return false, "", fmt.Errorf("providers.json has no providers")
+	}
+	bySlug := map[string][]catalogueEntry{}
+	for _, e := range cat.Entries {
+		bySlug[e.Model] = append(bySlug[e.Model], e)
+	}
+	var touched []string
+	for i, raw := range list {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		before, _ := json.Marshal(entry)
+		if m, _ := entry["model"].(string); m != "" {
+			slug := stripProviderPin(m)
+			if _, pinned := entry["provider_routing"]; pinned || slug != m {
+				if order := pinOrder(cfg, bySlug[slug]); len(order) > 0 {
+					entry["model"] = slug
+					entry["provider_routing"] = order
+				}
+			}
+		}
+		if sm, _ := entry["small_model"].(string); sm != "" {
+			slug := stripProviderPin(sm)
+			if _, pinned := entry["small_provider_routing"]; pinned || slug != sm {
+				if order := pinOrder(cfg, bySlug[slug]); len(order) > 0 {
+					entry["small_model"] = slug
+					entry["small_provider_routing"] = order
+				}
+			}
+		}
+		after, _ := json.Marshal(entry)
+		if string(before) != string(after) {
+			changed = true
+			name, _ := entry["name"].(string)
+			touched = append(touched, name)
+			list[i] = entry
+		}
+	}
+	if !changed {
+		return false, "pins unchanged", nil
+	}
+	file["providers"] = list
+	out, _ := json.MarshalIndent(file, "", "  ")
+	if err := os.WriteFile(providersPath+".bak-pin", data, 0644); err != nil {
+		return false, "", fmt.Errorf("pin backup failed: %w", err)
+	}
+	tmp := providersPath + ".tmp"
+	if err := os.WriteFile(tmp, out, 0644); err != nil {
+		return false, "", err
+	}
+	if err := os.Rename(tmp, providersPath); err != nil {
+		return false, "", err
+	}
+	return true, "pinned " + strings.Join(touched, ", "), nil
+}
+
+// sendHUP signals the running mino to hot-reload providers.json. Var for
+// tests. The write already happened; a failed signal only delays the pin to
+// the next restart (deploy does one anyway).
+var sendHUP = func() error {
+	return exec.Command("systemctl", "kill", "-s", "HUP", "mino").Run()
+}
+
+// refreshAndPin is the hourly loop body and the cost_watch_refresh tool:
+// fetch fresh prices, persist the catalogue, chase the cheapest eligible pin,
+// and hot-reload mino when the order changed.
+func refreshAndPin(cfg *config) string {
+	cat, err := fetchCatalogue(cfg)
+	if err != nil {
+		return "catalogue fetch failed: " + err.Error()
+	}
+	if err := saveCatalogue(cat); err != nil {
+		return "catalogue save failed: " + err.Error()
+	}
+	changed, summary, err := applyPins(cfg, cat)
+	if err != nil {
+		return "pin failed: " + err.Error()
+	}
+	if !changed {
+		return summary
+	}
+	if err := sendHUP(); err != nil {
+		return summary + "; mino reload failed (applies at next restart): " + err.Error()
+	}
+	return summary + "; mino reloaded"
 }
 
 // saveCatalogue writes the catalogue atomically to cost-catalogue.json.
@@ -466,13 +641,8 @@ func main() {
 	// persists the fresh price catalogue for the harness's system_check.
 	go func() {
 		for {
-			fresh := loadConfig()
-			if cat, err := fetchCatalogue(fresh); err == nil {
-				if err := saveCatalogue(cat); err != nil {
-					fmt.Println("catalogue save failed:", err)
-				}
-			}
-			min := fresh.CatalogueRefreshMin
+			fmt.Println("refresh:", refreshAndPin(loadConfig()))
+			min := loadConfig().CatalogueRefreshMin
 			if min <= 0 {
 				min = 60
 			}
@@ -494,15 +664,9 @@ func executeTool(cfg *config, tool string, args map[string]any) (string, error) 
 		_, flags := checkModels(cfg)
 		return statusText(cfg) + "\n" + fmt.Sprintf("%v", flags), nil
 	case "cost_watch_refresh":
-		// CTX-020: on-demand catalogue refresh (also runs periodically).
-		cat, err := fetchCatalogue(cfg)
-		if err != nil {
-			return "", err
-		}
-		if err := saveCatalogue(cat); err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("catalogue refreshed: %d entries at %s", len(cat.Entries), cat.ScrapedAt), nil
+		// CTX-020: on-demand catalogue refresh (also runs periodically);
+		// now also chases the cheapest eligible pin.
+		return refreshAndPin(cfg), nil
 	default:
 		return "", fmt.Errorf("unknown tool %s", tool)
 	}

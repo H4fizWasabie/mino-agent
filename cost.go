@@ -130,8 +130,8 @@ func costSince(home string, since time.Time) (float64, bool) {
 
 // costCatalogueSummary returns a brief snapshot of cost-catalogue.json (written
 // by the cost-watch extension) or "" when absent. Schema (CTX-020):
-// {"scraped_at": RFC3339, "entries": [{"model", "provider", "in", "out", "data_handling"}]}
-// with in/out in USD per 1M tokens and data_handling in zdr|trains|unknown.
+// {"scraped_at": RFC3339, "entries": [{"model", "provider", "in", "out", "discount", "data_handling"}]}
+// with in/out in USD per 1M tokens and data_handling in zdr|cache_only|trains|unknown.
 func costCatalogueSummary(home string) string {
 	data, err := os.ReadFile(filepath.Join(home, "cost-catalogue.json"))
 	if err != nil {
