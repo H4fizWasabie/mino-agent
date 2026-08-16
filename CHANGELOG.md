@@ -1,4 +1,4 @@
-## [Unreleased]
+## [v2.12.0] — Orbital Galaxy and bounded runtime work (2026-08-17)
 
 ### Added
 
