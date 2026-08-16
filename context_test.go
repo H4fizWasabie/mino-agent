@@ -115,8 +115,9 @@ func TestSettingsDefaultToUniversalWorkspaceAnd16KOutput(t *testing.T) {
 }
 
 func TestCompactToolOutputWritesArtifact(t *testing.T) {
+	home := t.TempDir()
 	output := strings.Repeat("x", artifactInlineLimit+1)
-	compact := compactToolOutput("", "test-session", 1, "bash", output)
+	compact := compactToolOutput(home, "test-session", 1, "bash", output)
 	if !strings.Contains(compact, "artifact") {
 		t.Fatalf("got %q", compact)
 	}
@@ -132,7 +133,48 @@ func TestCompactToolOutputWritesArtifact(t *testing.T) {
 	if err != nil || string(data) != output {
 		t.Fatalf("artifact: %v", err)
 	}
-	os.RemoveAll("/tmp/mino/results/test-session")
+	if !strings.HasPrefix(path, filepath.Join(home, "results")) {
+		t.Fatalf("artifact not under durable spill dir: %q", path)
+	}
+}
+
+func TestPruneSpillsRemovesOldArtifacts(t *testing.T) {
+	// RUN-007: the durable spill store must stay bounded — files older than
+	// spillRetention are pruned and empty dirs collapse with them.
+	home := t.TempDir()
+	root := filepath.Join(home, "results")
+	old := filepath.Join(root, "s", "1")
+	if err := os.MkdirAll(old, 0700); err != nil {
+		t.Fatal(err)
+	}
+	fresh := filepath.Join(root, "s", "2")
+	if err := os.MkdirAll(fresh, 0700); err != nil {
+		t.Fatal(err)
+	}
+	oldFile := filepath.Join(old, "bash.txt")
+	if err := os.WriteFile(oldFile, []byte("stale"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-spillRetention - time.Hour)
+	if err := os.Chtimes(oldFile, past, past); err != nil {
+		t.Fatal(err)
+	}
+	freshFile := filepath.Join(fresh, "bash.txt")
+	if err := os.WriteFile(freshFile, []byte("current"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	pruneSpills(home)
+
+	if _, err := os.Stat(oldFile); !os.IsNotExist(err) {
+		t.Fatalf("old artifact survived pruning: %v", err)
+	}
+	if data, err := os.ReadFile(freshFile); err != nil || string(data) != "current" {
+		t.Fatalf("fresh artifact pruned: %v", err)
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Fatalf("empty dir survived pruning: %v", err)
+	}
 }
 
 func TestPrepareToolOutputCompactsReadFileToo(t *testing.T) {
@@ -140,13 +182,13 @@ func TestPrepareToolOutputCompactsReadFileToo(t *testing.T) {
 	// 8k chars each, re-sent every iteration — dominated a 2.48M-token run.
 	// read_file is deliberately not exempt from the inline cap.
 	output := strings.Repeat("x", artifactInlineLimit+1)
-	got := prepareToolOutput("", "test-session", 1, "read_file", output)
+	got := prepareToolOutput(t.TempDir(), "test-session", 1, "read_file", output)
 	if !strings.Contains(got, "artifact") || strings.Contains(got, strings.Repeat("x", artifactInlineLimit+1)) {
 		t.Fatalf("read_file not compacted: %.200q", got)
 	}
 	// Small read_file results stay inline (offset/limit slicing still works).
 	small := strings.Repeat("y", 100)
-	if got := prepareToolOutput("", "test-session", 1, "read_file", small); got != small {
+	if got := prepareToolOutput(t.TempDir(), "test-session", 1, "read_file", small); got != small {
 		t.Fatalf("small read_file result altered: %.100q", got)
 	}
 }
@@ -327,7 +369,6 @@ func TestContextForBoundsCurrentInputAndKeepsArtifactCatalog(t *testing.T) {
 	if !strings.Contains(userContext, "large user input") || !strings.Contains(joined, artifactPath) {
 		t.Fatalf("context lost input or catalog: %q", joined)
 	}
-	os.RemoveAll(filepath.Join("/tmp/mino/results", "test-session"))
 }
 
 func TestArtifactFromOutput(t *testing.T) {
@@ -524,24 +565,24 @@ func TestToolTrailForHistory(t *testing.T) {
 	defer mem.db.Close()
 
 	short := "pong"
-	if got := toolTrailForHistory("s", "ping", short, mem); got != short {
+	if got := toolTrailForHistory(home, "s", "ping", short, mem); got != short {
 		t.Fatalf("short output altered: %q", got)
 	}
 
 	pointer := "[artifact: bash → 1234 chars at /tmp/mino/results/s/1/bash.txt; use read_file with offset and limit]"
-	if got := toolTrailForHistory("s", "bash", pointer, mem); got != pointer {
+	if got := toolTrailForHistory(home, "s", "bash", pointer, mem); got != pointer {
 		t.Fatalf("existing artifact pointer altered: %q", got)
 	}
 
 	long := strings.Repeat("x", 700)
-	got := toolTrailForHistory("s", "grep", long, mem)
+	got := toolTrailForHistory(home, "s", "grep", long, mem)
 	if strings.Contains(got, strings.Repeat("x", 501)) {
 		t.Fatalf("long output not truncated: %q", got)
 	}
 	if !strings.Contains(got, "[tool result: 700 chars at ") {
 		t.Fatalf("missing artifact pointer: %q", got)
 	}
-	path := got[strings.Index(got, "/tmp/mino/results"):]
+	path := got[strings.Index(got, filepath.Join(home, "results")):]
 	path = path[:strings.Index(path, ";")]
 	if data, err := os.ReadFile(path); err != nil || string(data) != long {
 		t.Fatalf("artifact file missing or wrong content: %v", err)
@@ -550,7 +591,7 @@ func TestToolTrailForHistory(t *testing.T) {
 		t.Fatalf("artifact not recorded in catalog: %q", catalog)
 	}
 
-	if got := toolTrailForHistory("s", "grep", long, nil); !strings.Contains(got, "[tool result:") {
+	if got := toolTrailForHistory(home, "s", "grep", long, nil); !strings.Contains(got, "[tool result:") {
 		t.Fatalf("nil memory: %q", got)
 	}
 }

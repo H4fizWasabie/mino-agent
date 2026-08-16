@@ -1776,7 +1776,7 @@ func handleFilesAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	requestedPath := r.URL.Query().Get("path")
 	if requestedPath == "" {
-		requestedPath = "/tmp/mino/results"
+		requestedPath = filepath.Join(dashCore.Settings.Home, "results")
 	}
 	abs, info, status, message := resolveDashboardArtifact(dashCore.Settings.Home, dashCore.Settings.MemoriesDir, requestedPath)
 	if status != http.StatusOK {
@@ -1863,7 +1863,7 @@ func resolveDashboardArtifact(home, memoriesDir, raw string) (string, os.FileInf
 		filepath.Join(home, "skills"),
 		filepath.Join(home, "traces"),
 		filepath.Join(home, "outbox"),
-		"/tmp/mino/results",
+		filepath.Join(home, "results"),
 	}
 	if memoriesDir != "" {
 		roots = append(roots, memoriesDir)

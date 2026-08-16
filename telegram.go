@@ -383,7 +383,7 @@ func downloadTelegramFile(bot *tgbotapi.BotAPI, w *Core, sid, fileID, name strin
 	if err != nil {
 		return "", nil, err
 	}
-	dir := filepath.Join("/tmp/mino/results", safePath(sid))
+	dir := filepath.Join(spillDir(w.Settings.Home), safePath(sid))
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", nil, err
 	}

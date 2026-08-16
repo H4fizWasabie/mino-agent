@@ -76,6 +76,7 @@ func NewCore() *Core {
 	// Working-memory pruning is the only embedding-store leftover; it now only
 	// trims the file (issue #179 removed the store itself).
 	PruneRecentFixes(s.Home, 7*24*time.Hour)
+	pruneSpillsIfDue(s.Home) // RUN-007: durable spill store, bounded by max-age at boot
 	mem.skills = NewSkillLoader(s.Home)
 	tools := BuildRegistry(db, s.Home, s.Workspace, mem, s.Location())
 	tools.SetMaxToolDescChars(s.MaxToolDescChars)           // schema payload description cap
