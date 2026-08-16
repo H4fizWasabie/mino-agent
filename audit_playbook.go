@@ -17,10 +17,24 @@ import (
 
 var (
 	commitBoundaryRe = regexp.MustCompile(`(?i)\b(commit|do not loop|do not re-|single pass|bounded|at most|stop after|abandon|once|exactly)\b`)
+	// #238: universal-coverage language ("read ... every ...") is the
+	// unbounded-research tell — a boundary word elsewhere in the stage (e.g.
+	// "send EXACTLY ONCE") must not launder it into "bounded". That exact
+	// mismatch is why weekly-audit's "every published post" contract stayed
+	// un-flagged until the 50-iteration cap made it fail at runtime.
+	unboundedRe      = regexp.MustCompile(`(?i)\b(every)\b`)
 	verifyRe         = regexp.MustCompile(`(?i)\b(verify|verified|read back|check that|confirm|read it back)\b`)
 	groundingRe      = regexp.MustCompile(`(?i)\b(verbatim|exact result|the tool returned|never fabricate|fabrication|fabricated|grounded|grounding)\b`)
 	toolRefRe        = regexp.MustCompile(`(?i)\b(read_file|write_file|bash|search_web|generate_image|view_image|send_message|remember|save_note|manage_memory|run_playbook|list_playbooks|system_check|post_mortem|manage_playbook|sqlite3|grep)\b`)
 )
+
+// researchBounded reports whether a contract bounds its research: a boundary
+// word is not enough when "every ..." demands unbounded coverage. Flags are
+// risks, not assertions — "every" is the strong tell, and a contract that
+// uses it should name its own bound.
+func researchBounded(text string) bool {
+	return commitBoundaryRe.MatchString(text) && !unboundedRe.MatchString(text)
+}
 
 func makeAuditPlaybookTool(home string) *Tool {
 	return &Tool{
@@ -56,10 +70,10 @@ func auditPlaybookContracts(home, name string) string {
 		fmt.Fprintf(&b, "## Playbook: %s\n", n)
 		for _, st := range pb.Stages {
 			text := st.Context
-			bounded := commitBoundaryRe.MatchString(text)
+			bounded := researchBounded(text)
 			fmt.Fprintf(&b, "### Stage %02d-%s\n", st.Number, st.Name)
 			fmt.Fprintf(&b, "- size: %d chars\n", len(text))
-			fmt.Fprintf(&b, "- research_bounded: %v%s\n", bounded, riskNote(!bounded, "no explicit commit/boundary instruction → research churn risk"))
+			fmt.Fprintf(&b, "- research_bounded: %v%s\n", bounded, riskNote(!bounded, "unbounded coverage language or no commit/boundary instruction → research churn risk"))
 			fmt.Fprintf(&b, "- verification: %v%s\n", verifyRe.MatchString(text), riskNote(!verifyRe.MatchString(text), "no verify step → unverified-completion risk"))
 			fmt.Fprintf(&b, "- grounding: %v%s\n", groundingRe.MatchString(text), riskNote(!groundingRe.MatchString(text), "no grounding/fabrication guard → fabrication risk"))
 			fmt.Fprintf(&b, "- tools referenced: %v\n", uniqueMatches(toolRefRe, text))
@@ -113,8 +127,8 @@ func needsPlaybookAudit(pb *PlaybookWorkspace) bool {
 func stageRiskFlags(stage WorkspaceStage) string {
 	text := stage.Context
 	var flags []string
-	if !commitBoundaryRe.MatchString(text) {
-		flags = append(flags, "research_unbounded (no commit/boundary instruction → churn risk)")
+	if !researchBounded(text) {
+		flags = append(flags, "research_unbounded (unbounded coverage language or no commit/boundary instruction → churn risk)")
 	}
 	if !verifyRe.MatchString(text) {
 		flags = append(flags, "no_verify_step (unverified-completion risk)")

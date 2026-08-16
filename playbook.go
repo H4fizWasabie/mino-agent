@@ -1250,6 +1250,35 @@ func spawnScheduleRun(core *Core, s PlaybookSchedule, at time.Time, run schedule
 	}()
 }
 
+// scheduleRetryDelay is how long a capped scheduled run waits before its one
+// automatic retry. #238 evidence (2026-08-16): the 10:00 cap-hit was followed
+// by a 10:03 rerun that succeeded — a few minutes clears the transient load
+// that caps a run. A var, not a const, so tests can shorten it.
+var scheduleRetryDelay = 3 * time.Minute
+
+// retryMu guards retriedOccurrences.
+var retryMu sync.Mutex
+
+// retriedOccurrences remembers which schedule occurrences already received
+// their one automatic iteration_limit retry, so a retry can never retry
+// itself. In-memory by design: a daemon restart forgets the claim, and a
+// fresh daemon is a fresh try.
+var retriedOccurrences = map[string]bool{}
+
+// claimIterationRetry claims the single automatic retry for a schedule
+// occurrence. Returns false when the occurrence already retried — its next
+// cap-hit goes straight to the normal alert path (one retry, then alert).
+func claimIterationRetry(name string, at time.Time) bool {
+	key := name + "@" + at.UTC().Format(time.RFC3339)
+	retryMu.Lock()
+	defer retryMu.Unlock()
+	if retriedOccurrences[key] {
+		return false
+	}
+	retriedOccurrences[key] = true
+	return true
+}
+
 // fireSchedule runs one scheduled playbook and records the outcome. It runs
 // in its own goroutine; LastRun was already claimed synchronously by the
 // dispatcher before spawning.
@@ -1272,12 +1301,31 @@ func fireSchedule(core *Core, s PlaybookSchedule, at time.Time, run scheduledPla
 	}
 	if result != nil {
 		slog.Info("schedule playbook result", "name", s.Name, "status", result.Status, "stages", result.StagesRun)
-		// Health counters use the fire time, not a second wall-clock read —
-		// two clocks in one function made the streak-day test date-dependent
-		// (passed on the 10th, failed on the 11th when midnight rolled the
-		// day over between the two calls).
-		alertScheduleHealth(core, s, result, at)
-		alertRunCost(core, s, at)
+		if result.Status == "iteration_limit" && claimIterationRetry(s.Name, at) {
+			// #238: a capped run gets ONE automatic retry after a short delay —
+			// the 08-16 evidence (10:00 cap → 10:03 rerun success) is transient
+			// overload, not a broken contract. The retry re-fires this same
+			// occurrence through fireSchedule; the claim is spent either way, so
+			// a second cap falls into the normal alert path below.
+			logTrace(core.Settings.Home, "schedule_retry", map[string]any{"name": s.Name, "time": s.Time, "occurrence": at.UTC().Format(time.RFC3339)})
+			core.auditLog(sessionID, "schedule_retry", "iteration cap hit; one automatic retry scheduled", 0)
+			time.AfterFunc(scheduleRetryDelay, func() {
+				if !claimInflight(s.Name) {
+					slog.Warn("schedule retry skipped: playbook already running", "name", s.Name)
+					return
+				}
+				defer releaseInflight(s.Name)
+				slog.Info("schedule retry firing playbook", "name", s.Name)
+				fireSchedule(core, s, at, run)
+			})
+		} else {
+			// Health counters use the fire time, not a second wall-clock read —
+			// two clocks in one function made the streak-day test date-dependent
+			// (passed on the 10th, failed on the 11th when midnight rolled the
+			// day over between the two calls).
+			alertScheduleHealth(core, s, result, at)
+			alertRunCost(core, s, at)
+		}
 	}
 	finishedAt := time.Now().UTC()
 	if recordErr := core.Responsibilities.finishRoutine(core.Settings.Home, sessionID, s, result, err, finishedAt); recordErr != nil {
@@ -1304,6 +1352,9 @@ func recordScheduleError(home, name, errMsg string) {
 // alertScheduleHealth enforces the REL-03 health-alert contract (issue #124):
 // a failed scheduled run pages the owner once per playbook per day, and a
 // failure on 2+ consecutive owner-local days escalates to a louder message.
+// An iteration_limit run counts as a failure too (#238) — the automatic
+// retry already ran by the time this is reached, so a cap here means the
+// retry also capped.
 // A successful run resets the streak (a mid-day success redeems the day); a
 // cancelled run (owner-initiated stop) never alerts or counts. Trends ride
 // the persisted fail_streak fields in schedules.json, which the morning
@@ -1315,7 +1366,7 @@ func alertScheduleHealth(core *Core, s PlaybookSchedule, result *PlaybookResult,
 		})
 		return
 	}
-	if result.Status != "failed" {
+	if result.Status != "failed" && result.Status != "iteration_limit" {
 		return
 	}
 	reason := failureReason(result.Reply)

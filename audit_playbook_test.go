@@ -56,6 +56,37 @@ func TestAuditPlaybookContractsFlagsRisks(t *testing.T) {
 	}
 }
 
+// #238: "every" + glob + no bound must fail the gate. This is the exact
+// weekly-audit shape that stayed un-flagged: a stage demanding coverage of
+// "every published post" across a glob, laundered into "bounded" by a stray
+// boundary word ("send EXACTLY ONCE") elsewhere in the contract.
+func TestAuditPlaybookFlagsUnboundedEveryGlob(t *testing.T) {
+	home := t.TempDir()
+	pb := filepath.Join(home, "playbooks", "unbounded-pb")
+	os.MkdirAll(filepath.Join(pb, "stages", "01-audit"), 0700)
+	os.WriteFile(filepath.Join(pb, "CONTEXT.md"), []byte("# Unbounded PB\n"), 0600)
+	os.WriteFile(filepath.Join(pb, "stages", "01-audit", "CONTEXT.md"),
+		[]byte("# Audit\nGlob `/home/mino/.mino/playbooks/*/runs/*/stages/*/output/*.md` and read the post texts of every published post. Send the summary EXACTLY ONCE.\n\n## Outputs\n| Artifact | Path |\n| --- | --- |\n| report | output/audit.md |\n"), 0600)
+
+	audit := auditPlaybookContracts(home, "unbounded-pb")
+	if !strings.Contains(audit, "research_bounded: false") {
+		t.Fatalf("every+glob+no-bound contract must fail the gate (boundary word elsewhere must not launder it):\n%s", audit)
+	}
+	if !strings.Contains(audit, "RISK") {
+		t.Fatalf("unbounded contract must carry the churn RISK note:\n%s", audit)
+	}
+	// The run-time injection uses the same check.
+	st := WorkspaceStage{Name: "audit", Context: "Glob `*.md` and read every file. Send the summary EXACTLY ONCE."}
+	if got := stageRiskFlags(st); got == "" || !strings.Contains(got, "research_unbounded") {
+		t.Fatalf("every+no-bound stage must flag research_unbounded, got %q", got)
+	}
+	// A bounded contract that avoids "every" stays clean.
+	ok := WorkspaceStage{Name: "audit", Context: "Glob `*.md`, read at most the 10 most recent runs, stop at 30 iterations. Verify the output by reading it back. Never fabricate. Send the summary EXACTLY ONCE."}
+	if got := stageRiskFlags(ok); got != "" {
+		t.Fatalf("bounded contract must have no flags, got %q", got)
+	}
+}
+
 func TestNeedsPlaybookAuditAdaptive(t *testing.T) {
 	home := t.TempDir()
 	pbDir := filepath.Join(home, "playbooks", "p")
