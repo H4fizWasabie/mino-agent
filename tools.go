@@ -891,6 +891,15 @@ func makeWriteTool(workspace, home string) *Tool {
 			if guard := playbookWriteGuard(home, path, ctx); guard != "" {
 				return "Error: " + guard
 			}
+			// RUN-005: config-set files (providers.json/mino.env/cost-watch.json)
+			// go through the self-heal guard — validate, backup, journal. A
+			// rejected edit returns here with the file untouched.
+			if handled, err := applyConfigEdit(home, path, []byte(content), mode == "append"); handled {
+				if err != nil {
+					return "Error: " + err.Error()
+				}
+				return fmt.Sprintf("Wrote %d bytes to %s", len(content), path)
+			}
 			os.MkdirAll(filepath.Dir(path), 0755)
 			flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
 			verb := "Wrote"
@@ -953,6 +962,12 @@ func makeEditTool(workspace, home string) *Tool {
 							count++
 						}
 					}
+					if handled, err := applyConfigEdit(home, path, []byte(result), false); handled {
+						if err != nil {
+							return "Error: " + err.Error()
+						}
+						return fmt.Sprintf("Edited %s (%d replacements)", path, count)
+					}
 					if err := os.WriteFile(path, []byte(result), 0644); err != nil {
 						return fmt.Sprintf("Error writing %s: %v", path, err)
 					}
@@ -967,6 +982,12 @@ func makeEditTool(workspace, home string) *Tool {
 				return fmt.Sprintf("old_text not found in %s", path)
 			}
 			result = strings.Replace(result, oldText, newText, 1)
+			if handled, err := applyConfigEdit(home, path, []byte(result), false); handled {
+				if err != nil {
+					return "Error: " + err.Error()
+				}
+				return fmt.Sprintf("Edited %s (1 replacement)", path)
+			}
 			if err := os.WriteFile(path, []byte(result), 0644); err != nil {
 				return fmt.Sprintf("Error writing %s: %v", path, err)
 			}
