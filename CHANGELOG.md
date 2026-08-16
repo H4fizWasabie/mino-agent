@@ -1,5 +1,4 @@
-## [Unreleased]
-## [Unreleased]
+## [v2.11.0] — Runtime self-management: the plane fixes itself (2026-08-16)
 
 ### Added
 - **stage-smoke gains RUN-feature rehearsals (closes #229)**: the release gate now rehearses the runtime-self-management map before any release ships — ops_journal present in the staged schema (RUN-002), config self-heal proven against the staged providers.json (RUN-005: SIGHUP pass 1 establishes .prev, corrupt, SIGHUP pass 2 must restore and keep serving — deterministic, no LLM), and the approval entry point (RUN-006: "deny 999" through the real /api/chat is consumed before the loop). The staged copy also excludes extensions.json + extensions/ (RUN-001 hazard: the staged boot's supervisor reconciliation would otherwise spawn the LIVE extensions — duplicate processes and port conflicts). Deliberately not smoke-able in stage and covered elsewhere: RUN-001 install (needs git+go toolchain + fixture source on the VPS), RUN-004 rollback (needs a real swap cycle), RUN-003 sudoers (needs real root) — those stay unit-tested + the owner-run live rehearsal. (Why: the gate rehearsed boot/schema/chat/#195/#188 but none of the RUN features — a regression in config heal or the approval gate would have shipped silently.)
