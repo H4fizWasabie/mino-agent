@@ -26,6 +26,28 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "rollback":
+			// RUN-004: owner-call revert — restores the previous binary kept
+			// by the last update, records the ledger line, marks the swap
+			// op rolled_back.
+			if err := DoRollback(); err != nil {
+				fmt.Fprintf(os.Stderr, "Rollback failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "config-rollback":
+			// RUN-005: owner-call config revert — restores the .prev backup
+			// of one config-set file (providers.json / mino.env /
+			// cost-watch.json) and marks the last config.edit op rolled_back.
+			if len(os.Args) < 3 {
+				fmt.Fprintln(os.Stderr, "usage: mino config-rollback <providers.json|mino.env|cost-watch.json>")
+				os.Exit(2)
+			}
+			if err := DoConfigRollback(os.Args[2]); err != nil {
+				fmt.Fprintf(os.Stderr, "Config rollback failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "migrate-memories", "--migrate-memories":
 			s := LoadSettings()
 			MigrateMemories(s.Home, s.MemoriesDir)
@@ -49,6 +71,32 @@ func main() {
 		case "eval":
 			s := LoadSettings()
 			os.Exit(RunEval(s.Home))
+		case "setup-privileges":
+			// RUN-003: write the sudoers command whitelist (run as root).
+			user, home := "mino", ""
+			for i := 2; i < len(os.Args); i++ {
+				switch os.Args[i] {
+				case "--user":
+					i++
+					if i < len(os.Args) {
+						user = os.Args[i]
+					}
+				case "--home":
+					i++
+					if i < len(os.Args) {
+						home = os.Args[i]
+					}
+				default:
+					fmt.Fprintf(os.Stderr, "unknown flag %q\n", os.Args[i])
+					os.Exit(2)
+				}
+			}
+			if err := SetupPrivileges(home, user); err != nil {
+				fmt.Fprintf(os.Stderr, "setup-privileges failed: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("wrote %s — the mino user can now run only the whitelisted commands as root.\n", sudoersPath())
+			return
 		}
 	}
 
@@ -105,8 +153,14 @@ func main() {
 	}
 
 	// cost-watch's autonomous pinning rewrites providers.json and signals mino;
-	// hot-reload the routing list instead of waiting for a restart.
-	go reloadOnHUP(func() error { return w.Client.ReloadProviders(w.Settings.Home) }, hup)
+	// hot-reload the routing list instead of waiting for a restart. The heal
+	// runs first (RUN-005): validate the config set, revert anything bad from
+	// its .prev backup — a bad SIGHUP reload must revert, not just log.
+	journal := NewOpJournal(w.DB)
+	go reloadOnHUP(func() error {
+		HealConfig(w.Settings.Home, journal)
+		return w.Client.ReloadProviders(w.Settings.Home)
+	}, hup)
 
 	// Auto-open browser on first run (onboarding §16)
 	if needsOnboarding(w.Settings.Home) {
@@ -136,7 +190,9 @@ func main() {
 
 // reloadOnHUP reloads provider config on SIGHUP (the cost-watch pinning
 // signal). Runs until sig closes; a failed reload is logged and the loop
-// keeps listening — one bad reload must not wedge the watcher loop.
+// keeps listening — one bad reload must not wedge the watcher loop. The
+// config self-heal (HealConfig) runs inside the reload closure BEFORE the
+// provider reload, so a bad config is reverted before anything reads it.
 func reloadOnHUP(reload func() error, sig <-chan os.Signal) {
 	for range sig {
 		if err := reload(); err != nil {
@@ -163,6 +219,14 @@ func runCLI(w *Core) {
 		if input == "/exit" {
 			fmt.Println("bye!")
 			break
+		}
+
+		// RUN-006: approve/deny replies resolve pending approvals before the loop.
+		if w.approvals != nil {
+			if reply, handled := w.approvals.ResolveReply(input); handled {
+				fmt.Printf("\n%s\n", reply)
+				continue
+			}
 		}
 
 		result := w.Respond(input, "cli", nil, false)

@@ -146,3 +146,30 @@ func TestOpJournalRunValidates(t *testing.T) {
 		t.Fatalf("validation failure wrote a row: n=%d err=%v", n, err)
 	}
 }
+
+// SetStatus is the status-transition seam the journal vocabulary exists for
+// (carry-forward from RUN-002 review, picked up by RUN-001): rollback
+// consumers mark the entry they revert as rolled_back.
+func TestOpJournalSetStatus(t *testing.T) {
+	j := newTestOpJournal(t)
+	id, err := j.Run(&OpEntry{OpType: "extension.install", Entity: "threads"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := j.SetStatus(id, OpStatusRolledBack); err != nil {
+		t.Fatal(err)
+	}
+	got, err := j.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != OpStatusRolledBack {
+		t.Fatalf("status = %q, want %q", got.Status, OpStatusRolledBack)
+	}
+	if err := j.SetStatus(id, "bogus"); err == nil {
+		t.Fatal("SetStatus must reject unknown status vocabulary")
+	}
+	if err := j.SetStatus(999999, OpStatusRolledBack); err != sql.ErrNoRows {
+		t.Fatalf("SetStatus on missing id = %v, want sql.ErrNoRows", err)
+	}
+}

@@ -261,14 +261,14 @@ const sessionNoteInjectionLimit = 1500
 // part of the working note (the command, not its output — the how, not the what).
 const sessionNoteCommandLen = 200
 
-func toolTrailForHistory(sessionID, tool, output string, mem *Memory) string {
+func toolTrailForHistory(home, sessionID, tool, output string, mem *Memory) string {
 	if len(output) <= toolTrailLimit {
 		return output
 	}
 	if _, ok := artifactFromOutput(output); ok {
 		return output
 	}
-	dir := filepath.Join("/tmp/mino/results", safePath(sessionID), "trail")
+	dir := filepath.Join(spillDir(home), safePath(sessionID), "trail")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return output[:toolTrailLimit] + fmt.Sprintf(" [%d more chars not saved]", len(output)-toolTrailLimit)
 	}
@@ -288,7 +288,7 @@ func (s *Session) AddExchange(userRaw, userContext, reply string, toolCalls []To
 	if len(toolCalls) > 0 {
 		parts := make([]string, 0)
 		for _, tc := range toolCalls {
-			parts = append(parts, fmt.Sprintf("%s(%v) -> %s", tc.Name, tc.Args, toolTrailForHistory(s.sessionID, tc.Name, tc.Output, s.mem)))
+			parts = append(parts, fmt.Sprintf("%s(%v) -> %s", tc.Name, tc.Args, toolTrailForHistory(s.settings.Home, s.sessionID, tc.Name, tc.Output, s.mem)))
 		}
 		record = fmt.Sprintf("%s\n[tools used: %s]", reply, strings.Join(parts, "; "))
 	}
@@ -415,7 +415,7 @@ func (s *Session) ContextFor(system, userMessage string) ([]Message, string) {
 	}
 	available := s.settings.ContextChars - len(system) - len(catalog)
 	preview := min(inputPreviewLimit, max(512, available/4))
-	userContext, artifact := compactUserInput(s.sessionID, userMessage, preview)
+	userContext, artifact := compactUserInput(s.settings.Home, s.sessionID, userMessage, preview)
 	if s.mem != nil && artifact.Path != "" {
 		s.mem.RecordArtifact(s.sessionID, artifact.Label, artifact.Path, artifact.Size)
 	}
@@ -492,11 +492,11 @@ func artifactFromOutput(output string) (SessionArtifact, bool) {
 	return SessionArtifact{Label: matches[1], Path: matches[3], Size: size}, true
 }
 
-func compactUserInput(sessionID, input string, preview int) (string, SessionArtifact) {
+func compactUserInput(home, sessionID, input string, preview int) (string, SessionArtifact) {
 	if len(input) <= preview || preview <= 0 {
 		return input, SessionArtifact{}
 	}
-	dir := filepath.Join("/tmp/mino/results", safePath(sessionID), "input-"+fmt.Sprint(time.Now().UnixNano()))
+	dir := filepath.Join(spillDir(home), safePath(sessionID), "input-"+fmt.Sprint(time.Now().UnixNano()))
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return input[:preview], SessionArtifact{}
 	}

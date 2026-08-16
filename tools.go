@@ -64,12 +64,13 @@ type Tool struct {
 // --- Registry (matches Core's ToolRegistry) ---
 
 type Registry struct {
-	tools          map[string]*Tool
-	logDB          *sql.DB    // optional: if set, ExecuteContext logs to tool_calls table
-	auditFile      *os.File   // optional: append-only JSONL audit log
-	auditMu        *sync.Mutex // guards auditFile writes (shared across Only-derived registries)
-	searchDB *sql.DB    // optional: FTS5 index for context-conditioned tool selection
-	searchMu sync.Mutex
+	tools     map[string]*Tool
+	toolsMu   sync.RWMutex // guards tools — registration is background-adjacent (RUN-001 supervisor)
+	logDB     *sql.DB      // optional: if set, ExecuteContext logs to tool_calls table
+	auditFile *os.File     // optional: append-only JSONL audit log
+	auditMu   *sync.Mutex  // guards auditFile writes (shared across Only-derived registries)
+	searchDB  *sql.DB      // optional: FTS5 index for context-conditioned tool selection
+	searchMu  sync.Mutex
 
 	// Per-session tool union capped at schemaUnionCap: a tool stays selected
 	// once chosen so the `tools` array in the request payload stabilizes
@@ -139,17 +140,32 @@ func NewRegistry() *Registry {
 }
 
 func (r *Registry) Register(t *Tool) {
+	r.toolsMu.Lock()
 	r.tools[t.Name] = t
+	r.toolsMu.Unlock()
+	r.syncToolCatalog()
+}
+
+// Unregister removes a tool — the extension-uninstall path (RUN-001).
+// Symmetric with Register.
+func (r *Registry) Unregister(name string) {
+	r.toolsMu.Lock()
+	delete(r.tools, name)
+	r.toolsMu.Unlock()
 	r.syncToolCatalog()
 }
 
 func (r *Registry) SetSearchDB(db *sql.DB) {
+	r.toolsMu.Lock()
 	r.searchDB = db
+	r.toolsMu.Unlock()
 	r.syncToolCatalog()
 }
 
 func (r *Registry) BehaviorFor(name string, args map[string]any) ToolBehavior {
+	r.toolsMu.RLock()
 	t, ok := r.tools[name]
+	r.toolsMu.RUnlock()
 	if !ok {
 		return BehaviorUnknown
 	}
@@ -172,6 +188,7 @@ type ToolInfo struct {
 
 // Catalog returns the tool catalog for the dashboard Tools > Available sub-tab.
 func (r *Registry) Catalog() []ToolInfo {
+	r.toolsMu.RLock()
 	catalog := make([]ToolInfo, 0, len(r.tools))
 	for _, t := range r.tools {
 		src := "builtin"
@@ -187,6 +204,7 @@ func (r *Registry) Catalog() []ToolInfo {
 		}
 		catalog = append(catalog, ToolInfo{Name: t.Name, Description: t.Description, Source: src})
 	}
+	r.toolsMu.RUnlock()
 	sort.Slice(catalog, func(i, j int) bool {
 		if catalog[i].Source == catalog[j].Source {
 			return catalog[i].Name < catalog[j].Name
@@ -197,10 +215,12 @@ func (r *Registry) Catalog() []ToolInfo {
 }
 
 func (r *Registry) Schemas() []ToolDef {
+	r.toolsMu.RLock()
 	schemas := make([]ToolDef, 0, len(r.tools))
 	for _, t := range r.tools {
 		schemas = append(schemas, r.toolDef(t))
 	}
+	r.toolsMu.RUnlock()
 	sort.Slice(schemas, func(i, j int) bool { return schemas[i].Name < schemas[j].Name })
 	return schemas
 }
@@ -267,7 +287,10 @@ func (r *Registry) SchemasForContext(sessionID string, fullCtx string, oneTurnTe
 		}
 	}
 	for _, name := range essentialNamesSorted {
-		if _, ok := r.tools[name]; ok {
+		r.toolsMu.RLock()
+		_, ok := r.tools[name]
+		r.toolsMu.RUnlock()
+		if ok {
 			add(name)
 		}
 	}
@@ -314,7 +337,10 @@ func (r *Registry) SchemasForContext(sessionID string, fullCtx string, oneTurnTe
 		}
 		if matched {
 			for _, name := range family {
-				if _, ok := r.tools[name]; ok {
+				r.toolsMu.RLock()
+				_, ok := r.tools[name]
+				r.toolsMu.RUnlock()
+				if ok {
 					add(name)
 				}
 			}
@@ -356,7 +382,10 @@ func (r *Registry) SchemasForContext(sessionID string, fullCtx string, oneTurnTe
 
 	var schemas []ToolDef
 	for name := range selected {
-		if tool, ok := r.tools[name]; ok {
+		r.toolsMu.RLock()
+		tool, ok := r.tools[name]
+		r.toolsMu.RUnlock()
+		if ok {
 			schemas = append(schemas, r.toolDef(tool))
 		}
 	}
@@ -429,6 +458,7 @@ func (r *Registry) explicitToolNames(contextText string) []string {
 		}
 	}
 	var names []string
+	r.toolsMu.RLock()
 	for name := range r.tools {
 		if strings.HasPrefix(name, "MCP_") {
 			continue
@@ -452,10 +482,15 @@ func (r *Registry) explicitToolNames(contextText string) []string {
 	return names
 }
 
+// syncToolCatalog rebuilds the FTS tool index. Self-locking (toolsMu.RLock
+// around the map iteration) — safe from any caller context, including
+// background registration from the extension supervisor's runLoop.
 func (r *Registry) syncToolCatalog() {
 	if r.searchDB == nil {
 		return
 	}
+	r.toolsMu.RLock()
+	defer r.toolsMu.RUnlock()
 	r.searchMu.Lock()
 	defer r.searchMu.Unlock()
 	if _, err := r.searchDB.Exec("DELETE FROM tool_catalog_fts"); err != nil {
@@ -572,7 +607,9 @@ func compactSchema(p map[string]any) map[string]any {
 }
 
 func (r *Registry) ExecuteContext(ctx context.Context, name string, args map[string]any) string {
+	r.toolsMu.RLock()
 	t, ok := r.tools[name]
+	r.toolsMu.RUnlock()
 	if !ok {
 		return fmt.Sprintf("Error: unknown tool '%s'", name)
 	}
@@ -674,7 +711,10 @@ func (r *Registry) Only(names ...string) *Registry {
 	out.auditFile = r.auditFile
 	out.auditMu = r.auditMu // shared mutex: both registries may write concurrently
 	for _, name := range names {
-		if t, ok := r.tools[name]; ok {
+		r.toolsMu.RLock()
+		t, ok := r.tools[name]
+		r.toolsMu.RUnlock()
+		if ok {
 			out.Register(t)
 		}
 	}
@@ -851,6 +891,15 @@ func makeWriteTool(workspace, home string) *Tool {
 			if guard := playbookWriteGuard(home, path, ctx); guard != "" {
 				return "Error: " + guard
 			}
+			// RUN-005: config-set files (providers.json/mino.env/cost-watch.json)
+			// go through the self-heal guard — validate, backup, journal. A
+			// rejected edit returns here with the file untouched.
+			if handled, err := applyConfigEdit(home, path, []byte(content), mode == "append"); handled {
+				if err != nil {
+					return "Error: " + err.Error()
+				}
+				return fmt.Sprintf("Wrote %d bytes to %s", len(content), path)
+			}
 			os.MkdirAll(filepath.Dir(path), 0755)
 			flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
 			verb := "Wrote"
@@ -913,6 +962,12 @@ func makeEditTool(workspace, home string) *Tool {
 							count++
 						}
 					}
+					if handled, err := applyConfigEdit(home, path, []byte(result), false); handled {
+						if err != nil {
+							return "Error: " + err.Error()
+						}
+						return fmt.Sprintf("Edited %s (%d replacements)", path, count)
+					}
 					if err := os.WriteFile(path, []byte(result), 0644); err != nil {
 						return fmt.Sprintf("Error writing %s: %v", path, err)
 					}
@@ -927,6 +982,12 @@ func makeEditTool(workspace, home string) *Tool {
 				return fmt.Sprintf("old_text not found in %s", path)
 			}
 			result = strings.Replace(result, oldText, newText, 1)
+			if handled, err := applyConfigEdit(home, path, []byte(result), false); handled {
+				if err != nil {
+					return "Error: " + err.Error()
+				}
+				return fmt.Sprintf("Edited %s (1 replacement)", path)
+			}
 			if err := os.WriteFile(path, []byte(result), 0644); err != nil {
 				return fmt.Sprintf("Error writing %s: %v", path, err)
 			}
@@ -1095,6 +1156,11 @@ func makeBashToolFor(home string, timeout time.Duration) *Tool {
 		dangerReason := dangerousBashReason(cmd)
 		if dangerReason != "" {
 			gitCommitBeforeBash(ctx, cmd, home)
+		}
+		if containsSudoInvocation(cmd) {
+			// RUN-003: the model never calls sudo itself — privileged
+			// operations go through the harness tools only.
+			return "Error: sudo is refused here — privileged host operations go through the harness tools: install_package, write_unit, restart_service."
 		}
 		out, err := runBashContext(ctx, timeout, rewriteBashWithRTK(ctx, cmd))
 		if err != nil {
@@ -1624,9 +1690,9 @@ func makeManageMemoryTool(mem *Memory) *Tool {
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"action":  map[string]any{"type": "string", "description": "'add', 'correct', 'forget', 'confirm', 'reject' (archives immediately — active expiry), 'status', 'consolidate', 'dedup', 'rebuild_edges', 'clean_edges', 'maintain', 'judge_edges', or 'distill_outputs'"},
-				"subject": map[string]any{"type": "string", "description": "Subject (fact actions only)"},
-				"content": map[string]any{"type": "string", "description": "New content (for correct/add)"},
+				"action":      map[string]any{"type": "string", "description": "'add', 'correct', 'forget', 'confirm', 'reject' (archives immediately — active expiry), 'status', 'consolidate', 'dedup', 'rebuild_edges', 'clean_edges', 'maintain', 'judge_edges', or 'distill_outputs'"},
+				"subject":     map[string]any{"type": "string", "description": "Subject (fact actions only)"},
+				"content":     map[string]any{"type": "string", "description": "New content (for correct/add)"},
 				"stale_after": map[string]any{"type": "string", "description": "Optional expiry for volatile facts (DRF-002): duration like '7d' or '24h', or an RFC3339 timestamp. Config-mirror facts (current stack, current schedule) MUST set a short one — the live file/tool is the truth, the fact is a dated snapshot."},
 			},
 			"required": []string{"action"},
@@ -2002,12 +2068,12 @@ func makeGenerateImageTool(home string) *Tool {
 			if prompt == "" {
 				return "Error: prompt is required"
 			}
-			if out, err := generateWithCloudflare(prompt); err == nil {
+			if out, err := generateWithCloudflare(home, prompt); err == nil {
 				return out
 			} else {
 				slog.Warn("cloudflare image gen failed, falling back to openrouter", "error", err)
 			}
-			if out, err := generateWithOpenRouter(prompt); err == nil {
+			if out, err := generateWithOpenRouter(home, prompt); err == nil {
 				return out
 			} else {
 				slog.Warn("openrouter image gen failed, falling back to pollinations", "error", err)
@@ -2022,7 +2088,7 @@ func makeGenerateImageTool(home string) *Tool {
 			if resp.StatusCode >= 400 || len(data) < 100 {
 				return fmt.Sprintf("Image generation failed (%d)", resp.StatusCode)
 			}
-			dir := filepath.Join("/tmp/mino/results", "images")
+			dir := filepath.Join(spillDir(home), "images")
 			os.MkdirAll(dir, 0700)
 			name := fmt.Sprintf("%d.jpg", time.Now().UnixNano())
 			path := filepath.Join(dir, name)
@@ -2044,10 +2110,11 @@ type cfImageResponse struct {
 }
 
 // generateWithCloudflare renders the prompt via Cloudflare Workers AI and
-// saves it, returning the saved path. The model is MINO_IMAGE_MODEL
-// (default @cf/black-forest-labs/flux-1-schnell). Returns an error when the credentials
-// are missing or the call fails, so callers can fall back to pollinations.
-func generateWithCloudflare(prompt string) (string, error) {
+// saves it under the durable spill store, returning the saved path. The model
+// is MINO_IMAGE_MODEL (default @cf/black-forest-labs/flux-1-schnell). Returns
+// an error when the credentials are missing or the call fails, so callers can
+// fall back to pollinations.
+func generateWithCloudflare(home, prompt string) (string, error) {
 	token := os.Getenv("CLOUDFLARE_API_TOKEN")
 	if token == "" {
 		token = readEnvFile("CLOUDFLARE_API_TOKEN")
@@ -2117,7 +2184,7 @@ func generateWithCloudflare(prompt string) (string, error) {
 		}
 		ext = ".png"
 	}
-	dir := filepath.Join("/tmp/mino/results", "images")
+	dir := filepath.Join(spillDir(home), "images")
 	os.MkdirAll(dir, 0700)
 	path := filepath.Join(dir, fmt.Sprintf("%d%s", time.Now().UnixNano(), ext))
 	if err := os.WriteFile(path, img, 0600); err != nil {
@@ -2128,9 +2195,10 @@ func generateWithCloudflare(prompt string) (string, error) {
 
 // generateWithOpenRouter renders the prompt via OpenRouter's Gemini image
 // model (google/gemini-3.1-flash-lite-image, ~0.15¢ per 1024² image, model
-// overridable via MINO_OPENROUTER_IMAGE_MODEL) and saves it. Requires
-// MINO_OPENROUTER_KEY; returns an error otherwise so callers can fall back.
-func generateWithOpenRouter(prompt string) (string, error) {
+// overridable via MINO_OPENROUTER_IMAGE_MODEL) and saves it under the durable
+// spill store. Requires MINO_OPENROUTER_KEY; returns an error otherwise so
+// callers can fall back.
+func generateWithOpenRouter(home, prompt string) (string, error) {
 	key := os.Getenv("MINO_OPENROUTER_KEY")
 	if key == "" {
 		key = readEnvFile("MINO_OPENROUTER_KEY")
@@ -2167,7 +2235,7 @@ func generateWithOpenRouter(prompt string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join("/tmp/mino/results", "images")
+	dir := filepath.Join(spillDir(home), "images")
 	os.MkdirAll(dir, 0700)
 	path := filepath.Join(dir, fmt.Sprintf("%d%s", time.Now().UnixNano(), ext))
 	if err := os.WriteFile(path, img, 0600); err != nil {

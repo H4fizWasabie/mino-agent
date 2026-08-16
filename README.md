@@ -76,6 +76,7 @@ mino
 | `mino memory path <from> <to>` | Shortest path between two memory facts |
 | `mino version` | Show version |
 | `mino update` | Self-update from GitHub releases |
+| `mino setup-privileges` | Write the sudoers command whitelist (RUN-003) — run as root |
 
 ## Configuration
 
@@ -194,6 +195,16 @@ Mino runs with none of these, but a few helper binaries make it noticeably bette
 ```
 
 All three degrade gracefully — Mino works without them, but noisy commands and web pages eat more tokens.
+
+### Host privileges (optional)
+
+To let Mino manage host state itself (install packages, write systemd units, restart its own
+service — the `install_package` / `write_unit` / `restart_service` tools), install the sudoers
+command whitelist once, as root: `sudo MINO_HOME=/home/mino/.mino mino setup-privileges`.
+This grants the mino user exactly six command shapes as root (apt-get install/remove -y,
+systemctl restart/daemon-reload, `install -o root -g root -m 0644` from `~/.mino/tmp` to
+/etc/systemd/system, `rm -f /etc/systemd/system/*`) — never a shell, never ALL. Without it the
+tools refuse every op with a clear boundary message, and `bash` refuses `sudo` outright.
 
 ## A task failed — now what?
 

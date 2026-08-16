@@ -168,6 +168,13 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 	if sid == "" {
 		sid = "default"
 	}
+	// RUN-006: approve/deny replies resolve pending approvals before the loop.
+	if dashCore.approvals != nil {
+		if reply, handled := dashCore.approvals.ResolveReply(body.Message); handled {
+			json.NewEncoder(w).Encode(map[string]any{"reply": reply, "status": "approval", "iterations": 0})
+			return
+		}
+	}
 	if isStopMessage(body.Message) {
 		stopped := dashCore.CancelTurn(sid)
 		json.NewEncoder(w).Encode(map[string]any{"reply": map[bool]string{true: "Stopped.", false: "No active task."}[stopped], "status": "cancelled", "iterations": 0})
@@ -227,6 +234,15 @@ func handleChatStream(w http.ResponseWriter, r *http.Request) {
 	sid := body.SessionID
 	if sid == "" {
 		sid = "default"
+	}
+	// RUN-006: approve/deny replies resolve pending approvals before the loop.
+	if dashCore.approvals != nil {
+		if reply, handled := dashCore.approvals.ResolveReply(body.Message); handled {
+			data, _ := json.Marshal(map[string]any{"kind": "done", "reply": reply, "status": "approval", "iterations": 0})
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+			return
+		}
 	}
 	if isStopMessage(body.Message) {
 		stopped := dashCore.CancelTurn(sid)
@@ -1776,7 +1792,7 @@ func handleFilesAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	requestedPath := r.URL.Query().Get("path")
 	if requestedPath == "" {
-		requestedPath = "/tmp/mino/results"
+		requestedPath = filepath.Join(dashCore.Settings.Home, "results")
 	}
 	abs, info, status, message := resolveDashboardArtifact(dashCore.Settings.Home, dashCore.Settings.MemoriesDir, requestedPath)
 	if status != http.StatusOK {
@@ -1863,7 +1879,7 @@ func resolveDashboardArtifact(home, memoriesDir, raw string) (string, os.FileInf
 		filepath.Join(home, "skills"),
 		filepath.Join(home, "traces"),
 		filepath.Join(home, "outbox"),
-		"/tmp/mino/results",
+		filepath.Join(home, "results"),
 	}
 	if memoriesDir != "" {
 		roots = append(roots, memoriesDir)
