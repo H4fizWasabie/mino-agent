@@ -29,6 +29,12 @@ var updateClient = &http.Client{Timeout: 30 * time.Second}
 // the whole exchange including the io.Copy below.
 var downloadClient = &http.Client{Timeout: 5 * time.Minute}
 
+// fetchLatestAsset and fetchReleaseChecksum are package vars (the same
+// test-seam family as updateClient/downloadClient) so update tests can stub
+// the GitHub half and exercise the same-version decision end to end.
+var fetchLatestAsset = fetchLatestAssetReal
+var fetchReleaseChecksum = fetchReleaseChecksumReal
+
 // updateCache is the on-disk cache for update checks (rate-limit friendly).
 type updateCache struct {
 	LastCheck time.Time `json:"last_check"`
@@ -86,9 +92,25 @@ func DoUpdate() error {
 		return fmt.Errorf("check release: %w", err)
 	}
 
+	assetName := fmt.Sprintf("mino-%s-%s", runtime.GOOS, runtime.GOARCH)
+
 	if !isNewer(tag, Version) {
-		fmt.Printf("Already up to date (%s).\n", Version)
-		return nil
+		if isNewer(Version, tag) {
+			fmt.Printf("Already up to date (%s).\n", Version)
+			return nil // release is older — the updater never downgrades
+		}
+		// Issue #231: two builds can share a version string while differing in
+		// content (live hit 2026-08-16: a stale pre-RUN-map v2.11.0 build on
+		// the VPS made `mino update` skip the fresh release). Distinguish
+		// rebuilds by content: only a POSITIVE sha256 identity match skips;
+		// any uncertainty (unreadable running binary, missing/unreachable
+		// checksum file) proceeds — the download path re-verifies the release
+		// checksum and health-checks the candidate anyway.
+		if sameBuildAsRelease(updateBinaryPath(), tag, assetName) {
+			fmt.Printf("Already up to date (%s).\n", Version)
+			return nil
+		}
+		fmt.Printf("%s is current, but the running binary differs from the release build — reinstalling.\n", Version)
 	}
 
 	fmt.Printf("Downloading %s...\n", tag)
@@ -124,7 +146,6 @@ func DoUpdate() error {
 	// release ships SHA256SUMS.txt; a binary that does not match its platform
 	// checksum (or a release without a checksum) is refused — the self-updater
 	// is the only production path, so it must be the trusted one.
-	assetName := fmt.Sprintf("mino-%s-%s", runtime.GOOS, runtime.GOARCH)
 	sum, err := sha256File(newPath)
 	if err != nil {
 		os.Remove(newPath)
@@ -191,7 +212,7 @@ func releaseChecksumURL(tag string) string {
 
 // fetchReleaseChecksum fetches SHA256SUMS.txt for the release and returns the
 // checksum line for the named asset. Each line is "<hex>  <name>".
-func fetchReleaseChecksum(tag, assetName string) (string, bool, error) {
+func fetchReleaseChecksumReal(tag, assetName string) (string, bool, error) {
 	resp, err := updateClient.Get(releaseChecksumURL(tag))
 	if err != nil {
 		return "", false, err
@@ -211,6 +232,23 @@ func fetchReleaseChecksum(tag, assetName string) (string, bool, error) {
 		}
 	}
 	return "", false, nil
+}
+
+// sameBuildAsRelease reports whether the running binary is byte-identical to
+// the release asset of the SAME version (issue #231). Any failure to confirm
+// identity returns false — the caller proceeds with the update, where the
+// existing download path re-verifies the release checksum and health-checks
+// the candidate, so a false "proceed" is safe and a false "skip" is not.
+func sameBuildAsRelease(exe, tag, assetName string) bool {
+	sum, err := sha256File(exe)
+	if err != nil {
+		return false
+	}
+	want, ok, err := fetchReleaseChecksum(tag, assetName)
+	if err != nil || !ok {
+		return false
+	}
+	return strings.EqualFold(sum, want)
 }
 
 // appendDeploymentLog records one line per successful update — timestamp,
@@ -244,7 +282,7 @@ type releaseAsset struct {
 	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
-func fetchLatestAsset() (string, string, error) {
+func fetchLatestAssetReal() (string, string, error) {
 	req, _ := http.NewRequest("GET", releasesURL, nil)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "mino-agent/"+Version)
