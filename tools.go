@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -746,6 +747,7 @@ func BuildRegistry(db *sql.DB, home, workspace string, mem *Memory, location ...
 	// file tools (coding)
 	r.Register(behaves(makeReadTool(), BehaviorObserve))
 	r.Register(behaves(makeViewImageTool(), BehaviorObserve))
+	r.Register(behaves(makeScreenshotTool(home), BehaviorMutate))
 	r.Register(behaves(makeWriteTool(workspace, home), BehaviorMutate))
 	r.Register(behaves(makeEditTool(workspace, home), BehaviorMutate))
 	r.Register(behaves(makeSyncFileToolFor(workspace, home, syncTimeout), BehaviorMutate))
@@ -2118,6 +2120,96 @@ var imageClient = &http.Client{Timeout: 90 * time.Second}
 
 // cfBaseURL is swappable in tests (same seam as imageClient).
 var cfBaseURL = "https://api.cloudflare.com/client/v4"
+
+// screenshotTimeout bounds a wkhtmltoimage render: a slow page must fail
+// honestly, not hang the tool call.
+const screenshotTimeout = 60 * time.Second
+
+// makeScreenshotTool captures a URL or local file as a PNG via the host's
+// wkhtmltoimage binary (a host tool, never a repo dependency) and saves it
+// under the durable spill store (RUN-007) so the returned path round-trips
+// through view_image. wkhtmltoimage renders static HTML only — JS-rendered or
+// auth'd pages are beyond it — so every failure path says exactly why and
+// names the headless-browser requirement instead of a phantom success (the
+// #235 lesson: no silent "ok").
+func makeScreenshotTool(home string) *Tool {
+	return &Tool{
+		Name:        "screenshot",
+		Description: "Capture a web page or local HTML file as a PNG screenshot saved to the durable results store; returns the absolute artifact path that view_image can read. Renders STATIC pages via the host's wkhtmltoimage — no login/session injection, and JS-rendered or auth'd pages usually render blank or fail; those need a headless browser that Mino does not ship (the result will say so, never a phantom success). Use when the user asks for a screenshot of a page, dashboard, or file.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"url":  map[string]any{"type": "string", "description": "http(s) URL to capture"},
+				"path": map[string]any{"type": "string", "description": "Local file to capture (absolute path)"},
+			},
+		},
+		Fn: func(args map[string]any) string {
+			urlArg, _ := args["url"].(string)
+			pathArg, _ := args["path"].(string)
+			if (urlArg == "") == (pathArg == "") {
+				return "Error: provide exactly one of url (http/https) or path (local file)"
+			}
+			target := urlArg
+			if pathArg != "" {
+				abs, err := filepath.Abs(pathArg)
+				if err != nil {
+					return "Error: " + err.Error()
+				}
+				if _, err := os.Stat(abs); err != nil {
+					return "Error: file not readable: " + abs
+				}
+				target = "file://" + abs
+			} else if u, err := url.Parse(urlArg); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+				return "Error: url must be http(s): " + urlArg
+			}
+
+			bin, err := exec.LookPath("wkhtmltoimage")
+			if err != nil {
+				return "Screenshot failed: wkhtmltoimage is not installed. It renders static pages only; JS-rendered or auth'd pages need a headless browser (chromium-class), which Mino does not ship. Install it with install_package (apt-get install -y wkhtmltopdf) and verify with `which wkhtmltoimage` before retrying."
+			}
+			dir := filepath.Join(spillDir(home), "screenshots")
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				return "Screenshot failed: " + err.Error()
+			}
+			out := filepath.Join(dir, fmt.Sprintf("%d.png", time.Now().UnixNano()))
+			ctx, cancel := context.WithTimeout(context.Background(), screenshotTimeout)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, bin, "--quiet", target, out)
+			output, runErr := cmd.CombinedOutput()
+			if runErr != nil {
+				msg := strings.TrimSpace(string(output))
+				if len(msg) > 300 {
+					msg = msg[:300]
+				}
+				return fmt.Sprintf("Screenshot failed: wkhtmltoimage exited with an error (%v). %q. It renders static HTML only — if the page needs JS or a login session, capture requires a headless browser (chromium-class) installed via install_package; Mino does not ship one.", runErr, msg)
+			}
+			info, err := os.Stat(out)
+			if err != nil || info.Size() == 0 {
+				return "Screenshot failed: wkhtmltoimage produced no image. The page likely needs JS or auth it cannot provide — a headless browser (chromium-class, via install_package) is required."
+			}
+			w, h := pngSize(out)
+			return fmt.Sprintf("Captured %s (%dx%d, %d bytes)\nSaved to %s\n(view_image can read it)", target, w, h, info.Size(), out)
+		},
+	}
+}
+
+// pngSize reads a PNG file's IHDR dimensions; (0,0) when the file is not a
+// readable PNG (the caller reports the failure honestly, never invents size).
+func pngSize(path string) (int, int) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, 0
+	}
+	defer f.Close()
+	hdr := make([]byte, 24)
+	if _, err := io.ReadFull(f, hdr); err != nil {
+		return 0, 0
+	}
+	if string(hdr[:8]) != "\x89PNG\r\n\x1a\n" || string(hdr[12:16]) != "IHDR" {
+		return 0, 0
+	}
+	return int(binary.BigEndian.Uint32(hdr[16:20])), int(binary.BigEndian.Uint32(hdr[20:24]))
+}
 
 // makeViewImageTool reads an image file and hands it to the vision provider.
 // The loop converts the returned data URL into a vision-model text description
