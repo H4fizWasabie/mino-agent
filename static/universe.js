@@ -162,6 +162,7 @@ function universeLandmarkStyle(zoom){
   return {alpha:.94-detail*.54,radius:11+overview*5-detail*2,fontSize:9+overview*1.5-detail};
 }
 function universeDefaultZoom(width){return width<720?.78:1;}
+function universeDensityLevel(zoom){return zoom>=2.1?2:zoom>=1.5?1:0;}
 
 // --- Branching field layout (issue #182) ---
 // Deterministic, topology-led: synthetic trunk → identity branch anchors →
@@ -587,7 +588,7 @@ function initUniverse(snapshot,lens="universe"){
   const dated=nodes.map(n=>n._time).filter(Number.isFinite);
   const state={canvas,nodes,nodeMap,edges,lens:UNIVERSE_LENSES[lens]?lens:"universe",selected:null,hovered:null,landmarkBoxes:[],currentNodeIDs:new Set(nodes.map(node=>node.id)),
     query:"",timeline:1,playing:false,playStarted:0,earliest:dated.length?Math.min(...dated):Date.now(),latest:dated.length?Math.max(...dated):Date.now(),
-    panX:0,panY:0,zoom:universeDefaultZoom(canvas.clientWidth),rotX:-.12,rotY:-.18,activities:[],snapshot,overviewSnapshot:snapshot,raf:0,animateUntil:0,pointer:null,degrees,glCanvas,webgl,detailNodes:[],detailEdges:[]};
+    panX:0,panY:0,zoom:universeDefaultZoom(canvas.clientWidth),densityLevel:universeDensityLevel(universeDefaultZoom(canvas.clientWidth)),rotX:-.12,rotY:-.18,activities:[],snapshot,overviewSnapshot:snapshot,raf:0,animateUntil:0,pointer:null,degrees,glCanvas,webgl,detailNodes:[],detailEdges:[]};
   universeState=state;
   nodes.forEach(node=>universeKnown.add(node.id));
   if(universePendingRegion===state.lens){universeCenterRegion(state,state.lens);universePendingRegion=null;}
@@ -693,6 +694,20 @@ function initUniverse(snapshot,lens="universe"){
     if(state.playing||state.activities.length||now<state.animateUntil)state.raf=requestAnimationFrame(draw);
   };
   state.draw=draw;state.screen=screen;state.visible=visible;state.requestDraw=(duration=0)=>{state.animateUntil=Math.max(state.animateUntil,performance.now()+duration);if(!state.raf)state.raf=requestAnimationFrame(draw);};
+  let densityTimer=0,densityController=null;
+  const requestDensity=()=>{
+    const level=universeDensityLevel(state.zoom);if(level===state.densityLevel)return;
+    clearTimeout(densityTimer);densityTimer=setTimeout(async()=>{
+      densityController?.abort();const controller=densityController=new AbortController();
+      try{
+        const response=await fetch(`/api/universe/projection?scope=overview&level=${level}`,{signal:controller.signal});
+        if(!response.ok)throw new Error(`Galaxy returned ${response.status}`);
+        const projection=await response.json();
+        if(controller!==densityController||universeState!==state||universeDensityLevel(state.zoom)!==level)return;
+        state.densityLevel=level;universeUpdate(projection);
+      }catch(error){if(error.name!=="AbortError"&&controller===densityController)state.requestDraw?.();}
+    },120);
+  };
 
   const pick=(clientX,clientY)=>{
     const rect=canvas.getBoundingClientRect(),x=clientX-rect.left,y=clientY-rect.top,landmark=state.landmarkBoxes.find(box=>x>=box.x&&x<=box.x+box.width&&y>=box.y&&y<=box.y+box.height);
@@ -705,11 +720,11 @@ function initUniverse(snapshot,lens="universe"){
   canvas.onpointerdown=event=>{const hit=pick(event.clientX,event.clientY);state.hovered=hit.node;if(!hit.node&&!hit.landmark){state.pointer={x:event.clientX,y:event.clientY,rotX:state.rotX,rotY:state.rotY};canvas.setPointerCapture(event.pointerId);}};
   canvas.onpointerup=event=>{if(state.pointer){state.pointer=null;canvas.releasePointerCapture(event.pointerId);state.requestDraw();return;}const hit=pick(event.clientX,event.clientY);if(hit.landmark)focusUniverseRegion(hit.landmark);else if(hit.node)openUniverseEntity(hit.node.id);};
   canvas.onpointerleave=()=>{state.hovered=null;state.pointer=null;state.requestDraw();};
-  canvas.onwheel=event=>{event.preventDefault();state.zoom=Math.max(.65,Math.min(3,state.zoom*(event.deltaY>0 ? .9 : 1.1)));state.requestDraw();};
+  canvas.onwheel=event=>{event.preventDefault();state.zoom=Math.max(.65,Math.min(3,state.zoom*(event.deltaY>0 ? .9 : 1.1)));requestDensity();state.requestDraw();};
   canvas.onkeydown=event=>{if(event.key==="Escape")selectUniverseNode(null);};
   document.getElementById("universe-search").oninput=event=>scheduleUniverseSearch(event.target.value.trim());
   document.getElementById("universe-search").onkeydown=event=>{if(event.key==="Escape"){event.currentTarget.value="";scheduleUniverseSearch("");canvas.focus();}};
-  document.getElementById("universe-fit").onclick=()=>{state.panX=0;state.panY=0;state.rotX=-.12;state.rotY=-.18;state.zoom=universeDefaultZoom(canvas.clientWidth);state.requestDraw(180);};
+  document.getElementById("universe-fit").onclick=()=>{state.panX=0;state.panY=0;state.rotX=-.12;state.rotY=-.18;state.zoom=universeDefaultZoom(canvas.clientWidth);requestDensity();state.requestDraw(180);};
   document.getElementById("universe-inspector-close").onclick=()=>selectUniverseNode(null);
   document.getElementById("universe-range").oninput=event=>{state.playing=false;state.timeline=Number(event.target.value)/1000;syncUniverseTimeline();state.requestDraw();};
   document.getElementById("universe-play").onclick=()=>playUniverseHistory();

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -97,9 +98,9 @@ type UniverseCommunity struct {
 
 var universeOverviewCache struct {
 	sync.Mutex
-	core       *Core
-	expires    time.Time
-	projection UniverseProjection
+	core     *Core
+	expires  time.Time
+	snapshot UniverseSnapshot
 }
 
 func handleUniverseAPI(w http.ResponseWriter, r *http.Request) {
@@ -134,7 +135,8 @@ func handleUniverseProjectionAPI(w http.ResponseWriter, r *http.Request) {
 	if scope == "" {
 		scope = "overview"
 	}
-	projection, ok, err := universeProjection(dashCore, scope, r.URL.Query().Get("id"), time.Now().UTC())
+	level, _ := strconv.Atoi(r.URL.Query().Get("level"))
+	projection, ok, err := universeProjection(dashCore, scope, r.URL.Query().Get("id"), level, time.Now().UTC())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -148,7 +150,7 @@ func handleUniverseProjectionAPI(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(projection)
 }
 
-func universeProjection(core *Core, scope, id string, now time.Time) (UniverseProjection, bool, error) {
+func universeProjection(core *Core, scope, id string, level int, now time.Time) (UniverseProjection, bool, error) {
 	if scope != "overview" {
 		snapshot, err := buildUniverseSnapshot(core, now)
 		if err != nil {
@@ -162,21 +164,24 @@ func universeProjection(core *Core, scope, id string, now time.Time) (UniversePr
 	universeOverviewCache.Lock()
 	defer universeOverviewCache.Unlock()
 	if universeOverviewCache.core == core && now.Before(universeOverviewCache.expires) {
-		projection := universeOverviewCache.projection
+		projection, ok := projectUniverseSnapshotAtLevel(universeOverviewCache.snapshot, scope, id, level)
+		if !ok {
+			return UniverseProjection{}, false, nil
+		}
 		projection.GeneratedAt = now.Format(time.RFC3339)
 		projection.Activity = universeProjectionActivity(core, 64)
-		return projection, true, nil
+		return projection, ok, nil
 	}
 	snapshot, err := buildUniverseSnapshot(core, now)
 	if err != nil {
 		return UniverseProjection{}, false, err
 	}
-	projection, ok := projectUniverseSnapshot(snapshot, scope, id)
+	projection, ok := projectUniverseSnapshotAtLevel(snapshot, scope, id, level)
 	if ok {
 		projection.Activity = universeProjectionActivity(core, 64)
 		universeOverviewCache.core = core
 		universeOverviewCache.expires = now.Add(30 * time.Second)
-		universeOverviewCache.projection = projection
+		universeOverviewCache.snapshot = snapshot
 	}
 	return projection, ok, nil
 }
@@ -196,6 +201,10 @@ func universeProjectionActivity(core *Core, budget int) []UniverseActivity {
 }
 
 func projectUniverseSnapshot(snapshot UniverseSnapshot, scope, id string) (UniverseProjection, bool) {
+	return projectUniverseSnapshotAtLevel(snapshot, scope, id, 0)
+}
+
+func projectUniverseSnapshotAtLevel(snapshot UniverseSnapshot, scope, id string, level int) (UniverseProjection, bool) {
 	if scope == "" {
 		scope = "overview"
 	}
@@ -203,7 +212,7 @@ func projectUniverseSnapshot(snapshot UniverseSnapshot, scope, id string) (Unive
 	switch scope {
 	case "overview":
 		communities := universeCommunities(snapshot.Nodes)
-		projection.Nodes = universeOverviewNodes(snapshot.Nodes, communities, 120)
+		projection.Nodes = universeOverviewNodes(snapshot.Nodes, communities, universeOverviewBudget(len(snapshot.Nodes), level))
 		projection.HasMore = len(projection.Nodes) < len(snapshot.Nodes)
 		projection.Communities = communities[:min(256, len(communities))]
 		projection.HasMore = projection.HasMore || len(projection.Communities) < len(communities)
@@ -233,6 +242,20 @@ func projectUniverseSnapshot(snapshot UniverseSnapshot, scope, id string) (Unive
 	projection.Edges = universeProjectionEdges(snapshot.Edges, projection.Nodes, id, 1200)
 	projection.History = universeProjectionHistory(snapshot.History, projection.Nodes, 500)
 	return projection, true
+}
+
+func universeOverviewBudget(total, level int) int {
+	level = max(0, min(level, 2))
+	base := 120
+	switch {
+	case total <= 2_000:
+		base = 420
+	case total <= 10_000:
+		base = 360
+	case total <= 50_000:
+		base = 240
+	}
+	return min(total, min(1200, base*(level+1)))
 }
 
 func universeRevision(snapshot UniverseSnapshot) string {

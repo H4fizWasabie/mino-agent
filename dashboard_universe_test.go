@@ -148,6 +148,19 @@ func TestUniverseProjectionBoundsOverviewAndNeighborhood(t *testing.T) {
 	}
 }
 
+func TestUniverseOverviewBudgetScalesWithoutOpeningTheFullGraph(t *testing.T) {
+	for _, test := range []struct {
+		total, level, want int
+	}{
+		{1_390, 0, 420}, {1_390, 1, 840}, {1_390, 2, 1_200},
+		{10_000, 2, 1_080}, {50_001, 2, 360}, {100_000, 2, 360},
+	} {
+		if got := universeOverviewBudget(test.total, test.level); got != test.want {
+			t.Fatalf("universeOverviewBudget(%d, %d) = %d, want %d", test.total, test.level, got, test.want)
+		}
+	}
+}
+
 func TestDashboardEventsUseNonDestructiveCursors(t *testing.T) {
 	dashEventMu.Lock()
 	oldQueue, oldCursor := dashEventQ, dashCursor
