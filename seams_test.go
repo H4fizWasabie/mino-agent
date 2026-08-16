@@ -308,6 +308,11 @@ var promptAssemblySeams = []string{
 	"verifyWorkspaceStageOutputs",
 	"alertScheduleHealth",
 	"contextBudgetBlock",
+	"taskIntentOffer",
+	"buildTaskifyStages",
+	"splitOfferText",
+	"gatePauseReply",
+	"approvePendingTaskGate",
 }
 
 func TestPromptAssemblySeamsCovered(t *testing.T) {

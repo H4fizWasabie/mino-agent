@@ -181,6 +181,8 @@ func NewCore() *Core {
 	tools.Register(behaves(makeRestartServiceTool(host), BehaviorMutate))
 	tools.Register(behaves(makeRequestApprovalTool(w.approvals), BehaviorMutate))
 	tools.Register(behaves(makeRunPlaybookTool(w), BehaviorMutate))
+	tools.Register(behaves(makeTaskifyTool(w), BehaviorMutate))
+	tools.Register(behaves(makeSplitStageTool(w), BehaviorMutate))
 	tools.Register(behaves(makeCapturePlaybookTool(w), BehaviorMutate))
 	tools.Register(behaves(makeSchedulePlaybookTool(s.Home, s.Timezone), BehaviorMutate))
 	tools.Register(behaves(makeListSchedulesTool(s.Home), BehaviorObserve))
@@ -334,6 +336,11 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 		w.auditLog(sessionID, eventType, message, iteration)
 	})
 	system, routing := conversation.Session.BuildContext(userMessage, source)
+	// #237: the owner's approval of a paused task gate is a harness decision
+	// (the model can never approve its own run — approval.go's RUN-006
+	// discipline). Detect the approval BEFORE the loop, mark the run approved
+	// in its state.json, and route the turn to resume it via run_playbook.
+	gateRouting := approvePendingTaskGate(w.Settings.Home, sessionID, userMessage)
 	// Cache stability: keep the system prompt byte-stable across calls so the
 	// provider prefix cache stays warm. The clock AND the per-turn routing
 	// block (matched skills + playbook routing) are appended to the fresh user
@@ -345,6 +352,18 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 		tail := clock + "\nUse this clock; do not infer the current time from conversation history."
 		if routing != "" {
 			tail = routing + "\n\n" + tail
+		}
+		if gateRouting != "" {
+			tail = gateRouting + "\n\n" + tail
+		}
+		// #237 task-intent detection: the offer is a DISCUSSION OPENER — no
+		// scaffold, no work, until the owner approves (owner lock 2026-08-16).
+		// Suppressed on the turn that just approved the gate: the approval is
+		// the start signal, not another discussion.
+		if gateRouting == "" {
+			if offer := taskIntentOffer(userMessage); offer != "" {
+				tail = offer + "\n\n" + tail
+			}
 		}
 		messages[len(messages)-1].Content += "\n\n" + tail
 	}

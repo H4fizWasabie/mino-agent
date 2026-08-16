@@ -240,6 +240,7 @@ func cleanPlaybookRequest(request string) string {
 	for _, marker := range []string{
 		"\n\n[AUTHORITATIVE LOCAL CLOCK:",
 		"\n\nThe user explicitly asked to run the",
+		"\n\nThe owner approved the decomposition for task run",
 		"\n\nPOSSIBLY RELEVANT PLAYBOOK",
 	} {
 		if i := strings.Index(request, marker); i >= 0 {
@@ -582,7 +583,7 @@ func canonicalManagedStageName(raw string, position int) (string, error) {
 			number, name = parsed, parts[1]
 		}
 	}
-	if number < 1 || !validPlaybookName(name) {
+	if number < 0 || !validPlaybookName(name) {
 		return "", fmt.Errorf("stage %q must use a name like 01-research", raw)
 	}
 	return fmt.Sprintf("%02d-%s", number, name), nil
