@@ -18,9 +18,16 @@ import (
 )
 
 // ExtensionConfig matches ~/.mino/extensions.json
+//
+// Supervised entries (managed by ExtensionSupervisor, RUN-001) carry Repo
+// and Port; URL-only entries stay manual — discovered by LoadExtensions but
+// not spawned or supervised.
 type ExtensionConfig struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
+	Name string            `json:"name"`
+	URL  string            `json:"url"`            // resolved from the supervised child's port at registration
+	Repo string            `json:"repo,omitempty"` // git clone URL (supervised)
+	Port int               `json:"port,omitempty"` // 127.0.0.1 listen port (supervised)
+	Env  map[string]string `json:"env,omitempty"`  // extra child env (supervised)
 }
 
 // ExtensionTool — a tool discovered from a running extension
@@ -43,6 +50,9 @@ func LoadExtensions(home string, r *Registry) {
 		return
 	}
 	for _, c := range configs {
+		if c.Repo != "" {
+			continue // supervised by ExtensionSupervisor — it spawns and registers these
+		}
 		var tools []ExtensionTool
 		var err error
 		for attempt := 0; attempt < 3; attempt++ { // extensions may still be binding at boot
@@ -206,8 +216,9 @@ func trigramSimilarity(a, b string) float64 {
 
 // checkExtensionRetryLoops detects when extension tools are stuck returning similar
 // useless results (§21). Two signals:
-//   1. ≥3 consecutive same-tool calls within 5 min (no other extension call between)
-//   2. Last 3 outputs within 10 min are >90% similar (trigram Jaccard)
+//  1. ≥3 consecutive same-tool calls within 5 min (no other extension call between)
+//  2. Last 3 outputs within 10 min are >90% similar (trigram Jaccard)
+//
 // When both fire, triggers an alert via the same notifyFn used by checkErrorRate.
 func checkExtensionRetryLoops(db *sql.DB, notifyFn func(string)) {
 	cutoff := time.Now().Add(-10 * time.Minute).UTC().Format("2006-01-02 15:04:05")

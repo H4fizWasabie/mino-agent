@@ -106,6 +106,30 @@ func (j *OpJournal) Get(id int64) (*OpEntry, error) {
 		FROM ops_journal WHERE id = ?`, id)
 }
 
+// SetStatus transitions an entry's lifecycle status — the write path the
+// journal's status vocabulary exists for. Rollback consumers (RUN-001/003/
+// 004/005) mark the entry they revert with OpStatusRolledBack; failed
+// installs record OpStatusFailed at Run time.
+func (j *OpJournal) SetStatus(id int64, status string) error {
+	switch status {
+	case OpStatusOK, OpStatusFailed, OpStatusRolledBack:
+	default:
+		return fmt.Errorf("unknown status %q", status)
+	}
+	res, err := j.db.Exec(`UPDATE ops_journal SET status = ? WHERE id = ?`, status, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (j *OpJournal) get(query string, args ...any) (*OpEntry, error) {
 	var e OpEntry
 	err := j.db.QueryRow(query, args...).Scan(&e.ID, &e.Ts, &e.OpType, &e.Entity,

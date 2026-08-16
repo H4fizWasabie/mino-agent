@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -555,11 +556,11 @@ func TestRewriteBashWithRTK(t *testing.T) {
 	os.WriteFile(stub, []byte("#!/bin/sh\nprintf '%s' \"$RTK_STUB_RESPONSE\"\nexit \"${RTK_STUB_CODE:-0}\"\n"), 0755)
 
 	cases := []struct {
-		name      string
-		hasRTK    bool
-		response  string
-		code      string
-		want      string
+		name     string
+		hasRTK   bool
+		response string
+		code     string
+		want     string
 	}{
 		{"valid rewrite, quirky exit 3", true, "rtk ls -la /tmp", "3", "rtk ls -la /tmp"},
 		{"compound rewrite", true, "cd /tmp && rtk ls", "3", "cd /tmp && rtk ls"},
@@ -692,4 +693,30 @@ func TestSearchToolProactiveProvenanceGate(t *testing.T) {
 	if strings.Contains(out2, "provenance gate") {
 		t.Fatalf("gate fired on unrelated query:\n%s", out2)
 	}
+}
+
+// F1 regression (RUN-001 review, PR #224): syncToolCatalog must not iterate
+// the tools map unlocked — concurrent registration (supervisor runLoop
+// goroutines) racing the FTS catalog rebuild. Fails under -race without the
+// toolsMu guard inside syncToolCatalog.
+func TestRegistryConcurrentRegisterCatalogRebuild(t *testing.T) {
+	r := NewRegistry()
+	r.SetSearchDB(Connect(t.TempDir())) // searchDB set → syncToolCatalog does real work
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { // register storm — locked map writes + catalog rebuilds
+		defer wg.Done()
+		for i := 0; i < 20; i++ {
+			r.Register(&Tool{Name: fmt.Sprintf("tool_%d", i), Description: "concurrent registration"})
+		}
+	}()
+	go func() { // catalog rebuild + read storm — overlaps the registration writes
+		defer wg.Done()
+		for i := 0; i < 25; i++ {
+			r.syncToolCatalog()
+			r.Catalog()
+			r.Schemas()
+		}
+	}()
+	wg.Wait()
 }
