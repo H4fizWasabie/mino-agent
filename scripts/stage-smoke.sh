@@ -12,6 +12,21 @@
 #     so it can never steal the live agent's Telegram updates or reply to the
 #     owner from a rehearsal copy
 #   - traces / audit / outbox / *.bak* excluded
+#   - extensions.json + extensions/ excluded (RUN-001) -> the staged boot's
+#     extension-supervisor reconciliation must not spawn the LIVE extensions
+#     (duplicate processes, port conflicts)
+#
+# RUN-feature rehearsals (map #213, release gate):
+#   - RUN-002: ops_journal table present in the staged schema
+#   - RUN-005: config self-heal — two SIGHUPs against the staged providers.json
+#     (pass 1 establishes .prev from the valid file, corrupt, pass 2 must
+#     restore it) — deterministic, no LLM
+#   - RUN-006: approval entry-point interception — "deny 999" through the real
+#     /api/chat must be consumed before the loop
+#   Not smoke-able in stage (covered by unit tests + the owner-run live
+#   rehearsal): RUN-001 install (needs git+go toolchain + a fixture source on
+#   the VPS), RUN-004 rollback (needs a real swap cycle), RUN-003 sudoers
+#   (needs real root).
 #
 # The one live cost: the chat turn calls the real LLM with the staged keys
 # (a few cents).
@@ -31,7 +46,8 @@ echo "== stage-smoke: $(basename "$CANDIDATE") on :${PORT} (live service untouch
 # 1. stage a copy of the real state
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
-rsync -a --exclude traces --exclude audit.jsonl --exclude outbox --exclude '*.bak*' "$LIVE_HOME/" "$STAGE/"
+rsync -a --exclude traces --exclude audit.jsonl --exclude outbox --exclude '*.bak*' \
+	--exclude extensions --exclude extensions.json "$LIVE_HOME/" "$STAGE/"
 rm -f "$STAGE/schedules.json"
 sed -i '/^TELEGRAM_BOT_TOKEN=/d' "$STAGE/mino.env"
 
@@ -75,7 +91,7 @@ else
 	echo "FAIL: chat turn did not return a cost block: $(echo "$REPLY" | head -c 200)"; FAIL=1
 fi
 
-# 7. #195: removing a provider while a session is sticky to it must not
+# 6. #195: removing a provider while a session is sticky to it must not
 #    panic — the session falls through to the remaining providers. Pre-fix
 #    binaries nil-deref in candidates() and the chat call fails loudly.
 STICKY_PROVIDER="mimo"
@@ -99,7 +115,45 @@ else
 	echo "WARN: could not switch staged session (provider missing?) — skipping #195 step"
 fi
 
-# 6. #188: candidate must FAIL LOUDLY on the occupied live port (7779)
+# 7. RUN-002: the operation journal (RUN-002 seam) exists in the staged schema
+JOURNAL_OK=$(sqlite3 "$STAGE/state.db" "SELECT name FROM sqlite_master WHERE type='table' AND name='ops_journal'" 2>/dev/null || echo "")
+if [ "$JOURNAL_OK" = "ops_journal" ]; then
+	echo "PASS: ops_journal table present (RUN-002)"
+else
+	echo "FAIL: ops_journal missing from staged schema (RUN-002)"; FAIL=1
+fi
+
+# 8. RUN-005: config self-heal — heal pass 1 (SIGHUP) refreshes .prev from the
+#    valid staged providers.json; corrupt it; heal pass 2 must restore the file
+#    and keep the instance serving. The staged file only — live untouched.
+PROVIDERS_ORIG=$(mktemp)
+cp "$STAGE/providers.json" "$PROVIDERS_ORIG"
+kill -HUP "$PID" 2>/dev/null || true   # pass 1: establishes .prev baseline
+sleep 2
+echo '{"providers":[' > "$STAGE/providers.json"   # truncated JSON — the bad-edit class
+kill -HUP "$PID" 2>/dev/null || true   # pass 2: must restore
+sleep 2
+if diff -q "$PROVIDERS_ORIG" "$STAGE/providers.json" > /dev/null 2>&1 \
+	&& curl -sf -m 5 "$BASE/api/universe" > /dev/null 2>&1; then
+	echo "PASS: config self-heal restored bad providers.json from .prev (RUN-005)"
+else
+	echo "FAIL: config self-heal did not restore providers.json (RUN-005):"
+	diff "$PROVIDERS_ORIG" "$STAGE/providers.json" | head -5; FAIL=1
+fi
+rm -f "$PROVIDERS_ORIG"
+
+# 9. RUN-006: approval entry-point interception — "deny <id>" is consumed by
+#    the harness BEFORE the loop at the real /api/chat entry point, even for an
+#    unknown id (the format is reserved). Deterministic — no LLM involvement.
+REPLY3=$(curl -sf -m 30 -X POST "$BASE/api/chat" -H 'Content-Type: application/json' \
+	-d '{"message":"deny 999","session_id":"stage-approval"}' 2>/dev/null || echo "APPROVAL-CHAT-FAILED")
+if echo "$REPLY3" | grep -q "No pending approval request 999"; then
+	echo "PASS: approval reply intercepted before the loop (RUN-006)"
+else
+	echo "FAIL: approval interception: $(echo "$REPLY3" | head -c 200)"; FAIL=1
+fi
+
+# 10. #188: candidate must FAIL LOUDLY on the occupied live port (7779)
 kill "$PID" 2>/dev/null || true
 wait "$PID" 2>/dev/null || true
 set +e
