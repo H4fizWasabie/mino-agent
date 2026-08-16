@@ -207,6 +207,7 @@ func (s *ExtensionSupervisor) Install(cfg ExtensionConfig, sessionID string) err
 		// Journal is the record of truth: tear the op back down.
 		s.writeConfigs(configs)
 		s.kill(cfg.Name)
+		s.unregisterTools(cfg.Name) // no proxy closures pointing at a dead child
 		os.RemoveAll(dir)
 		return fmt.Errorf("journal install: %w", err)
 	}
@@ -356,6 +357,7 @@ func (s *ExtensionSupervisor) runLoop(m *managedExt) {
 		if !s.waitOrStop(m, backoff) {
 			return
 		}
+		backoff = min(backoff*2, extMaxBackoff) // crash-loop ramp, same as the spawn-failure branch
 	}
 }
 

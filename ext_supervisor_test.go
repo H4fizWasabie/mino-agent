@@ -104,6 +104,26 @@ func lastPid(t *testing.T, path string) int {
 	return pid
 }
 
+// startTimes parses the fakeext startup log's timestamps (ts=RFC3339Nano).
+func startTimes(t *testing.T, path string) []time.Time {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var out []time.Time
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		for _, f := range strings.Fields(line) {
+			if strings.HasPrefix(f, "ts=") {
+				if ts, err := time.Parse(time.RFC3339Nano, f[3:]); err == nil {
+					out = append(out, ts)
+				}
+			}
+		}
+	}
+	return out
+}
+
 func pidAlive(pid int) bool {
 	if pid <= 0 {
 		return false
@@ -327,4 +347,42 @@ func TestManageExtensionToolValidation(t *testing.T) {
 
 func extNameFromRepo(repo string) string {
 	return strings.TrimSuffix(filepath.Base(repo), ".git")
+}
+
+// F2 regression (RUN-001 review, PR #224): crash-loop backoff must ramp.
+// A child that spawns fine but crashes every ~600ms restarts at ~1s, ~2s,
+// ~4s… — never a flat 1s-forever (600ms is the shortest crash window that
+// still lets the /tools health poll land). Fails without the crash-branch
+// doubling: third interval ≈ first (margin −0.6s), passes with it (margin
+// +0.55s).
+func TestSupervisorBackoffRampsOnRepeatedCrashes(t *testing.T) {
+	home := t.TempDir()
+	logPath := placeFakeExt(t, home, "fakeext")
+	port, err := freePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := ExtensionConfig{
+		Name: "fakeext", Repo: "file:///unused", Port: port,
+		Env: map[string]string{"FAKEEXT_LOG": logPath, "FAKEEXT_CRASH_AFTER_MS": "600"},
+	}
+	data, _ := json.Marshal([]ExtensionConfig{cfg})
+	if err := os.WriteFile(filepath.Join(home, "extensions.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	sup := NewExtensionSupervisor(home, NewRegistry(), NewOpJournal(Connect(home)))
+	sup.Start()
+	defer sup.Shutdown()
+
+	var ts []time.Time
+	waitFor(t, 20*time.Second, func() bool {
+		ts = startTimes(t, logPath)
+		return len(ts) >= 4
+	}, "four extension starts (crash loop)")
+	// Restart intervals grow as backoff doubles: I1≈1.6s, I2≈2.6s, I3≈4.6s.
+	// The third must exceed twice the first — impossible with a flat 1s.
+	if third, first := ts[3].Sub(ts[2]), ts[1].Sub(ts[0]); third <= 2*first {
+		t.Fatalf("backoff not ramping: third interval %.2fs <= 2× first %.2fs", third.Seconds(), first.Seconds())
+	}
 }

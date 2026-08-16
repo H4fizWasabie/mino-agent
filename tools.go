@@ -158,8 +158,8 @@ func (r *Registry) Unregister(name string) {
 func (r *Registry) SetSearchDB(db *sql.DB) {
 	r.toolsMu.Lock()
 	r.searchDB = db
-	r.syncToolCatalog()
 	r.toolsMu.Unlock()
+	r.syncToolCatalog()
 }
 
 func (r *Registry) BehaviorFor(name string, args map[string]any) ToolBehavior {
@@ -482,11 +482,15 @@ func (r *Registry) explicitToolNames(contextText string) []string {
 	return names
 }
 
-// syncToolCatalog rebuilds the FTS tool index. Callers hold toolsMu.
+// syncToolCatalog rebuilds the FTS tool index. Self-locking (toolsMu.RLock
+// around the map iteration) — safe from any caller context, including
+// background registration from the extension supervisor's runLoop.
 func (r *Registry) syncToolCatalog() {
 	if r.searchDB == nil {
 		return
 	}
+	r.toolsMu.RLock()
+	defer r.toolsMu.RUnlock()
 	r.searchMu.Lock()
 	defer r.searchMu.Unlock()
 	if _, err := r.searchDB.Exec("DELETE FROM tool_catalog_fts"); err != nil {

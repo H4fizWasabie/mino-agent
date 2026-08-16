@@ -19,7 +19,7 @@ func main() {
 	if log := os.Getenv("FAKEEXT_LOG"); log != "" {
 		f, err := os.OpenFile(log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err == nil {
-			fmt.Fprintf(f, "start pid=%d port=%s\n", os.Getpid(), port)
+			fmt.Fprintf(f, "start pid=%d port=%s ts=%s\n", os.Getpid(), port, time.Now().Format(time.RFC3339Nano))
 			f.Close()
 		}
 	}
