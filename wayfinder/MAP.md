@@ -152,11 +152,12 @@ Mino's context is lean at the eager-injection layer (skills loaded by section, n
 - **Frontier (not yet a ticket): the working-set *choice* layer (#4).** Mechanism side (lazy fetch: `remember` pointers, artifact catalog, 8-tool playbook scoping, bounded history) is ~shipped; choice side (model can perceive/prune/compress its own window mid-turn) is ~0 — every model context tool is a *writer* (`note_session`, `save_note`, `add_working_memory`), none reads or shrinks the current window. Deferred by design: choice needs awareness (#171) first; revisit with a real case after #170+#171 land. (Measured 2026-08-12: playbook `one_turn` 18–28k chars ≈ 2–3× the whole ~2.4k static prompt.)
 - [GitHub #170 — Eager skill bodies injected en bloc (no section routing)](https://github.com/H4fizWasabie/mino-agent/issues/170) — measured token waste on automation; only `image-generation` needed by playbooks.
 - [GitHub #171 — Iteration/retry awareness + containment](https://github.com/H4fizWasabie/mino-agent/issues/171) — expose live `i/maxIter` + repeated-tool signal; model-visible rule to diverge or give up before the cap. Driver: 2026-08-12 FB `01-post` 50-iteration research churn (pre-contract-fix).
+- [CTX-024 — Mino doesn't know its own max-token budget](tickets/ctx-024-budget-awareness.md) (**resolved**, #240) — per-turn budget block (chars used / ceiling / headroom) in the turn tail (clock pattern, prefix-cache-safe) with a locked-template threshold warning at ≥70% (also covering the 90% level): "compact or consolidate, or wrap up with a status report" — never skip/rush; informational only, verification discipline stays absolute.
 - **Static system prompt is thin (~2.4k tok), not fat** — measured; trimming it is a low-value/high-regression lever. The real token cost is the [eager skill injection](#170), not the static prompt.
 - **Tool-schema union is correct as-is** — chat=20 wide (legit), automation=8 tight (legit).
 
 ## Out of scope
-- Context-budget telemetry (#2) — rejected; cheaper to stop-on-spin (#171) than to gauge.
+- Context-budget telemetry (#2) — rejected pre-#240; the #171 stop-on-spin guard stops repetition, but live evidence (2026-08-16: 30-iteration turns at 30k+ context) showed the model still needed its own budget numbers — now shipped as per-turn budget awareness (CTX-024).
 - Multi-owner trust/provenance (single-owner Mino)
 - The 30-iteration cap itself
 

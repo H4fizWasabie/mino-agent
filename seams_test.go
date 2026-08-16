@@ -307,6 +307,7 @@ var promptAssemblySeams = []string{
 	"cleanPlaybookRequest",
 	"verifyWorkspaceStageOutputs",
 	"alertScheduleHealth",
+	"contextBudgetBlock",
 }
 
 func TestPromptAssemblySeamsCovered(t *testing.T) {
