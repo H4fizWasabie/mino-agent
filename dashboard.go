@@ -126,6 +126,7 @@ func registerDashboardRoutes(mux *http.ServeMux, memDir string) {
 	mux.HandleFunc("/api/nerves", handleNervesAPI)
 	mux.HandleFunc("/api/data", handleDataAPI)
 	mux.HandleFunc("/api/universe", handleUniverseAPI)
+	mux.HandleFunc("/api/universe/projection", handleUniverseProjectionAPI)
 	mux.HandleFunc("/api/responsibilities", handleResponsibilitiesAPI)
 	mux.HandleFunc("/api/responsibility-evidence", handleResponsibilityEvidence)
 	mux.HandleFunc("/api/reveal", handleRevealAPI)

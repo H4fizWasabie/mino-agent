@@ -179,14 +179,16 @@ func TestDashboardNavigationAndLegacyHashContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, lens := range []string{"universe", "now", "work", "memory", "routines", "system"} {
-		hash := "#universe"
-		if lens != "universe" {
-			hash += "/" + lens
-		}
-		want := `href="` + hash + `" data-v="universe" data-lens="` + lens + `"`
-		if !strings.Contains(string(index), want) {
-			t.Errorf("primary navigation must expose the %q map lens", lens)
+	for _, route := range []struct{ name, want string }{
+		{"universe", `href="#universe" data-v="universe" data-lens="universe"`},
+		{"now", `href="#today" data-v="today"`},
+		{"work", `href="#work" data-v="work"`},
+		{"memory", `href="#memory/overview" data-v="memory"`},
+		{"routines", `href="#system/schedules" data-v="system"`},
+		{"system", `href="#system/overview" data-v="system"`},
+	} {
+		if !strings.Contains(string(index), route.want) {
+			t.Errorf("primary navigation must expose the canonical %q surface", route.name)
 		}
 	}
 
@@ -194,10 +196,15 @@ func TestDashboardNavigationAndLegacyHashContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if strings.Contains(string(script), `if(raw==="today") route=["universe","now"]`) ||
+		strings.Contains(string(script), `else if(raw==="work") route=["universe","work"]`) {
+		t.Fatal("canonical Today and Work routes must not redirect back into Galaxy lenses")
+	}
+	if !strings.Contains(string(script), `return raw==="universe"||raw==="overview"||raw==="graph"||(raw==="memory"&&sub==="graph")`) {
+		t.Fatal("canonical Today and Work routes must load their operational dashboard data")
+	}
 	for _, redirect := range []string{
 		`if(raw==="overview") route=["universe",null]`,
-		`else if(raw==="today") route=["universe","now"]`,
-		`else if(raw==="work") route=["universe","work"]`,
 		`else if(raw==="gateway"||raw==="chat") route=["conversations",null]`,
 		`else if(raw==="loop") route=["system","traces"]`,
 		`else if(raw==="tools") route=["system",sub==="results"?"tool-results":sub==="mcp"?"mcp":"tools"]`,
@@ -240,7 +247,9 @@ func TestDashboardLivingFieldSurfaceContract(t *testing.T) {
 	}
 	for _, behavior := range []string{
 		`universe(d, lens){ return universeView(U,lens||"universe"); }`,
-		`fetch("/api/universe")`,
+		`fetch("/api/universe/projection?scope=overview")`,
+		`if(dashboardDataRequest) return dashboardDataRequest`,
+		`if(!universeOnlyRoute()&&!fullDataLoaded)await loadDashboardData()`,
 		`if(view==="universe") setTimeout(()=>initUniverse(U,sub||"universe"),20)`,
 		`(r.events||[]).forEach(universeActivity)`,
 	} {
@@ -252,10 +261,17 @@ func TestDashboardLivingFieldSurfaceContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if strings.Contains(string(field), `state.query=event.target.value`) {
+		t.Fatal("typing in Galaxy search must not filter nodes or move the camera")
+	}
 	for _, behavior := range []string{
 		`id="universe-canvas"`, `snapshot.nodes`, `snapshot.edges`, `function playUniverseHistory()`,
+		`id="universe-webgl"`, `function initUniverseWebGL(canvas)`, `drawArraysInstanced`, `WebGL2`,
+		`/api/memory/remember?q=`, `setTimeout(async()=>`, `},275)`, `function openUniverseEntity(id,push=true)`,
+		`tools:"#system/tools"`, `Archived · open Memory`, `function universeBranchTotal(snapshot,branch,fallback)`,
+		`universeEntityController?.abort()`, `universeEntityResponseCurrent(controller,state)`, `state.nodes.splice(index,1)`,
 		`state.timeline=Math.min(1`, `function universeActivity(event)`, `state.activities.push`,
-		`requestAnimationFrame(draw)`, `function selectUniverseNode(id)`, `Open full view`,
+		`requestAnimationFrame(draw)`, `function selectUniverseNode(id,push=true)`, `Open full view`,
 		`function universeRegionCenters()`, `function universeLandmarkCount(nodes,region,visible,currentIDs)`,
 		`function universeLandmarkStyle(zoom)`, `function universeDefaultZoom(width)`, `function focusUniverseRegion(region)`,
 		`state.currentNodeIDs=new Set(incoming.keys())`,
@@ -293,8 +309,9 @@ func TestDashboardLivingFieldBehavior(t *testing.T) {
 	const harness = `
 const fs=require("fs"),vm=require("vm"),source=fs.readFileSync(process.argv[1],"utf8");
 function extract(name){
-  const start=source.indexOf("function "+name+"(");
+  let start=source.indexOf("function "+name+"(");
   if(start<0) throw new Error("missing "+name);
+  if(source.slice(start-6,start)==="async ")start-=6;
   const brace=source.indexOf("{",start); let depth=0;
   for(let i=brace;i<source.length;i++){
     if(source[i]==="{") depth++;
@@ -302,14 +319,14 @@ function extract(name){
   }
   throw new Error("unterminated "+name);
 }
-const names=["universeHash","universeRand","universeRegion","universeFocus","universeNodeLink","universeRegionCenters","universeLandmarkCount","universeLandmarkStyle","universeDefaultZoom","universeLayout","universeCenterRegion","focusUniverseRegion","universeBranch","universeBranchAnchors","universeAdjacency","layoutMemoryBranch","layoutIdentityBranch","layoutWorkBranch"];
+const names=["universeHash","universeRand","universeRegion","universeFocus","universeNodeLink","universeRegionCenters","universeLandmarkCount","universeLandmarkStyle","universeDefaultZoom","universeLayout","universeClusterKey","universeCenterRegion","focusUniverseRegion","focusUniverseCamera","rotateUniverseCamera","universeSearchResults","universeBranch","universeBranchAnchors","universeBranchVectors","universeBranchTotal","universeProjectionMerge","universeDetailNeedsRefresh","universeEntityResponseCurrent","universeAdjacency","layoutMemoryBranch","layoutIdentityBranch","layoutWorkBranch"];
 const box={location:{hash:"#universe"},universePendingRegion:null};vm.runInNewContext(names.map(extract).join("\n"),box);
 function assert(ok,label){if(!ok)throw new Error(label)}
 assert(box.universeHash("memory:a")===box.universeHash("memory:a"),"stable hash");
 assert(box.universeFocus({kind:"reminder",attention:false},"now"),"now lens includes reminders");
 assert(box.universeNodeLink({id:"responsibility:routine:test",kind:"responsibility"})==="#responsibility/routine%3Atest","responsibility deep link");
 const centers=box.universeRegionCenters();
-assert(Object.keys(centers).join(",")==="now,memory,work,routines,system","five stable landmark centers");
+assert(Object.keys(centers).join(",")==="now,memory,tools,work,routines,system","six stable landmark centers");
 const landmarkNodes=[
   {id:"memory:a",kind:"memory"},
   {id:"memory:removed",kind:"memory"},
@@ -323,17 +340,65 @@ assert(box.universeLandmarkCount(landmarkNodes,"system",node=>node.kind!=="memor
 const overview=box.universeLandmarkStyle(.65),detail=box.universeLandmarkStyle(3);
 assert(overview.alpha>detail.alpha&&overview.radius>detail.radius,"landmarks lead at overview scale and recede in detail");
 assert(box.universeDefaultZoom(390)<box.universeDefaultZoom(1440),"phone starts at overview scale");
+assert(box.universeBranchTotal({counts:{memories:100000}},"memories",120)===100000,"landmarks use source totals instead of projection counts");
+const ranked=box.universeSearchResults("First result  # fact-a\n  body: body\nSecond result  # fact-b");
+assert(ranked.map(result=>result.id).join(",")==="memory:fact-a,memory:fact-b","search preserves server ranking");
+const base={nodes:[{id:"overview"}],edges:[]},mergedFirst=box.universeProjectionMerge(base,{nodes:[{id:"first"}],edges:[]}),mergedSecond=box.universeProjectionMerge(base,{nodes:[{id:"second"}],edges:[]});
+assert(mergedFirst.nodes.some(node=>node.id==="first")&&!mergedSecond.nodes.some(node=>node.id==="first")&&mergedSecond.nodes.some(node=>node.id==="second"),"entity projections replace instead of accumulate");
+assert(box.universeDetailNeedsRefresh("old","new",{selected:{id:"memory:a"},detailNodes:[{}]}),"selected detail refreshes after source revision changes");
+const request={},requestState={canvas:{isConnected:true}};box.universeEntityController=request;box.universeState=requestState;
+assert(box.universeEntityResponseCurrent(request,requestState),"current entity response is accepted");requestState.canvas.isConnected=false;
+assert(!box.universeEntityResponseCurrent(request,requestState),"entity response is rejected after leaving Galaxy");
+const camera={rotX:0,rotY:0,zoom:3,panX:4,panY:5};box.focusUniverseCamera({_gx:.5,_gy:.25,_gz:.82},camera);
+assert(camera.zoom===1.22&&camera.panX===0&&camera.panY===0&&camera.rotY!==0,"selected search result focuses the camera");
+const rotated={rotX:0,rotY:0,panX:8,panY:9};box.rotateUniverseCamera(rotated,{x:10,y:20,rotX:.1,rotY:.2},60,70);
+assert(Math.abs(rotated.rotX-.3)<1e-9&&Math.abs(rotated.rotY-.4)<1e-9&&rotated.panX===0&&rotated.panY===0,"drag rotates the centered camera without panning the sphere");
 box.universeState={canvas:{clientWidth:1000,clientHeight:800},lens:"memory",zoom:3,panX:0,panY:0};
-box.focusUniverseRegion("memory");
-assert(box.universeState.zoom===1.28&&box.universeState.panY!==0,"active landmark centers its region");
+box.universeCenterRegion(box.universeState,"memory");
+assert(box.universeState.zoom===1.22&&box.universeState.panX===0&&box.universeState.panY===0,"active landmark centers its camera");
 box.focusUniverseRegion("system");
-assert(box.location.hash==="#universe/system"&&box.universePendingRegion==="system","new landmark activates its lens route");
+assert(box.location.hash==="#system/overview","landmark activates its canonical route");
 const make=()=>Array.from({length:64},(_,i)=>({id:"memory:"+i,kind:"memory",community:0,state:"semantic"}));
 const edges=Array.from({length:63},(_,i)=>({source:"memory:"+i,target:"memory:"+(i+1)}));
 const first=make(),second=make();box.universeLayout(first,edges);box.universeLayout(second,edges);
-assert(JSON.stringify(first.map(n=>[n.x,n.y]))===JSON.stringify(second.map(n=>[n.x,n.y])),"deterministic geography");
-const xs=first.map(n=>n.x),ys=first.map(n=>n.y);
-assert(Math.max(...xs)-Math.min(...xs)>.35&&Math.max(...ys)-Math.min(...ys)>.25,"single stored community must still form a topology field");
+assert(JSON.stringify(first.map(n=>[n._gx,n._gy,n._gz]))===JSON.stringify(second.map(n=>[n._gx,n._gy,n._gz])),"deterministic geography");
+assert(first.every(n=>Math.abs(Math.hypot(n._gx,n._gy,n._gz)-1)<.01),"nodes remain on the spherical atlas");
+assert(first.every(n=>n._layoutCommunity==="memory:0"),"stored community remains explicit in presentation state");
+assert(first.slice(1).every(n=>n._primaryParent===first[0].id),"community leaves retain their visual hub");
+const scale=Array.from({length:4096},(_,i)=>({id:"memory:scale-"+i,kind:"memory",community:i,state:"semantic"}));
+box.universeLayout(scale,[]);
+assert(scale.filter(n=>n._overviewVisible).length<=120,"large atlases keep overview disclosure bounded");
+(async()=>{
+  const lifecycleNames=["universeTimeValue","universeProjectionMerge","universeDetailNeedsRefresh","universeEntityResponseCurrent","universeMergeProjection","openUniverseEntity","universeUpdate"];
+  const life={performance:{now:()=>1},document:{getElementById:id=>id==="universe-canvas"?{}:null},queueMicrotask:fn=>fn(),universeDegrees:()=>({}),universePlaceNode:()=>{},renderUniverseIndex:()=>{},universeKnown:new Set(),universeEntityController:null,universeState:null,U:null,AbortController};
+  vm.runInNewContext(lifecycleNames.map(extract).join("\n"),life);
+
+  const overviewNode={id:"overview",kind:"artifact",_time:null,x:0},firstDetail={id:"first",kind:"memory",_time:null,x:0,_layoutCommunity:1},secondDetail={id:"second",kind:"memory",_time:null,x:0,_layoutCommunity:2};
+  const lifecycleState={canvas:{isConnected:true},overviewSnapshot:{revision:"old",nodes:[overviewNode],edges:[]},snapshot:{nodes:[overviewNode],edges:[]},nodes:[overviewNode],nodeMap:{overview:overviewNode},detailNodes:[],detailEdges:[],selected:null,requestDraw:()=>{},activities:[]};
+  life.universeState=lifecycleState;
+  const actualUpdate=life.universeUpdate,actualOpen=life.openUniverseEntity;let merged;
+  life.universeUpdate=snapshot=>{merged=snapshot};
+  life.universeMergeProjection({nodes:[firstDetail],edges:[]});
+  life.universeMergeProjection({nodes:[secondDetail],edges:[]});
+  assert(lifecycleState.detailNodes[0]===secondDetail&&!merged.nodes.some(node=>node.id==="first"),"production merge wiring replaces stale detail");
+
+  life.universeUpdate=actualUpdate;lifecycleState.nodes=[overviewNode,secondDetail];lifecycleState.nodeMap={overview:overviewNode,second:secondDetail};lifecycleState.detailNodes=[secondDetail];lifecycleState.selected=secondDetail;
+  let refreshed="";life.openUniverseEntity=id=>{refreshed=id};
+  life.universeUpdate({scope:"overview",revision:"new",nodes:[overviewNode],edges:[],history:[],activity:[]});
+  assert(refreshed==="second","production refresh wiring reloads selected detail after revision change");
+
+  life.openUniverseEntity=actualOpen;let resolveFetch,mergedResponses=0;life.universeMergeProjection=()=>{mergedResponses++};life.focusUniverseCamera=()=>{};life.selectUniverseNode=()=>{};
+  life.fetch=()=>new Promise(resolve=>{resolveFetch=resolve});
+  const requestState={canvas:{isConnected:true},nodeMap:{"memory:a":{id:"memory:a"}},requestDraw:()=>{}};life.universeState=requestState;
+  const stale=life.openUniverseEntity("memory:a");life.universeState={canvas:{isConnected:true}};
+  resolveFetch({ok:true,json:async()=>({nodes:[{id:"memory:a"}],edges:[]})});await stale;
+  assert(mergedResponses===0,"production entity request ignores response after Galaxy state replacement");
+
+  life.fetch=()=>new Promise(resolve=>{resolveFetch=resolve});life.universeState=requestState;requestState.canvas.isConnected=true;
+  const disconnected=life.openUniverseEntity("memory:a");requestState.canvas.isConnected=false;
+  resolveFetch({ok:true,json:async()=>({nodes:[{id:"memory:a"}],edges:[]})});await disconnected;
+  assert(mergedResponses===0,"production entity request ignores response after Galaxy disconnect");
+})().catch(error=>{console.error(error);process.exit(1)});
 `
 	cmd := exec.Command(node, "-e", harness, filepath.Join("static", "universe.js"))
 	if out, err := cmd.CombinedOutput(); err != nil {
