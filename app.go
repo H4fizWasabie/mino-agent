@@ -352,6 +352,20 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 	for _, m := range messages {
 		msgLen += len(m.Content)
 	}
+	// #240 — budget awareness: tell the model its own context ceiling each
+	// turn (chars used / ceiling / headroom), computed from the messages the
+	// harness already built. Same per-turn-tail placement as the clock, so the
+	// byte-stable system prompt and its prefix cache stay warm. INFORMATIONAL
+	// ONLY — CTX-003 (state both numbers), verify-then-claim, and
+	// action-grounding (CTX-016) are absolute rules with no context-budget
+	// escape hatch; this block never waives them and never offers skipping
+	// verification or rushing.
+	if len(messages) > 0 {
+		if block := contextBudgetBlock(len(system)+msgLen, w.Settings.ContextChars); block != "" {
+			messages[len(messages)-1].Content += "\n\n" + block
+			msgLen += len(block) + 2
+		}
+	}
 	logTrace(w.Settings.Home, "turn_start", map[string]any{"user_message": userMessage, "system_chars": len(system), "msg_count": len(messages), "msg_chars": msgLen})
 	if len(images) > 0 {
 		messages[len(messages)-1].Images = images
@@ -380,6 +394,33 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 
 	conversation.Session.AddExchange(userMessage, userContext, result.Reply, result.ToolCalls, source)
 	return result
+}
+
+// contextBudgetWarnPct — the warning fires on every turn at or above 70% of
+// the ceiling; the 90% level from #240 is the same locked template with a
+// higher N, so one gate covers both thresholds.
+const contextBudgetWarnPct = 70
+
+// contextBudgetBlock (issue #240) renders the per-turn context-budget block:
+// chars used, the max ceiling, remaining headroom, and — at or above
+// contextBudgetWarnPct — the threshold warning. The warning template is
+// LOCKED (owner decision): exactly two safe options — compact/consolidate,
+// or wrap up with a status report. It never offers skipping verification or
+// rushing: verification discipline is budget-independent. Guarded by
+// TestContextBudgetBlockGuardrail.
+func contextBudgetBlock(used, ceiling int) string {
+	if ceiling <= 0 || used < 0 {
+		return ""
+	}
+	if used > ceiling {
+		used = ceiling
+	}
+	pct := used * 100 / ceiling
+	block := fmt.Sprintf("context budget: %d chars used of %d ceiling (%d%%), %d headroom", used, ceiling, pct, ceiling-used)
+	if pct >= contextBudgetWarnPct {
+		block += fmt.Sprintf("\nWARNING: context at %d%% of the ceiling — compact or consolidate (manage_memory/consolidate), or wrap up with a status report of what's done and what remains.", pct)
+	}
+	return block
 }
 
 func authoritativeClock(now time.Time, loc *time.Location) string {
