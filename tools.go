@@ -1136,6 +1136,11 @@ func makeBashToolFor(home string, timeout time.Duration) *Tool {
 		if dangerReason != "" {
 			gitCommitBeforeBash(ctx, cmd, home)
 		}
+		if containsSudoInvocation(cmd) {
+			// RUN-003: the model never calls sudo itself — privileged
+			// operations go through the harness tools only.
+			return "Error: sudo is refused here — privileged host operations go through the harness tools: install_package, write_unit, restart_service."
+		}
 		out, err := runBashContext(ctx, timeout, rewriteBashWithRTK(ctx, cmd))
 		if err != nil {
 			// A non-zero exit with stdout is a PARTIAL failure, not a negative

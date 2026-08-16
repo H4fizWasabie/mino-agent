@@ -49,6 +49,32 @@ func main() {
 		case "eval":
 			s := LoadSettings()
 			os.Exit(RunEval(s.Home))
+		case "setup-privileges":
+			// RUN-003: write the sudoers command whitelist (run as root).
+			user, home := "mino", ""
+			for i := 2; i < len(os.Args); i++ {
+				switch os.Args[i] {
+				case "--user":
+					i++
+					if i < len(os.Args) {
+						user = os.Args[i]
+					}
+				case "--home":
+					i++
+					if i < len(os.Args) {
+						home = os.Args[i]
+					}
+				default:
+					fmt.Fprintf(os.Stderr, "unknown flag %q\n", os.Args[i])
+					os.Exit(2)
+				}
+			}
+			if err := SetupPrivileges(home, user); err != nil {
+				fmt.Fprintf(os.Stderr, "setup-privileges failed: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("wrote %s — the mino user can now run only the whitelisted commands as root.\n", sudoersPath())
+			return
 		}
 	}
 

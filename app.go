@@ -90,6 +90,10 @@ func NewCore() *Core {
 	extSup := NewExtensionSupervisor(s.Home, tools, NewOpJournal(db))
 	extSup.Start()
 	LoadExtensions(s.Home, tools) // discover + register extension tools
+	// RUN-003: the privilege bridge — harness-native host tools. The
+	// sudoers command whitelist is the boundary; these are the only way
+	// Mino touches host state (the bash tool refuses sudo outright).
+	host := NewHostTools(s.Home, NewOpJournal(db))
 
 	if s.ConsolidateEvery > 0 {
 		safeGo("consolidation", func() { // 6-hour full consolidation pass
@@ -168,6 +172,9 @@ func NewCore() *Core {
 	tools.Register(behaves(makeListPlaybooksTool(s.Home), BehaviorObserve))
 	tools.Register(behaves(makeManagePlaybookTool(w), BehaviorMutate))
 	tools.Register(behaves(makeManageExtensionTool(extSup), BehaviorMutate))
+	tools.Register(behaves(makeInstallPackageTool(host), BehaviorMutate))
+	tools.Register(behaves(makeWriteUnitTool(host), BehaviorMutate))
+	tools.Register(behaves(makeRestartServiceTool(host), BehaviorMutate))
 	tools.Register(behaves(makeRunPlaybookTool(w), BehaviorMutate))
 	tools.Register(behaves(makeCapturePlaybookTool(w), BehaviorMutate))
 	tools.Register(behaves(makeSchedulePlaybookTool(s.Home, s.Timezone), BehaviorMutate))
