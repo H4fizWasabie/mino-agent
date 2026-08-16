@@ -26,6 +26,15 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "rollback":
+			// RUN-004: owner-call revert — restores the previous binary kept
+			// by the last update, records the ledger line, marks the swap
+			// op rolled_back.
+			if err := DoRollback(); err != nil {
+				fmt.Fprintf(os.Stderr, "Rollback failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "migrate-memories", "--migrate-memories":
 			s := LoadSettings()
 			MigrateMemories(s.Home, s.MemoriesDir)
