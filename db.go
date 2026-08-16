@@ -106,6 +106,18 @@ var schemaStatements = []string{
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_responsibilities_source ON responsibilities(source_kind, source_ref)
 		WHERE source_kind <> '' AND source_ref <> ''`,
 	`CREATE INDEX IF NOT EXISTS idx_responsibility_events_responsibility ON responsibility_events(responsibility_id, id)`,
+	`CREATE TABLE IF NOT EXISTS ops_journal (
+		id INTEGER PRIMARY KEY,
+		ts TEXT NOT NULL DEFAULT (datetime('now')),
+		op_type TEXT NOT NULL,
+		entity TEXT NOT NULL,
+		before_state TEXT NOT NULL DEFAULT '',
+		after_state TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT 'ok' CHECK (status IN ('ok','failed','rolled_back')),
+		session_id TEXT NOT NULL DEFAULT '',
+		undo_of INTEGER NOT NULL DEFAULT 0
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_ops_journal_entity ON ops_journal(entity, id)`,
 	`CREATE VIRTUAL TABLE IF NOT EXISTS tool_catalog_fts USING fts5(name UNINDEXED, description, keywords)`,
 	`CREATE TABLE IF NOT EXISTS _meta (
 		key TEXT PRIMARY KEY,
