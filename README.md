@@ -206,6 +206,12 @@ systemctl restart/daemon-reload, `install -o root -g root -m 0644` from `~/.mino
 /etc/systemd/system, `rm -f /etc/systemd/system/*`) — never a shell, never ALL. Without it the
 tools refuse every op with a clear boundary message, and `bash` refuses `sudo` outright.
 
+> **Platform note:** the privilege bridge (sudoers/apt/systemd) is **Linux-only** (issue #233).
+> On macOS/Windows the host tools fail loudly and safely (nothing runs), while the rest of Mino
+> works normally. **Windows users: run Mino under [WSL](https://learn.microsoft.com/en-us/windows/wsl/install)**
+> to get the full Linux feature set. macOS/Windows host-tool adapters are planned later; see
+> issue #233.
+
 ## A task failed — now what?
 
 | Symptom | Cause | Fix |
