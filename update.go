@@ -102,7 +102,7 @@ func DoUpdate() error {
 		return fmt.Errorf("download failed: HTTP %d", resp.StatusCode)
 	}
 
-	exe := currentExe()
+	exe := updateBinaryPath()
 	newPath := exe + ".new"
 
 	f, err := os.OpenFile(newPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
@@ -144,16 +144,12 @@ func DoUpdate() error {
 		return fmt.Errorf("checksum mismatch for %s: got %s, want %s — refusing to install", assetName, sum, want)
 	}
 
-	if err := os.Rename(newPath, exe); err != nil {
-		os.Remove(newPath)
-		return fmt.Errorf("replace binary: %w — try running with sudo", err)
+	// RUN-004: the swap, the journal entry, and the post-update health check
+	// (with revert on failure) live in applyUpdate — the download/verify half
+	// ends here so the swap/revert decision logic is testable end to end.
+	if err := applyUpdate(exe, homeDir(), tag, sum, newPath); err != nil {
+		return err
 	}
-
-	// The who/what/when ledger is written by the updater itself so it cannot
-	// rot (REL-05: code-generated, not agent-remembered).
-	appendDeploymentLog(homeDir(), tag, exe, sum)
-
-	fmt.Printf("Updated to %s (verified %s). Restart Mino to use the new version.\n", tag, assetName)
 	return nil
 }
 
@@ -219,17 +215,10 @@ func fetchReleaseChecksum(tag, assetName string) (string, bool, error) {
 
 // appendDeploymentLog records one line per successful update — timestamp,
 // version, verified checksum, binary path. Append-only, 0600, never rotated
-// by the updater (the owner can prune it).
+// by the updater (the owner can prune it). Rollback lines share the shape
+// via recordDeployment (rollback.go, RUN-004).
 func appendDeploymentLog(home, tag, exe, sum string) {
-	if err := os.MkdirAll(home, 0700); err != nil {
-		return
-	}
-	f, err := os.OpenFile(filepath.Join(home, "deployments.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	fmt.Fprintf(f, "%s update=%s sha256=%s binary=%s\n", time.Now().UTC().Format(time.RFC3339), tag, sum, exe)
+	recordDeployment(home, "update", tag, sum, exe)
 }
 
 func fetchLatestRelease() (string, error) {
