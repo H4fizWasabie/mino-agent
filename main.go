@@ -221,6 +221,14 @@ func runCLI(w *Core) {
 			break
 		}
 
+		// RUN-006: approve/deny replies resolve pending approvals before the loop.
+		if w.approvals != nil {
+			if reply, handled := w.approvals.ResolveReply(input); handled {
+				fmt.Printf("\n%s\n", reply)
+				continue
+			}
+		}
+
 		result := w.Respond(input, "cli", nil, false)
 		fmt.Printf("\n%s\n", result.Reply)
 	}

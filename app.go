@@ -48,6 +48,7 @@ type Core struct {
 	Sessions         *SessionManager
 	ext              *ExtensionSupervisor
 	mcp              *MCPBridge
+	approvals        *ApprovalGate // RUN-006: stage/page/approve gate for risky ops
 	snapshots        sync.Map // sessionID → *LoopSnapshot (ephemeral, per-loop state)
 }
 
@@ -83,11 +84,13 @@ func NewCore() *Core {
 	tools.SetMaxToolDescChars(s.MaxToolDescChars)           // schema payload description cap
 	tools.SetLogDB(db)                                      // enable tool_calls table logging
 	tools.SetAuditLog(filepath.Join(s.Home, "audit.jsonl")) // §8.4: immutable audit log
+	// RUN-006: the approval tier — same journal as the other consumers.
+	journal := NewOpJournal(db)
 	// RUN-001: in-process extension supervision — spawns, health-checks,
 	// restarts on crash, kills on shutdown; boot reconciliation re-spawns
 	// every supervised entry. Runs BEFORE LoadExtensions so supervised
 	// children are up when their tools get discovered.
-	extSup := NewExtensionSupervisor(s.Home, tools, NewOpJournal(db))
+	extSup := NewExtensionSupervisor(s.Home, tools, journal)
 	extSup.Start()
 	LoadExtensions(s.Home, tools) // discover + register extension tools
 	// RUN-003: the privilege bridge — harness-native host tools. The
@@ -159,6 +162,7 @@ func NewCore() *Core {
 		Tools:            tools,
 		ext:              extSup,
 		Sessions:         NewSessionManager(s, mem),
+		approvals:        NewApprovalGate(s.Home, journal),
 	}
 	// MCP bridge: connect configured servers and register their tools
 	mcpBridge := NewMCPBridge(s.Home, tools)
@@ -175,6 +179,7 @@ func NewCore() *Core {
 	tools.Register(behaves(makeInstallPackageTool(host), BehaviorMutate))
 	tools.Register(behaves(makeWriteUnitTool(host), BehaviorMutate))
 	tools.Register(behaves(makeRestartServiceTool(host), BehaviorMutate))
+	tools.Register(behaves(makeRequestApprovalTool(w.approvals), BehaviorMutate))
 	tools.Register(behaves(makeRunPlaybookTool(w), BehaviorMutate))
 	tools.Register(behaves(makeCapturePlaybookTool(w), BehaviorMutate))
 	tools.Register(behaves(makeSchedulePlaybookTool(s.Home, s.Timezone), BehaviorMutate))
@@ -192,6 +197,9 @@ func NewCore() *Core {
 	// to Telegram so scheduled reports actually arrive.
 	safeGo("outbox-dispatcher", func() { runOutboxDispatcher(w) })
 
+	// Approval timeout — unanswered approval requests deny themselves (RUN-006).
+	safeGo("approval-sweeper", func() { w.approvals.sweepLoop() })
+
 	// Reminder delivery — runs in every gateway mode; no-ops without Telegram config.
 	safeGo("reminder-dispatcher", func() { runReminderDispatcher(w) })
 
@@ -205,6 +213,13 @@ func NewCore() *Core {
 	// marked "interrupted" with evidence — no manual quarantine.
 	if n := ReconcileInterruptedRuns(w.Settings.Home); n > 0 {
 		slog.Info("startup reconciliation", "interrupted_runs", n)
+	}
+
+	// RUN-006 boot reconciliation: approval requests that never got a
+	// decision are unresolvable after a restart (the pending map is gone) —
+	// mark them rolled_back so the journal never reads a staged op as live.
+	if n := ReconcileStaleApprovals(w.approvals.journal); n > 0 {
+		slog.Info("startup reconciliation", "stale_approval_requests", n)
 	}
 
 	// Audit pruning: remove events older than 30 days, runs daily

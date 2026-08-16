@@ -234,6 +234,16 @@ func handleTelegramMessage(w *Core, bot *tgbotapi.BotAPI, message *tgbotapi.Mess
 		return
 	}
 
+	// RUN-006: the owner's approve/deny reply resolves a pending approval
+	// HERE, before the loop — the harness owns the gate, the model can never
+	// approve its own op.
+	if w.approvals != nil {
+		if reply, handled := w.approvals.ResolveReply(text); handled {
+			sendTelegramReply(bot, chatID, reply, nil, message.MessageID)
+			return
+		}
+	}
+
 	// Interrupt routing: mid-loop queries don't wait for loop to finish
 	if query, ok := isInterrupt(text); ok && w.snapshot(sid) != nil {
 		go w.handleInterrupt(sid, query, func(reply string) {

@@ -67,7 +67,7 @@ func (h *HostTools) whitelisted(argv []string) bool { return h.check(argv) }
 
 // notWhitelisted is the refusal every host tool shares — membership is the
 // boundary; outside it the op waits for the owner (RUN-006's approval tier).
-const notWhitelisted = " not in the privilege whitelist (the sudoers command whitelist is the autonomous/approval boundary) — the owner must extend it or approve the op"
+const notWhitelisted = " not in the privilege whitelist (the sudoers whitelist is the autonomous/approval boundary — approval never grants root) — the owner must extend the whitelist for privileged ops; risky unprivileged ops go through request_approval"
 
 func (h *HostTools) sessionID(ctx context.Context) string {
 	if v := ctx.Value(sessionIDKey{}); v != nil {
