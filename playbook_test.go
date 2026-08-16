@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -1741,6 +1742,88 @@ func TestFireScheduleAlertsOnFailedRun(t *testing.T) {
 		t.Fatalf("streak not reset: %+v", after)
 	}
 	waitForRows(t, core.DB, 2)
+}
+
+// #238: a scheduled run that hits the iteration cap gets ONE automatic retry
+// after a short delay (the 08-16 evidence: 10:00 cap → 10:03 rerun success),
+// re-firing the same occurrence. A successful retry is silent — no alert.
+func TestFireScheduleRetriesIterationLimitOnce(t *testing.T) {
+	old := scheduleRetryDelay
+	scheduleRetryDelay = 50 * time.Millisecond
+	defer func() { scheduleRetryDelay = old }()
+
+	core, home := newScheduleTestCore(t)
+	loc := mustKL(t)
+	writeHealthSchedule(t, home, "tribal", 0, "", "")
+	sched := scheduleHealthEntry(t, home, "tribal")
+	at := time.Date(2026, 8, 10, 9, 30, 0, 0, loc)
+	var calls atomic.Int32
+	run := func(_ context.Context, _ *Core, _ string, _ string, _ string, _ Observer) (*PlaybookResult, error) {
+		if calls.Add(1) == 1 {
+			return &PlaybookResult{Status: "iteration_limit", Reply: "Run 1 (stopped after 50 iterations) Completed steps: read_file, bash. Continue, or abandon the task?"}, nil
+		}
+		return &PlaybookResult{Status: "complete", Reply: "done"}, nil
+	}
+	fireSchedule(core, sched, at, run)
+	waitForCalls(t, &calls, 2)
+	// The retry succeeded → no alert, streak reset.
+	if _, err := os.Stat(filepath.Join(home, "outbox", "msg_owner.txt")); !os.IsNotExist(err) {
+		t.Fatalf("successful retry must not alert: %v", err)
+	}
+	if after := scheduleHealthEntry(t, home, "tribal"); after.FailStreak != 0 || after.AlertedDay != "" {
+		t.Fatalf("successful retry must reset health counters: %+v", after)
+	}
+	// The retry decision is journaled in the audit table.
+	var n int
+	if err := core.DB.QueryRow("SELECT COUNT(*) FROM audit_events WHERE event_type='schedule_retry'").Scan(&n); err != nil || n < 1 {
+		t.Fatalf("schedule_retry not journaled (n=%d, err=%v)", n, err)
+	}
+	waitForRows(t, core.DB, 4) // original + retry: started + finished each
+}
+
+// #238: exactly ONE retry. A second cap-hit goes to the normal alert path —
+// the run pages the owner and counts the fail streak.
+func TestFireScheduleAlertsWhenRetryAlsoCaps(t *testing.T) {
+	old := scheduleRetryDelay
+	scheduleRetryDelay = 50 * time.Millisecond
+	defer func() { scheduleRetryDelay = old }()
+
+	core, home := newScheduleTestCore(t)
+	loc := mustKL(t)
+	writeHealthSchedule(t, home, "tribal", 0, "", "")
+	sched := scheduleHealthEntry(t, home, "tribal")
+	at := time.Date(2026, 8, 10, 10, 0, 0, 0, loc) // distinct occurrence from the retry-success test
+	var calls atomic.Int32
+	run := func(_ context.Context, _ *Core, _ string, _ string, _ string, _ Observer) (*PlaybookResult, error) {
+		calls.Add(1)
+		return &PlaybookResult{Status: "iteration_limit", Reply: "Run 1 (stopped after 50 iterations) Completed steps: read_file."}, nil
+	}
+	fireSchedule(core, sched, at, run)
+	waitForCalls(t, &calls, 2)
+	time.Sleep(150 * time.Millisecond) // a runaway retry loop would call a 3rd time
+	if calls.Load() != 2 {
+		t.Fatalf("run called %d times, want exactly 2 (original + one retry)", calls.Load())
+	}
+	msg := outboxText(t, home)
+	if !strings.Contains(msg, "tribal") || !strings.Contains(msg, "stopped after 50 iterations") {
+		t.Fatalf("second cap must alert with the cap reason, got: %q", msg)
+	}
+	if after := scheduleHealthEntry(t, home, "tribal"); after.FailStreak != 1 || after.AlertedDay != "2026-08-10" {
+		t.Fatalf("counters not persisted: %+v", after)
+	}
+	waitForRows(t, core.DB, 4)
+}
+
+func waitForCalls(t *testing.T, calls *atomic.Int32, want int32) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if calls.Load() >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("runner called %d times, want %d", calls.Load(), want)
 }
 
 // ISSUE-205: a schedule with days only fires on matching weekdays (in its
