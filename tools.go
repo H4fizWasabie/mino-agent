@@ -2002,12 +2002,12 @@ func makeGenerateImageTool(home string) *Tool {
 			if prompt == "" {
 				return "Error: prompt is required"
 			}
-			if out, err := generateWithCloudflare(prompt); err == nil {
+			if out, err := generateWithCloudflare(home, prompt); err == nil {
 				return out
 			} else {
 				slog.Warn("cloudflare image gen failed, falling back to openrouter", "error", err)
 			}
-			if out, err := generateWithOpenRouter(prompt); err == nil {
+			if out, err := generateWithOpenRouter(home, prompt); err == nil {
 				return out
 			} else {
 				slog.Warn("openrouter image gen failed, falling back to pollinations", "error", err)
@@ -2022,7 +2022,7 @@ func makeGenerateImageTool(home string) *Tool {
 			if resp.StatusCode >= 400 || len(data) < 100 {
 				return fmt.Sprintf("Image generation failed (%d)", resp.StatusCode)
 			}
-			dir := filepath.Join("/tmp/mino/results", "images")
+			dir := filepath.Join(spillDir(home), "images")
 			os.MkdirAll(dir, 0700)
 			name := fmt.Sprintf("%d.jpg", time.Now().UnixNano())
 			path := filepath.Join(dir, name)
@@ -2044,10 +2044,11 @@ type cfImageResponse struct {
 }
 
 // generateWithCloudflare renders the prompt via Cloudflare Workers AI and
-// saves it, returning the saved path. The model is MINO_IMAGE_MODEL
-// (default @cf/black-forest-labs/flux-1-schnell). Returns an error when the credentials
-// are missing or the call fails, so callers can fall back to pollinations.
-func generateWithCloudflare(prompt string) (string, error) {
+// saves it under the durable spill store, returning the saved path. The model
+// is MINO_IMAGE_MODEL (default @cf/black-forest-labs/flux-1-schnell). Returns
+// an error when the credentials are missing or the call fails, so callers can
+// fall back to pollinations.
+func generateWithCloudflare(home, prompt string) (string, error) {
 	token := os.Getenv("CLOUDFLARE_API_TOKEN")
 	if token == "" {
 		token = readEnvFile("CLOUDFLARE_API_TOKEN")
@@ -2117,7 +2118,7 @@ func generateWithCloudflare(prompt string) (string, error) {
 		}
 		ext = ".png"
 	}
-	dir := filepath.Join("/tmp/mino/results", "images")
+	dir := filepath.Join(spillDir(home), "images")
 	os.MkdirAll(dir, 0700)
 	path := filepath.Join(dir, fmt.Sprintf("%d%s", time.Now().UnixNano(), ext))
 	if err := os.WriteFile(path, img, 0600); err != nil {
@@ -2128,9 +2129,10 @@ func generateWithCloudflare(prompt string) (string, error) {
 
 // generateWithOpenRouter renders the prompt via OpenRouter's Gemini image
 // model (google/gemini-3.1-flash-lite-image, ~0.15¢ per 1024² image, model
-// overridable via MINO_OPENROUTER_IMAGE_MODEL) and saves it. Requires
-// MINO_OPENROUTER_KEY; returns an error otherwise so callers can fall back.
-func generateWithOpenRouter(prompt string) (string, error) {
+// overridable via MINO_OPENROUTER_IMAGE_MODEL) and saves it under the durable
+// spill store. Requires MINO_OPENROUTER_KEY; returns an error otherwise so
+// callers can fall back.
+func generateWithOpenRouter(home, prompt string) (string, error) {
 	key := os.Getenv("MINO_OPENROUTER_KEY")
 	if key == "" {
 		key = readEnvFile("MINO_OPENROUTER_KEY")
@@ -2167,7 +2169,7 @@ func generateWithOpenRouter(prompt string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join("/tmp/mino/results", "images")
+	dir := filepath.Join(spillDir(home), "images")
 	os.MkdirAll(dir, 0700)
 	path := filepath.Join(dir, fmt.Sprintf("%d%s", time.Now().UnixNano(), ext))
 	if err := os.WriteFile(path, img, 0600); err != nil {

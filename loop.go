@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -1371,11 +1372,83 @@ func describeImage(ctx context.Context, client LLMClient, sessionID, dataURL, ta
 	return desc, nil
 }
 
+// --- Spill store (RUN-007: durable spill artifacts) ---
+
+// spillDir is the durable spill root under the Mino home — the old
+// /tmp/mino/results was RAM-backed and died on reboot, so oversized tool
+// outputs (issue #99) never survived to the eval workflow that needs them
+// (ex-#214). Every spill writer routes through this helper, which also runs
+// the throttled max-age prune: durable means bounded. (dsh's spillStore was
+// checked for a retention pattern first — it has none: files persist until
+// external cleanup, with per-session dirs only grouping them for that future
+// cleanup. Mino's bound is therefore our own, 30 days like audit events.)
+func spillDir(home string) string {
+	pruneSpillsIfDue(home)
+	return filepath.Join(home, "results")
+}
+
+// spillRetention bounds the spill store: artifacts older than this are pruned.
+// 30 days matches the audit-event horizon and comfortably covers the artifact
+// catalog's own 1-day lookback plus the eval workflow's fetch window.
+const spillRetention = 30 * 24 * time.Hour
+
+var (
+	spillPruneMu   sync.Mutex
+	lastSpillPrune time.Time
+)
+
+// spillPruneEvery throttles the on-write prune sweep — each sweep is a full
+// directory walk, so once an hour is plenty to keep the store bounded without
+// taxing write-heavy turns.
+const spillPruneEvery = time.Hour
+
+// pruneSpillsIfDue sweeps at most once per spillPruneEvery; called from
+// spillDir on every spill write and once at boot.
+func pruneSpillsIfDue(home string) {
+	spillPruneMu.Lock()
+	defer spillPruneMu.Unlock()
+	if time.Since(lastSpillPrune) < spillPruneEvery {
+		return
+	}
+	lastSpillPrune = time.Now()
+	pruneSpills(home)
+}
+
+// pruneSpills deletes spill files older than spillRetention and the empty
+// directories left behind. Removal races with concurrent spill writes are
+// benign (os.Remove fails silently on a fresh file/dir and the next sweep
+// retries).
+func pruneSpills(home string) {
+	root := filepath.Join(home, "results")
+	cutoff := time.Now().Add(-spillRetention)
+	var dirs []string
+	filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // root missing or unreadable: nothing to prune
+		}
+		if d.IsDir() {
+			if path != root {
+				dirs = append(dirs, path)
+			}
+			return nil
+		}
+		if info, err := d.Info(); err == nil && info.ModTime().Before(cutoff) {
+			os.Remove(path)
+		}
+		return nil
+	})
+	// WalkDir lists parents before children; removing in reverse drops the
+	// deepest empty dirs first (os.Remove fails on non-empty, harmlessly).
+	for i := len(dirs) - 1; i >= 0; i-- {
+		os.Remove(dirs[i])
+	}
+}
+
 func compactToolOutput(home, sessionID string, turn int, tool, output string) string {
 	if len(output) <= artifactInlineLimit {
 		return output
 	}
-	dir := filepath.Join("/tmp/mino/results", safePath(sessionID), fmt.Sprintf("%d", turn))
+	dir := filepath.Join(spillDir(home), safePath(sessionID), fmt.Sprintf("%d", turn))
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return output[:artifactInlineLimit] + "\n[artifact write failed]"
 	}

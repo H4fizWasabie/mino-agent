@@ -162,7 +162,7 @@ func TestGenerateWithCloudflareServesBothEncodings(t *testing.T) {
 		defer ts.Close()
 		imageClient, cfBaseURL = ts.Client(), ts.URL
 
-		out, err := generateWithCloudflare("a sunset")
+		out, err := generateWithCloudflare(t.TempDir(), "a sunset")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -193,7 +193,7 @@ func TestGenerateWithCloudflareServesBothEncodings(t *testing.T) {
 		defer ts.Close()
 		imageClient, cfBaseURL = ts.Client(), ts.URL
 
-		out, err := generateWithCloudflare("a sunset")
+		out, err := generateWithCloudflare(t.TempDir(), "a sunset")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -218,7 +218,7 @@ func TestGenerateWithCloudflareServesBothEncodings(t *testing.T) {
 		defer ts.Close()
 		imageClient, cfBaseURL = ts.Client(), ts.URL
 
-		if _, err := generateWithCloudflare("a sunset"); err == nil {
+		if _, err := generateWithCloudflare(t.TempDir(), "a sunset"); err == nil {
 			t.Fatal("expected error for NSFW rejection")
 		}
 		if calls != 1 {
