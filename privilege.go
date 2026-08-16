@@ -57,20 +57,34 @@ var pkgNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]*$`)
 // Whitelist is the parsed privilege whitelist: a list of command shapes,
 // each a fixed field prefix. Allows reports whether argv (the full command
 // WITHOUT sudo) is a member.
+//
+// trailingArg marks arg-ful shapes (apt-get install -y <pkg>, systemctl
+// restart <unit>): the RENDERED sudoers line carries a trailing `*` for
+// them, because sudoers matches command args EXACTLY (sudoers(5): "the
+// arguments in the Cmnd must match those given by the user") while the
+// in-process Allows check is a prefix match. Without the rendered `*`, the
+// file would refuse the tools' real invocations — the two boundaries must
+// never drift.
+type whitelistEntry struct {
+	fields      []string
+	trailingArg bool
+}
+
+// Whitelist holds the whitelist entries.
 type Whitelist struct {
-	entries [][]string
+	entries []whitelistEntry
 }
 
 // DefaultWhitelist returns the canonical whitelist for a Mino home — the
 // same entries `mino setup-privileges` writes to sudoers.
 func DefaultWhitelist(home string) *Whitelist {
-	return &Whitelist{entries: [][]string{
-		{"/usr/bin/apt-get", "install", "-y"},
-		{"/usr/bin/apt-get", "remove", "-y"},
-		{"/usr/bin/systemctl", "restart"},
-		{"/usr/bin/systemctl", "daemon-reload"},
-		{"/usr/bin/install", "-o", "root", "-g", "root", "-m", "0644", filepath.Join(home, "tmp") + "/", "/etc/systemd/system/"},
-		{"/bin/rm", "-f", "/etc/systemd/system/"},
+	return &Whitelist{entries: []whitelistEntry{
+		{fields: []string{"/usr/bin/apt-get", "install", "-y"}, trailingArg: true},
+		{fields: []string{"/usr/bin/apt-get", "remove", "-y"}, trailingArg: true},
+		{fields: []string{"/usr/bin/systemctl", "restart"}, trailingArg: true},
+		{fields: []string{"/usr/bin/systemctl", "daemon-reload"}},
+		{fields: []string{"/usr/bin/install", "-o", "root", "-g", "root", "-m", "0644", filepath.Join(home, "tmp") + "/", "/etc/systemd/system/"}},
+		{fields: []string{"/bin/rm", "-f", "/etc/systemd/system/"}},
 	}}
 }
 
@@ -104,7 +118,7 @@ func LoadWhitelist(path string) (*Whitelist, error) {
 		if len(fields) == 0 || !strings.HasPrefix(fields[0], "/") {
 			continue
 		}
-		w.entries = append(w.entries, fields)
+		w.entries = append(w.entries, whitelistEntry{fields: fields})
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err
@@ -119,11 +133,11 @@ func LoadWhitelist(path string) (*Whitelist, error) {
 // is a directory-prefix constraint.
 func (w *Whitelist) Allows(argv []string) bool {
 	for _, e := range w.entries {
-		if len(argv) < len(e) {
+		if len(argv) < len(e.fields) {
 			continue
 		}
 		ok := true
-		for i, ef := range e {
+		for i, ef := range e.fields {
 			if !fieldMatches(ef, argv[i]) {
 				ok = false
 				break
@@ -150,18 +164,24 @@ func fieldMatches(entry, arg string) bool {
 }
 
 // SudoersLines renders the canonical entries as sudoers.d lines for the
-// given user — what `mino setup-privileges` writes (directory-prefix fields
-// become `*` args; sudoers wildcards in args match slashes).
+// given user — what `mino setup-privileges` writes. Directory-prefix fields
+// become `*` args (sudoers wildcards in args match slashes), and arg-ful
+// entries get a trailing `*` — sudoers matches args EXACTLY, so without it
+// the file would refuse the free args (the package, the unit) the in-process
+// prefix check permits. The rendered file must match what Allows permits.
 func (w *Whitelist) SudoersLines(user string) []string {
 	lines := make([]string, 0, len(w.entries))
 	for _, e := range w.entries {
-		fields := make([]string, len(e))
-		for i, f := range e {
+		fields := make([]string, 0, len(e.fields)+1)
+		for _, f := range e.fields {
 			if strings.HasSuffix(f, "/") {
-				fields[i] = f + "*"
+				fields = append(fields, f+"*")
 			} else {
-				fields[i] = f
+				fields = append(fields, f)
 			}
+		}
+		if e.trailingArg {
+			fields = append(fields, "*")
 		}
 		lines = append(lines, user+" ALL=(root) NOPASSWD: "+strings.Join(fields, " "))
 	}
@@ -281,13 +301,18 @@ func parseUnitShow(out string) (id, state string) {
 	return id, state
 }
 
+
+
 // containsSudoInvocation is the bash-tool tripwire: the model must never
 // call sudo itself — privileged operations go through the harness tools.
 // The regex is intentionally conservative (false-positives like `echo sudo`
 // are harmless refusals); the real enforcement is that the harness is the
 // only thing that ever invokes sudo, and the sudoers whitelist is the only
-// thing sudo grants.
-var sudoInvocationRe = regexp.MustCompile(`(?:^|[;&|(]|\s)sudo(?:\s|$)`)
+// thing sudo grants. The preceding character is any non-word character
+// (not just start/;/&/|/(/whitespace) so backtick and brace substitution
+// contexts are caught too — a model must not be able to reach raw sudo
+// through command substitution.
+var sudoInvocationRe = regexp.MustCompile(`(?:^|[^A-Za-z0-9_])sudo(?:\s|$)`)
 
 func containsSudoInvocation(command string) bool {
 	return sudoInvocationRe.MatchString(command)

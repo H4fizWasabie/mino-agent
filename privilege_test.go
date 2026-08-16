@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -87,6 +88,77 @@ func TestLoadWhitelistUnreadable(t *testing.T) {
 	}
 }
 
+// The rendered sudoers file is what sudo actually enforces, and sudoers
+// matches command args EXACTLY (modulo wildcards) — unlike the in-process
+// Allows prefix check. This test proves the tools' real invocations fnmatch
+// the rendered lines (Go's path.Match is the stdlib glob, the same matching
+// family sudo's fnmatch uses), so the two boundaries never drift. This is
+// the test that would have caught the missing trailing `*` on arg-ful
+// entries.
+func TestSudoersRenderedLinesMatchToolArgv(t *testing.T) {
+	home := "/home/mino/.mino"
+	lines := DefaultWhitelist(home).SudoersLines("mino")
+	if len(lines) != 6 {
+		t.Fatalf("expected 6 rendered entries, got %d: %v", len(lines), lines)
+	}
+	const prefix = "mino ALL=(root) NOPASSWD: "
+	patterns := make([]string, len(lines))
+	for i, l := range lines {
+		if !strings.HasPrefix(l, prefix) {
+			t.Fatalf("line %d lacks the user prefix: %q", i, l)
+		}
+		patterns[i] = strings.TrimPrefix(l, prefix)
+	}
+
+	// The tools' real invocations, exactly as install_package/write_unit/
+	// restart_service build them — each must match a rendered line.
+	mustMatch := []string{
+		"/usr/bin/apt-get install -y curl",
+		"/usr/bin/apt-get remove -y curl",
+		"/usr/bin/systemctl restart mino.service",
+		"/usr/bin/systemctl daemon-reload",
+		"/usr/bin/install -o root -g root -m 0644 " + home + "/tmp/mino.service /etc/systemd/system/mino.service",
+		"/bin/rm -f /etc/systemd/system/mino.service",
+	}
+	for _, cmd := range mustMatch {
+		matched := false
+		for _, p := range patterns {
+			ok, err := path.Match(p, cmd)
+			if err != nil {
+				t.Fatalf("path.Match(%q, %q): %v", p, cmd, err)
+			}
+			if ok {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			t.Fatalf("real tool invocation %q matches NO rendered sudoers line — the two boundaries drift", cmd)
+		}
+	}
+
+	// Invocations outside the whitelist must match nothing.
+	mustNotMatch := []string{
+		"/usr/bin/apt-get install curl",
+		"/usr/bin/apt-get purge -y curl",
+		"/usr/bin/systemctl stop mino.service",
+		"/bin/rm -rf /etc/systemd/system/",
+		"/usr/bin/install -o root -g root -m 0644 /tmp/evil /etc/systemd/system/mino.service",
+	}
+	for _, cmd := range mustNotMatch {
+		for _, p := range patterns {
+			ok, err := path.Match(p, cmd)
+			if err != nil {
+				t.Fatalf("path.Match(%q, %q): %v", p, cmd, err)
+			}
+			if ok {
+				t.Fatalf("refused invocation %q unexpectedly fnmatches rendered line %q", cmd, p)
+			}
+		}
+	}
+}
+
+
 func TestContainsSudoInvocation(t *testing.T) {
 	cases := []struct {
 		cmd  string
@@ -97,9 +169,14 @@ func TestContainsSudoInvocation(t *testing.T) {
 		{"x && sudo y", true},
 		{"x; sudo y", true},
 		{"(sudo y)", true},
+		{"x=`sudo -n id`", true},       // backtick substitution must be caught
+		{"x=$(sudo -n id)", true},     // $() substitution must be caught
+		{"${sudo apt-get}", true},     // brace expansion must be caught
 		{"ls", false},
 		{"apt-get install x", false},
-		{"echo sudo is fine", true}, // conservative false positive — a harmless refusal
+		{"mysudo x", false},           // a word boundary is required
+		{"echo sudo is fine", true},           // conservative false positive — a harmless refusal
+		{"echo \"sudo -n id\"", true},       // quote-preceded (and space-followed) is a refusal too
 	}
 	for _, tc := range cases {
 		if got := containsSudoInvocation(tc.cmd); got != tc.want {

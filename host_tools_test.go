@@ -85,13 +85,13 @@ func newTestHost(t *testing.T) (*HostTools, *fakeRunner) {
 			return "", "", errNoSuchUnit
 		},
 		check: func(argv []string) bool {
-			w := &Whitelist{entries: [][]string{
-				{"/usr/bin/apt-get", "install", "-y"},
-				{"/usr/bin/apt-get", "remove", "-y"},
-				{"/usr/bin/systemctl", "restart"},
-				{"/usr/bin/systemctl", "daemon-reload"},
-				{"/usr/bin/install", "-o", "root", "-g", "root", "-m", "0644", filepath.Join(home, "tmp") + "/", unitDir + "/"},
-				{"/bin/rm", "-f", unitDir + "/"},
+			w := &Whitelist{entries: []whitelistEntry{
+				{fields: []string{"/usr/bin/apt-get", "install", "-y"}, trailingArg: true},
+				{fields: []string{"/usr/bin/apt-get", "remove", "-y"}, trailingArg: true},
+				{fields: []string{"/usr/bin/systemctl", "restart"}, trailingArg: true},
+				{fields: []string{"/usr/bin/systemctl", "daemon-reload"}},
+				{fields: []string{"/usr/bin/install", "-o", "root", "-g", "root", "-m", "0644", filepath.Join(home, "tmp") + "/", unitDir + "/"}},
+				{fields: []string{"/bin/rm", "-f", unitDir + "/"}},
 			}}
 			return w.Allows(argv)
 		},
@@ -423,8 +423,14 @@ func TestRestartServiceNotWhitelisted(t *testing.T) {
 
 func TestBashRejectsSudo(t *testing.T) {
 	tool := makeBashToolFor(t.TempDir(), 0)
-	got := tool.Fn(map[string]any{"command": "sudo apt-get install jq"})
-	if !strings.Contains(got, "refused") {
-		t.Fatalf("bash must refuse sudo, got %q", got)
+	for _, cmd := range []string{
+		"sudo apt-get install jq",
+		"x=`sudo -n systemctl restart mino.service`", // backtick substitution must be caught too
+		"x=$(sudo -n id)",
+	} {
+		got := tool.Fn(map[string]any{"command": cmd})
+		if !strings.Contains(got, "refused") {
+			t.Fatalf("bash must refuse %q, got %q", cmd, got)
+		}
 	}
 }
