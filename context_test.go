@@ -91,6 +91,19 @@ func TestBuildSystemIncludesVerifyThenClaimRule(t *testing.T) {
 	}
 }
 
+// #235: the verification discipline must tell the model to check package
+// presence after installs — a silent pipe-masked install failure must not
+// become the foundation for later work.
+func TestBuildSystemIncludesInstallVerificationRule(t *testing.T) {
+	s := NewSession(&Settings{Home: t.TempDir(), Workspace: t.TempDir()}, nil)
+	system, _ := s.BuildContext("hello", "cli")
+	for _, want := range []string{"Install verification", "verify the package is actually present", "pip show", "BEFORE building on it"} {
+		if !strings.Contains(system, want) {
+			t.Fatalf("install-verification rule missing %q from system prompt", want)
+		}
+	}
+}
+
 func TestSettingsLocationFallsBackForInvalidTimezone(t *testing.T) {
 	if got := (&Settings{Timezone: "not/a-real-zone"}).Location(); got != time.Local {
 		t.Fatalf("invalid timezone location = %v, want local %v", got, time.Local)

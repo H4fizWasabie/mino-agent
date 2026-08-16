@@ -333,6 +333,87 @@ func TestBashHardFailureNoOutput(t *testing.T) {
 	}
 }
 
+// Issue #235: a pipeline's exit status comes from its LAST element (shells
+// have no pipefail), so `pip install --quiet X | tail -2` reported success
+// while pip failed. The harness must surface the masked statuses —
+// informational, the call itself still succeeds.
+func TestBashPipeMaskedExitWarning(t *testing.T) {
+	tool := makeBashToolFor("", 2*time.Minute)
+	out := tool.Fn(map[string]any{"command": "sh -c 'exit 7' | tail -2"})
+	if !strings.Contains(out, "effective-result warning") {
+		t.Fatalf("masked-exit warning missing: %q", out)
+	}
+	if !strings.Contains(out, "exited 7") {
+		t.Fatalf("masked status not named: %q", out)
+	}
+	if strings.Contains(out, pipeStatusMarker) {
+		t.Fatalf("capture marker leaked into result: %q", out)
+	}
+}
+
+// Acceptance: no warning when the piped command genuinely succeeded.
+func TestBashPipeSuccessNoWarning(t *testing.T) {
+	tool := makeBashToolFor("", 2*time.Minute)
+	out := tool.Fn(map[string]any{"command": "echo ok | tail -1"})
+	if strings.Contains(out, "effective-result warning") {
+		t.Fatalf("false positive on successful pipe: %q", out)
+	}
+	if !strings.Contains(out, "ok") {
+		t.Fatalf("output lost: %q", out)
+	}
+}
+
+// Acceptance: SIGPIPE death of the producer (`yes | head -1`) is the
+// truncation idiom, not a masked failure — no warning.
+func TestBashPipeSigpipeNoWarning(t *testing.T) {
+	tool := makeBashToolFor("", 2*time.Minute)
+	out := tool.Fn(map[string]any{"command": "yes | head -1"})
+	if strings.Contains(out, "effective-result warning") {
+		t.Fatalf("false positive on SIGPIPE truncation: %q", out)
+	}
+}
+
+// A failing LAST element is already visible through the exit status — the
+// error path is unchanged and no marker leaks into the result.
+func TestBashPipeVisibleFailureUnchanged(t *testing.T) {
+	tool := makeBashToolFor("", 2*time.Minute)
+	out := tool.Fn(map[string]any{"command": "echo hi | grep nomatch"})
+	if !strings.Contains(out, "Command failed") {
+		t.Fatalf("visible pipe failure should fail as before: %q", out)
+	}
+	if strings.Contains(out, pipeStatusMarker) {
+		t.Fatalf("capture marker leaked: %q", out)
+	}
+}
+
+// Issue #235 (c): a quiet install that prints nothing gets an in-band verify
+// hint — the presence check is the model's guard, without brittle parsing of
+// the command (stub pip on PATH: no network, no real install).
+func TestBashQuietInstallGetsVerifyHint(t *testing.T) {
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "pip")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tool := makeBashToolFor("", 2*time.Minute)
+	out := tool.Fn(map[string]any{"command": "PATH=" + dir + ":$PATH pip install --quiet phantompkg"})
+	if !strings.Contains(out, "Verify the package is present") {
+		t.Fatalf("install verify hint missing: %q", out)
+	}
+}
+
+// A quiet NON-install command keeps the generic no-output advice.
+func TestBashQuietNonInstallNoHint(t *testing.T) {
+	tool := makeBashToolFor("", 2*time.Minute)
+	out := tool.Fn(map[string]any{"command": "true"})
+	if !strings.Contains(out, "state may have changed") {
+		t.Fatalf("non-install empty output should keep the generic hint: %q", out)
+	}
+	if strings.Contains(out, "verify the package is present") {
+		t.Fatalf("install hint on a non-install command: %q", out)
+	}
+}
+
 func TestCompactSchemaStripsProseKeepsStructure(t *testing.T) {
 	schema := map[string]any{
 		"type":        "object",

@@ -1162,7 +1162,7 @@ func makeBashToolFor(home string, timeout time.Duration) *Tool {
 			// operations go through the harness tools only.
 			return "Error: sudo is refused here — privileged host operations go through the harness tools: install_package, write_unit, restart_service."
 		}
-		out, err := runBashContext(ctx, timeout, rewriteBashWithRTK(ctx, cmd))
+		out, statuses, err := runBashContext(ctx, timeout, rewriteBashWithRTK(ctx, cmd))
 		if err != nil {
 			// A non-zero exit with stdout is a PARTIAL failure, not a negative
 			// result: the output often contains the actual answer (e.g. find
@@ -1177,8 +1177,21 @@ func makeBashToolFor(home string, timeout time.Duration) *Tool {
 		if len(out) > 1<<20 {
 			out = out[:1<<20] + fmt.Sprintf("\n... (truncated at 1 MiB, %d bytes total)", len(out))
 		}
+		warn := maskedPipeWarning(statuses)
 		if out == "" {
+			if warn != "" {
+				return warn
+			}
+			if installPattern.MatchString(cmd) {
+				// --quiet installs print nothing and a pipe reports the LAST
+				// element's exit code — an empty result is not proof of a
+				// successful install (issue #235).
+				return "(no output — installs can complete silently (--quiet), and a pipe reports the LAST element's exit code, not the installer's. Verify the package is present — pip show <pkg>, an import check, or which <bin> — before building on it.)"
+			}
 			return "(no output — state may have changed; verify with ls, cat, grep, or appropriate check before declaring done)"
+		}
+		if warn != "" {
+			out += warn
 		}
 		return out
 	}
@@ -1961,12 +1974,96 @@ func rewriteBashWithRTK(parent context.Context, command string) string {
 	return command
 }
 
-func runBashContext(parent context.Context, timeout time.Duration, cmd string) (string, error) {
+// pipeStatusMarker delimits the bash PIPESTATUS capture appended by
+// runBashContext to pipe commands; it is stripped from the result before the
+// model sees it.
+const pipeStatusMarker = "__MINO_PIPESTATUS__"
+
+// installPattern matches install commands whose silent success must not be
+// trusted without a presence check (issue #235).
+var installPattern = regexp.MustCompile(`(?i)\b(pip|pip3|npm|npx|go|cargo|apt-get|brew)\s+install\b`)
+
+// runBashContext runs cmd through bash -c with identical observable semantics
+// to a plain invocation (exit status = last pipeline element, no pipefail).
+// When the command contains a pipe it additionally captures each element's
+// exit status, so callers can detect a failure masked by the last element
+// (issue #235: `pip install --quiet X | tail -2` reported tail's 0 while pip
+// failed). Multi-line commands are left unwrapped — a heredoc would swallow
+// the appended capture line; a missed detection is harmless by design.
+func runBashContext(parent context.Context, timeout time.Duration, cmd string) (string, []int, error) {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
+	if strings.Contains(cmd, "|") && !strings.Contains(cmd, "\n") {
+		// One-shot capture: the command substitution forks a subshell before
+		// any new command runs, so it still sees the pipeline's statuses (a
+		// plain assignment would reset PIPESTATUS first). The shell then
+		// re-exits with the command's own status, so the reported exit code
+		// is unchanged. A command that calls exit/exec itself skips the
+		// capture — no marker, no change.
+		cmd += `; __mino_cap="$(printf '%s %s' "$?" "${PIPESTATUS[*]}")"; printf '\n__MINO_PIPESTATUS__:%s\n' "$__mino_cap"; exit ${__mino_cap%% *}`
+	}
 	c := exec.CommandContext(ctx, "bash", "-c", cmd)
 	out, err := c.CombinedOutput()
-	return string(out), err
+	if clean, statuses, ok := parsePipeStatuses(string(out)); ok {
+		return clean, statuses, err
+	}
+	return string(out), nil, err
+}
+
+// parsePipeStatuses finds runBashContext's capture line, strips it from the
+// output, and returns the pipeline statuses (first = reported exit code, then
+// each element's status, left to right). No capture line -> unchanged output.
+func parsePipeStatuses(out string) (string, []int, bool) {
+	idx := strings.LastIndex(out, "\n"+pipeStatusMarker)
+	if idx < 0 {
+		return out, nil, false
+	}
+	line := out[idx+1:]
+	if end := strings.IndexByte(line, '\n'); end >= 0 {
+		line = line[:end]
+	}
+	_, data, ok := strings.Cut(line, ":")
+	if !ok {
+		return out, nil, false
+	}
+	var statuses []int
+	for _, f := range strings.Fields(data) {
+		n, err := strconv.Atoi(f)
+		if err != nil {
+			return out, nil, false
+		}
+		statuses = append(statuses, n)
+	}
+	if len(statuses) == 0 {
+		return out, nil, false
+	}
+	return out[:idx], statuses, true
+}
+
+// maskedPipeWarning reports when a pipeline's reported success — the exit
+// status of its LAST element, since shells have no pipefail — hides an
+// earlier element's failure. SIGPIPE death (141) is not a failure: `yes |
+// head -1` dying on a closed pipe is the intended truncation idiom.
+// Informational only; the call itself still succeeds.
+func maskedPipeWarning(statuses []int) string {
+	if len(statuses) < 2 {
+		return ""
+	}
+	rc := statuses[len(statuses)-1]
+	if rc != 0 {
+		return "" // the failure is already visible through the exit status
+	}
+	var failed []string
+	for i, s := range statuses[:len(statuses)-1] {
+		if s != 0 && s != 141 {
+			failed = append(failed, fmt.Sprintf("element %d exited %d", i+1, s))
+		}
+	}
+	if len(failed) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("\n[effective-result warning: the reported success came from the LAST element of the pipe, but an earlier element failed: %s — pipeline statuses (left to right): %s. The shell has no pipefail, so the failure was masked. Verify the actual result (pip show / import check / which / ls) before building on it.]",
+		strings.Join(failed, "; "), strings.Trim(fmt.Sprint(statuses[1:]), "[]"))
 }
 
 func appendICS(path, title, start, end, attendees, notes string) {
