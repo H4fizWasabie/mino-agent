@@ -32,6 +32,7 @@ func TestDashboardHTTPRouteContract(t *testing.T) {
 		{"nerves", "/api/nerves", "/api/nerves"},
 		{"data", "/api/data", "/api/data"},
 		{"universe", "/api/universe", "/api/universe"},
+		{"universe projection", "/api/universe/projection", "/api/universe/projection"},
 		{"responsibilities", "/api/responsibilities", "/api/responsibilities"},
 		{"responsibility evidence", "/api/responsibility-evidence", "/api/responsibility-evidence"},
 		{"reveal", "/api/reveal", "/api/reveal"},

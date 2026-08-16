@@ -1,3 +1,40 @@
+# Mino Galaxy UI/UX — Wayfinder Map
+
+## Destination
+
+Galaxy is Mino's read-only exploration surface: a light, no-glow orbital atlas
+for durable entities, communities, relationships, search, inspection, and
+history. Today, Work, Memory, Routines, System, and Conversations retain
+operational ownership.
+
+Measurable: Galaxy startup transfers and renders a bounded overview, explicit
+selection loads a bounded neighborhood, authoritative search still comes from
+`/api/memory/remember`, `/api/universe` remains backward-compatible, and the
+data/projection seam supports a 100k-node / roughly 1M-edge source graph without
+eagerly sending or drawing the full graph.
+
+## Decisions so far
+
+- [GitHub #246 — Galaxy visual language](https://github.com/H4fizWasabie/mino-agent/issues/246) — **resolved**: depth comes from scale, perspective, and occlusion; community uses restrained hue and orbital region; no glow or decorative activity.
+- [GitHub #247 — Product ownership](https://github.com/H4fizWasabie/mino-agent/issues/247) — **resolved**: Galaxy explores and routes; canonical operational surfaces own mutation, schedules, runtime controls, and conversation execution.
+- [GitHub #248 — Scalable graph delivery](https://github.com/H4fizWasabie/mino-agent/issues/248) — **resolved**: keep `/api/universe`; add read-only overview, community, entity, search, and refresh projections. Every returned edge carries both endpoints; initial refresh may refetch.
+- [GitHub #249 — Native rendering contract](https://github.com/H4fizWasabie/mino-agent/issues/249) — **resolved**: dependency-free WebGL2 with truthful Canvas2D fallback, bounded LOD budgets, supplementary keyboard/search/index access, and rendering suspended at rest.
+- [GitHub #250 — Search-to-orbit](https://github.com/H4fizWasabie/mino-agent/issues/250) — **resolved**: debounce exact queries to `/api/memory/remember`, preserve server rank and camera state while typing, load a bounded projection only on selection, persist selection in a deep link, and ignore stale requests.
+
+## Frontier
+
+- [GitHub #245 — Galaxy UI/UX Wayfinder](https://github.com/H4fizWasabie/mino-agent/issues/245) — open umbrella for later measured iteration.
+- [GitHub #254 — First production slice](https://github.com/H4fizWasabie/mino-agent/issues/254) — implementation and release gate.
+
+## Out of scope
+
+- Operational mutation from Galaxy
+- Dark mode, glow, perpetual force physics, or invented topology
+- Mobile-first Galaxy navigation
+- Replacing the existing graph query authorities
+
+---
+
 # Mino Verification Gap — Wayfinder Map
 
 ## Destination

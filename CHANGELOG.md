@@ -1,3 +1,10 @@
+## [Unreleased]
+
+### Added
+
+- **Orbital Galaxy composition (issue #254)**: the renderer now presents the durable graph as a deterministic spherical field with size-aware community islands, bounded radial spokes, camera-bound orbital guides, matte depth-scaled nodes, and restrained topology lines. Galaxy startup uses an additive 120-node overview projection while `/api/universe` stays backward-compatible; authoritative `/api/memory/remember` search loads bounded entity neighborhoods only after explicit selection, preserves server ranking, ignores stale requests, and leaves the camera unchanged on empty or failed searches. Rendering sleeps at rest and relationship edges stay hidden until focus. Primary landmarks open their canonical operational surfaces instead of trapping Today, Work, Memory, Routines, or System inside Galaxy lenses.
+- **Galaxy renderer foundation (issue #254)**: the Living Field now detects native WebGL2 and renders visible Galaxy nodes through instanced GPU buffers while retaining the existing 2D edge, scaffold, interaction, and accessibility paths as the capability fallback. The renderer label is truthful when WebGL2 is unavailable; graph data, `/api/query`, and operational state remain unchanged.
+
 ## [v2.11.0] — Runtime self-management: the plane fixes itself (2026-08-16)
 
 ### Added

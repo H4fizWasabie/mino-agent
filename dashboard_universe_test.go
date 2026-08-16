@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -83,6 +84,67 @@ func TestDashboardUniverseIncludesDurableStateAndHistory(t *testing.T) {
 	}
 	if len(payload.History) != 2 || payload.History[1].At != at.Add(2*time.Hour).Format(time.RFC3339) {
 		t.Fatalf("history = %+v", payload.History)
+	}
+}
+
+func TestUniverseProjectionBoundsOverviewAndNeighborhood(t *testing.T) {
+	snapshot := UniverseSnapshot{Nodes: make([]UniverseNode, 100_000), Edges: make([]UniverseEdge, 1_000_000)}
+	for index := range snapshot.Nodes {
+		snapshot.Nodes[index] = UniverseNode{
+			ID: fmt.Sprintf("memory:n-%06d", index), Kind: "memory", Label: fmt.Sprintf("Node %d", index),
+			Region: "memory", Community: index % 400, Connections: index % 17,
+		}
+	}
+	for index := range snapshot.Edges {
+		snapshot.Edges[index] = UniverseEdge{
+			Source: snapshot.Nodes[index%100_000].ID, Target: snapshot.Nodes[(index+1)%100_000].ID, Relation: "related",
+		}
+	}
+
+	overview, ok := projectUniverseSnapshot(snapshot, "overview", "")
+	if !ok || len(overview.Nodes) != 120 || !overview.HasMore || len(overview.Communities) != 256 {
+		t.Fatalf("overview projection = nodes:%d communities:%d more:%v ok:%v", len(overview.Nodes), len(overview.Communities), overview.HasMore, ok)
+	}
+	ids := map[string]bool{}
+	for _, node := range overview.Nodes {
+		ids[node.ID] = true
+	}
+	for _, edge := range overview.Edges {
+		if !ids[edge.Source] || !ids[edge.Target] {
+			t.Fatalf("overview returned dangling edge %+v", edge)
+		}
+	}
+
+	entity, ok := projectUniverseSnapshot(snapshot, "entity", "memory:n-000500")
+	if !ok || len(entity.Nodes) == 0 || len(entity.Nodes) > 240 || len(entity.Edges) > 1_200 {
+		t.Fatalf("entity projection = nodes:%d edges:%d ok:%v", len(entity.Nodes), len(entity.Edges), ok)
+	}
+	if entity.Nodes[0].ID != "memory:n-000500" {
+		t.Fatalf("entity projection starts at %q", entity.Nodes[0].ID)
+	}
+
+	dangling := universeNeighborhood(snapshot.Nodes[:2], []UniverseEdge{{Source: snapshot.Nodes[0].ID, Target: "memory:missing"}}, snapshot.Nodes[0].ID, 10)
+	if len(dangling) != 1 || dangling[0].ID != snapshot.Nodes[0].ID {
+		t.Fatalf("dangling neighborhood = %+v", dangling)
+	}
+	lateIncident := universeProjectionEdges([]UniverseEdge{
+		{Source: snapshot.Nodes[1].ID, Target: snapshot.Nodes[2].ID},
+		{Source: snapshot.Nodes[0].ID, Target: snapshot.Nodes[1].ID},
+	}, snapshot.Nodes[:3], snapshot.Nodes[0].ID, 1)
+	if len(lateIncident) != 1 || lateIncident[0].Source != snapshot.Nodes[0].ID {
+		t.Fatalf("focused edge was not preserved: %+v", lateIncident)
+	}
+	exactNodes := snapshot.Nodes[:240]
+	exactEdges := snapshot.Edges[:239]
+	exact, ok := projectUniverseSnapshot(UniverseSnapshot{Nodes: exactNodes, Edges: exactEdges}, "entity", exactNodes[0].ID)
+	if !ok || exact.HasMore {
+		t.Fatalf("exact-budget neighborhood has_more = %v, ok = %v", exact.HasMore, ok)
+	}
+
+	revision := universeRevision(UniverseSnapshot{Nodes: []UniverseNode{{ID: "memory:a", Label: "Before"}}})
+	changed := universeRevision(UniverseSnapshot{Nodes: []UniverseNode{{ID: "memory:a", Label: "After"}}})
+	if revision == changed {
+		t.Fatal("projection revision ignored a visible node change")
 	}
 }
 

@@ -90,6 +90,7 @@ function renderMarkdown(text){
 }
 let D = null;
 let fullDataLoaded = false;
+let dashboardDataRequest = null;
 let oauthProviders = {}, oauthMessage = "";
 
 // Artifact actions stay inside the headless dashboard: folders route to the
@@ -1314,8 +1315,6 @@ function canonicalRoute(){
   const parts=(location.hash||"#universe").slice(1).split("/"), raw=parts[0]||"universe", sub=parts[1]||null;
   let route=[raw,sub];
   if(raw==="overview") route=["universe",null];
-  else if(raw==="today") route=["universe","now"];
-  else if(raw==="work") route=["universe","work"];
   else if(raw==="gateway"||raw==="chat") route=["conversations",null];
   else if(raw==="loop") route=["system","traces"];
   else if(raw==="tools") route=["system",sub==="results"?"tool-results":sub==="mcp"?"mcp":"tools"];
@@ -1399,19 +1398,23 @@ function tickLive(){
 }
 function universeOnlyRoute(){
   const parts=(location.hash||"#universe").slice(1).split("/"),raw=parts[0]||"universe",sub=parts[1]||"";
-  return raw==="universe"||raw==="overview"||raw==="today"||raw==="work"||raw==="graph"||(raw==="memory"&&sub==="graph");
+  return raw==="universe"||raw==="overview"||raw==="graph"||(raw==="memory"&&sub==="graph");
 }
 function dashboardDataFromUniverse(snapshot){
   return {needs_onboarding:snapshot.needs_onboarding,timezone:snapshot.timezone,responsibilities:{today:[],work:[]},active_tasks:[],sessions:[],tools:{mcp:{}}};
 }
 async function loadDashboardData(){
-  const response=await fetch("/api/data");
-  if(!response.ok) throw new Error(`dashboard returned ${response.status}`);
-  D=await response.json();fullDataLoaded=true;return D;
+  if(dashboardDataRequest) return dashboardDataRequest;
+  dashboardDataRequest=(async()=>{
+    const response=await fetch("/api/data");
+    if(!response.ok) throw new Error(`dashboard returned ${response.status}`);
+    D=await response.json();fullDataLoaded=true;return D;
+  })();
+  try{return await dashboardDataRequest;}finally{dashboardDataRequest=null;}
 }
 async function refresh(){
   try {
-    const universeResponse=await fetch("/api/universe");
+    const universeResponse=await fetch("/api/universe/projection?scope=overview");
     if(!universeResponse.ok) throw new Error(`dashboard returned ${universeResponse.status}`);
     const nextUniverse=await universeResponse.json();U=nextUniverse;
     if(!D) D=dashboardDataFromUniverse(nextUniverse);
@@ -2012,7 +2015,7 @@ function clearGraphQuery() {
 }
 
 window.addEventListener("hashchange", async()=>{
-  try{if(!universeOnlyRoute())await loadDashboardData();render();tickLive();}
+  try{if(!universeOnlyRoute()&&!fullDataLoaded)await loadDashboardData();render();tickLive();}
   catch(error){refreshFailed=true;renderRefreshError(error);tickLive();}
 });
 const THEME_KEY = "mino-theme";
