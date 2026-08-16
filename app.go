@@ -46,6 +46,7 @@ type Core struct {
 	Responsibilities *ResponsibilityStore
 	Tools            *Registry
 	Sessions         *SessionManager
+	ext              *ExtensionSupervisor
 	mcp              *MCPBridge
 	snapshots        sync.Map // sessionID → *LoopSnapshot (ephemeral, per-loop state)
 }
@@ -82,7 +83,13 @@ func NewCore() *Core {
 	tools.SetMaxToolDescChars(s.MaxToolDescChars)           // schema payload description cap
 	tools.SetLogDB(db)                                      // enable tool_calls table logging
 	tools.SetAuditLog(filepath.Join(s.Home, "audit.jsonl")) // §8.4: immutable audit log
-	LoadExtensions(s.Home, tools)                           // discover + register extension tools
+	// RUN-001: in-process extension supervision — spawns, health-checks,
+	// restarts on crash, kills on shutdown; boot reconciliation re-spawns
+	// every supervised entry. Runs BEFORE LoadExtensions so supervised
+	// children are up when their tools get discovered.
+	extSup := NewExtensionSupervisor(s.Home, tools, NewOpJournal(db))
+	extSup.Start()
+	LoadExtensions(s.Home, tools) // discover + register extension tools
 
 	if s.ConsolidateEvery > 0 {
 		safeGo("consolidation", func() { // 6-hour full consolidation pass
@@ -146,6 +153,7 @@ func NewCore() *Core {
 		Memory:           mem,
 		Responsibilities: responsibilities,
 		Tools:            tools,
+		ext:              extSup,
 		Sessions:         NewSessionManager(s, mem),
 	}
 	// MCP bridge: connect configured servers and register their tools
@@ -159,6 +167,7 @@ func NewCore() *Core {
 	tools.Register(behaves(makeSystemCheckTool(db, s.Home), BehaviorObserve))
 	tools.Register(behaves(makeListPlaybooksTool(s.Home), BehaviorObserve))
 	tools.Register(behaves(makeManagePlaybookTool(w), BehaviorMutate))
+	tools.Register(behaves(makeManageExtensionTool(extSup), BehaviorMutate))
 	tools.Register(behaves(makeRunPlaybookTool(w), BehaviorMutate))
 	tools.Register(behaves(makeCapturePlaybookTool(w), BehaviorMutate))
 	tools.Register(behaves(makeSchedulePlaybookTool(s.Home, s.Timezone), BehaviorMutate))
@@ -448,6 +457,9 @@ func isStopMessage(message string) bool {
 
 func (w *Core) Close() {
 	stopAlerts()
+	if w.ext != nil {
+		w.ext.Shutdown() // RUN-001: kill supervised extension children
+	}
 	closeTrace(w.Settings.Home)
 	w.Tools.CloseAuditLog()
 	if w.mcp != nil {

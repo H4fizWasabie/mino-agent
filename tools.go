@@ -64,12 +64,13 @@ type Tool struct {
 // --- Registry (matches Core's ToolRegistry) ---
 
 type Registry struct {
-	tools          map[string]*Tool
-	logDB          *sql.DB    // optional: if set, ExecuteContext logs to tool_calls table
-	auditFile      *os.File   // optional: append-only JSONL audit log
-	auditMu        *sync.Mutex // guards auditFile writes (shared across Only-derived registries)
-	searchDB *sql.DB    // optional: FTS5 index for context-conditioned tool selection
-	searchMu sync.Mutex
+	tools     map[string]*Tool
+	toolsMu   sync.RWMutex // guards tools — registration is background-adjacent (RUN-001 supervisor)
+	logDB     *sql.DB      // optional: if set, ExecuteContext logs to tool_calls table
+	auditFile *os.File     // optional: append-only JSONL audit log
+	auditMu   *sync.Mutex  // guards auditFile writes (shared across Only-derived registries)
+	searchDB  *sql.DB      // optional: FTS5 index for context-conditioned tool selection
+	searchMu  sync.Mutex
 
 	// Per-session tool union capped at schemaUnionCap: a tool stays selected
 	// once chosen so the `tools` array in the request payload stabilizes
@@ -139,17 +140,32 @@ func NewRegistry() *Registry {
 }
 
 func (r *Registry) Register(t *Tool) {
+	r.toolsMu.Lock()
 	r.tools[t.Name] = t
+	r.toolsMu.Unlock()
+	r.syncToolCatalog()
+}
+
+// Unregister removes a tool — the extension-uninstall path (RUN-001).
+// Symmetric with Register.
+func (r *Registry) Unregister(name string) {
+	r.toolsMu.Lock()
+	delete(r.tools, name)
+	r.toolsMu.Unlock()
 	r.syncToolCatalog()
 }
 
 func (r *Registry) SetSearchDB(db *sql.DB) {
+	r.toolsMu.Lock()
 	r.searchDB = db
 	r.syncToolCatalog()
+	r.toolsMu.Unlock()
 }
 
 func (r *Registry) BehaviorFor(name string, args map[string]any) ToolBehavior {
+	r.toolsMu.RLock()
 	t, ok := r.tools[name]
+	r.toolsMu.RUnlock()
 	if !ok {
 		return BehaviorUnknown
 	}
@@ -172,6 +188,7 @@ type ToolInfo struct {
 
 // Catalog returns the tool catalog for the dashboard Tools > Available sub-tab.
 func (r *Registry) Catalog() []ToolInfo {
+	r.toolsMu.RLock()
 	catalog := make([]ToolInfo, 0, len(r.tools))
 	for _, t := range r.tools {
 		src := "builtin"
@@ -187,6 +204,7 @@ func (r *Registry) Catalog() []ToolInfo {
 		}
 		catalog = append(catalog, ToolInfo{Name: t.Name, Description: t.Description, Source: src})
 	}
+	r.toolsMu.RUnlock()
 	sort.Slice(catalog, func(i, j int) bool {
 		if catalog[i].Source == catalog[j].Source {
 			return catalog[i].Name < catalog[j].Name
@@ -197,10 +215,12 @@ func (r *Registry) Catalog() []ToolInfo {
 }
 
 func (r *Registry) Schemas() []ToolDef {
+	r.toolsMu.RLock()
 	schemas := make([]ToolDef, 0, len(r.tools))
 	for _, t := range r.tools {
 		schemas = append(schemas, r.toolDef(t))
 	}
+	r.toolsMu.RUnlock()
 	sort.Slice(schemas, func(i, j int) bool { return schemas[i].Name < schemas[j].Name })
 	return schemas
 }
@@ -267,7 +287,10 @@ func (r *Registry) SchemasForContext(sessionID string, fullCtx string, oneTurnTe
 		}
 	}
 	for _, name := range essentialNamesSorted {
-		if _, ok := r.tools[name]; ok {
+		r.toolsMu.RLock()
+		_, ok := r.tools[name]
+		r.toolsMu.RUnlock()
+		if ok {
 			add(name)
 		}
 	}
@@ -314,7 +337,10 @@ func (r *Registry) SchemasForContext(sessionID string, fullCtx string, oneTurnTe
 		}
 		if matched {
 			for _, name := range family {
-				if _, ok := r.tools[name]; ok {
+				r.toolsMu.RLock()
+				_, ok := r.tools[name]
+				r.toolsMu.RUnlock()
+				if ok {
 					add(name)
 				}
 			}
@@ -356,7 +382,10 @@ func (r *Registry) SchemasForContext(sessionID string, fullCtx string, oneTurnTe
 
 	var schemas []ToolDef
 	for name := range selected {
-		if tool, ok := r.tools[name]; ok {
+		r.toolsMu.RLock()
+		tool, ok := r.tools[name]
+		r.toolsMu.RUnlock()
+		if ok {
 			schemas = append(schemas, r.toolDef(tool))
 		}
 	}
@@ -429,6 +458,7 @@ func (r *Registry) explicitToolNames(contextText string) []string {
 		}
 	}
 	var names []string
+	r.toolsMu.RLock()
 	for name := range r.tools {
 		if strings.HasPrefix(name, "MCP_") {
 			continue
@@ -452,6 +482,7 @@ func (r *Registry) explicitToolNames(contextText string) []string {
 	return names
 }
 
+// syncToolCatalog rebuilds the FTS tool index. Callers hold toolsMu.
 func (r *Registry) syncToolCatalog() {
 	if r.searchDB == nil {
 		return
@@ -572,7 +603,9 @@ func compactSchema(p map[string]any) map[string]any {
 }
 
 func (r *Registry) ExecuteContext(ctx context.Context, name string, args map[string]any) string {
+	r.toolsMu.RLock()
 	t, ok := r.tools[name]
+	r.toolsMu.RUnlock()
 	if !ok {
 		return fmt.Sprintf("Error: unknown tool '%s'", name)
 	}
@@ -674,7 +707,10 @@ func (r *Registry) Only(names ...string) *Registry {
 	out.auditFile = r.auditFile
 	out.auditMu = r.auditMu // shared mutex: both registries may write concurrently
 	for _, name := range names {
-		if t, ok := r.tools[name]; ok {
+		r.toolsMu.RLock()
+		t, ok := r.tools[name]
+		r.toolsMu.RUnlock()
+		if ok {
 			out.Register(t)
 		}
 	}
@@ -1624,9 +1660,9 @@ func makeManageMemoryTool(mem *Memory) *Tool {
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"action":  map[string]any{"type": "string", "description": "'add', 'correct', 'forget', 'confirm', 'reject' (archives immediately — active expiry), 'status', 'consolidate', 'dedup', 'rebuild_edges', 'clean_edges', 'maintain', 'judge_edges', or 'distill_outputs'"},
-				"subject": map[string]any{"type": "string", "description": "Subject (fact actions only)"},
-				"content": map[string]any{"type": "string", "description": "New content (for correct/add)"},
+				"action":      map[string]any{"type": "string", "description": "'add', 'correct', 'forget', 'confirm', 'reject' (archives immediately — active expiry), 'status', 'consolidate', 'dedup', 'rebuild_edges', 'clean_edges', 'maintain', 'judge_edges', or 'distill_outputs'"},
+				"subject":     map[string]any{"type": "string", "description": "Subject (fact actions only)"},
+				"content":     map[string]any{"type": "string", "description": "New content (for correct/add)"},
 				"stale_after": map[string]any{"type": "string", "description": "Optional expiry for volatile facts (DRF-002): duration like '7d' or '24h', or an RFC3339 timestamp. Config-mirror facts (current stack, current schedule) MUST set a short one — the live file/tool is the truth, the fact is a dated snapshot."},
 			},
 			"required": []string{"action"},
