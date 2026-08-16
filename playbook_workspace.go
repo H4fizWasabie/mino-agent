@@ -68,6 +68,9 @@ type PlaybookRun struct {
 	CreatedAt time.Time          `json:"created_at"`
 	UpdatedAt time.Time          `json:"updated_at"`
 	Stages    []PlaybookRunStage `json:"stages"`
+	// #237: the owner's approval of the run's gate — set by the harness
+	// (approvePendingTaskGate); the model can never approve its own run.
+	GateApproved bool `json:"gate_approved,omitempty"`
 }
 
 type PlaybookRunStage struct {
@@ -152,9 +155,17 @@ func loadPlaybookWorkspace(home, name string) (*PlaybookWorkspace, error) {
 	if len(pb.Stages) == 0 {
 		return nil, fmt.Errorf("playbook %s has no stages", name)
 	}
-	sort.Slice(pb.Stages, func(i, j int) bool { return pb.Stages[i].Number < pb.Stages[j].Number })
+	sort.Slice(pb.Stages, func(i, j int) bool {
+		if pb.Stages[i].Number != pb.Stages[j].Number {
+			return pb.Stages[i].Number < pb.Stages[j].Number
+		}
+		// Stable tiebreak on name: checkpoint splits add a second stage with
+		// the act stage's number (02-act then 02-act-b) — execution order and
+		// previousStage resolution depend on the act stage coming first.
+		return pb.Stages[i].Name < pb.Stages[j].Name
+	})
 	for i := range pb.Stages {
-		if pb.Stages[i].Number == 0 {
+		if pb.Stages[i].Number < 0 {
 			return nil, fmt.Errorf("playbook %s stage %q must start with NN-", name, pb.Stages[i].Name)
 		}
 		if len(pb.Stages[i].Outputs) == 0 {
@@ -194,7 +205,7 @@ func loadWorkspaceStage(dir, folder string) (*WorkspaceStage, error) {
 		return nil, fmt.Errorf("stage folder %q must be NN-name", folder)
 	}
 	number, err := strconv.Atoi(parts[0])
-	if err != nil || number < 1 {
+	if err != nil || number < 0 {
 		return nil, fmt.Errorf("stage folder %q must be NN-name", folder)
 	}
 	context := string(data)
@@ -347,18 +358,22 @@ func latestResumablePlaybookRun(pb *PlaybookWorkspace, registry *Registry) (*Pla
 		if json.Unmarshal(data, &run) != nil {
 			continue
 		}
-		if run.Status != "running" && run.Status != "failed" {
+		if run.Status != "running" && run.Status != "failed" && run.Status != "awaiting_approval" && run.Status != "awaiting_split" {
 			continue
 		}
-		// Resume is only safe when the next incomplete stage is read-only
-		// (retry-safe). A destructive stage that failed may already have
-		// executed its external side effect (posted, deleted, sent); resuming
-		// would re-execute it — the VPS duplicate-Threads-post incident. Such
-		// runs are terminal: they fail loud and require a fresh run.
+		// Resume safety: a stage that already ran (status failed or running) with
+		// non-retry-safe tools may have executed external side effects — never
+		// resume it (the VPS duplicate-Threads-post incident). A stage that never
+		// started (pending) executed nothing, so gate pauses (#237) and
+		// checkpoint splits (#237) resume freely; an awaiting_split run resumes
+		// only to the model's explicit accept/decline decision point.
 		next := nextPlaybookStage(&run)
 		if next != nil {
-			stage, ok := workspaceStage(pb, next.Number)
-			if !ok || !stageRetrySafe(registry, stage) {
+			stage, ok := workspaceStageFor(pb, next.Number, next.Name)
+			if !ok {
+				continue
+			}
+			if (next.Status == "failed" || next.Status == "running") && !stageRetrySafe(registry, stage) && run.Status != "awaiting_split" {
 				continue
 			}
 		}
@@ -751,6 +766,12 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 	// rewrite on every call (~63% of playbook input billed at full rate).
 	system := conversation.Session.BuildPlaybookSystem(run.Request, "")
 	baseMessages := conversation.Session.PlaybookContext(system)
+	if taskifiedPlaybook(pb) {
+		// #237 context rule (owner lock 4): a taskified stage's context is its
+		// contract + prior stages' declared outputs — never the raw session
+		// history (the context tax the ticket exists to kill).
+		baseMessages = conversation.Session.TaskPlaybookContext(system)
+	}
 	// Label the run self-certified when any stage's Audit declares `self` — the
 	// audit trail then marks that no machine verified those outputs.
 	for _, stage := range pb.Stages {
@@ -770,9 +791,22 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 			result.Status = "complete"
 			return result, nil
 		}
-		stage, ok := workspaceStage(pb, state.Number)
+		stage, ok := workspaceStageFor(pb, state.Number, state.Name)
 		if !ok {
 			return nil, fmt.Errorf("playbook %s run %s references missing stage %d", name, run.ID, state.Number)
+		}
+		// #237 approval gate (taskified runs): the stage right after the
+		// config's gate stage runs only after the owner approved the gate
+		// stage's proposal. Checked on every entry — a fresh run and a resume
+		// both pause here until the harness records the owner's approval.
+		if prev, ok := previousStage(pb, stage); ok && isApprovalGateStage(pb, prev) && !run.GateApproved {
+			run.Status = "awaiting_approval"
+			if err := savePlaybookRun(pb, run); err != nil {
+				return nil, err
+			}
+			result.Status = "awaiting_approval"
+			result.Reply = gatePauseReply(pb, run, prev)
+			return result, nil
 		}
 		stageTools := core.Tools
 		if len(stage.Tools) > 0 {
@@ -861,6 +895,18 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 						"tool":     of.Tool,
 					})
 				}
+				// #237 checkpoint split (#236 absorption): a taskified stage that
+				// burns its budget without producing its declared outputs gets a
+				// split offer instead of a hard fail — the partial state on disk
+				// IS the checkpoint; split_stage accept creates the continuation
+				// stage (02-...-b) and the run resumes mid-task, never from zero.
+				if stageResult.Status == "iteration_limit" && stageResult.Iterations >= splitOfferAtIterations && taskifiedPlaybook(pb) {
+					run.Status = "awaiting_split"
+					_ = savePlaybookRun(pb, run)
+					result.Status = "awaiting_split"
+					result.Reply = splitOfferText(pb, run, stage, stageResult.Iterations)
+					return result, nil
+				}
 				run.Status = "failed"
 				_ = savePlaybookRun(pb, run)
 				result.Status = "failed"
@@ -892,6 +938,21 @@ func workspaceStage(pb *PlaybookWorkspace, number int) (WorkspaceStage, bool) {
 		}
 	}
 	return WorkspaceStage{}, false
+}
+
+// workspaceStageFor resolves a run-state stage to its workspace contract by
+// number AND name — checkpoint splits add a second stage with the act stage's
+// number (02-act then 02-act-b), so number-only lookup would resolve both to
+// 02-act. Falls back to number-only for runs predating the split.
+func workspaceStageFor(pb *PlaybookWorkspace, number int, name string) (WorkspaceStage, bool) {
+	if name != "" {
+		for _, stage := range pb.Stages {
+			if stage.Number == number && stage.Name == name {
+				return stage, true
+			}
+		}
+	}
+	return workspaceStage(pb, number)
 }
 
 // outcomeID is the harness's proof-of-publication: a 15+ digit platform ID in

@@ -452,6 +452,29 @@ func (s *Session) PlaybookContext(system string) []Message {
 	return messages
 }
 
+// TaskPlaybookContext builds the stage base context for a taskified run
+// (issue #237): the session working note and artifact catalog ride along
+// (bounded, established working state), but the raw turn history does not — a
+// taskified stage's context is its contract plus the prior stages' declared
+// outputs (owner lock 4: never raw session history; that history is the
+// context tax the ticket exists to kill).
+func (s *Session) TaskPlaybookContext(system string) []Message {
+	catalog := ""
+	if s.mem != nil {
+		catalog = s.mem.SessionArtifacts(s.sessionID, 2000)
+	}
+	var messages []Message
+	if catalog != "" {
+		messages = append(messages, Message{Role: "assistant", Content: catalog})
+	}
+	if s.mem != nil {
+		if note := s.mem.SessionNote(s.sessionID, sessionNoteInjectionLimit); note != "" {
+			messages = append(messages, Message{Role: "assistant", Content: "Session working note (established by earlier turns — do not re-discover; verify only if contradictory):\n" + note})
+		}
+	}
+	return messages
+}
+
 func (s *Session) StartNew(id string) {
 	s.sessionID = id
 	s.history = nil
