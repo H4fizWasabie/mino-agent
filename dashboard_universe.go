@@ -246,16 +246,11 @@ func projectUniverseSnapshotAtLevel(snapshot UniverseSnapshot, scope, id string,
 
 func universeOverviewBudget(total, level int) int {
 	level = max(0, min(level, 2))
-	base := 120
-	switch {
-	case total <= 2_000:
+	base := 5_000
+	if total <= 2_000 {
 		base = 420
-	case total <= 10_000:
-		base = 360
-	case total <= 50_000:
-		base = 240
 	}
-	return min(total, min(1200, base*(level+1)))
+	return min(total, min(15_000, base*(level+1)))
 }
 
 func universeRevision(snapshot UniverseSnapshot) string {

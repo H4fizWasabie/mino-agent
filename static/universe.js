@@ -599,7 +599,7 @@ function initUniverse(snapshot,lens="universe"){
     if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}
   };
   const screen=node=>{
-    const gx=node._gx??((node.x??.5)-.5)/.38,gy=node._gy??((node.y??.51)-.51)/.38,gz=node._gz??0,cy=Math.cos(state.rotY),sy=Math.sin(state.rotY),cx=Math.cos(state.rotX),sx=Math.sin(state.rotX),rx=gx*cy+gz*sy,rz=-gx*sy+gz*cy,ry=gy*cx-rz*sx,depth=gy*sx+rz*cx,perspective=1/(1-depth*.16),view=universeViewport(canvas,state.zoom),radius=view.radius*perspective;
+    const gx=node._gx??((node.x??.5)-.5)/.38,gy=node._gy??((node.y??.51)-.51)/.38,gz=node._gz??0,cy=Math.cos(state.rotY),sy=Math.sin(state.rotY),cx=Math.cos(state.rotX),sx=Math.sin(state.rotX),rx=gx*cy+gz*sy,rz=-gx*sy+gz*cy,ry=gy*cx-rz*sx,depth=gy*sx+rz*cx,perspective=1/(1-depth*.32),view=universeViewport(canvas,state.zoom),radius=view.radius*perspective;
     return {x:view.x+rx*radius+state.panX,y:view.y+ry*radius+state.panY,depth};
   };
   const cutoff=()=>state.earliest+(state.latest-state.earliest)*state.timeline;
@@ -610,12 +610,10 @@ function initUniverse(snapshot,lens="universe"){
   };
   const focused=node=>universeFocus(node,state.lens);
   let overviewAttention=new Set();
-  // The overview is one authored map, not 1,117 equally loud dots. Keep the
-  // full graph in state, search, the inspector, and the accessible index, but
-  // reserve overview pixels for branch hubs and owner-attention nodes. Zoom,
-  // lenses, search, and selection progressively disclose the local graph.
+  // The desktop overview is intentionally dense: the transport budget is also
+  // the visible budget. Mobile keeps its compact branch map below.
   const overviewMode=()=>state.lens==="universe"&&!state.query&&state.zoom<1.5;
-  const renderable=node=>visible(node)&&(!overviewMode()||nodes.length<=2000||node._overviewVisible||overviewAttention.has(node.id)||node===state.hovered||node===state.selected);
+  const renderable=node=>visible(node);
   const draw=now=>{
     if(!canvas.isConnected||universeState!==state) return;
     state.raf=0;

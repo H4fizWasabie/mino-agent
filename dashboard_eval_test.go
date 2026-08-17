@@ -274,7 +274,7 @@ func TestDashboardLivingFieldSurfaceContract(t *testing.T) {
 		`requestAnimationFrame(draw)`, `function selectUniverseNode(id,push=true)`, `Open full view`,
 		`function universeRegionCenters()`, `function universeLandmarkCount(nodes,region,visible,currentIDs)`,
 		`function universeLandmarkStyle(zoom)`, `function universeDefaultZoom(width)`, `function focusUniverseRegion(region)`,
-		`function universeDensityLevel(zoom)`, `scope=overview&level=`, `state.densityLevel`,
+		`function universeDensityLevel(zoom)`, `scope=overview&level=`, `state.densityLevel`, `perspective=1/(1-depth*.32)`, `const renderable=node=>visible(node)`,
 		`state.currentNodeIDs=new Set(incoming.keys())`,
 	} {
 		if !strings.Contains(string(field), behavior) {
