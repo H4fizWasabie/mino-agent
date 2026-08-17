@@ -129,6 +129,7 @@ const st={edges:[],nodeMap:Object.fromEntries(nodes.map(n=>[n.id,n]))};
 const fresh={id:"new1",kind:"tool",label:"new"};
 universePlaceNode(fresh,st);
 if(fresh.x===undefined||!Number.isFinite(fresh.x)) throw new Error("new node unpositioned");
+equal(Math.hypot(fresh._gx,fresh._gy)<.9,true,"new standalone nodes join the packed rim");
 equal(before,nodes.map(n=>n.x+","+n.y).join("|"),"new node never moves existing positions");
 // degraded cases: zero nodes, one node
 equal(src.includes("if(branchNodes.length===0) return;"),true,"empty branch degrades");
@@ -365,11 +366,10 @@ const make=()=>Array.from({length:64},(_,i)=>({id:"memory:"+i,kind:"memory",comm
 const edges=Array.from({length:63},(_,i)=>({source:"memory:"+i,target:"memory:"+(i+1)}));
 const first=make(),second=make();box.universeLayout(first,edges);box.universeLayout(second,edges);
 assert(JSON.stringify(first.map(n=>[n._gx,n._gy,n._gz]))===JSON.stringify(second.map(n=>[n._gx,n._gy,n._gz])),"deterministic geography");
-assert(first.every(n=>Math.abs(Math.hypot(n._gx,n._gy,n._gz)-1)<.01),"nodes remain on the spherical atlas");
-assert(new Set(first.map(n=>n._layoutCommunity)).size>1,"real memory topology derives local communities");
-assert(first.filter(n=>n._primaryParent).every(n=>first.some(parent=>parent.id===n._primaryParent&&parent._layoutCommunity===n._layoutCommunity)),"community leaves retain a local visual hub");
-const memoryVector=box.universeBranchVectors().memories;
-assert(first.every(n=>n._gx*memoryVector[0]+n._gy*memoryVector[1]+n._gz*memoryVector[2]>.88),"memory nodes stay close to the memory landmark");
+assert(first.every(n=>Math.hypot(n._gx,n._gy)<=.95),"nodes remain inside the packed graph boundary");
+assert(first.every(n=>n._layoutCommunity==="memory:0"),"stored memory communities remain explicit");
+const hub=first.find(n=>n._layoutAnchor);
+assert(hub&&first.filter(n=>n!==hub).every(n=>n._primaryParent===hub.id),"community leaves retain their local hub");
 const scale=Array.from({length:4096},(_,i)=>({id:"memory:scale-"+i,kind:"memory",community:i,state:"semantic"}));
 box.universeLayout(scale,[]);
 assert(scale.filter(n=>n._overviewVisible).length<=120,"large atlases keep overview disclosure bounded");
