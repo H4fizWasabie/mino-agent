@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -44,7 +43,7 @@ func parsePersonaFile(path string) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	match := regexp.MustCompile(`(?s)^---\s*\n(.*?)\n---\s*\n(.*)$`).FindStringSubmatch(string(data))
+	match := frontmatterRe.FindStringSubmatch(string(data))
 	if match == nil {
 		return nil, fmt.Errorf("no frontmatter")
 	}

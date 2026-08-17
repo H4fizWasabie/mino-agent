@@ -775,7 +775,20 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 	// the main loop documents ("Time is injected as user message for cache
 	// stability"). Before this fix the timestamp in system forced a full cache
 	// rewrite on every call (~63% of playbook input billed at full rate).
-	system := conversation.Session.BuildPlaybookSystem(pb)
+	system, err := conversation.Session.BuildPlaybookSystem(pb)
+	if err != nil {
+		// PSN-001 review: the bound persona failed to load AFTER pre-run
+		// validation passed (roster file deleted in the gap). Fail loudly —
+		// never run the stage hatless. The run is saved failed so the resume
+		// path does not treat it as a stuck "running" run.
+		for i := range run.Stages {
+			run.Stages[i].Status = "failed"
+			run.Stages[i].Error = err.Error()
+		}
+		run.Status = "failed"
+		_ = savePlaybookRun(pb, run)
+		return nil, fmt.Errorf("playbook %s: %w", name, err)
+	}
 	baseMessages := conversation.Session.PlaybookContext(system)
 	if taskifiedPlaybook(pb) {
 		// #237 context rule (owner lock 4): a taskified stage's context is its

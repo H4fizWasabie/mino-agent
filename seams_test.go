@@ -312,7 +312,10 @@ func TestBuildPlaybookSystemUsesAgentPersona(t *testing.T) {
 	body := writeTestPersona(t, home, "trend-researcher")
 	sess := NewSession(&Settings{Home: home, Workspace: home}, nil)
 	pb := &PlaybookWorkspace{Name: "news", Agent: "trend-researcher"}
-	sys := sess.BuildPlaybookSystem(pb)
+	sys, err := sess.BuildPlaybookSystem(pb)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, want := range []string{
 		"You are Mino (the harness) operating as trend-researcher for this playbook run.",
 		body,
@@ -327,7 +330,10 @@ func TestBuildPlaybookSystemRailsPresent(t *testing.T) {
 	home := t.TempDir()
 	writeTestPersona(t, home, "trend-researcher")
 	sess := NewSession(&Settings{Home: home, Workspace: home}, nil)
-	sys := sess.BuildPlaybookSystem(&PlaybookWorkspace{Name: "news", Agent: "trend-researcher"})
+	sys, err := sess.BuildPlaybookSystem(&PlaybookWorkspace{Name: "news", Agent: "trend-researcher"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	// The compressed rails carry the harness invariants that are
 	// model-delivered — each line maps back to a behavioral test elsewhere
 	// (e.g. TestVerifyWorkspaceStageOutputsSuccessOutcome, TestTruncateWorkspaceInput),
@@ -359,7 +365,10 @@ func TestBuildPlaybookSystemNoChatVoice(t *testing.T) {
 	}
 	writeTestPersona(t, home, "trend-researcher")
 	sess := NewSession(&Settings{Home: home, Workspace: home}, nil)
-	sys := sess.BuildPlaybookSystem(&PlaybookWorkspace{Name: "news", Agent: "trend-researcher"})
+	sys, err := sess.BuildPlaybookSystem(&PlaybookWorkspace{Name: "news", Agent: "trend-researcher"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, banned := range []string{"digital son", "Manglish", "Never write essays", "Memory snapshot discipline", "Install verification"} {
 		if strings.Contains(sys, banned) {
 			t.Fatalf("BuildPlaybookSystem leaks chat voice %q in:\n%s", banned, sys)
@@ -369,6 +378,27 @@ func TestBuildPlaybookSystemNoChatVoice(t *testing.T) {
 	chat, _ := sess.BuildContext("hello", "telegram")
 	if !strings.Contains(chat, "digital son") || !strings.Contains(chat, "Manglish") {
 		t.Fatalf("chat profile lost its SOUL voice:\n%s", chat)
+	}
+}
+
+func TestBuildPlaybookSystemFailsLoudlyOnMissingPersona(t *testing.T) {
+	// PSN-001 review finding: validation passes pre-run, but a roster file
+	// deleted in the gap between validation and prompt build must fail loudly
+	// — never silently degrade to a hatless rails-only run.
+	home := t.TempDir()
+	writeTestPersona(t, home, "trend-researcher")
+	sess := NewSession(&Settings{Home: home, Workspace: home}, nil)
+	pb := &PlaybookWorkspace{Name: "news", Agent: "trend-researcher"}
+	// Validation passes while the file exists...
+	if err := validatePlaybookPersona(home, pb); err != nil {
+		t.Fatalf("pre-run validation should pass while the file exists: %v", err)
+	}
+	// ...then the roster file disappears before the prompt is built.
+	if err := os.Remove(filepath.Join(home, "agents", "trend-researcher.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.BuildPlaybookSystem(pb); err == nil {
+		t.Fatal("BuildPlaybookSystem must fail loudly when the bound persona is gone, not silently degrade")
 	}
 }
 

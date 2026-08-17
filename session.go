@@ -161,18 +161,24 @@ const playbookRails = `## Operating Rules (absolute — override persona and sta
 // system role carries authority, so rails + anchor + persona stay one cohesive
 // profile. The persona is bound deterministically (never fuzzy-matched), so
 // the profile is byte-stable across a run and warm across same-hat runs.
-func (s *Session) BuildPlaybookSystem(pb *PlaybookWorkspace) string {
+//
+// An error here means the bound persona failed to load AFTER the pre-run
+// validation passed (a roster file deleted in the gap) — it must fail loudly,
+// never silently degrade to rails-only: a hatless run is a contract violation.
+func (s *Session) BuildPlaybookSystem(pb *PlaybookWorkspace) (string, error) {
 	parts := []string{playbookRails}
 	if pb != nil && pb.Agent != "" {
-		if persona, err := loadAgentPersona(s.settings.Home, pb.Agent); err == nil {
-			// Persona grammar: "operating as", never "you are" — the persona
-			// claims stance/mission/lens/voice, never identity.
-			parts = append(parts, fmt.Sprintf("\nYou are Mino (the harness) operating as %s for this playbook run.", persona.Name))
-			parts = append(parts, persona.Body)
+		persona, err := loadAgentPersona(s.settings.Home, pb.Agent)
+		if err != nil {
+			return "", err
 		}
+		// Persona grammar: "operating as", never "you are" — the persona
+		// claims stance/mission/lens/voice, never identity.
+		parts = append(parts, fmt.Sprintf("\nYou are Mino (the harness) operating as %s for this playbook run.", persona.Name))
+		parts = append(parts, persona.Body)
 	}
 	parts = append(parts, fmt.Sprintf("\nLOCAL WORKSPACE (authoritative): %s\nThis overrides any hardcoded workspace path in a skill. Local files may be edited in place. Stage remote files here, verify locally, then sync them back once.", s.settings.Workspace))
-	return strings.Join(parts, "\n")
+	return strings.Join(parts, "\n"), nil
 }
 
 func (s *Session) buildSystem(userMessage, source string, includePlaybookRouting bool) (string, string) {

@@ -235,12 +235,18 @@ func (sl *SkillLoader) stale() bool {
 	return info.ModTime().After(sl.lastScan)
 }
 
+// frontmatterRe matches a YAML frontmatter block followed by a body. Shared by
+// parseSkillFile and parsePersonaFile (PSN-001) — one regex, two dedicated
+// parsers (each must stay separate: skills carry triggers/usage machinery
+// personas must not inherit).
+var frontmatterRe = regexp.MustCompile(`(?s)^---\s*\n(.*?)\n---\s*\n(.*)$`)
+
 func parseSkillFile(path string) (*Skill, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	match := regexp.MustCompile(`(?s)^---\s*\n(.*?)\n---\s*\n(.*)$`).FindStringSubmatch(string(data))
+	match := frontmatterRe.FindStringSubmatch(string(data))
 	if match == nil {
 		return nil, fmt.Errorf("no frontmatter")
 	}
