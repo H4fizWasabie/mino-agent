@@ -102,7 +102,7 @@ func TestUniverseProjectionBoundsOverviewAndNeighborhood(t *testing.T) {
 	}
 
 	overview, ok := projectUniverseSnapshot(snapshot, "overview", "")
-	if !ok || len(overview.Nodes) != 120 || !overview.HasMore || len(overview.Communities) != 256 {
+	if !ok || len(overview.Nodes) != 5_000 || !overview.HasMore || len(overview.Communities) != 256 {
 		t.Fatalf("overview projection = nodes:%d communities:%d more:%v ok:%v", len(overview.Nodes), len(overview.Communities), overview.HasMore, ok)
 	}
 	ids := map[string]bool{}
@@ -145,6 +145,19 @@ func TestUniverseProjectionBoundsOverviewAndNeighborhood(t *testing.T) {
 	changed := universeRevision(UniverseSnapshot{Nodes: []UniverseNode{{ID: "memory:a", Label: "After"}}})
 	if revision == changed {
 		t.Fatal("projection revision ignored a visible node change")
+	}
+}
+
+func TestUniverseOverviewBudgetScalesWithoutOpeningTheFullGraph(t *testing.T) {
+	for _, test := range []struct {
+		total, level, want int
+	}{
+		{1_390, 0, 420}, {1_390, 1, 840}, {1_390, 2, 1_260},
+		{5_000, 0, 5_000}, {10_000, 2, 10_000}, {50_001, 2, 15_000}, {100_000, 0, 5_000},
+	} {
+		if got := universeOverviewBudget(test.total, test.level); got != test.want {
+			t.Fatalf("universeOverviewBudget(%d, %d) = %d, want %d", test.total, test.level, got, test.want)
+		}
 	}
 }
 

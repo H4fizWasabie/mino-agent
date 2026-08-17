@@ -274,6 +274,7 @@ func TestDashboardLivingFieldSurfaceContract(t *testing.T) {
 		`requestAnimationFrame(draw)`, `function selectUniverseNode(id,push=true)`, `Open full view`,
 		`function universeRegionCenters()`, `function universeLandmarkCount(nodes,region,visible,currentIDs)`,
 		`function universeLandmarkStyle(zoom)`, `function universeDefaultZoom(width)`, `function focusUniverseRegion(region)`,
+		`function universeDensityLevel(zoom)`, `scope=overview&level=`, `state.densityLevel`, `perspective=1/(1-depth*.32)`, `const renderable=node=>visible(node)`,
 		`state.currentNodeIDs=new Set(incoming.keys())`,
 	} {
 		if !strings.Contains(string(field), behavior) {
@@ -319,7 +320,7 @@ function extract(name){
   }
   throw new Error("unterminated "+name);
 }
-const names=["universeHash","universeRand","universeRegion","universeFocus","universeNodeLink","universeRegionCenters","universeLandmarkCount","universeLandmarkStyle","universeDefaultZoom","universeLayout","universeClusterKey","universeCenterRegion","focusUniverseRegion","focusUniverseCamera","rotateUniverseCamera","universeSearchResults","universeBranch","universeBranchAnchors","universeBranchVectors","universeBranchTotal","universeProjectionMerge","universeDetailNeedsRefresh","universeEntityResponseCurrent","universeAdjacency","layoutMemoryBranch","layoutIdentityBranch","layoutWorkBranch"];
+const names=["universeHash","universeRand","universeRegion","universeFocus","universeNodeLink","universeRegionCenters","universeLandmarkCount","universeLandmarkStyle","universeDefaultZoom","universeDensityLevel","universeLayout","universeClusterKey","universeCenterRegion","focusUniverseRegion","focusUniverseCamera","rotateUniverseCamera","universeSearchResults","universeBranch","universeBranchAnchors","universeBranchVectors","universeBranchTotal","universeProjectionMerge","universeDetailNeedsRefresh","universeEntityResponseCurrent","universeAdjacency","layoutMemoryBranch","layoutIdentityBranch","layoutWorkBranch"];
 const box={location:{hash:"#universe"},universePendingRegion:null};vm.runInNewContext(names.map(extract).join("\n"),box);
 function assert(ok,label){if(!ok)throw new Error(label)}
 assert(box.universeHash("memory:a")===box.universeHash("memory:a"),"stable hash");
@@ -340,6 +341,7 @@ assert(box.universeLandmarkCount(landmarkNodes,"system",node=>node.kind!=="memor
 const overview=box.universeLandmarkStyle(.65),detail=box.universeLandmarkStyle(3);
 assert(overview.alpha>detail.alpha&&overview.radius>detail.radius,"landmarks lead at overview scale and recede in detail");
 assert(box.universeDefaultZoom(390)<box.universeDefaultZoom(1440),"phone starts at overview scale");
+assert(box.universeDensityLevel(1)===0&&box.universeDensityLevel(1.5)===1&&box.universeDensityLevel(2.1)===2,"zoom selects bounded density levels");
 assert(box.universeBranchTotal({counts:{memories:100000}},"memories",120)===100000,"landmarks use source totals instead of projection counts");
 const ranked=box.universeSearchResults("First result  # fact-a\n  body: body\nSecond result  # fact-b");
 assert(ranked.map(result=>result.id).join(",")==="memory:fact-a,memory:fact-b","search preserves server ranking");

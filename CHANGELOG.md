@@ -1,3 +1,9 @@
+## [Unreleased]
+
+### Fixed
+
+- **Galaxy zoom now reveals denser projections (closes #256)**: the Orbital Galaxy no longer stays at a fixed 120-node overview. Graphs above 2,000 nodes now show at least 5,000 nodes on desktop, scale to larger bounded levels as the owner zooms, and use stronger spherical perspective, while very large graphs retain a strict transport ceiling and `/api/universe` remains unchanged. (Why: a fixed overview budget made ordinary graphs look empty, camera zoom did not disclose additional nodes, and the shallow perspective weakened depth.)
+
 ## [v2.12.0] — Orbital Galaxy and bounded runtime work (2026-08-17)
 
 ### Added
