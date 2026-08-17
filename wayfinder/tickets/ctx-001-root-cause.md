@@ -1,6 +1,6 @@
 # Context Truth — Root Cause
 
-Status: **CONFIRMED** (2026-08-10, verified against session.go + VPS state.db)
+Status: **CLOSED** (2026-08-17 — analysis complete; each root-cause mechanism was fixed by its own follow-up ticket: ctx-002 head/tail preview #145, ctx-003 verification discipline #149, ctx-005 cancel-intent #148 — all RESOLVED)
 
 ## Question
 
