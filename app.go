@@ -191,6 +191,10 @@ func NewCore() *Core {
 	if len(ListPlaybooks(s.Home)) == 0 {
 		CreateExamplePlaybook(s.Home)
 	}
+	// task-232: seed the generic default playbooks (idempotent — absent only)
+	if err := SeedDefaultPlaybooks(s.Home); err != nil {
+		slog.Error("seeding default playbooks", "error", err)
+	}
 
 	// In-process playbook scheduler — checks schedules.json every minute
 	safeGo("schedule-dispatcher", func() { runScheduleDispatcher(w) })

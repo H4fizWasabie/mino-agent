@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"database/sql"
+	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"math"
 	"os"
@@ -152,6 +154,54 @@ func MatchPlaybook(home, prompt string) (string, string, float64) {
 		return bestName, bestDesc, score
 	}
 	return "", "", 0
+}
+
+//go:embed playbook_defaults
+var defaultPlaybooks embed.FS
+
+// SeedDefaultPlaybooks installs the generic playbook templates (task-232) into
+// ~/.mino/playbooks/ on first boot — alongside the hello-world seed. Data-only:
+// no per-playbook Go code; the templates are embedded files, sanitized of
+// owner-specific data (recipient names, absolute home paths). Idempotent: a
+// playbook directory that already exists is NEVER overwritten — the owner's
+// edits win. Only absent playbooks are copied, so the seed is a no-op after
+// the first run and safe against manual deletions (the playbook is re-seeded
+// if the owner removes it without replacement).
+func SeedDefaultPlaybooks(home string) error {
+	destRoot := filepath.Join(home, "playbooks")
+	err := fs.WalkDir(defaultPlaybooks, "playbook_defaults", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel("playbook_defaults", path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		dest := filepath.Join(destRoot, rel)
+		if d.IsDir() {
+			return os.MkdirAll(dest, 0700)
+		}
+		// Idempotency: existing files are the owner's — never overwrite.
+		if _, err := os.Stat(dest); err == nil {
+			return nil
+		}
+		data, err := defaultPlaybooks.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(dest), 0700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(dest, data, 0644); err != nil {
+			return err
+		}
+		slog.Info("seeded default playbook", "path", dest)
+		return nil
+	})
+	return err
 }
 
 // CreateExamplePlaybook scaffolds a minimal playbook for testing.

@@ -1,6 +1,20 @@
 # Ship generic playbooks as install defaults (data-only)
 
-Status: **OPEN** (GitHub issue #232)
+Status: **RESOLVED** (closes GitHub issue #232, commit pending)
+
+## Resolution
+
+- **Seeding**: `SeedDefaultPlaybooks` (playbook.go) walks an embedded `playbook_defaults/`
+  tree and copies absent playbooks into `~/.mino/playbooks/` on boot, alongside the
+  hello-world seed (app.go). Data-only — no per-playbook Go.
+- **Idempotent**: an existing playbook directory is never overwritten; owner edits win.
+- **Sanitized**: templates carry no owner-specific data (verified by
+  `TestDefaultPlaybooksSanitized` — no recipient names, no absolute home paths).
+- **Validated**: seeded defaults pass the same edit-time validation as any playbook
+  (`TestSeededDefaultsValidate`).
+- **Shipped defaults**: ai-news-daily, morning-briefing, weekly-cost, weekly-audit +
+  shared platform-rules/threads-gate. Personas intentionally NOT baked in — they
+  belong to the PSN-001 roster mechanism, not the generic templates.
 
 ## Question
 
