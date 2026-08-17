@@ -269,7 +269,7 @@ func TestDashboardLivingFieldSurfaceContract(t *testing.T) {
 	for _, behavior := range []string{
 		`id="universe-canvas"`, `snapshot.nodes`, `snapshot.edges`, `function playUniverseHistory()`,
 		`id="universe-webgl"`, `function initUniverseWebGL(canvas)`, `drawArraysInstanced`, `WebGL2`,
-		`/api/memory/remember?q=`, `setTimeout(async()=>`, `},275)`, `function openUniverseEntity(id,push=true)`,
+		`/api/memory/remember?q=`, `setTimeout(async()=>`, `},275)`, `function openUniverseEntity(id,push=true,focus=true)`,
 		`tools:"#system/tools"`, `Archived · open Memory`, `function universeBranchTotal(snapshot,branch,fallback)`,
 		`universeEntityController?.abort()`, `universeEntityResponseCurrent(controller,state)`, `state.nodes.splice(index,1)`,
 		`state.timeline=Math.min(1`, `function universeActivity(event)`, `state.activities.push`,
@@ -277,6 +277,7 @@ func TestDashboardLivingFieldSurfaceContract(t *testing.T) {
 		`function universeRegionCenters()`, `function universeLandmarkCount(nodes,region,visible,currentIDs)`,
 		`function universeLandmarkStyle(zoom)`, `function universeDefaultZoom(width)`, `function focusUniverseRegion(region)`,
 		`function universeDensityLevel(zoom)`, `scope=overview&level=`, `state.densityLevel`, `perspective=1/(1-depth*.32)`, `const renderable=node=>visible(node)`,
+		`openUniverseEntity(hit.node.id,true,false)`,
 		`state.currentNodeIDs=new Set(incoming.keys())`,
 	} {
 		if !strings.Contains(string(field), behavior) {
@@ -392,7 +393,7 @@ assert(scale.filter(n=>n._overviewVisible).length<=120,"large atlases keep overv
   life.universeUpdate({scope:"overview",revision:"new",nodes:[overviewNode],edges:[],history:[],activity:[]});
   assert(refreshed==="second","production refresh wiring reloads selected detail after revision change");
 
-  life.openUniverseEntity=actualOpen;let resolveFetch,mergedResponses=0;life.universeMergeProjection=()=>{mergedResponses++};life.focusUniverseCamera=()=>{};life.selectUniverseNode=()=>{};
+  life.openUniverseEntity=actualOpen;let resolveFetch,mergedResponses=0,cameraMoves=0;life.universeMergeProjection=()=>{mergedResponses++};life.focusUniverseCamera=()=>{cameraMoves++};life.selectUniverseNode=()=>{};
   life.fetch=()=>new Promise(resolve=>{resolveFetch=resolve});
   const requestState={canvas:{isConnected:true},nodeMap:{"memory:a":{id:"memory:a"}},requestDraw:()=>{}};life.universeState=requestState;
   const stale=life.openUniverseEntity("memory:a");life.universeState={canvas:{isConnected:true}};
@@ -403,6 +404,12 @@ assert(scale.filter(n=>n._overviewVisible).length<=120,"large atlases keep overv
   const disconnected=life.openUniverseEntity("memory:a");requestState.canvas.isConnected=false;
   resolveFetch({ok:true,json:async()=>({nodes:[{id:"memory:a"}],edges:[]})});await disconnected;
   assert(mergedResponses===0,"production entity request ignores response after Galaxy disconnect");
+
+  requestState.canvas.isConnected=true;life.fetch=async()=>({ok:true,json:async()=>({nodes:[{id:"memory:a"}],edges:[]})});
+  await life.openUniverseEntity("memory:a",true,false);
+  assert(cameraMoves===0,"canvas node selection preserves the owner's camera");
+  await life.openUniverseEntity("memory:a");
+  assert(cameraMoves===1,"search and deep links retain intentional camera focus");
 })().catch(error=>{console.error(error);process.exit(1)});
 `
 	cmd := exec.Command(node, "-e", harness, filepath.Join("static", "universe.js"))

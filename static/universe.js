@@ -455,7 +455,7 @@ function universeMergeProjection(projection){
 }
 
 let universeEntityController=null;
-async function openUniverseEntity(id,push=true){
+async function openUniverseEntity(id,push=true,focus=true){
   const state=universeState;if(!state||!id||!state.canvas.isConnected)return;
   universeEntityController?.abort();const controller=universeEntityController=new AbortController();
   try{
@@ -463,7 +463,7 @@ async function openUniverseEntity(id,push=true){
     if(!response.ok)throw new Error(`Galaxy returned ${response.status}`);
     const projection=await response.json();if(!universeEntityResponseCurrent(controller,state))return;universeMergeProjection(projection);
     const node=state.nodeMap[id];if(!node)return;
-    focusUniverseCamera(node,state);selectUniverseNode(id,push);state.requestDraw?.(240);
+    if(focus)focusUniverseCamera(node,state);selectUniverseNode(id,push);state.requestDraw?.(240);
     const target=document.getElementById("universe-search-results");if(target)target.hidden=true;
   }catch(error){if(error.name==="AbortError")return;
     const target=document.getElementById("universe-search-results");
@@ -711,7 +711,7 @@ function initUniverse(snapshot,lens="universe"){
   };
   canvas.onpointermove=event=>{if(state.pointer){rotateUniverseCamera(state,state.pointer,event.clientX,event.clientY);state.requestDraw();return;}const hit=pick(event.clientX,event.clientY);state.hovered=hit.node;canvas.style.cursor=hit.node||hit.landmark?"pointer":"grab";state.requestDraw();};
   canvas.onpointerdown=event=>{const hit=pick(event.clientX,event.clientY);state.hovered=hit.node;if(!hit.node&&!hit.landmark){state.pointer={x:event.clientX,y:event.clientY,rotX:state.rotX,rotY:state.rotY};canvas.setPointerCapture(event.pointerId);}};
-  canvas.onpointerup=event=>{if(state.pointer){state.pointer=null;canvas.releasePointerCapture(event.pointerId);state.requestDraw();return;}const hit=pick(event.clientX,event.clientY);if(hit.landmark)focusUniverseRegion(hit.landmark);else if(hit.node)openUniverseEntity(hit.node.id);};
+  canvas.onpointerup=event=>{if(state.pointer){state.pointer=null;canvas.releasePointerCapture(event.pointerId);state.requestDraw();return;}const hit=pick(event.clientX,event.clientY);if(hit.landmark)focusUniverseRegion(hit.landmark);else if(hit.node)openUniverseEntity(hit.node.id,true,false);};
   canvas.onpointerleave=()=>{state.hovered=null;state.pointer=null;state.requestDraw();};
   canvas.onwheel=event=>{event.preventDefault();state.zoom=Math.max(.65,Math.min(8,state.zoom*(event.deltaY>0 ? .92 : 1.08)));requestDensity();state.requestDraw();};
   canvas.onkeydown=event=>{if(event.key==="Escape")selectUniverseNode(null);};
