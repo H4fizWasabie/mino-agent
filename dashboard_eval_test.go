@@ -287,6 +287,9 @@ func TestDashboardLivingFieldSurfaceContract(t *testing.T) {
 	if strings.Contains(string(field), `class="field-region-labels"`) {
 		t.Error("camera-bound landmarks must replace fixed region-label overlays")
 	}
+	if strings.Contains(string(field), `(!overview&&node._layoutAnchor)`) {
+		t.Error("individual node titles must stay hidden until maximum zoom")
+	}
 
 	styles, err := staticFiles.ReadFile("static/style.css")
 	if err != nil {

@@ -667,7 +667,7 @@ function initUniverse(snapshot,lens="universe"){
         if(node.attention){ctx.strokeStyle="#b53c42";ctx.lineWidth=1.5;ctx.stroke();}
         ctx.globalAlpha=1;
       }
-      const showLabel=(overview&&(node._overviewLabel||overviewAttention.has(node.id)))||(!overview&&node._layoutAnchor)||detailStyle.labels;
+      const showLabel=(overview&&(node._overviewLabel||overviewAttention.has(node.id)))||detailStyle.labels;
       if(showLabel&&(!state.hovered&&!state.selected||detailStyle.labels)&&node!==state.hovered&&node!==state.selected){
         const maxLabel=detailStyle.labels?(canvas.clientWidth<600?26:34):overview?(canvas.clientWidth<600?18:24):(canvas.clientWidth<600?17:23),label=node.label.length>maxLabel?node.label.slice(0,maxLabel-1)+"…":node.label;
         ctx.font=`${detailStyle.labels?600:650} 10px ui-sans-serif,system-ui`;const width=ctx.measureText(label).width,right=detailStyle.labels?p.x>canvas.clientWidth*.72:node.x>.66,center=!detailStyle.labels&&node.x>.45&&!right,labelX=right?p.x-11:center?p.x:p.x+11,labelY=!detailStyle.labels&&canvas.clientWidth<600&&node.x>.45&&node.x<.66?p.y+18:p.y+4,box={x:right?labelX-width:center?labelX-width/2:labelX,y:labelY-10,width,height:13},onCanvas=box.x+box.width>0&&box.x<canvas.clientWidth&&box.y+box.height>0&&box.y<canvas.clientHeight,crowded=detailStyle.labels&&labelBoxes.some(other=>box.x<other.x+other.width+5&&box.x+box.width+5>other.x&&box.y<other.y+other.height+3&&box.y+box.height+3>other.y);
