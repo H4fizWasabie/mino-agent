@@ -1,4 +1,4 @@
-## [Unreleased]
+## [v2.15.0] — Playbook personas & install defaults (2026-08-17)
 
 ### Added
 
