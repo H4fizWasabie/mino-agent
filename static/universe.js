@@ -624,7 +624,7 @@ function initUniverse(snapshot,lens="universe"){
     ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,canvas.clientWidth,canvas.clientHeight);
     ctx.fillStyle="rgba(246,247,244,.78)";ctx.fillRect(0,0,canvas.clientWidth,canvas.clientHeight);
     const incident=state.hovered||state.selected,edgeLayers=[[],[],[]];
-    const overview=overviewMode(),mobileOverview=canvas.clientWidth<720&&overview;
+    const overview=overviewMode(),mobileOverview=canvas.clientWidth<300&&overview;
     overviewAttention=universeOverviewAttention(nodes);
     if(!mobileOverview)drawUniverseScaffold(ctx,state,screen,visible,overview);
     if(state.webgl)drawUniverseWebGL(state.webgl,state,screen,mobileOverview?()=>false:renderable,overview);
