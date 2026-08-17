@@ -1,4 +1,4 @@
-## [Unreleased]
+## [v2.13.0] — Orbital Galaxy density and depth (2026-08-17)
 
 ### Fixed
 
