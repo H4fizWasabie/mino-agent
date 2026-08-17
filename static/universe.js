@@ -163,7 +163,7 @@ function universeLandmarkStyle(zoom){
 }
 function universeDefaultZoom(width){return width<720?.78:1;}
 function universeDensityLevel(zoom){return zoom>=2.1?2:zoom>=1.5?1:0;}
-function universeDetailStyle(zoom){const progress=Math.max(0,Math.min(1,(zoom-4)/12));return {labels:zoom>=10,nodeScale:1+progress*.45};}
+function universeDetailStyle(zoom){const progress=Math.max(0,Math.min(1,(zoom-4)/12));return {labels:zoom>=16,nodeScale:1+progress*.45};}
 
 // --- Branching field layout (issue #182) ---
 // Deterministic, topology-led: synthetic trunk → identity branch anchors →

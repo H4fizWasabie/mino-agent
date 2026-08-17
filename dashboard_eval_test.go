@@ -345,7 +345,7 @@ const overview=box.universeLandmarkStyle(.65),detail=box.universeLandmarkStyle(3
 assert(overview.alpha>detail.alpha&&overview.radius>detail.radius,"landmarks lead at overview scale and recede in detail");
 assert(box.universeDefaultZoom(390)<box.universeDefaultZoom(1440),"phone starts at overview scale");
 assert(box.universeDensityLevel(1)===0&&box.universeDensityLevel(1.5)===1&&box.universeDensityLevel(2.1)===2,"zoom selects bounded density levels");
-assert(!box.universeDetailStyle(9.9).labels&&box.universeDetailStyle(10).labels&&box.universeDetailStyle(16).nodeScale>box.universeDetailStyle(4).nodeScale,"deep zoom reveals labels and enlarges spheres progressively");
+assert(!box.universeDetailStyle(15.99).labels&&box.universeDetailStyle(16).labels&&box.universeDetailStyle(16).nodeScale>box.universeDetailStyle(4).nodeScale,"only maximum zoom reveals labels while spheres enlarge progressively");
 assert(box.universeBranchTotal({counts:{memories:100000}},"memories",120)===100000,"landmarks use source totals instead of projection counts");
 const ranked=box.universeSearchResults("First result  # fact-a\n  body: body\nSecond result  # fact-b");
 assert(ranked.map(result=>result.id).join(",")==="memory:fact-a,memory:fact-b","search preserves server ranking");
