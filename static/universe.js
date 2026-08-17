@@ -566,7 +566,7 @@ function drawUniverseWebGL(renderer,state,screen,renderable,overview){
   const width=Math.max(1,Math.round(rect.width*dpr)),height=Math.max(1,Math.round(rect.height*dpr));
   if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}
   const data=[];
-  state.nodes.forEach(node=>{if(!renderable(node))return;const point=screen(node),depth=Math.max(0,Math.min(1,(point.depth+1)/2)),base=universeNodeRadius(node),scale=.72+depth*.48,emphasis=node===state.selected?1.6:overview&&(node._layoutAnchor||state.hovered===node)?1.14:1,radius=Math.min(node===state.selected?9:6,base*scale*emphasis)*dpr,alpha=node===state.selected||node===state.hovered?1:.24+depth*.72,color=universeWebGLColor(universeNodeColor(node),alpha);data.push(point.x*dpr,point.y*dpr,radius,...color);});
+  state.nodes.forEach(node=>{if(!renderable(node))return;const point=screen(node),depth=Math.max(0,Math.min(1,(point.depth+1)/2)),base=universeNodeRadius(node),scale=.72+depth*.48,emphasis=node===state.selected?1.6:overview&&(node._layoutAnchor||state.hovered===node)?1.14:1,radius=Math.min(node===state.selected?9:6,base*scale*emphasis)*dpr,alpha=node===state.selected||node===state.hovered?1:.5+depth*.46,color=universeWebGLColor(universeNodeColor(node),alpha);data.push(point.x*dpr,point.y*dpr,radius,...color);});
   gl.viewport(0,0,width,height);gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);gl.useProgram(renderer.program);gl.uniform2f(renderer.viewport,width,height);gl.bindVertexArray(renderer.vao);gl.bindBuffer(gl.ARRAY_BUFFER,renderer.instances);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(data),gl.DYNAMIC_DRAW);gl.drawArraysInstanced(gl.TRIANGLE_STRIP,0,4,data.length/7);gl.bindVertexArray(null);renderer.count=data.length/7;
 }
 
@@ -800,7 +800,7 @@ function drawUniverseScaffold(ctx,state,screen,visible,overview=false){
   anchors.slice(0,120).forEach((node,index)=>{
     const point=screen(node),radius=Math.max(8,view.radius*(node._clusterRadius||.025)),color=universeNodeColor(node);
     ctx.beginPath();ctx.arc(point.x,point.y,radius,0,Math.PI*2);ctx.fillStyle=`${color}0c`;ctx.fill();ctx.strokeStyle=`${color}${overview?"55":"38"}`;ctx.lineWidth=index<10?1:.65;ctx.stroke();
-    if(index<8){const label=node.community_label||node.source||node.kind;ctx.font="700 8px ui-monospace,SFMono-Regular,Menlo,monospace";ctx.textAlign="center";ctx.fillStyle="#5d6965";ctx.fillText(String(label).toUpperCase(),point.x,point.y-radius-5);}
+    if(index<8){const label=node.community_label||(node.kind==="file"?node.source:node.kind);ctx.font="700 8px ui-monospace,SFMono-Regular,Menlo,monospace";ctx.textAlign="center";ctx.fillStyle="#5d6965";ctx.fillText(String(label).toUpperCase(),point.x,point.y-radius-5);}
   });
   ctx.restore();
 }
