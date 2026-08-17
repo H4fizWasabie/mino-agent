@@ -78,7 +78,7 @@ function universeView(snapshot, lens="universe"){
         <span class="field-live" id="universe-live"><i></i> Live</span><span class="field-renderer" id="universe-renderer" aria-live="polite">Detecting renderer</span>
       </div>
       <canvas id="universe-webgl" aria-hidden="true"></canvas>
-      <canvas id="universe-canvas" tabindex="0" aria-label="Interactive map of Mino's durable universe. Use search or the accessible index to inspect nodes."></canvas>
+      <canvas id="universe-canvas" tabindex="0" title="Drag to rotate. When zoomed, drag to pan or Shift-drag to rotate." aria-label="Interactive map of Mino's durable universe. Drag to rotate; when zoomed, drag to pan or Shift-drag to rotate. Use search or the accessible index to inspect nodes."></canvas>
       <aside class="field-inspector" id="universe-inspector" aria-live="polite">
         <button class="field-inspector-close" id="universe-inspector-close" type="button" aria-label="Close inspector">×</button>
         <span class="field-inspector-kicker">Living Field</span><h3>Select anything</h3><p>Choose a node to inspect what it is, where it came from, and how it connects.</p>
@@ -164,7 +164,7 @@ function universeLandmarkStyle(zoom){
 function universeDefaultZoom(width){return width<720?.78:1;}
 function universeDensityLevel(zoom){return zoom>=2.1?2:zoom>=1.5?1:0;}
 function universeDetailStyle(zoom){const progress=Math.max(0,Math.min(1,(zoom-4)/12));return {labels:zoom>=16,nodeScale:1+progress*.45};}
-function universeDragMode(zoom,width){return zoom>universeDefaultZoom(width)*1.05?"pan":"rotate";}
+function universeDragMode(zoom,width,rotate=false){return rotate||zoom<=universeDefaultZoom(width)*1.05?"rotate":"pan";}
 
 // --- Branching field layout (issue #182) ---
 // Deterministic, topology-led: synthetic trunk → identity branch anchors →
@@ -723,7 +723,7 @@ function initUniverse(snapshot,lens="universe"){
     return {landmark:null,node:hit};
   };
   canvas.onpointermove=event=>{if(state.pointer){if(state.pointer.mode==="pan")panUniverseCamera(state,state.pointer,event.clientX,event.clientY);else rotateUniverseCamera(state,state.pointer,event.clientX,event.clientY);state.requestDraw();return;}const hit=pick(event.clientX,event.clientY);state.hovered=hit.node;canvas.style.cursor=hit.node||hit.landmark?"pointer":"grab";state.requestDraw();};
-  canvas.onpointerdown=event=>{const hit=pick(event.clientX,event.clientY);state.hovered=hit.node;if(!hit.node&&!hit.landmark){state.pointer={x:event.clientX,y:event.clientY,rotX:state.rotX,rotY:state.rotY,panX:state.panX,panY:state.panY,mode:universeDragMode(state.zoom,canvas.clientWidth)};canvas.setPointerCapture(event.pointerId);canvas.style.cursor="grabbing";}};
+  canvas.onpointerdown=event=>{const hit=pick(event.clientX,event.clientY);state.hovered=hit.node;if(!hit.node&&!hit.landmark){state.pointer={x:event.clientX,y:event.clientY,rotX:state.rotX,rotY:state.rotY,panX:state.panX,panY:state.panY,mode:universeDragMode(state.zoom,canvas.clientWidth,event.shiftKey)};canvas.setPointerCapture(event.pointerId);canvas.style.cursor="grabbing";}};
   canvas.onpointerup=event=>{if(state.pointer){state.pointer=null;canvas.releasePointerCapture(event.pointerId);canvas.style.cursor="grab";state.requestDraw();return;}const hit=pick(event.clientX,event.clientY);if(hit.landmark)focusUniverseRegion(hit.landmark);else if(hit.node)openUniverseEntity(hit.node.id,true,false);};
   canvas.onpointerleave=()=>{state.hovered=null;state.pointer=null;state.requestDraw();};
   canvas.onwheel=event=>{event.preventDefault();state.zoom=Math.max(.65,Math.min(16,state.zoom*(event.deltaY>0 ? .92 : 1.08)));constrainUniversePan(state);requestDensity();state.requestDraw();};
