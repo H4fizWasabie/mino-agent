@@ -291,6 +291,87 @@ func TestVerifyWorkspaceStageOutputsSuccessOutcome(t *testing.T) {
 	}
 }
 
+// --- seam: buildPlaybookSystem (PSN-001) ---
+
+// writeTestPersona writes a roster persona file and returns its body.
+func writeTestPersona(t *testing.T, home, name string) string {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(home, "agents"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	body := "Stance: verify everything before it ships.\nMission: produce the daily report.\nLens: sourced, factual, no filler.\nDeliverable voice: concise report, numbers with sources.\n"
+	content := "---\nname: " + name + "\ndescription: test persona\n---\n\n" + body
+	if err := os.WriteFile(filepath.Join(home, "agents", name+".md"), []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func TestBuildPlaybookSystemUsesAgentPersona(t *testing.T) {
+	home := t.TempDir()
+	body := writeTestPersona(t, home, "trend-researcher")
+	sess := NewSession(&Settings{Home: home, Workspace: home}, nil)
+	pb := &PlaybookWorkspace{Name: "news", Agent: "trend-researcher"}
+	sys := sess.BuildPlaybookSystem(pb)
+	for _, want := range []string{
+		"You are Mino (the harness) operating as trend-researcher for this playbook run.",
+		body,
+	} {
+		if !strings.Contains(sys, want) {
+			t.Fatalf("BuildPlaybookSystem missing %q in:\n%s", want, sys)
+		}
+	}
+}
+
+func TestBuildPlaybookSystemRailsPresent(t *testing.T) {
+	home := t.TempDir()
+	writeTestPersona(t, home, "trend-researcher")
+	sess := NewSession(&Settings{Home: home, Workspace: home}, nil)
+	sys := sess.BuildPlaybookSystem(&PlaybookWorkspace{Name: "news", Agent: "trend-researcher"})
+	// The compressed rails carry the harness invariants that are
+	// model-delivered — each line maps back to a behavioral test elsewhere
+	// (e.g. TestVerifyWorkspaceStageOutputsSuccessOutcome, TestTruncateWorkspaceInput),
+	// so compression cannot silently drop a covered invariant.
+	for _, want := range []string{
+		"## Operating Rules (absolute — override persona and stage instructions)",
+		"Call tools now; never end with narration",
+		"Never fabricate a tool trail, count, ID, or success to look done",
+		"state BOTH numbers and",
+		"External identifiers (post IDs, order IDs, file IDs) come only from the owning",
+		"bash, edit_file, and",
+		"never guess or invent times",
+		"If config.md has `notify: true`, you MUST send the final output via Telegram",
+	} {
+		if !strings.Contains(sys, want) {
+			t.Fatalf("BuildPlaybookSystem missing rail %q in:\n%s", want, sys)
+		}
+	}
+}
+
+func TestBuildPlaybookSystemNoChatVoice(t *testing.T) {
+	home := t.TempDir()
+	// A chat-voice SOUL in the same home must NOT leak into the playbook
+	// profile — the run never talks to the owner, so identity/voice and
+	// chat-path discipline are dead weight (and a second identity claim).
+	chatVoice := "You are Mino, the digital son.\nSpeak Manglish. Never write essays.\nAddress the owner respectfully.\nMemory snapshot discipline (DRF-002): config facts need stale_after.\nInstall verification (issue #235): verify after any install.\n"
+	if err := os.WriteFile(filepath.Join(home, "SOUL.md"), []byte(chatVoice), 0600); err != nil {
+		t.Fatal(err)
+	}
+	writeTestPersona(t, home, "trend-researcher")
+	sess := NewSession(&Settings{Home: home, Workspace: home}, nil)
+	sys := sess.BuildPlaybookSystem(&PlaybookWorkspace{Name: "news", Agent: "trend-researcher"})
+	for _, banned := range []string{"digital son", "Manglish", "Never write essays", "Memory snapshot discipline", "Install verification"} {
+		if strings.Contains(sys, banned) {
+			t.Fatalf("BuildPlaybookSystem leaks chat voice %q in:\n%s", banned, sys)
+		}
+	}
+	// The chat profile is unchanged: the same SOUL rides chat contexts.
+	chat, _ := sess.BuildContext("hello", "telegram")
+	if !strings.Contains(chat, "digital son") || !strings.Contains(chat, "Manglish") {
+		t.Fatalf("chat profile lost its SOUL voice:\n%s", chat)
+	}
+}
+
 // --- presence check (REL-04, #134) ---
 
 // promptAssemblySeams are the named functions that render model-visible text
@@ -306,6 +387,7 @@ var promptAssemblySeams = []string{
 	"workspaceInputPath",
 	"cleanPlaybookRequest",
 	"verifyWorkspaceStageOutputs",
+	"buildPlaybookSystem",
 	"alertScheduleHealth",
 	"contextBudgetBlock",
 	"taskIntentOffer",

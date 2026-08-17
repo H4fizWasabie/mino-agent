@@ -512,7 +512,13 @@ func validateManagedPlaybook(core *Core, name string) error {
 	if err != nil {
 		return err
 	}
-	return validateWorkspaceStageTools(pb, core.Tools)
+	if err := validateWorkspaceStageTools(pb, core.Tools); err != nil {
+		return err
+	}
+	// PSN-001: the `agent:` reference is validated at edit time like declared
+	// tools — a missing persona refuses the playbook the same way an unknown
+	// tool does.
+	return validatePlaybookPersona(core.Settings.Home, pb)
 }
 
 func createManagedPlaybook(core *Core, name string, args map[string]any) string {

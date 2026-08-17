@@ -719,7 +719,7 @@ func TestPlaybookSystemPromptHasNoClock(t *testing.T) {
 		t.Fatal(err)
 	}
 	conversation := core.Sessions.Get("test")
-	system := conversation.Session.BuildPlaybookSystem("run it", "")
+	system := conversation.Session.BuildPlaybookSystem(pb)
 	if strings.Contains(system, "System time") || strings.Contains(system, "AUTHORITATIVE LOCAL CLOCK") {
 		t.Fatalf("system prompt contains a clock: %s", system)
 	}

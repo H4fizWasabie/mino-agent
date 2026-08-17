@@ -24,6 +24,10 @@ type PlaybookWorkspace struct {
 	Description string
 	Schedule    string
 	Status      string
+	// Agent is the config.md `agent:` binding — the roster persona this
+	// playbook's runs wear (PSN-001). Deterministic binding, never
+	// fuzzy-matched; resolved by validatePlaybookPersona.
+	Agent       string
 	Config      map[string]string
 	Stages      []WorkspaceStage
 }
@@ -189,6 +193,8 @@ func parseWorkspaceConfig(data []byte, pb *PlaybookWorkspace) {
 			pb.Status = value
 		case "schedule":
 			pb.Schedule = value
+		case "agent":
+			pb.Agent = value
 		default:
 			pb.Config[key] = value
 		}
@@ -747,6 +753,11 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 	if err := validateWorkspaceStageTools(pb, core.Tools); err != nil {
 		return nil, err
 	}
+	// PSN-001: a roster file deleted out from under a playbook fails pre-run,
+	// not mid-stage — the persona is bound before the run starts.
+	if err := validatePlaybookPersona(core.Settings.Home, pb); err != nil {
+		return nil, err
+	}
 	run, err := loadOrCreatePlaybookRun(pb, core.Tools, request, sessionID, time.Now())
 	if err != nil {
 		return nil, err
@@ -764,7 +775,7 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 	// the main loop documents ("Time is injected as user message for cache
 	// stability"). Before this fix the timestamp in system forced a full cache
 	// rewrite on every call (~63% of playbook input billed at full rate).
-	system := conversation.Session.BuildPlaybookSystem(run.Request, "")
+	system := conversation.Session.BuildPlaybookSystem(pb)
 	baseMessages := conversation.Session.PlaybookContext(system)
 	if taskifiedPlaybook(pb) {
 		// #237 context rule (owner lock 4): a taskified stage's context is its
