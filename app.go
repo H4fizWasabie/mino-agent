@@ -195,6 +195,10 @@ func NewCore() *Core {
 	if err := SeedDefaultPlaybooks(s.Home); err != nil {
 		slog.Error("seeding default playbooks", "error", err)
 	}
+	// PSN-001: seed the persona roster so seeded playbooks' agent: bindings resolve
+	if err := SeedDefaultAgents(s.Home); err != nil {
+		slog.Error("seeding default agents", "error", err)
+	}
 
 	// In-process playbook scheduler — checks schedules.json every minute
 	safeGo("schedule-dispatcher", func() { runScheduleDispatcher(w) })

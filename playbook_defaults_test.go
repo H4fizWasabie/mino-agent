@@ -16,9 +16,17 @@ func TestSeedDefaultPlaybooksIdempotent(t *testing.T) {
 	if err := SeedDefaultPlaybooks(home); err != nil {
 		t.Fatal(err)
 	}
+	if err := SeedDefaultAgents(home); err != nil {
+		t.Fatal(err)
+	}
 	for _, pb := range []string{"ai-news-daily", "morning-briefing", "weekly-cost", "weekly-audit", "shared"} {
 		if _, err := os.Stat(filepath.Join(home, "playbooks", pb)); err != nil {
 			t.Fatalf("default playbook %s not seeded: %v", pb, err)
+		}
+	}
+	for _, agent := range []string{"trend-researcher", "content-creator", "community-builder", "narrative-designer", "chief-of-staff", "reality-checker"} {
+		if _, err := os.Stat(filepath.Join(home, "agents", agent+".md")); err != nil {
+			t.Fatalf("default agent %s not seeded: %v", agent, err)
 		}
 	}
 	if got := ListPlaybooks(home); len(got) < 4 {
@@ -30,7 +38,15 @@ func TestSeedDefaultPlaybooksIdempotent(t *testing.T) {
 	if err := os.WriteFile(ownerFile, []byte("OWNER EDIT"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	// Same for a seeded agent.
+	ownerAgent := filepath.Join(home, "agents", "reality-checker.md")
+	if err := os.WriteFile(ownerAgent, []byte("OWNER PERSONA"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err := SeedDefaultPlaybooks(home); err != nil {
+		t.Fatal(err)
+	}
+	if err := SeedDefaultAgents(home); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(ownerFile)
@@ -39,6 +55,13 @@ func TestSeedDefaultPlaybooksIdempotent(t *testing.T) {
 	}
 	if string(data) != "OWNER EDIT" {
 		t.Fatalf("second seed overwrote owner edit: %q", string(data))
+	}
+	data, err = os.ReadFile(ownerAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "OWNER PERSONA" {
+		t.Fatalf("second seed overwrote owner persona: %q", string(data))
 	}
 }
 
@@ -69,23 +92,25 @@ func TestSeedDefaultPlaybooksNoOverwriteExistingDir(t *testing.T) {
 // enforces for public docs.
 func TestDefaultPlaybooksSanitized(t *testing.T) {
 	banned := []string{"Abah", "/home/mino", "to=Abah"}
-	err := fs.WalkDir(defaultPlaybooks, "playbook_defaults", func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		data, err := defaultPlaybooks.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		for _, b := range banned {
-			if strings.Contains(string(data), b) {
-				t.Fatalf("default %s contains banned owner data %q", path, b)
+	for _, fsys := range []fs.FS{defaultPlaybooks, defaultAgents} {
+		err := fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
 			}
+			data, err := fs.ReadFile(fsys, path)
+			if err != nil {
+				return err
+			}
+			for _, b := range banned {
+				if strings.Contains(string(data), b) {
+					t.Fatalf("default %s contains banned owner data %q", path, b)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -97,6 +122,9 @@ func TestSeededDefaultsValidate(t *testing.T) {
 	if err := SeedDefaultPlaybooks(home); err != nil {
 		t.Fatal(err)
 	}
+	if err := SeedDefaultAgents(home); err != nil {
+		t.Fatal(err)
+	}
 	settings := &Settings{Home: home, Workspace: home}
 	registry := NewRegistry()
 	for _, name := range []string{"write_file", "send_message", "fetch_url", "bash", "search_web", "list_reminders", "manage_memory", "read_file"} {
@@ -106,6 +134,37 @@ func TestSeededDefaultsValidate(t *testing.T) {
 	for _, pb := range []string{"ai-news-daily", "morning-briefing", "weekly-cost", "weekly-audit"} {
 		if err := validateManagedPlaybook(core, pb); err != nil {
 			t.Fatalf("seeded default %s fails validation: %v", pb, err)
+		}
+	}
+}
+
+// TestSeededDefaultsPersonaResolves verifies the seed's PSN-001 coupling: a
+// seeded default playbook's config.md agent: binding resolves against the
+// seeded roster (frontmatter name matches the binding exactly).
+func TestSeededDefaultsPersonaResolves(t *testing.T) {
+	home := t.TempDir()
+	if err := SeedDefaultPlaybooks(home); err != nil {
+		t.Fatal(err)
+	}
+	if err := SeedDefaultAgents(home); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"ai-news-daily":   "trend-researcher",
+		"morning-briefing": "chief-of-staff",
+		"weekly-cost":      "reality-checker",
+		"weekly-audit":     "reality-checker",
+	}
+	for pb, agent := range want {
+		loaded, err := loadPlaybookWorkspace(home, pb)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if loaded.Agent != agent {
+			t.Fatalf("%s agent = %q, want %q", pb, loaded.Agent, agent)
+		}
+		if _, err := loadAgentPersona(home, loaded.Agent); err != nil {
+			t.Fatalf("%s persona %q does not resolve: %v", pb, agent, err)
 		}
 	}
 }

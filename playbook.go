@@ -159,21 +159,18 @@ func MatchPlaybook(home, prompt string) (string, string, float64) {
 //go:embed playbook_defaults
 var defaultPlaybooks embed.FS
 
-// SeedDefaultPlaybooks installs the generic playbook templates (task-232) into
-// ~/.mino/playbooks/ on first boot — alongside the hello-world seed. Data-only:
-// no per-playbook Go code; the templates are embedded files, sanitized of
-// owner-specific data (recipient names, absolute home paths). Idempotent: a
-// playbook directory that already exists is NEVER overwritten — the owner's
-// edits win. Only absent playbooks are copied, so the seed is a no-op after
-// the first run and safe against manual deletions (the playbook is re-seeded
-// if the owner removes it without replacement).
-func SeedDefaultPlaybooks(home string) error {
-	destRoot := filepath.Join(home, "playbooks")
-	err := fs.WalkDir(defaultPlaybooks, "playbook_defaults", func(path string, d fs.DirEntry, err error) error {
+//go:embed agent_defaults
+var defaultAgents embed.FS
+
+// seedEmbeddedTree copies an embedded defaults tree into destRoot,
+// idempotently: an existing file is NEVER overwritten (owner edits win);
+// only absent paths are written. Directories are created as needed.
+func seedEmbeddedTree(fsys fs.FS, srcRoot, destRoot string) error {
+	return fs.WalkDir(fsys, srcRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		rel, err := filepath.Rel("playbook_defaults", path)
+		rel, err := filepath.Rel(srcRoot, path)
 		if err != nil {
 			return err
 		}
@@ -188,7 +185,7 @@ func SeedDefaultPlaybooks(home string) error {
 		if _, err := os.Stat(dest); err == nil {
 			return nil
 		}
-		data, err := defaultPlaybooks.ReadFile(path)
+		data, err := fs.ReadFile(fsys, path)
 		if err != nil {
 			return err
 		}
@@ -198,10 +195,29 @@ func SeedDefaultPlaybooks(home string) error {
 		if err := os.WriteFile(dest, data, 0644); err != nil {
 			return err
 		}
-		slog.Info("seeded default playbook", "path", dest)
+		slog.Info("seeded default", "path", dest)
 		return nil
 	})
-	return err
+}
+
+// SeedDefaultPlaybooks installs the generic playbook templates (task-232) into
+// ~/.mino/playbooks/ on first boot — alongside the hello-world seed. Data-only:
+// no per-playbook Go code; the templates are embedded files, sanitized of
+// owner-specific data (recipient names, absolute home paths). Idempotent: a
+// playbook directory that already exists is NEVER overwritten — the owner's
+// edits win. Only absent playbooks are copied, so the seed is a no-op after
+// the first run and safe against manual deletions (the playbook is re-seeded
+// if the owner removes it without replacement).
+func SeedDefaultPlaybooks(home string) error {
+	return seedEmbeddedTree(defaultPlaybooks, "playbook_defaults", filepath.Join(home, "playbooks"))
+}
+
+// SeedDefaultAgents installs the persona roster (PSN-001) into
+// ~/.mino/agents/ on first boot, so seeded default playbooks that bind
+// `agent:` in config.md resolve their hats. Idempotent — owner-authored
+// personas are never overwritten.
+func SeedDefaultAgents(home string) error {
+	return seedEmbeddedTree(defaultAgents, "agent_defaults", filepath.Join(home, "agents"))
 }
 
 // CreateExamplePlaybook scaffolds a minimal playbook for testing.
