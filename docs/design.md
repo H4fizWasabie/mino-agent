@@ -81,6 +81,11 @@ rewind how it formed, and follow current work without leaving the field. Past,
 Now, and Next remain available through the timeline and inspector, but the map
 owns the first viewport.
 
+Galaxy is the durable graph expression of that world: a light, packed knowledge
+globe where community density and real relationships are legible immediately.
+It follows an Obsidian-style packed form in Mino's mineral visual system, never
+a dark neon scene or a set of landmarks separated into decorative orbits.
+
 The system is deliberately restrained, but not passive. Semantic status color
 appears where it changes the owner's decision; contextual Ask actions and
 evidence disclosures provide depth only when requested. Runtime machinery stays
@@ -89,6 +94,7 @@ available under System without competing with the owner story.
 **Key Characteristics:**
 
 - The map leads; implementation detail recedes into overlays.
+- Galaxy shows dense community structure and its truthful edge mesh at rest.
 - Direct sans-serif hierarchy keeps the field readable at a glance.
 - Thin rules and restrained floating controls preserve spatial context.
 - Status is stated in words and reinforced, never replaced, by color.
@@ -115,7 +121,8 @@ and explicit semantic colors for verified, attention, and blocked states.
 ### Named Rules
 
 **The Earned Color Rule.** Accent and semantic color must communicate action or
-state; never use them as ambient decoration.
+state; never use them as ambient decoration. In Galaxy, saturated dot and
+hairline territory colors may also identify real communities.
 
 **The Truth Before Reassurance Rule.** Green is reserved for evidence-backed,
 fresh operational or verified state. Stale or failed reads revoke it.
@@ -152,6 +159,12 @@ the lower edge as separate controls. Opening conversation preserves the field
 camera and selected node while the workbench becomes the active lower surface;
 Evidence, Actions, and Links receive the remaining context space.
 
+Galaxy opens as one large circular packed graph. Memory communities form its
+dense core; file/output and operational communities occupy the rim. Desktop and
+standard mobile keep this same composition and every node in the current server
+projection remains visible. Only viewports narrower than 300px replace it with
+the five-branch overview.
+
 Below 720px, each horizontal thread becomes one ordered Past, Now, Next stack,
 with every section labelled in place. The header reduces to identity and health,
 and a six-destination bottom navigation provides Today, Work, Inbox, Memory,
@@ -162,6 +175,8 @@ Ask, and More. Touch actions are at least 44px high.
 The system is flat by default. Boundaries come from paper tone and hairline
 rules. Shadows are reserved for temporary popovers such as health; the
 conversation workbench remains part of shell layout at every desktop size.
+Galaxy conveys depth through spherical perspective, node scale, and restrained
+overlap—not glow, haze, or decorative particles.
 
 ### Named Rules
 
@@ -207,6 +222,20 @@ Desktop navigation is one short row of owner concepts. Active destinations use
 a soft indigo field; counts appear only when actionable. Mobile navigation is a
 fixed six-item bar with authored line icons, labels, and the same active color.
 
+### Packed Galaxy
+
+- **Structure:** One circular field with a packed memory core and operational,
+  file, and output communities around the rim; never detached landmark orbits.
+- **Graph truth:** Draw all projected nodes and a thin mesh of real edges at
+  rest. Selection focuses the camera and opens the persistent inspector without
+  inventing nodes, edges, activity, or counts.
+- **Surface:** Mineral-white canvas, saturated community dots, hairline colored
+  territories, matte depth, and the existing Mino search, fit, timeline,
+  navigation, and inspector controls.
+- **Data boundary:** File nodes expose metadata only from Mino-authorized output
+  roots and approved runtime files. Configuration, credentials, and secrets
+  never enter the graph.
+
 ### Responsibility Field
 
 Each lane connects the latest meaningful Past event summary to current state and
@@ -239,6 +268,8 @@ disallowed, or unsupported targets at the initiating control.
 - **Do** keep evidence available behind clear disclosure controls.
 - **Do** preserve semantic labels and visible keyboard focus.
 - **Do** adapt navigation and Ask behavior specifically for phones.
+- **Do** keep every node in the current Galaxy projection visible and preserve
+  its real relationships.
 
 ### Don't:
 
@@ -246,5 +277,7 @@ disallowed, or unsupported targets at the initiating control.
 - **Don't** fabricate activity, proof, health, or reassuring empty states.
 - **Don't** turn the journal into a grid of interchangeable metric cards.
 - **Don't** use color, tiny glyphs, or motion as the only status signal.
+- **Don't** turn Galaxy into a dark or neon scene, hide its relationship mesh,
+  or separate its communities into decorative landmark orbits.
 - **Don't** center Work inside a narrow reading column or disconnect current
   state from its Past evidence and Next action.
