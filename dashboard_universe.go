@@ -4,7 +4,10 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,6 +39,7 @@ type UniverseCounts struct {
 	Reminders        int `json:"reminders"`
 	Conversations    int `json:"conversations"`
 	Artifacts        int `json:"artifacts"`
+	Files            int `json:"files"`
 	Skills           int `json:"skills"`
 	Tools            int `json:"tools"`
 }
@@ -557,7 +561,7 @@ func buildUniverseSnapshot(core *Core, now time.Time) (UniverseSnapshot, error) 
 		}
 	}
 
-	if err := appendUniverseRows(core, &snapshot); err != nil {
+	if err := appendUniverseRows(core, &snapshot, playbookIDs); err != nil {
 		return snapshot, err
 	}
 
@@ -593,7 +597,7 @@ func buildUniverseSnapshot(core *Core, now time.Time) (UniverseSnapshot, error) 
 	return snapshot, nil
 }
 
-func appendUniverseRows(core *Core, snapshot *UniverseSnapshot) error {
+func appendUniverseRows(core *Core, snapshot *UniverseSnapshot, playbookIDs map[string]string) error {
 	rows, err := core.DB.Query(`SELECT id, message, remind_at, status, created_at FROM reminders ORDER BY id`)
 	if err != nil {
 		return err
@@ -616,6 +620,7 @@ func appendUniverseRows(core *Core, snapshot *UniverseSnapshot) error {
 	if err != nil {
 		return err
 	}
+	artifactPaths := map[string]bool{}
 	for rows.Next() {
 		var path, sessionID, label, createdAt string
 		var size int64
@@ -624,9 +629,13 @@ func appendUniverseRows(core *Core, snapshot *UniverseSnapshot) error {
 			return err
 		}
 		snapshot.Nodes = append(snapshot.Nodes, UniverseNode{ID: "artifact:" + path, Kind: "artifact", Label: label, Summary: fmt.Sprintf("%s · %d bytes", path, size), Source: sessionID, Region: "work", At: createdAt})
+		artifactPaths[universeFilePath(core.Settings.Home, path)] = true
 		snapshot.Counts.Artifacts++
 	}
 	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := appendUniverseFiles(core.Settings.Home, snapshot, artifactPaths, playbookIDs); err != nil {
 		return err
 	}
 
@@ -637,6 +646,74 @@ func appendUniverseRows(core *Core, snapshot *UniverseSnapshot) error {
 		}
 		snapshot.Nodes = append(snapshot.Nodes, UniverseNode{ID: "conversation:" + id, Kind: "conversation", Label: universeString(session["title"]), Summary: universeString(session["last"]), Region: "conversations", UpdatedAt: universeString(session["last_at"])})
 		snapshot.Counts.Conversations++
+	}
+	return nil
+}
+
+func universeFilePath(home, path string) string {
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(home, path)
+	}
+	abs, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	return abs
+}
+
+func appendUniverseFiles(home string, snapshot *UniverseSnapshot, artifacts map[string]bool, playbookIDs map[string]string) error {
+	type root struct{ path, source, region string }
+	roots := []root{
+		{filepath.Join(home, "results"), "results", "work"},
+		{filepath.Join(home, "outbox"), "outbox", "work"},
+		{filepath.Join(home, "traces"), "traces", "system"},
+		{filepath.Join(home, "playbooks"), "playbooks", "work"},
+	}
+	appendFile := func(path, source, region string, info fs.FileInfo) {
+		path = universeFilePath(home, path)
+		if artifacts[path] || !info.Mode().IsRegular() {
+			return
+		}
+		rel, err := filepath.Rel(home, path)
+		if err != nil {
+			rel = path
+		}
+		node := UniverseNode{ID: "file:" + path, Kind: "file", Label: filepath.Base(path), Summary: fmt.Sprintf("%s · %d bytes", rel, info.Size()), Source: source, State: strings.TrimPrefix(filepath.Ext(path), "."), Region: region, At: info.ModTime().UTC().Format(time.RFC3339)}
+		snapshot.Nodes = append(snapshot.Nodes, node)
+		snapshot.Counts.Files++
+		if source == "playbooks" {
+			parts := strings.Split(filepath.ToSlash(rel), "/")
+			if len(parts) > 1 && playbookIDs[parts[1]] != "" {
+				snapshot.Edges = append(snapshot.Edges, UniverseEdge{Source: node.ID, Target: playbookIDs[parts[1]], Relation: "belongs to", Kind: "structural"})
+			}
+		}
+	}
+	for _, root := range roots {
+		if _, err := os.Stat(root.path); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		if err := filepath.WalkDir(root.path, func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil || entry.IsDir() {
+				return nil
+			}
+			info, err := entry.Info()
+			if err == nil {
+				appendFile(path, root.source, root.region, info)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
+	for _, name := range []string{"calendar.ics", "usage.jsonl"} {
+		path := filepath.Join(home, name)
+		if info, err := os.Stat(path); err == nil {
+			appendFile(path, "runtime", "system", info)
+		} else if !os.IsNotExist(err) {
+			return err
+		}
 	}
 	return nil
 }

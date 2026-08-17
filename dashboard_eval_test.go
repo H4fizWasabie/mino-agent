@@ -123,11 +123,13 @@ equal(src.includes("function drawMobileUniverseOverview"),true,"mobile branch fa
 equal(src.includes("const overviewMode=()=>"),true,"progressive overview mode");
 equal(src.includes("_overviewVisible"),true,"overview hierarchy markers");
 equal(src.includes("_primaryParent"),true,"backbone parent knowledge");
+equal(src.includes("memoryDependency"),true,"memory dependencies remain visible in overview");
 const before=nodes.map(n=>n.x+","+n.y).join("|");
 const st={edges:[],nodeMap:Object.fromEntries(nodes.map(n=>[n.id,n]))};
 const fresh={id:"new1",kind:"tool",label:"new"};
 universePlaceNode(fresh,st);
 if(fresh.x===undefined||!Number.isFinite(fresh.x)) throw new Error("new node unpositioned");
+equal(Math.hypot(fresh._gx,fresh._gy)<.9,true,"new standalone nodes join the packed rim");
 equal(before,nodes.map(n=>n.x+","+n.y).join("|"),"new node never moves existing positions");
 // degraded cases: zero nodes, one node
 equal(src.includes("if(branchNodes.length===0) return;"),true,"empty branch degrades");
@@ -267,14 +269,15 @@ func TestDashboardLivingFieldSurfaceContract(t *testing.T) {
 	for _, behavior := range []string{
 		`id="universe-canvas"`, `snapshot.nodes`, `snapshot.edges`, `function playUniverseHistory()`,
 		`id="universe-webgl"`, `function initUniverseWebGL(canvas)`, `drawArraysInstanced`, `WebGL2`,
-		`/api/memory/remember?q=`, `setTimeout(async()=>`, `},275)`, `function openUniverseEntity(id,push=true)`,
+		`/api/memory/remember?q=`, `setTimeout(async()=>`, `},275)`, `function openUniverseEntity(id,push=true,focus=true)`,
 		`tools:"#system/tools"`, `Archived · open Memory`, `function universeBranchTotal(snapshot,branch,fallback)`,
 		`universeEntityController?.abort()`, `universeEntityResponseCurrent(controller,state)`, `state.nodes.splice(index,1)`,
 		`state.timeline=Math.min(1`, `function universeActivity(event)`, `state.activities.push`,
 		`requestAnimationFrame(draw)`, `function selectUniverseNode(id,push=true)`, `Open full view`,
 		`function universeRegionCenters()`, `function universeLandmarkCount(nodes,region,visible,currentIDs)`,
 		`function universeLandmarkStyle(zoom)`, `function universeDefaultZoom(width)`, `function focusUniverseRegion(region)`,
-		`function universeDensityLevel(zoom)`, `scope=overview&level=`, `state.densityLevel`, `perspective=1/(1-depth*.32)`, `const renderable=node=>visible(node)`,
+		`function universeDensityLevel(zoom)`, `function universeDetailStyle(zoom)`, `function universeCanPan(zoom,width)`, `function universeDragMode(zoom,width,pan=false)`, `function panUniverseCamera(state,pointer,x,y)`, `event.shiftKey||event.button===2`, `canvas.oncontextmenu=`, `sqrt(max(0.0,1.0-d*d))`, `Math.min(16,state.zoom`, `scope=overview&level=`, `state.densityLevel`, `perspective=1/(1-depth*.32)`, `const renderable=node=>visible(node)`,
+		`openUniverseEntity(hit.node.id,true,false)`,
 		`state.currentNodeIDs=new Set(incoming.keys())`,
 	} {
 		if !strings.Contains(string(field), behavior) {
@@ -283,6 +286,9 @@ func TestDashboardLivingFieldSurfaceContract(t *testing.T) {
 	}
 	if strings.Contains(string(field), `class="field-region-labels"`) {
 		t.Error("camera-bound landmarks must replace fixed region-label overlays")
+	}
+	if strings.Contains(string(field), `(!overview&&node._layoutAnchor)`) {
+		t.Error("individual node titles must stay hidden until maximum zoom")
 	}
 
 	styles, err := staticFiles.ReadFile("static/style.css")
@@ -320,7 +326,7 @@ function extract(name){
   }
   throw new Error("unterminated "+name);
 }
-const names=["universeHash","universeRand","universeRegion","universeFocus","universeNodeLink","universeRegionCenters","universeLandmarkCount","universeLandmarkStyle","universeDefaultZoom","universeDensityLevel","universeLayout","universeClusterKey","universeCenterRegion","focusUniverseRegion","focusUniverseCamera","rotateUniverseCamera","universeSearchResults","universeBranch","universeBranchAnchors","universeBranchVectors","universeBranchTotal","universeProjectionMerge","universeDetailNeedsRefresh","universeEntityResponseCurrent","universeAdjacency","layoutMemoryBranch","layoutIdentityBranch","layoutWorkBranch"];
+const names=["universeHash","universeRand","universeRegion","universeFocus","universeNodeLink","universeRegionCenters","universeLandmarkCount","universeLandmarkStyle","universeDefaultZoom","universeDensityLevel","universeDetailStyle","universeCanPan","universeDragMode","universeViewport","constrainUniversePan","panUniverseCamera","universeLayout","universeClusterKey","universeCenterRegion","focusUniverseRegion","focusUniverseCamera","rotateUniverseCamera","universeSearchResults","universeBranch","universeBranchAnchors","universeBranchVectors","universeBranchTotal","universeProjectionMerge","universeDetailNeedsRefresh","universeEntityResponseCurrent","universeAdjacency","universeSpherePoint","layoutMemoryBranch","layoutIdentityBranch","layoutWorkBranch"];
 const box={location:{hash:"#universe"},universePendingRegion:null};vm.runInNewContext(names.map(extract).join("\n"),box);
 function assert(ok,label){if(!ok)throw new Error(label)}
 assert(box.universeHash("memory:a")===box.universeHash("memory:a"),"stable hash");
@@ -342,6 +348,9 @@ const overview=box.universeLandmarkStyle(.65),detail=box.universeLandmarkStyle(3
 assert(overview.alpha>detail.alpha&&overview.radius>detail.radius,"landmarks lead at overview scale and recede in detail");
 assert(box.universeDefaultZoom(390)<box.universeDefaultZoom(1440),"phone starts at overview scale");
 assert(box.universeDensityLevel(1)===0&&box.universeDensityLevel(1.5)===1&&box.universeDensityLevel(2.1)===2,"zoom selects bounded density levels");
+assert(!box.universeDetailStyle(15.99).labels&&box.universeDetailStyle(16).labels&&box.universeDetailStyle(16).nodeScale>box.universeDetailStyle(4).nodeScale,"only maximum zoom reveals labels while spheres enlarge progressively");
+assert(box.universeDragMode(1,1000)==="rotate"&&box.universeDragMode(4,1000)==="rotate","plain left-drag always rotates");
+assert(box.universeDragMode(1,1000,true)==="rotate"&&box.universeDragMode(4,1000,true)==="pan","explicit pan gestures work only while zoomed");
 assert(box.universeBranchTotal({counts:{memories:100000}},"memories",120)===100000,"landmarks use source totals instead of projection counts");
 const ranked=box.universeSearchResults("First result  # fact-a\n  body: body\nSecond result  # fact-b");
 assert(ranked.map(result=>result.id).join(",")==="memory:fact-a,memory:fact-b","search preserves server ranking");
@@ -355,6 +364,9 @@ const camera={rotX:0,rotY:0,zoom:3,panX:4,panY:5};box.focusUniverseCamera({_gx:.
 assert(camera.zoom===1.22&&camera.panX===0&&camera.panY===0&&camera.rotY!==0,"selected search result focuses the camera");
 const rotated={rotX:0,rotY:0,panX:8,panY:9};box.rotateUniverseCamera(rotated,{x:10,y:20,rotX:.1,rotY:.2},60,70);
 assert(Math.abs(rotated.rotX-.3)<1e-9&&Math.abs(rotated.rotY-.4)<1e-9&&rotated.panX===0&&rotated.panY===0,"drag rotates the centered camera without panning the sphere");
+const panned={canvas:{clientWidth:1000,clientHeight:800},zoom:4,panX:0,panY:0};box.panUniverseCamera(panned,{x:10,y:20,panX:0,panY:0},5010,5020);
+assert(panned.panX>0&&panned.panX<5000&&panned.panY>0&&panned.panY<5000,"zoomed drag pans within reachable Galaxy bounds");panned.zoom=1;box.constrainUniversePan(panned);
+assert(panned.panX===0&&panned.panY===0,"returning to fitted zoom recenters the Galaxy");
 box.universeState={canvas:{clientWidth:1000,clientHeight:800},lens:"memory",zoom:3,panX:0,panY:0};
 box.universeCenterRegion(box.universeState,"memory");
 assert(box.universeState.zoom===1.22&&box.universeState.panX===0&&box.universeState.panY===0,"active landmark centers its camera");
@@ -364,9 +376,10 @@ const make=()=>Array.from({length:64},(_,i)=>({id:"memory:"+i,kind:"memory",comm
 const edges=Array.from({length:63},(_,i)=>({source:"memory:"+i,target:"memory:"+(i+1)}));
 const first=make(),second=make();box.universeLayout(first,edges);box.universeLayout(second,edges);
 assert(JSON.stringify(first.map(n=>[n._gx,n._gy,n._gz]))===JSON.stringify(second.map(n=>[n._gx,n._gy,n._gz])),"deterministic geography");
-assert(first.every(n=>Math.abs(Math.hypot(n._gx,n._gy,n._gz)-1)<.01),"nodes remain on the spherical atlas");
-assert(first.every(n=>n._layoutCommunity==="memory:0"),"stored community remains explicit in presentation state");
-assert(first.slice(1).every(n=>n._primaryParent===first[0].id),"community leaves retain their visual hub");
+assert(first.every(n=>Math.hypot(n._gx,n._gy)<=.95),"nodes remain inside the packed graph boundary");
+assert(first.every(n=>n._layoutCommunity==="memory:0"),"stored memory communities remain explicit");
+const hub=first.find(n=>n._layoutAnchor);
+assert(hub&&first.filter(n=>n!==hub).every(n=>n._primaryParent===hub.id),"community leaves retain their local hub");
 const scale=Array.from({length:4096},(_,i)=>({id:"memory:scale-"+i,kind:"memory",community:i,state:"semantic"}));
 box.universeLayout(scale,[]);
 assert(scale.filter(n=>n._overviewVisible).length<=120,"large atlases keep overview disclosure bounded");
@@ -389,7 +402,7 @@ assert(scale.filter(n=>n._overviewVisible).length<=120,"large atlases keep overv
   life.universeUpdate({scope:"overview",revision:"new",nodes:[overviewNode],edges:[],history:[],activity:[]});
   assert(refreshed==="second","production refresh wiring reloads selected detail after revision change");
 
-  life.openUniverseEntity=actualOpen;let resolveFetch,mergedResponses=0;life.universeMergeProjection=()=>{mergedResponses++};life.focusUniverseCamera=()=>{};life.selectUniverseNode=()=>{};
+  life.openUniverseEntity=actualOpen;let resolveFetch,mergedResponses=0,cameraMoves=0;life.universeMergeProjection=()=>{mergedResponses++};life.focusUniverseCamera=()=>{cameraMoves++};life.selectUniverseNode=()=>{};
   life.fetch=()=>new Promise(resolve=>{resolveFetch=resolve});
   const requestState={canvas:{isConnected:true},nodeMap:{"memory:a":{id:"memory:a"}},requestDraw:()=>{}};life.universeState=requestState;
   const stale=life.openUniverseEntity("memory:a");life.universeState={canvas:{isConnected:true}};
@@ -400,6 +413,12 @@ assert(scale.filter(n=>n._overviewVisible).length<=120,"large atlases keep overv
   const disconnected=life.openUniverseEntity("memory:a");requestState.canvas.isConnected=false;
   resolveFetch({ok:true,json:async()=>({nodes:[{id:"memory:a"}],edges:[]})});await disconnected;
   assert(mergedResponses===0,"production entity request ignores response after Galaxy disconnect");
+
+  requestState.canvas.isConnected=true;life.fetch=async()=>({ok:true,json:async()=>({nodes:[{id:"memory:a"}],edges:[]})});
+  await life.openUniverseEntity("memory:a",true,false);
+  assert(cameraMoves===0,"canvas node selection preserves the owner's camera");
+  await life.openUniverseEntity("memory:a");
+  assert(cameraMoves===1,"search and deep links retain intentional camera focus");
 })().catch(error=>{console.error(error);process.exit(1)});
 `
 	cmd := exec.Command(node, "-e", harness, filepath.Join("static", "universe.js"))

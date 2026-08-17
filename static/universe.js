@@ -4,7 +4,7 @@ let universePendingRegion = null;
 const universeKnown = new Set();
 const UNIVERSE_COLORS = {
   memory:"#426fbd", responsibility:"#b96b46", playbook:"#6f8050", schedule:"#879757",
-  reminder:"#b95d64", artifact:"#8870a3", conversation:"#4d8984", skill:"#6f6a9a", tool:"#70808a",
+  reminder:"#c44e67", artifact:"#8b5ec7", file:"#c8872f", conversation:"#298d83", skill:"#7560b3", tool:"#597780",
 };
 const UNIVERSE_LENSES = {
   universe:{label:"Universe",copy:"Everything Mino can truthfully account for."},
@@ -69,7 +69,7 @@ function universeView(snapshot, lens="universe"){
   return `<section class="living-field" data-lens="${lens}">
     <header class="field-summary">
       <div><h2>${lens==="universe"?"The whole field":meta.label}</h2><p>${meta.copy}</p></div>
-      <dl><div><dt>Memories</dt><dd>${Number(c.memories||0).toLocaleString()}</dd></div><div><dt>Relationships</dt><dd>${Number(c.relationships||0).toLocaleString()}</dd></div><div><dt>Responsibilities</dt><dd>${Number(c.responsibilities||0).toLocaleString()}</dd></div><div><dt>Live</dt><dd id="universe-live-count">${(snapshot?.activity||[]).length}</dd></div></dl>
+      <dl><div><dt>Memories</dt><dd>${Number(c.memories||0).toLocaleString()}</dd></div><div><dt>Relationships</dt><dd>${Number(c.relationships||0).toLocaleString()}</dd></div><div><dt>Files</dt><dd>${Number((c.files||0)+(c.artifacts||0)).toLocaleString()}</dd></div><div><dt>Live</dt><dd id="universe-live-count">${(snapshot?.activity||[]).length}</dd></div></dl>
     </header>
     <div class="field-stage">
       <div class="field-toolbar" aria-label="Living Field controls">
@@ -78,7 +78,7 @@ function universeView(snapshot, lens="universe"){
         <span class="field-live" id="universe-live"><i></i> Live</span><span class="field-renderer" id="universe-renderer" aria-live="polite">Detecting renderer</span>
       </div>
       <canvas id="universe-webgl" aria-hidden="true"></canvas>
-      <canvas id="universe-canvas" tabindex="0" aria-label="Interactive map of Mino's durable universe. Use search or the accessible index to inspect nodes."></canvas>
+      <canvas id="universe-canvas" tabindex="0" title="Left-drag to rotate. When zoomed, Shift-left-drag or right-drag to pan." aria-label="Interactive map of Mino's durable universe. Left-drag to rotate; when zoomed, Shift-left-drag or right-drag to pan. Use search or the accessible index to inspect nodes."></canvas>
       <aside class="field-inspector" id="universe-inspector" aria-live="polite">
         <button class="field-inspector-close" id="universe-inspector-close" type="button" aria-label="Close inspector">×</button>
         <span class="field-inspector-kicker">Living Field</span><h3>Select anything</h3><p>Choose a node to inspect what it is, where it came from, and how it connects.</p>
@@ -129,7 +129,7 @@ function universeNodeLink(node){
   if(node.kind==="skill") return "#memory/skills";
   if(node.kind==="tool") return "#system/tools";
   if(node.kind==="conversation") return "#conversations";
-  if(node.kind==="artifact") return "#system/files";
+  if(node.kind==="artifact"||node.kind==="file") return "#system/files";
   return "#system/database-reminders";
 }
 
@@ -163,6 +163,9 @@ function universeLandmarkStyle(zoom){
 }
 function universeDefaultZoom(width){return width<720?.78:1;}
 function universeDensityLevel(zoom){return zoom>=2.1?2:zoom>=1.5?1:0;}
+function universeDetailStyle(zoom){const progress=Math.max(0,Math.min(1,(zoom-4)/12));return {labels:zoom>=16,nodeScale:1+progress*.45};}
+function universeCanPan(zoom,width){return zoom>universeDefaultZoom(width)*1.05;}
+function universeDragMode(zoom,width,pan=false){return pan&&universeCanPan(zoom,width)?"pan":"rotate";}
 
 // --- Branching field layout (issue #182) ---
 // Deterministic, topology-led: synthetic trunk → identity branch anchors →
@@ -181,30 +184,32 @@ function universeAdjacency(nodes,edges){
   return adjacency;
 }
 
+function universeSpherePoint(center,local,angle){
+  const up=Math.abs(center[1])>.85?[1,0,0]:[0,1,0],tangent=[center[1]*up[2]-center[2]*up[1],center[2]*up[0]-center[0]*up[2],center[0]*up[1]-center[1]*up[0]],length=Math.hypot(...tangent),t=tangent.map(value=>value/length),b=[center[1]*t[2]-center[2]*t[1],center[2]*t[0]-center[0]*t[2],center[0]*t[1]-center[1]*t[0]],radial=Math.sqrt(Math.max(0,1-local*local));
+  return [center[0]*radial+t[0]*Math.cos(angle)*local+b[0]*Math.sin(angle)*local,center[1]*radial+t[1]*Math.cos(angle)*local+b[1]*Math.sin(angle)*local,center[2]*radial+t[2]*Math.cos(angle)*local+b[2]*Math.sin(angle)*local];
+}
+
 function universeLayout(nodes,edges=[]){
-  const branchOrder=["memories","tools","system","routines","work"];
-  const groups=Object.fromEntries(branchOrder.map(branch=>[branch,[]]));
-  nodes.forEach(node=>{const branch=universeBranch(node);(groups[branch]||groups.work).push(node);node._layoutAnchor=false;node._overviewVisible=false;node._overviewLabel=false;node._primaryParent=null;});
-  const clusterGroups=[],branchClusterCounts={};
-  branchOrder.forEach(branch=>{
-    const group=groups[branch].sort((a,b)=>(b._degree||0)-(a._degree||0)||a.id.localeCompare(b.id));
-    const communityKeys=[...new Set(group.map(node=>universeClusterKey(node,branch)))];
-    const communities=new Map(communityKeys.map(key=>[String(key),[]]));
-    group.forEach(node=>{const key=String(universeClusterKey(node,branch));(communities.get(key)||communities.get(String(communityKeys[0]))).push(node);});
-    branchClusterCounts[branch]=communities.size;let branchIndex=0;
-    communities.forEach((community,key)=>clusterGroups.push({branch,key,community,branchIndex:branchIndex++}));
+  const communities=new Map();
+  nodes.forEach(node=>{
+    const branch=universeBranch(node),key=String(universeClusterKey(node,branch));
+    if(!communities.has(key))communities.set(key,{branch,key,nodes:[]});
+    communities.get(key).nodes.push(node);
+    node._layoutAnchor=false;node._overviewVisible=false;node._overviewLabel=false;node._primaryParent=null;
   });
-  const branchVectors=universeBranchVectors();
-  clusterGroups.forEach(({branch,key,community,branchIndex},clusterIndex)=>{
-    const base=branchVectors[branch],up=Math.abs(base[1])>.85?[1,0,0]:[0,1,0],branchTangent=[base[1]*up[2]-base[2]*up[1],base[2]*up[0]-base[0]*up[2],base[0]*up[1]-base[1]*up[0]],branchTangentLength=Math.hypot(...branchTangent),branchBasis=branchTangent.map(value=>value/branchTangentLength),binormal=[base[1]*branchBasis[2]-base[2]*branchBasis[1],base[2]*branchBasis[0]-base[0]*branchBasis[2],base[0]*branchBasis[1]-base[1]*branchBasis[0]],branchCount=branchClusterCounts[branch],capLimit=branch==="memories"?1.28:branch==="work"?1.02:branch==="tools"?.76:branch==="routines"?.78:.62,cap=.025+capLimit*Math.sqrt(branchIndex/Math.max(1,branchCount-1)),phase=2.399963*branchIndex,center=base.map((value,index)=>value*Math.cos(cap)+branchBasis[index]*Math.sin(cap)*Math.cos(phase)+binormal[index]*Math.sin(cap)*Math.sin(phase)),
-      tangent=[center[1]*up[2]-center[2]*up[1],center[2]*up[0]-center[0]*up[2],center[0]*up[1]-center[1]*up[0]],tangentLength=Math.hypot(...tangent),t=tangent.map(value=>value/tangentLength),b=[center[1]*t[2]-center[2]*t[1],center[2]*t[0]-center[0]*t[2],center[0]*t[1]-center[1]*t[0]],hub=community[0],stride=Math.max(1,Math.ceil(community.length/12)),clusterVisible=branchIndex%Math.max(1,Math.ceil(branchCount/120))===0,clusterSpan=Math.min(branch==="memories"?.13:.15,.025+.012*Math.sqrt(community.length));
-    community.forEach((node,index)=>{
-      const local=index===0?0:.01+clusterSpan*Math.sqrt(universeRand(node.id,3)),angle=universeRand(node.id,4)*Math.PI*2,radial=Math.sqrt(Math.max(0,1-local*local)),vector=[center[0]*radial+t[0]*Math.cos(angle)*local+b[0]*Math.sin(angle)*local,center[1]*radial+t[1]*Math.cos(angle)*local+b[1]*Math.sin(angle)*local,center[2]*radial+t[2]*Math.cos(angle)*local+b[2]*Math.sin(angle)*local];
-      node._gx=vector[0];node._gy=vector[1];node._gz=vector[2];node.x=.5+vector[0]*.38;node.y=.51+vector[1]*.38;node._orbitBranch=branch;node._clusterIndex=clusterIndex;node._clusterSize=community.length;node._layoutCommunity=key;node._primaryParent=index===0?null:hub.id;node._layoutAnchor=index===0;node._overviewVisible=node.attention||clusterVisible&&(index===0||index%stride===0);node._overviewLabel=index===0&&clusterVisible;
-      if(node.kind==="memory")node._communityColor=node._communityColor||["#5375ad","#7d68a3","#45877f","#b87845","#ad6168","#5d8eaa","#9d6f96"][branchIndex%7];
+  const groups=[...communities.values()].sort((a,b)=>b.nodes.length-a.nodes.length||a.key.localeCompare(b.key));
+  const core=groups.filter(group=>group.branch==="memories"),rim=groups.filter(group=>group.branch!=="memories"),palette=["#2f72d0","#18a66c","#d34d59","#7d54c5","#d48b2d","#198e9f","#be5a98","#6f8f32"];
+  const place=(group,index,total,onRim,clusterIndex)=>{
+    const phase=2.399963*index+(onRim?.35:-.7),distance=onRim?.72+.11*((index%3)/2):(index===0?.08:.13+.43*Math.sqrt(index/Math.max(1,total-1))),cx=Math.cos(phase)*distance,cy=Math.sin(phase)*distance,span=Math.min(onRim?.14:.2,(onRim?.025:.03)+.012*Math.sqrt(group.nodes.length)),community=[...group.nodes].sort((a,b)=>(b._degree||0)-(a._degree||0)||a.id.localeCompare(b.id)),hub=community[0],stride=Math.max(1,Math.ceil(community.length/14));
+    community.forEach((node,nodeIndex)=>{
+      const local=nodeIndex===0?0:span*Math.sqrt((nodeIndex+.35)/community.length),angle=nodeIndex*2.399963+universeRand(node.id)*.65;
+      let gx=cx+Math.cos(angle)*local,gy=cy+Math.sin(angle)*local;const radius=Math.hypot(gx,gy);if(radius>.94){gx*=.94/radius;gy*=.94/radius;}
+      node._gx=gx;node._gy=gy;node._gz=(universeRand(node.id,2)-.5)*(onRim?.12:.2);node.x=.5+gx*.38;node.y=.51+gy*.38;node._orbitBranch=group.branch;node._clusterIndex=clusterIndex;node._clusterSize=community.length;node._clusterRadius=span;node._layoutCommunity=group.key;node._primaryParent=nodeIndex===0?null:hub.id;node._layoutAnchor=nodeIndex===0;node._overviewVisible=node.attention||clusterIndex<64&&(nodeIndex===0||nodeIndex%stride===0);node._overviewLabel=nodeIndex===0&&clusterIndex<10;
+      if(node.kind==="memory")node._communityColor=palette[clusterIndex%palette.length];
     });
-  });
-  nodes.forEach(node=>{if(!node._orbitBranch){node._gx=0;node._gy=0;node._gz=0;node.x=.5;node.y=.51;}});
+  };
+  core.forEach((group,index)=>place(group,index,core.length,false,index));
+  rim.forEach((group,index)=>place(group,index,rim.length,true,core.length+index));
 }
 
 function universeClusterKey(node,branch){
@@ -222,7 +227,7 @@ function universeClusterKey(node,branch){
 // Memory branch: communities are the sub-branches. Reuses the existing
 // stable derivation (single-community BFS anchors) with the memories anchor
 // as the branch origin. Communities fan outward; leaves ring their hubs.
-function layoutMemoryBranch(nodes,edges,adjacency,anchor){
+function layoutMemoryBranch(nodes,edges,adjacency,anchor,branchVector){
   const memories=nodes.filter(node=>node.kind==="memory"),stored=[...new Set(memories.map(node=>node.community))];
   if(memories.length>24&&stored.length<=1){
     const memoryIDs=new Set(memories.map(node=>node.id));
@@ -239,7 +244,7 @@ function layoutMemoryBranch(nodes,edges,adjacency,anchor){
   const communities=[...new Set(memories.map(node=>node._layoutCommunity))].sort((a,b)=>String(a).localeCompare(String(b)));
   const communityCenter=new Map(communities.map((id,index)=>{
     const angle=-1.15+index*2.399963, radius=.09+.2*Math.sqrt((index+.5)/Math.max(1,communities.length));
-    return [id,[anchor[0]+Math.cos(angle)*radius,anchor[1]+Math.sin(angle)*radius*.72]];
+    return [id,branchVector?universeSpherePoint(branchVector,Math.sin(.12+.18*Math.sqrt((index+.5)/Math.max(1,communities.length))),angle):[anchor[0]+Math.cos(angle)*radius,anchor[1]+Math.sin(angle)*radius*.72]];
   }));
   const communityHubs=new Map(communities.map(id=>[id,memories.filter(node=>node._layoutCommunity===id).sort((a,b)=>(b._degree||0)-(a._degree||0)||a.id.localeCompare(b.id))[0]?.id]));
   const communitySizes=new Map(communities.map(id=>[id,memories.filter(node=>node._layoutCommunity===id).length]));
@@ -254,14 +259,14 @@ function layoutMemoryBranch(nodes,edges,adjacency,anchor){
     const center=communityCenter.get(node._layoutCommunity)||anchor;
     node._communityColor=communityColors.get(node._layoutCommunity)||memoryPalette[0];
     if(node.id===communityHubs.get(node._layoutCommunity)){
-      node.x=center[0]; node.y=center[1]; node._layoutAnchor=true; node._overviewCommunity=overviewCommunities.has(node._layoutCommunity); node._overviewVisible=node._overviewCommunity; node._overviewLabel=overviewLabels.has(node._layoutCommunity); node._primaryParent=null;
+      if(branchVector){node._gx=center[0];node._gy=center[1];node._gz=center[2];node.x=.5+center[0]*.38;node.y=.51+center[1]*.38;}else{node.x=center[0];node.y=center[1];}
+      node._layoutAnchor=true; node._overviewCommunity=overviewCommunities.has(node._layoutCommunity); node._overviewVisible=node._overviewCommunity; node._overviewLabel=overviewLabels.has(node._layoutCommunity); node._primaryParent=null;
       return;
     }
     const index=communityCounts[node._layoutCommunity]||0; communityCounts[node._layoutCommunity]=index+1;
     const angle=index*2.399963+universeRand(node.id)*.45;
     const radius=.05*Math.sqrt(universeRand(node.id,1));
-    node.x=center[0]+Math.cos(angle)*radius;
-    node.y=center[1]+Math.sin(angle)*radius*.78;
+    if(branchVector){const point=universeSpherePoint(center,.035+.045*Math.sqrt(universeRand(node.id,1)),angle);node._gx=point[0];node._gy=point[1];node._gz=point[2];node.x=.5+point[0]*.38;node.y=.51+point[1]*.38;}else{node.x=center[0]+Math.cos(angle)*radius;node.y=center[1]+Math.sin(angle)*radius*.78;}
     node._overviewCommunity=overviewCommunities.has(node._layoutCommunity);
     node._overviewVisible=node._overviewCommunity&&node.id===communityHubs.get(node._layoutCommunity);
     node._overviewLabel=node._overviewVisible&&overviewLabels.has(node._layoutCommunity);
@@ -402,7 +407,7 @@ function universePlaceNode(node,state){
     else if(edge.target===node.id) other=state.nodeMap[edge.source];
     if(other&&other.x!==undefined&&(!best||(other._degree||0)>(best._degree||0))) best=other;
   });
-  const center=best&&best._gx!==undefined?[best._gx,best._gy,best._gz]:universeBranchVectors()[branch],up=Math.abs(center[1])>.85?[1,0,0]:[0,1,0],tangent=[center[1]*up[2]-center[2]*up[1],center[2]*up[0]-center[0]*up[2],center[0]*up[1]-center[1]*up[0]],length=Math.hypot(...tangent),t=tangent.map(value=>value/length),b=[center[1]*t[2]-center[2]*t[1],center[2]*t[0]-center[0]*t[2],center[0]*t[1]-center[1]*t[0]],angle=universeRand(node.id)*Math.PI*2,local=best ? .035+.025*universeRand(node.id,1) : .08+.05*universeRand(node.id,1),radial=Math.sqrt(Math.max(0,1-local*local)),vector=[center[0]*radial+t[0]*Math.cos(angle)*local+b[0]*Math.sin(angle)*local,center[1]*radial+t[1]*Math.cos(angle)*local+b[1]*Math.sin(angle)*local,center[2]*radial+t[2]*Math.cos(angle)*local+b[2]*Math.sin(angle)*local];
+  const seedAngle=universeRand(node.id)*Math.PI*2,seedRadius=branch==="memories"?.46:.74,center=best&&best._gx!==undefined?[best._gx,best._gy,best._gz]:[Math.cos(seedAngle)*seedRadius,Math.sin(seedAngle)*seedRadius,0],up=Math.abs(center[1])>.85?[1,0,0]:[0,1,0],tangent=[center[1]*up[2]-center[2]*up[1],center[2]*up[0]-center[0]*up[2],center[0]*up[1]-center[1]*up[0]],length=Math.hypot(...tangent),t=tangent.map(value=>value/length),b=[center[1]*t[2]-center[2]*t[1],center[2]*t[0]-center[0]*t[2],center[0]*t[1]-center[1]*t[0]],angle=universeRand(node.id,2)*Math.PI*2,local=best ? .035+.025*universeRand(node.id,1) : .04+.025*universeRand(node.id,1),radial=Math.sqrt(Math.max(0,1-local*local)),vector=[center[0]*radial+t[0]*Math.cos(angle)*local+b[0]*Math.sin(angle)*local,center[1]*radial+t[1]*Math.cos(angle)*local+b[1]*Math.sin(angle)*local,center[2]*radial+t[2]*Math.cos(angle)*local+b[2]*Math.sin(angle)*local];
   node._gx=vector[0];node._gy=vector[1];node._gz=vector[2];node.x=.5+vector[0]*.38;node.y=.51+vector[1]*.38;node._orbitBranch=branch;node._layoutAnchor=false;node._primaryParent=best?.id||null;
 }
 
@@ -453,7 +458,7 @@ function universeMergeProjection(projection){
 }
 
 let universeEntityController=null;
-async function openUniverseEntity(id,push=true){
+async function openUniverseEntity(id,push=true,focus=true){
   const state=universeState;if(!state||!id||!state.canvas.isConnected)return;
   universeEntityController?.abort();const controller=universeEntityController=new AbortController();
   try{
@@ -461,7 +466,7 @@ async function openUniverseEntity(id,push=true){
     if(!response.ok)throw new Error(`Galaxy returned ${response.status}`);
     const projection=await response.json();if(!universeEntityResponseCurrent(controller,state))return;universeMergeProjection(projection);
     const node=state.nodeMap[id];if(!node)return;
-    focusUniverseCamera(node,state);selectUniverseNode(id,push);state.requestDraw?.(240);
+    if(focus)focusUniverseCamera(node,state);selectUniverseNode(id,push);state.requestDraw?.(240);
     const target=document.getElementById("universe-search-results");if(target)target.hidden=true;
   }catch(error){if(error.name==="AbortError")return;
     const target=document.getElementById("universe-search-results");
@@ -545,8 +550,11 @@ function initUniverseWebGL(canvas){
       float aa=max(fwidth(d)*1.5,0.012);
       float alpha=1.0-smoothstep(1.0-aa,1.0+aa,d);
       if(alpha<=0.0)discard;
-      vec3 face=mix(tint.rgb,vec3(1.0),0.035*(1.0-d));
-      vec3 edge=mix(face,face*0.70,smoothstep(0.80,0.98,d));
+      vec3 normal=vec3(local,sqrt(max(0.0,1.0-d*d)));
+      vec3 lightDirection=normalize(vec3(-0.55,-0.70,1.0));
+      float light=max(dot(normal,lightDirection),0.0);
+      vec3 face=tint.rgb*(0.58+0.42*light)+vec3(0.24*pow(light,16.0));
+      vec3 edge=mix(face,face*0.68,smoothstep(0.76,0.99,d));
       outColor=vec4(edge,tint.a*alpha);
     }`);gl.compileShader(fragment);
   if(!gl.getShaderParameter(vertex,gl.COMPILE_STATUS)||!gl.getShaderParameter(fragment,gl.COMPILE_STATUS)){gl.deleteShader(vertex);gl.deleteShader(fragment);return null;}
@@ -563,8 +571,8 @@ function drawUniverseWebGL(renderer,state,screen,renderable,overview){
   const {gl}=renderer,canvas=state.glCanvas,dpr=renderer.dpr=Math.min(2,window.devicePixelRatio||1),rect=canvas.getBoundingClientRect();
   const width=Math.max(1,Math.round(rect.width*dpr)),height=Math.max(1,Math.round(rect.height*dpr));
   if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}
-  const data=[];
-  state.nodes.forEach(node=>{if(!renderable(node))return;const point=screen(node),depth=Math.max(0,Math.min(1,(point.depth+1)/2)),base=universeNodeRadius(node),scale=.72+depth*.48,emphasis=node===state.selected?1.6:overview&&(node._layoutAnchor||state.hovered===node)?1.14:1,radius=Math.min(node===state.selected?9:6,base*scale*emphasis)*dpr,alpha=node===state.selected||node===state.hovered?1:.24+depth*.72,color=universeWebGLColor(universeNodeColor(node),alpha);data.push(point.x*dpr,point.y*dpr,radius,...color);});
+  const data=[],detail=universeDetailStyle(state.zoom);
+  state.nodes.forEach(node=>{if(!renderable(node))return;const point=screen(node),depth=Math.max(0,Math.min(1,(point.depth+1)/2)),base=universeNodeRadius(node),scale=.72+depth*.48,emphasis=node===state.selected?1.6:overview&&(node._layoutAnchor||state.hovered===node)?1.14:1,radius=Math.min(node===state.selected?9:6,base*scale*emphasis)*detail.nodeScale*dpr,alpha=node===state.selected||node===state.hovered?1:.5+depth*.46,color=universeWebGLColor(universeNodeColor(node),alpha);data.push(point.x*dpr,point.y*dpr,radius,...color);});
   gl.viewport(0,0,width,height);gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);gl.useProgram(renderer.program);gl.uniform2f(renderer.viewport,width,height);gl.bindVertexArray(renderer.vao);gl.bindBuffer(gl.ARRAY_BUFFER,renderer.instances);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(data),gl.DYNAMIC_DRAW);gl.drawArraysInstanced(gl.TRIANGLE_STRIP,0,4,data.length/7);gl.bindVertexArray(null);renderer.count=data.length/7;
 }
 
@@ -572,6 +580,12 @@ function universeViewport(canvas,zoom=1){
   const width=canvas.clientWidth,height=canvas.clientHeight,mobile=width<720,top=mobile?184:122,bottom=mobile?208:170,available=Math.max(240,height-top-bottom),radius=Math.max(110,Math.min(width*.42,available*.5))*zoom;
   return {x:width*.5,y:top+available*.5,radius};
 }
+function constrainUniversePan(state,panX=state.panX,panY=state.panY){
+  const canvas=state.canvas,width=canvas.clientWidth,height=canvas.clientHeight;if(!universeCanPan(state.zoom,width)){state.panX=0;state.panY=0;return;}
+  const view=universeViewport(canvas,state.zoom),margin=Math.max(48,Math.min(96,Math.min(width,height)*.12));
+  state.panX=Math.max(margin-view.x-view.radius,Math.min(width-margin-view.x+view.radius,panX));state.panY=Math.max(margin-view.y-view.radius,Math.min(height-margin-view.y+view.radius,panY));
+}
+function panUniverseCamera(state,pointer,x,y){constrainUniversePan(state,pointer.panX+x-pointer.x,pointer.panY+y-pointer.y);}
 
 function initUniverse(snapshot,lens="universe"){
   const canvas=document.getElementById("universe-canvas");
@@ -588,7 +602,7 @@ function initUniverse(snapshot,lens="universe"){
   const dated=nodes.map(n=>n._time).filter(Number.isFinite);
   const state={canvas,nodes,nodeMap,edges,lens:UNIVERSE_LENSES[lens]?lens:"universe",selected:null,hovered:null,landmarkBoxes:[],currentNodeIDs:new Set(nodes.map(node=>node.id)),
     query:"",timeline:1,playing:false,playStarted:0,earliest:dated.length?Math.min(...dated):Date.now(),latest:dated.length?Math.max(...dated):Date.now(),
-    panX:0,panY:0,zoom:universeDefaultZoom(canvas.clientWidth),densityLevel:universeDensityLevel(universeDefaultZoom(canvas.clientWidth)),rotX:-.12,rotY:-.18,activities:[],snapshot,overviewSnapshot:snapshot,raf:0,animateUntil:0,pointer:null,degrees,glCanvas,webgl,detailNodes:[],detailEdges:[]};
+    panX:0,panY:0,zoom:universeDefaultZoom(canvas.clientWidth),densityLevel:universeDensityLevel(universeDefaultZoom(canvas.clientWidth)),rotX:0,rotY:0,activities:[],snapshot,overviewSnapshot:snapshot,raf:0,animateUntil:0,pointer:null,degrees,glCanvas,webgl,detailNodes:[],detailEdges:[]};
   universeState=state;
   nodes.forEach(node=>universeKnown.add(node.id));
   if(universePendingRegion===state.lens){universeCenterRegion(state,state.lens);universePendingRegion=null;}
@@ -597,6 +611,7 @@ function initUniverse(snapshot,lens="universe"){
     const rect=canvas.getBoundingClientRect(), dpr=Math.min(2,window.devicePixelRatio||1);
     const width=Math.max(1,Math.round(rect.width*dpr)),height=Math.max(1,Math.round(rect.height*dpr));
     if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}
+    constrainUniversePan(state);
   };
   const screen=node=>{
     const gx=node._gx??((node.x??.5)-.5)/.38,gy=node._gy??((node.y??.51)-.51)/.38,gz=node._gz??0,cy=Math.cos(state.rotY),sy=Math.sin(state.rotY),cx=Math.cos(state.rotX),sx=Math.sin(state.rotX),rx=gx*cy+gz*sy,rz=-gx*sy+gz*cy,ry=gy*cx-rz*sx,depth=gy*sx+rz*cx,perspective=1/(1-depth*.32),view=universeViewport(canvas,state.zoom),radius=view.radius*perspective;
@@ -622,55 +637,50 @@ function initUniverse(snapshot,lens="universe"){
     ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,canvas.clientWidth,canvas.clientHeight);
     ctx.fillStyle="rgba(246,247,244,.78)";ctx.fillRect(0,0,canvas.clientWidth,canvas.clientHeight);
     const incident=state.hovered||state.selected,edgeLayers=[[],[],[]];
-    const overview=overviewMode(),mobileOverview=canvas.clientWidth<720&&overview;
+    const overview=overviewMode(),mobileOverview=canvas.clientWidth<300&&overview;
     overviewAttention=universeOverviewAttention(nodes);
-    if(overview&&!mobileOverview) drawUniverseBranchLinks(ctx,state,screen,renderable);
-    if(!mobileOverview&&incident)drawUniverseCommunitySpokes(ctx,state,screen,renderable,incident);
+    if(!mobileOverview)drawUniverseScaffold(ctx,state,screen,visible,overview);
     if(state.webgl)drawUniverseWebGL(state.webgl,state,screen,mobileOverview?()=>false:renderable,overview);
     state.edges.forEach(edge=>{
-      if(mobileOverview||!incident) return;
       const a=nodeMap[edge.source],b=nodeMap[edge.target];if(!renderable(a)||!renderable(b)) return;
-      const backbone=a._primaryParent===b.id||b._primaryParent===a.id;
+      const memoryDependency=a.kind==="memory"&&b.kind==="memory"&&(edge.kind==="explicit"||edge.kind==="inferred"||!edge.kind);
+      if(mobileOverview) return;
       const sameMemory=a.kind==="memory"&&b.kind==="memory"&&a._layoutCommunity===b._layoutCommunity;
-      const endpointProminent=a.kind!=="memory"||b.kind!=="memory"||sameMemory;
       const hot=incident&&(a===incident||b===incident);
-      const sameCluster=a.kind==="memory"&&b.kind==="memory"&&a._clusterIndex===b._clusterIndex;
-      if(!hot&&!backbone&&edge.kind==="inferred"&&!sameCluster) return;
-      if(!hot&&!backbone&&edge.kind==="explicit"&&!endpointProminent) return;
-      const layer=hot?2:(backbone&&(edge.kind==="structural"||edge.kind==="explicit")?1:0);edgeLayers[layer].push({edge,a,b,hot,backbone});
+      const layer=hot?2:(edge.kind==="explicit"||edge.kind==="structural"||memoryDependency?1:0);edgeLayers[layer].push({edge,a,b,hot,memoryDependency});
     });
-    edgeLayers.forEach((layer,index)=>layer.forEach(({edge,a,b,hot,backbone})=>{
-      const pa=screen(a),pb=screen(b),focus=focused(a)&&focused(b),sameRegion=universeRegion(a)===universeRegion(b),sameMemory=a.kind==="memory"&&b.kind==="memory"&&a._layoutCommunity===b._layoutCommunity;
+    edgeLayers.forEach(layer=>layer.forEach(({edge,a,b,hot,memoryDependency})=>{
+      const pa=screen(a),pb=screen(b),sameRegion=universeRegion(a)===universeRegion(b),sameMemory=a.kind==="memory"&&b.kind==="memory"&&a._layoutCommunity===b._layoutCommunity;
       const distance=Math.max(1,Math.hypot(pb.x-pa.x,pb.y-pa.y)),bend=((universeHash(a.id+"|"+b.id)%2000)/1000-.5)*Math.min(70,distance*.2),normal={x:-(pb.y-pa.y)/distance*bend,y:(pb.x-pa.x)/distance*bend};
       ctx.beginPath();ctx.moveTo(pa.x,pa.y);ctx.quadraticCurveTo((pa.x+pb.x)/2+normal.x,(pa.y+pb.y)/2+normal.y,pb.x,pb.y);
       if(hot) {ctx.strokeStyle="rgba(36,98,192,.92)";ctx.lineWidth=2;}
-      else if(backbone&&edge.kind==="structural") {ctx.strokeStyle=focus?"rgba(184,105,47,.64)":"rgba(184,105,47,.22)";ctx.lineWidth=1.25;}
-      else if(backbone&&edge.kind==="explicit") {ctx.strokeStyle=focus?"rgba(47,101,184,.28)":"rgba(47,101,184,.08)";ctx.lineWidth=.85;}
-      else if(edge.kind==="explicit") {ctx.strokeStyle=focus?"rgba(47,101,184,.16)":"rgba(47,101,184,.05)";ctx.lineWidth=.7;}
-      else if(edge.kind==="inferred") {ctx.strokeStyle=sameMemory?universeNodeColor(a):sameRegion?"#52687d":"#52687d";ctx.lineWidth=.5;}
-      else {ctx.strokeStyle=sameMemory?universeNodeColor(a):sameRegion?"#52687d":"#52687d";ctx.lineWidth=sameMemory?.55:.4;}
-      ctx.globalAlpha=hot?1:(edge.kind==="inferred"||(!edge.kind&&sameMemory)?.08:.18)*(.35+Math.max(0,Math.min(1,(pa.depth+pb.depth+2)/4))*.65);ctx.setLineDash([]);ctx.stroke();ctx.globalAlpha=1;
+      else if(edge.kind==="structural") {ctx.strokeStyle="rgba(174,104,43,.28)";ctx.lineWidth=.8;}
+      else if(edge.kind==="explicit") {ctx.strokeStyle=memoryDependency?"rgba(42,92,168,.25)":"rgba(65,78,88,.22)";ctx.lineWidth=.65;}
+      else if(edge.kind==="inferred") {ctx.strokeStyle=sameMemory?universeNodeColor(a):"#607078";ctx.lineWidth=.45;}
+      else {ctx.strokeStyle=sameRegion?"#5b6d74":"#738087";ctx.lineWidth=.45;}
+      ctx.globalAlpha=hot?1:(edge.kind==="inferred"?.12:.55)*(.45+Math.max(0,Math.min(1,(pa.depth+pb.depth+2)/4))*.55);ctx.setLineDash([]);ctx.stroke();ctx.globalAlpha=1;
     }));
-    let visibleCount=0,renderedCount=0;
+    let visibleCount=0,renderedCount=0;const detailStyle=universeDetailStyle(state.zoom),labelBoxes=[];
     nodes.forEach(node=>{
       if(!visible(node)) return;visibleCount++;
       if(mobileOverview) return;
-      if(!renderable(node)) return;renderedCount++;if(state.webgl)return;
-      const p=screen(node),isFocused=focused(node),baseRadius=universeNodeRadius(node),r=baseRadius*(node===state.selected?1.55:overview&&(node._overviewVisible||overviewAttention.has(node.id))?1.45:1),color=universeNodeColor(node),degree=state.degrees[node.id]||0,prominent=overview?(node._overviewVisible||overviewAttention.has(node.id)):node.kind!=="memory"||degree>=4;
-      const active=state.activities.some(a=>a.nodeID===node.id&&now-a.started<4200),born=node._born&&now-node._born<2600,reduced=matchMedia("(prefers-reduced-motion: reduce)").matches;
-      if((active||born||node.attention)&&!reduced){
-        const pulse=r+(active||born?5:3)+Math.sin(now/(active||born?260:620))*(active||born?2:.8);ctx.beginPath();ctx.arc(p.x,p.y,pulse,0,Math.PI*2);ctx.strokeStyle=active?"rgba(32,126,105,.42)":born?"rgba(53,104,193,.36)":"rgba(181,60,66,.2)";ctx.lineWidth=1;ctx.stroke();
+      if(!renderable(node)) return;renderedCount++;const p=screen(node),color=universeNodeColor(node);
+      if(!state.webgl){
+        const isFocused=focused(node),baseRadius=universeNodeRadius(node),r=baseRadius*(node===state.selected?1.55:overview&&(node._overviewVisible||overviewAttention.has(node.id))?1.45:1)*detailStyle.nodeScale,degree=state.degrees[node.id]||0,prominent=overview?(node._overviewVisible||overviewAttention.has(node.id)):node.kind!=="memory"||degree>=4;
+        const active=state.activities.some(a=>a.nodeID===node.id&&now-a.started<4200),born=node._born&&now-node._born<2600,reduced=matchMedia("(prefers-reduced-motion: reduce)").matches;
+        if((active||born||node.attention)&&!reduced){
+          const pulse=r+(active||born?5:3)+Math.sin(now/(active||born?260:620))*(active||born?2:.8);ctx.beginPath();ctx.arc(p.x,p.y,pulse,0,Math.PI*2);ctx.strokeStyle=active?"rgba(32,126,105,.42)":born?"rgba(53,104,193,.36)":"rgba(181,60,66,.2)";ctx.lineWidth=1;ctx.stroke();
+        }
+        ctx.globalAlpha=isFocused?1:.2;ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();ctx.beginPath();ctx.arc(p.x-r*.28,p.y-r*.32,Math.max(.7,r*.2),0,Math.PI*2);ctx.fillStyle="rgba(255,255,255,.72)";ctx.fill();
+        if(prominent){ctx.beginPath();ctx.arc(p.x,p.y,r+2.2,0,Math.PI*2);ctx.strokeStyle=`${color}66`;ctx.lineWidth=1;ctx.stroke();}
+        if(node.attention){ctx.strokeStyle="#b53c42";ctx.lineWidth=1.5;ctx.stroke();}
+        ctx.globalAlpha=1;
       }
-      ctx.globalAlpha=isFocused?1:.2;ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();
-      if(prominent){ctx.beginPath();ctx.arc(p.x,p.y,r+2.2,0,Math.PI*2);ctx.strokeStyle=`${color}66`;ctx.lineWidth=1;ctx.stroke();}
-      if(node.attention){ctx.strokeStyle="#b53c42";ctx.lineWidth=1.5;ctx.stroke();}
-      ctx.globalAlpha=1;
-      const showLabel=(overview&&(node._overviewLabel||overviewAttention.has(node.id)))||(!overview&&node._layoutAnchor);
-      if(showLabel&&!state.hovered&&!state.selected){
-        const maxLabel=overview?(canvas.clientWidth<600?18:24):(canvas.clientWidth<600?17:23),label=node.label.length>maxLabel?node.label.slice(0,maxLabel-1)+"…":node.label;
-        ctx.font="650 10px ui-sans-serif,system-ui";ctx.fillStyle="#28323a";
-        const labelY=canvas.clientWidth<600&&node.x>.45&&node.x<.66?p.y+18:p.y+4;
-        if(node.x>.66){ctx.textAlign="right";ctx.fillText(label,p.x-11,labelY);}else if(node.x>.45){ctx.textAlign="center";ctx.fillText(label,p.x,labelY);}else{ctx.textAlign="left";ctx.fillText(label,p.x+11,labelY);}ctx.textAlign="start";
+      const showLabel=(overview&&(node._overviewLabel||overviewAttention.has(node.id)))||detailStyle.labels;
+      if(showLabel&&(!state.hovered&&!state.selected||detailStyle.labels)&&node!==state.hovered&&node!==state.selected){
+        const maxLabel=detailStyle.labels?(canvas.clientWidth<600?26:34):overview?(canvas.clientWidth<600?18:24):(canvas.clientWidth<600?17:23),label=node.label.length>maxLabel?node.label.slice(0,maxLabel-1)+"…":node.label;
+        ctx.font=`${detailStyle.labels?600:650} 10px ui-sans-serif,system-ui`;const width=ctx.measureText(label).width,right=detailStyle.labels?p.x>canvas.clientWidth*.72:node.x>.66,center=!detailStyle.labels&&node.x>.45&&!right,labelX=right?p.x-11:center?p.x:p.x+11,labelY=!detailStyle.labels&&canvas.clientWidth<600&&node.x>.45&&node.x<.66?p.y+18:p.y+4,box={x:right?labelX-width:center?labelX-width/2:labelX,y:labelY-10,width,height:13},onCanvas=box.x+box.width>0&&box.x<canvas.clientWidth&&box.y+box.height>0&&box.y<canvas.clientHeight,crowded=detailStyle.labels&&labelBoxes.some(other=>box.x<other.x+other.width+5&&box.x+box.width+5>other.x&&box.y<other.y+other.height+3&&box.y+box.height+3>other.y);
+        if(onCanvas&&!crowded){ctx.textAlign=right?"right":center?"center":"left";if(detailStyle.labels){ctx.strokeStyle="rgba(246,247,244,.94)";ctx.lineWidth=3;ctx.lineJoin="round";ctx.strokeText(label,labelX,labelY);labelBoxes.push(box);}ctx.fillStyle="#28323a";ctx.fillText(label,labelX,labelY);ctx.textAlign="start";}
       }
       if(node===state.hovered||node===state.selected){
         ctx.font="600 11px ui-sans-serif,system-ui";const label=node.label.length>42?node.label.slice(0,41)+"…":node.label;
@@ -678,7 +688,6 @@ function initUniverse(snapshot,lens="universe"){
       }
     });
     if(mobileOverview) drawMobileUniverseOverview(ctx,state,canvas,visible);
-    else drawUniverseScaffold(ctx,state,screen,visible,overview);
     state.activities=state.activities.filter(activity=>now-activity.started<4200);
     state.activities.forEach(activity=>{
       const node=nodeMap[activity.nodeID];if(!node||!visible(node))return;const end=screen(node),age=(now-activity.started)/1800,t=Math.min(1,age),start={x:canvas.clientWidth*.5,y:16};
@@ -714,15 +723,16 @@ function initUniverse(snapshot,lens="universe"){
     nodes.forEach(node=>{if(!visible(node))return;const p=screen(node),d=Math.hypot(p.x-x,p.y-y);if(d<distance){distance=d;hit=node;}});
     return {landmark:null,node:hit};
   };
-  canvas.onpointermove=event=>{if(state.pointer){rotateUniverseCamera(state,state.pointer,event.clientX,event.clientY);state.requestDraw();return;}const hit=pick(event.clientX,event.clientY);state.hovered=hit.node;canvas.style.cursor=hit.node||hit.landmark?"pointer":"grab";state.requestDraw();};
-  canvas.onpointerdown=event=>{const hit=pick(event.clientX,event.clientY);state.hovered=hit.node;if(!hit.node&&!hit.landmark){state.pointer={x:event.clientX,y:event.clientY,rotX:state.rotX,rotY:state.rotY};canvas.setPointerCapture(event.pointerId);}};
-  canvas.onpointerup=event=>{if(state.pointer){state.pointer=null;canvas.releasePointerCapture(event.pointerId);state.requestDraw();return;}const hit=pick(event.clientX,event.clientY);if(hit.landmark)focusUniverseRegion(hit.landmark);else if(hit.node)openUniverseEntity(hit.node.id);};
+  canvas.onpointermove=event=>{if(state.pointer){if(state.pointer.mode==="pan")panUniverseCamera(state,state.pointer,event.clientX,event.clientY);else rotateUniverseCamera(state,state.pointer,event.clientX,event.clientY);state.requestDraw();return;}const hit=pick(event.clientX,event.clientY);state.hovered=hit.node;canvas.style.cursor=hit.node||hit.landmark?"pointer":"grab";state.requestDraw();};
+  canvas.onpointerdown=event=>{const hit=pick(event.clientX,event.clientY),panGesture=event.shiftKey||event.button===2;state.hovered=hit.node;if(panGesture&&!universeCanPan(state.zoom,canvas.clientWidth))return;if(panGesture||!hit.node&&!hit.landmark){state.pointer={x:event.clientX,y:event.clientY,rotX:state.rotX,rotY:state.rotY,panX:state.panX,panY:state.panY,mode:universeDragMode(state.zoom,canvas.clientWidth,panGesture)};canvas.setPointerCapture(event.pointerId);canvas.style.cursor="grabbing";}};
+  canvas.onpointerup=event=>{if(state.pointer){state.pointer=null;canvas.releasePointerCapture(event.pointerId);canvas.style.cursor="grab";state.requestDraw();return;}const hit=pick(event.clientX,event.clientY);if(hit.landmark)focusUniverseRegion(hit.landmark);else if(hit.node)openUniverseEntity(hit.node.id,true,false);};
   canvas.onpointerleave=()=>{state.hovered=null;state.pointer=null;state.requestDraw();};
-  canvas.onwheel=event=>{event.preventDefault();state.zoom=Math.max(.65,Math.min(3,state.zoom*(event.deltaY>0 ? .9 : 1.1)));requestDensity();state.requestDraw();};
+  canvas.oncontextmenu=event=>event.preventDefault();
+  canvas.onwheel=event=>{event.preventDefault();state.zoom=Math.max(.65,Math.min(16,state.zoom*(event.deltaY>0 ? .92 : 1.08)));constrainUniversePan(state);requestDensity();state.requestDraw();};
   canvas.onkeydown=event=>{if(event.key==="Escape")selectUniverseNode(null);};
   document.getElementById("universe-search").oninput=event=>scheduleUniverseSearch(event.target.value.trim());
   document.getElementById("universe-search").onkeydown=event=>{if(event.key==="Escape"){event.currentTarget.value="";scheduleUniverseSearch("");canvas.focus();}};
-  document.getElementById("universe-fit").onclick=()=>{state.panX=0;state.panY=0;state.rotX=-.12;state.rotY=-.18;state.zoom=universeDefaultZoom(canvas.clientWidth);requestDensity();state.requestDraw(180);};
+  document.getElementById("universe-fit").onclick=()=>{state.panX=0;state.panY=0;state.rotX=0;state.rotY=0;state.zoom=universeDefaultZoom(canvas.clientWidth);requestDensity();state.requestDraw(180);};
   document.getElementById("universe-inspector-close").onclick=()=>selectUniverseNode(null);
   document.getElementById("universe-range").oninput=event=>{state.playing=false;state.timeline=Number(event.target.value)/1000;syncUniverseTimeline();state.requestDraw();};
   document.getElementById("universe-play").onclick=()=>playUniverseHistory();
@@ -799,34 +809,13 @@ function drawUniverseOrbit(ctx,screen,u,v,scale=1){
 // index, search, or the durable edge array. Lens landmarks remain clickable.
 function drawUniverseScaffold(ctx,state,screen,visible,overview=false){
   state.landmarkBoxes=[];
-  const style=universeLandmarkStyle(state.zoom),currentIDs=state.currentNodeIDs,center={_gx:0,_gy:0,_gz:0},vectors=universeBranchVectors();
-  const p=screen(center),view=universeViewport(state.canvas,state.zoom);
+  const center=screen({_gx:0,_gy:0,_gz:0}),view=universeViewport(state.canvas,state.zoom),anchors=state.nodes.filter(node=>node._layoutAnchor&&visible(node)&&state.currentNodeIDs.has(node.id)).sort((a,b)=>(b._clusterSize||0)-(a._clusterSize||0)||a.id.localeCompare(b.id));
   ctx.save();
-  ctx.globalAlpha=overview?.9:style.alpha*.6;
-  ctx.beginPath();ctx.arc(p.x,p.y,view.radius,0,Math.PI*2);ctx.strokeStyle="rgba(76,98,88,.18)";ctx.lineWidth=.8;ctx.stroke();
-  drawUniverseOrbit(ctx,screen,[1,0,0],[0,0,1]);
-  drawUniverseOrbit(ctx,screen,[0,1,0],[.64,0,.77],1.025);
-  drawUniverseOrbit(ctx,screen,[.82,.42,.39],[-.13,.79,-.60],1.045);
-  ctx.beginPath();ctx.arc(p.x,p.y,style.radius+5,0,Math.PI*2);ctx.strokeStyle="rgba(40,50,58,.28)";ctx.lineWidth=1;ctx.stroke();
-  ctx.beginPath();ctx.arc(p.x,p.y,style.radius,0,Math.PI*2);ctx.fillStyle="rgba(246,247,244,.94)";ctx.fill();ctx.strokeStyle="#28323a";ctx.lineWidth=1.6;ctx.stroke();
-  ctx.beginPath();ctx.arc(p.x,p.y,3.4,0,Math.PI*2);ctx.fillStyle="#28323a";ctx.fill();
-  ctx.font=`700 ${style.fontSize+1}px ui-monospace,SFMono-Regular,Menlo,monospace`;ctx.textAlign="center";ctx.textBaseline="middle";
-  ctx.lineWidth=4;ctx.lineJoin="round";ctx.strokeStyle="rgba(246,247,244,.94)";ctx.strokeText("MINO",p.x,p.y-style.radius-11);ctx.fillStyle="#28323a";ctx.fillText("MINO",p.x,p.y-style.radius-11);
-  state.landmarkBoxes.push({region:"now",x:p.x-24,y:p.y-24,width:48,height:48});
-  const lensOf={memories:"memory",tools:"tools",system:"system",routines:"routines",work:"work"};
-  const regionColors={memory:"#426fbd",work:"#c46f31",routines:"#697a43",system:"#65727d"};
-  UNIVERSE_BRANCHES.forEach(branch=>{
-    const vector=vectors[branch],lens=lensOf[branch],q=screen({_gx:vector[0],_gy:vector[1],_gz:vector[2]});
-    const shown=universeBranchCount(state.nodes,branch,visible,currentIDs),count=universeBranchTotal(state.overviewSnapshot,branch,shown);
-    const label=`${UNIVERSE_BRANCH_LABELS[branch].toUpperCase()} · ${count.toLocaleString()}`;
-    const color=UNIVERSE_BRANCH_COLORS[branch]||regionColors[lens]||"#65727d";
-    ctx.beginPath();ctx.arc(q.x,q.y,style.radius+4,0,Math.PI*2);ctx.strokeStyle=`${color}${overview?"55":"38"}`;ctx.lineWidth=overview?1.4:1;ctx.stroke();
-    ctx.beginPath();ctx.arc(q.x,q.y,style.radius,0,Math.PI*2);ctx.fillStyle="rgba(246,247,244,.94)";ctx.fill();ctx.strokeStyle=color;ctx.lineWidth=overview?1.8:1.4;ctx.stroke();
-    ctx.beginPath();ctx.arc(q.x,q.y,overview?4:3,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();
-    ctx.font=`700 ${overview?style.fontSize+1:style.fontSize}px ui-monospace,SFMono-Regular,Menlo,monospace`;ctx.textAlign="center";ctx.textBaseline="middle";
-    const labelY=q.y+style.radius+13;
-    ctx.lineWidth=4;ctx.lineJoin="round";ctx.strokeStyle="rgba(246,247,244,.94)";ctx.strokeText(label,q.x,labelY);ctx.fillStyle=color;ctx.fillText(label,q.x,labelY);
-    state.landmarkBoxes.push({region:lens,x:q.x-26,y:q.y-26,width:52,height:52});
+  ctx.beginPath();ctx.arc(center.x,center.y,view.radius*.98,0,Math.PI*2);ctx.fillStyle="rgba(255,255,255,.48)";ctx.fill();ctx.strokeStyle="rgba(62,78,72,.2)";ctx.lineWidth=1;ctx.stroke();
+  anchors.slice(0,120).forEach((node,index)=>{
+    const point=screen(node),radius=Math.max(8,view.radius*(node._clusterRadius||.025)),color=universeNodeColor(node);
+    ctx.beginPath();ctx.arc(point.x,point.y,radius,0,Math.PI*2);ctx.fillStyle=`${color}0c`;ctx.fill();ctx.strokeStyle=`${color}${overview?"55":"38"}`;ctx.lineWidth=index<10?1:.65;ctx.stroke();
+    if(index<8){const label=node.community_label||(node.kind==="file"?node.source:node.kind);ctx.font="700 8px ui-monospace,SFMono-Regular,Menlo,monospace";ctx.textAlign="center";ctx.fillStyle="#5d6965";ctx.fillText(String(label).toUpperCase(),point.x,point.y-radius-5);}
   });
   ctx.restore();
 }

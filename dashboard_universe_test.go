@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -45,6 +46,20 @@ func TestDashboardUniverseIncludesDurableStateAndHistory(t *testing.T) {
 	}
 	db.Exec("INSERT INTO reminders(message,remind_at,status) VALUES('Check outcome','2026-08-02T09:00:00Z','pending')")
 	db.Exec("INSERT INTO session_artifacts(path,session_id,label,size,created_at) VALUES('results/report.md','session-a','Report',42,'2026-08-01T12:00:00Z')")
+	for _, dir := range []string{filepath.Join(home, "results"), filepath.Join(home, "traces")} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, body := range map[string]string{
+		filepath.Join(home, "results", "report.md"):     "registered artifact",
+		filepath.Join(home, "results", "untracked.txt"): "durable output",
+		filepath.Join(home, "traces", "turn.jsonl"):     "{}\n",
+	} {
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	previous := dashCore
 	dashCore = &Core{
@@ -68,6 +83,9 @@ func TestDashboardUniverseIncludesDurableStateAndHistory(t *testing.T) {
 	if payload.Counts.Responsibilities != 1 || payload.Counts.Schedules != 1 || payload.Counts.Reminders != 1 {
 		t.Fatalf("operational counts = %+v", payload.Counts)
 	}
+	if payload.Counts.Artifacts != 1 || payload.Counts.Files != 2 {
+		t.Fatalf("output counts = %+v", payload.Counts)
+	}
 	kinds := map[string]int{}
 	for _, node := range payload.Nodes {
 		kinds[node.Kind]++
@@ -76,7 +94,7 @@ func TestDashboardUniverseIncludesDurableStateAndHistory(t *testing.T) {
 		}
 	}
 	if kinds["memory"] != 2 || kinds["responsibility"] != 1 || kinds["schedule"] != 1 ||
-		kinds["reminder"] != 1 || kinds["artifact"] != 1 {
+		kinds["reminder"] != 1 || kinds["artifact"] != 1 || kinds["file"] != 2 {
 		t.Fatalf("node kinds = %+v", kinds)
 	}
 	if len(payload.Edges) != 2 || payload.Edges[0].Relation == "" {
