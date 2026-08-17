@@ -713,7 +713,7 @@ function initUniverse(snapshot,lens="universe"){
   canvas.onpointerdown=event=>{const hit=pick(event.clientX,event.clientY);state.hovered=hit.node;if(!hit.node&&!hit.landmark){state.pointer={x:event.clientX,y:event.clientY,rotX:state.rotX,rotY:state.rotY};canvas.setPointerCapture(event.pointerId);}};
   canvas.onpointerup=event=>{if(state.pointer){state.pointer=null;canvas.releasePointerCapture(event.pointerId);state.requestDraw();return;}const hit=pick(event.clientX,event.clientY);if(hit.landmark)focusUniverseRegion(hit.landmark);else if(hit.node)openUniverseEntity(hit.node.id);};
   canvas.onpointerleave=()=>{state.hovered=null;state.pointer=null;state.requestDraw();};
-  canvas.onwheel=event=>{event.preventDefault();state.zoom=Math.max(.65,Math.min(3,state.zoom*(event.deltaY>0 ? .9 : 1.1)));requestDensity();state.requestDraw();};
+  canvas.onwheel=event=>{event.preventDefault();state.zoom=Math.max(.65,Math.min(8,state.zoom*(event.deltaY>0 ? .92 : 1.08)));requestDensity();state.requestDraw();};
   canvas.onkeydown=event=>{if(event.key==="Escape")selectUniverseNode(null);};
   document.getElementById("universe-search").oninput=event=>scheduleUniverseSearch(event.target.value.trim());
   document.getElementById("universe-search").onkeydown=event=>{if(event.key==="Escape"){event.currentTarget.value="";scheduleUniverseSearch("");canvas.focus();}};
