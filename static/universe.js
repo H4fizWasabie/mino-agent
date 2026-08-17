@@ -164,6 +164,7 @@ function universeLandmarkStyle(zoom){
 function universeDefaultZoom(width){return width<720?.78:1;}
 function universeDensityLevel(zoom){return zoom>=2.1?2:zoom>=1.5?1:0;}
 function universeDetailStyle(zoom){const progress=Math.max(0,Math.min(1,(zoom-4)/12));return {labels:zoom>=16,nodeScale:1+progress*.45};}
+function universeDragMode(zoom,width){return zoom>universeDefaultZoom(width)*1.05?"pan":"rotate";}
 
 // --- Branching field layout (issue #182) ---
 // Deterministic, topology-led: synthetic trunk → identity branch anchors →
@@ -578,6 +579,12 @@ function universeViewport(canvas,zoom=1){
   const width=canvas.clientWidth,height=canvas.clientHeight,mobile=width<720,top=mobile?184:122,bottom=mobile?208:170,available=Math.max(240,height-top-bottom),radius=Math.max(110,Math.min(width*.42,available*.5))*zoom;
   return {x:width*.5,y:top+available*.5,radius};
 }
+function constrainUniversePan(state,panX=state.panX,panY=state.panY){
+  const canvas=state.canvas,width=canvas.clientWidth,height=canvas.clientHeight;if(universeDragMode(state.zoom,width)==="rotate"){state.panX=0;state.panY=0;return;}
+  const view=universeViewport(canvas,state.zoom),margin=Math.max(48,Math.min(96,Math.min(width,height)*.12));
+  state.panX=Math.max(margin-view.x-view.radius,Math.min(width-margin-view.x+view.radius,panX));state.panY=Math.max(margin-view.y-view.radius,Math.min(height-margin-view.y+view.radius,panY));
+}
+function panUniverseCamera(state,pointer,x,y){constrainUniversePan(state,pointer.panX+x-pointer.x,pointer.panY+y-pointer.y);}
 
 function initUniverse(snapshot,lens="universe"){
   const canvas=document.getElementById("universe-canvas");
@@ -603,6 +610,7 @@ function initUniverse(snapshot,lens="universe"){
     const rect=canvas.getBoundingClientRect(), dpr=Math.min(2,window.devicePixelRatio||1);
     const width=Math.max(1,Math.round(rect.width*dpr)),height=Math.max(1,Math.round(rect.height*dpr));
     if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}
+    constrainUniversePan(state);
   };
   const screen=node=>{
     const gx=node._gx??((node.x??.5)-.5)/.38,gy=node._gy??((node.y??.51)-.51)/.38,gz=node._gz??0,cy=Math.cos(state.rotY),sy=Math.sin(state.rotY),cx=Math.cos(state.rotX),sx=Math.sin(state.rotX),rx=gx*cy+gz*sy,rz=-gx*sy+gz*cy,ry=gy*cx-rz*sx,depth=gy*sx+rz*cx,perspective=1/(1-depth*.32),view=universeViewport(canvas,state.zoom),radius=view.radius*perspective;
@@ -714,11 +722,11 @@ function initUniverse(snapshot,lens="universe"){
     nodes.forEach(node=>{if(!visible(node))return;const p=screen(node),d=Math.hypot(p.x-x,p.y-y);if(d<distance){distance=d;hit=node;}});
     return {landmark:null,node:hit};
   };
-  canvas.onpointermove=event=>{if(state.pointer){rotateUniverseCamera(state,state.pointer,event.clientX,event.clientY);state.requestDraw();return;}const hit=pick(event.clientX,event.clientY);state.hovered=hit.node;canvas.style.cursor=hit.node||hit.landmark?"pointer":"grab";state.requestDraw();};
-  canvas.onpointerdown=event=>{const hit=pick(event.clientX,event.clientY);state.hovered=hit.node;if(!hit.node&&!hit.landmark){state.pointer={x:event.clientX,y:event.clientY,rotX:state.rotX,rotY:state.rotY};canvas.setPointerCapture(event.pointerId);}};
-  canvas.onpointerup=event=>{if(state.pointer){state.pointer=null;canvas.releasePointerCapture(event.pointerId);state.requestDraw();return;}const hit=pick(event.clientX,event.clientY);if(hit.landmark)focusUniverseRegion(hit.landmark);else if(hit.node)openUniverseEntity(hit.node.id,true,false);};
+  canvas.onpointermove=event=>{if(state.pointer){if(state.pointer.mode==="pan")panUniverseCamera(state,state.pointer,event.clientX,event.clientY);else rotateUniverseCamera(state,state.pointer,event.clientX,event.clientY);state.requestDraw();return;}const hit=pick(event.clientX,event.clientY);state.hovered=hit.node;canvas.style.cursor=hit.node||hit.landmark?"pointer":"grab";state.requestDraw();};
+  canvas.onpointerdown=event=>{const hit=pick(event.clientX,event.clientY);state.hovered=hit.node;if(!hit.node&&!hit.landmark){state.pointer={x:event.clientX,y:event.clientY,rotX:state.rotX,rotY:state.rotY,panX:state.panX,panY:state.panY,mode:universeDragMode(state.zoom,canvas.clientWidth)};canvas.setPointerCapture(event.pointerId);canvas.style.cursor="grabbing";}};
+  canvas.onpointerup=event=>{if(state.pointer){state.pointer=null;canvas.releasePointerCapture(event.pointerId);canvas.style.cursor="grab";state.requestDraw();return;}const hit=pick(event.clientX,event.clientY);if(hit.landmark)focusUniverseRegion(hit.landmark);else if(hit.node)openUniverseEntity(hit.node.id,true,false);};
   canvas.onpointerleave=()=>{state.hovered=null;state.pointer=null;state.requestDraw();};
-  canvas.onwheel=event=>{event.preventDefault();state.zoom=Math.max(.65,Math.min(16,state.zoom*(event.deltaY>0 ? .92 : 1.08)));requestDensity();state.requestDraw();};
+  canvas.onwheel=event=>{event.preventDefault();state.zoom=Math.max(.65,Math.min(16,state.zoom*(event.deltaY>0 ? .92 : 1.08)));constrainUniversePan(state);requestDensity();state.requestDraw();};
   canvas.onkeydown=event=>{if(event.key==="Escape")selectUniverseNode(null);};
   document.getElementById("universe-search").oninput=event=>scheduleUniverseSearch(event.target.value.trim());
   document.getElementById("universe-search").onkeydown=event=>{if(event.key==="Escape"){event.currentTarget.value="";scheduleUniverseSearch("");canvas.focus();}};

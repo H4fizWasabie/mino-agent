@@ -276,7 +276,7 @@ func TestDashboardLivingFieldSurfaceContract(t *testing.T) {
 		`requestAnimationFrame(draw)`, `function selectUniverseNode(id,push=true)`, `Open full view`,
 		`function universeRegionCenters()`, `function universeLandmarkCount(nodes,region,visible,currentIDs)`,
 		`function universeLandmarkStyle(zoom)`, `function universeDefaultZoom(width)`, `function focusUniverseRegion(region)`,
-		`function universeDensityLevel(zoom)`, `function universeDetailStyle(zoom)`, `sqrt(max(0.0,1.0-d*d))`, `Math.min(16,state.zoom`, `scope=overview&level=`, `state.densityLevel`, `perspective=1/(1-depth*.32)`, `const renderable=node=>visible(node)`,
+		`function universeDensityLevel(zoom)`, `function universeDetailStyle(zoom)`, `function universeDragMode(zoom,width)`, `function panUniverseCamera(state,pointer,x,y)`, `sqrt(max(0.0,1.0-d*d))`, `Math.min(16,state.zoom`, `scope=overview&level=`, `state.densityLevel`, `perspective=1/(1-depth*.32)`, `const renderable=node=>visible(node)`,
 		`openUniverseEntity(hit.node.id,true,false)`,
 		`state.currentNodeIDs=new Set(incoming.keys())`,
 	} {
@@ -326,7 +326,7 @@ function extract(name){
   }
   throw new Error("unterminated "+name);
 }
-const names=["universeHash","universeRand","universeRegion","universeFocus","universeNodeLink","universeRegionCenters","universeLandmarkCount","universeLandmarkStyle","universeDefaultZoom","universeDensityLevel","universeDetailStyle","universeLayout","universeClusterKey","universeCenterRegion","focusUniverseRegion","focusUniverseCamera","rotateUniverseCamera","universeSearchResults","universeBranch","universeBranchAnchors","universeBranchVectors","universeBranchTotal","universeProjectionMerge","universeDetailNeedsRefresh","universeEntityResponseCurrent","universeAdjacency","universeSpherePoint","layoutMemoryBranch","layoutIdentityBranch","layoutWorkBranch"];
+const names=["universeHash","universeRand","universeRegion","universeFocus","universeNodeLink","universeRegionCenters","universeLandmarkCount","universeLandmarkStyle","universeDefaultZoom","universeDensityLevel","universeDetailStyle","universeDragMode","universeViewport","constrainUniversePan","panUniverseCamera","universeLayout","universeClusterKey","universeCenterRegion","focusUniverseRegion","focusUniverseCamera","rotateUniverseCamera","universeSearchResults","universeBranch","universeBranchAnchors","universeBranchVectors","universeBranchTotal","universeProjectionMerge","universeDetailNeedsRefresh","universeEntityResponseCurrent","universeAdjacency","universeSpherePoint","layoutMemoryBranch","layoutIdentityBranch","layoutWorkBranch"];
 const box={location:{hash:"#universe"},universePendingRegion:null};vm.runInNewContext(names.map(extract).join("\n"),box);
 function assert(ok,label){if(!ok)throw new Error(label)}
 assert(box.universeHash("memory:a")===box.universeHash("memory:a"),"stable hash");
@@ -349,6 +349,7 @@ assert(overview.alpha>detail.alpha&&overview.radius>detail.radius,"landmarks lea
 assert(box.universeDefaultZoom(390)<box.universeDefaultZoom(1440),"phone starts at overview scale");
 assert(box.universeDensityLevel(1)===0&&box.universeDensityLevel(1.5)===1&&box.universeDensityLevel(2.1)===2,"zoom selects bounded density levels");
 assert(!box.universeDetailStyle(15.99).labels&&box.universeDetailStyle(16).labels&&box.universeDetailStyle(16).nodeScale>box.universeDetailStyle(4).nodeScale,"only maximum zoom reveals labels while spheres enlarge progressively");
+assert(box.universeDragMode(1,1000)==="rotate"&&box.universeDragMode(1.08,1000)==="pan","drag pans only after leaving fitted zoom");
 assert(box.universeBranchTotal({counts:{memories:100000}},"memories",120)===100000,"landmarks use source totals instead of projection counts");
 const ranked=box.universeSearchResults("First result  # fact-a\n  body: body\nSecond result  # fact-b");
 assert(ranked.map(result=>result.id).join(",")==="memory:fact-a,memory:fact-b","search preserves server ranking");
@@ -362,6 +363,9 @@ const camera={rotX:0,rotY:0,zoom:3,panX:4,panY:5};box.focusUniverseCamera({_gx:.
 assert(camera.zoom===1.22&&camera.panX===0&&camera.panY===0&&camera.rotY!==0,"selected search result focuses the camera");
 const rotated={rotX:0,rotY:0,panX:8,panY:9};box.rotateUniverseCamera(rotated,{x:10,y:20,rotX:.1,rotY:.2},60,70);
 assert(Math.abs(rotated.rotX-.3)<1e-9&&Math.abs(rotated.rotY-.4)<1e-9&&rotated.panX===0&&rotated.panY===0,"drag rotates the centered camera without panning the sphere");
+const panned={canvas:{clientWidth:1000,clientHeight:800},zoom:4,panX:0,panY:0};box.panUniverseCamera(panned,{x:10,y:20,panX:0,panY:0},5010,5020);
+assert(panned.panX>0&&panned.panX<5000&&panned.panY>0&&panned.panY<5000,"zoomed drag pans within reachable Galaxy bounds");panned.zoom=1;box.constrainUniversePan(panned);
+assert(panned.panX===0&&panned.panY===0,"returning to fitted zoom recenters the Galaxy");
 box.universeState={canvas:{clientWidth:1000,clientHeight:800},lens:"memory",zoom:3,panX:0,panY:0};
 box.universeCenterRegion(box.universeState,"memory");
 assert(box.universeState.zoom===1.22&&box.universeState.panX===0&&box.universeState.panY===0,"active landmark centers its camera");
