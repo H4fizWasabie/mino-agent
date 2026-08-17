@@ -276,7 +276,7 @@ func TestDashboardLivingFieldSurfaceContract(t *testing.T) {
 		`requestAnimationFrame(draw)`, `function selectUniverseNode(id,push=true)`, `Open full view`,
 		`function universeRegionCenters()`, `function universeLandmarkCount(nodes,region,visible,currentIDs)`,
 		`function universeLandmarkStyle(zoom)`, `function universeDefaultZoom(width)`, `function focusUniverseRegion(region)`,
-		`function universeDensityLevel(zoom)`, `function universeDetailStyle(zoom)`, `function universeDragMode(zoom,width,rotate=false)`, `function panUniverseCamera(state,pointer,x,y)`, `sqrt(max(0.0,1.0-d*d))`, `Math.min(16,state.zoom`, `scope=overview&level=`, `state.densityLevel`, `perspective=1/(1-depth*.32)`, `const renderable=node=>visible(node)`,
+		`function universeDensityLevel(zoom)`, `function universeDetailStyle(zoom)`, `function universeCanPan(zoom,width)`, `function universeDragMode(zoom,width,pan=false)`, `function panUniverseCamera(state,pointer,x,y)`, `event.shiftKey||event.button===2`, `canvas.oncontextmenu=`, `sqrt(max(0.0,1.0-d*d))`, `Math.min(16,state.zoom`, `scope=overview&level=`, `state.densityLevel`, `perspective=1/(1-depth*.32)`, `const renderable=node=>visible(node)`,
 		`openUniverseEntity(hit.node.id,true,false)`,
 		`state.currentNodeIDs=new Set(incoming.keys())`,
 	} {
@@ -326,7 +326,7 @@ function extract(name){
   }
   throw new Error("unterminated "+name);
 }
-const names=["universeHash","universeRand","universeRegion","universeFocus","universeNodeLink","universeRegionCenters","universeLandmarkCount","universeLandmarkStyle","universeDefaultZoom","universeDensityLevel","universeDetailStyle","universeDragMode","universeViewport","constrainUniversePan","panUniverseCamera","universeLayout","universeClusterKey","universeCenterRegion","focusUniverseRegion","focusUniverseCamera","rotateUniverseCamera","universeSearchResults","universeBranch","universeBranchAnchors","universeBranchVectors","universeBranchTotal","universeProjectionMerge","universeDetailNeedsRefresh","universeEntityResponseCurrent","universeAdjacency","universeSpherePoint","layoutMemoryBranch","layoutIdentityBranch","layoutWorkBranch"];
+const names=["universeHash","universeRand","universeRegion","universeFocus","universeNodeLink","universeRegionCenters","universeLandmarkCount","universeLandmarkStyle","universeDefaultZoom","universeDensityLevel","universeDetailStyle","universeCanPan","universeDragMode","universeViewport","constrainUniversePan","panUniverseCamera","universeLayout","universeClusterKey","universeCenterRegion","focusUniverseRegion","focusUniverseCamera","rotateUniverseCamera","universeSearchResults","universeBranch","universeBranchAnchors","universeBranchVectors","universeBranchTotal","universeProjectionMerge","universeDetailNeedsRefresh","universeEntityResponseCurrent","universeAdjacency","universeSpherePoint","layoutMemoryBranch","layoutIdentityBranch","layoutWorkBranch"];
 const box={location:{hash:"#universe"},universePendingRegion:null};vm.runInNewContext(names.map(extract).join("\n"),box);
 function assert(ok,label){if(!ok)throw new Error(label)}
 assert(box.universeHash("memory:a")===box.universeHash("memory:a"),"stable hash");
@@ -349,8 +349,8 @@ assert(overview.alpha>detail.alpha&&overview.radius>detail.radius,"landmarks lea
 assert(box.universeDefaultZoom(390)<box.universeDefaultZoom(1440),"phone starts at overview scale");
 assert(box.universeDensityLevel(1)===0&&box.universeDensityLevel(1.5)===1&&box.universeDensityLevel(2.1)===2,"zoom selects bounded density levels");
 assert(!box.universeDetailStyle(15.99).labels&&box.universeDetailStyle(16).labels&&box.universeDetailStyle(16).nodeScale>box.universeDetailStyle(4).nodeScale,"only maximum zoom reveals labels while spheres enlarge progressively");
-assert(box.universeDragMode(1,1000)==="rotate"&&box.universeDragMode(1.08,1000)==="pan","drag pans only after leaving fitted zoom");
-assert(box.universeDragMode(4,1000,true)==="rotate","Shift-drag keeps rotation available while zoomed");
+assert(box.universeDragMode(1,1000)==="rotate"&&box.universeDragMode(4,1000)==="rotate","plain left-drag always rotates");
+assert(box.universeDragMode(1,1000,true)==="rotate"&&box.universeDragMode(4,1000,true)==="pan","explicit pan gestures work only while zoomed");
 assert(box.universeBranchTotal({counts:{memories:100000}},"memories",120)===100000,"landmarks use source totals instead of projection counts");
 const ranked=box.universeSearchResults("First result  # fact-a\n  body: body\nSecond result  # fact-b");
 assert(ranked.map(result=>result.id).join(",")==="memory:fact-a,memory:fact-b","search preserves server ranking");
