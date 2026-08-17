@@ -181,6 +181,11 @@ function universeAdjacency(nodes,edges){
   return adjacency;
 }
 
+function universeSpherePoint(center,local,angle){
+  const up=Math.abs(center[1])>.85?[1,0,0]:[0,1,0],tangent=[center[1]*up[2]-center[2]*up[1],center[2]*up[0]-center[0]*up[2],center[0]*up[1]-center[1]*up[0]],length=Math.hypot(...tangent),t=tangent.map(value=>value/length),b=[center[1]*t[2]-center[2]*t[1],center[2]*t[0]-center[0]*t[2],center[0]*t[1]-center[1]*t[0]],radial=Math.sqrt(Math.max(0,1-local*local));
+  return [center[0]*radial+t[0]*Math.cos(angle)*local+b[0]*Math.sin(angle)*local,center[1]*radial+t[1]*Math.cos(angle)*local+b[1]*Math.sin(angle)*local,center[2]*radial+t[2]*Math.cos(angle)*local+b[2]*Math.sin(angle)*local];
+}
+
 function universeLayout(nodes,edges=[]){
   const branchOrder=["memories","tools","system","routines","work"];
   const groups=Object.fromEntries(branchOrder.map(branch=>[branch,[]]));
@@ -205,6 +210,7 @@ function universeLayout(nodes,edges=[]){
     });
   });
   nodes.forEach(node=>{if(!node._orbitBranch){node._gx=0;node._gy=0;node._gz=0;node.x=.5;node.y=.51;}});
+  layoutMemoryBranch(nodes,edges,universeAdjacency(nodes,edges),universeBranchAnchors().memories,universeBranchVectors().memories);
 }
 
 function universeClusterKey(node,branch){
@@ -222,7 +228,7 @@ function universeClusterKey(node,branch){
 // Memory branch: communities are the sub-branches. Reuses the existing
 // stable derivation (single-community BFS anchors) with the memories anchor
 // as the branch origin. Communities fan outward; leaves ring their hubs.
-function layoutMemoryBranch(nodes,edges,adjacency,anchor){
+function layoutMemoryBranch(nodes,edges,adjacency,anchor,branchVector){
   const memories=nodes.filter(node=>node.kind==="memory"),stored=[...new Set(memories.map(node=>node.community))];
   if(memories.length>24&&stored.length<=1){
     const memoryIDs=new Set(memories.map(node=>node.id));
@@ -239,7 +245,7 @@ function layoutMemoryBranch(nodes,edges,adjacency,anchor){
   const communities=[...new Set(memories.map(node=>node._layoutCommunity))].sort((a,b)=>String(a).localeCompare(String(b)));
   const communityCenter=new Map(communities.map((id,index)=>{
     const angle=-1.15+index*2.399963, radius=.09+.2*Math.sqrt((index+.5)/Math.max(1,communities.length));
-    return [id,[anchor[0]+Math.cos(angle)*radius,anchor[1]+Math.sin(angle)*radius*.72]];
+    return [id,branchVector?universeSpherePoint(branchVector,Math.sin(.12+.18*Math.sqrt((index+.5)/Math.max(1,communities.length))),angle):[anchor[0]+Math.cos(angle)*radius,anchor[1]+Math.sin(angle)*radius*.72]];
   }));
   const communityHubs=new Map(communities.map(id=>[id,memories.filter(node=>node._layoutCommunity===id).sort((a,b)=>(b._degree||0)-(a._degree||0)||a.id.localeCompare(b.id))[0]?.id]));
   const communitySizes=new Map(communities.map(id=>[id,memories.filter(node=>node._layoutCommunity===id).length]));
@@ -254,14 +260,14 @@ function layoutMemoryBranch(nodes,edges,adjacency,anchor){
     const center=communityCenter.get(node._layoutCommunity)||anchor;
     node._communityColor=communityColors.get(node._layoutCommunity)||memoryPalette[0];
     if(node.id===communityHubs.get(node._layoutCommunity)){
-      node.x=center[0]; node.y=center[1]; node._layoutAnchor=true; node._overviewCommunity=overviewCommunities.has(node._layoutCommunity); node._overviewVisible=node._overviewCommunity; node._overviewLabel=overviewLabels.has(node._layoutCommunity); node._primaryParent=null;
+      if(branchVector){node._gx=center[0];node._gy=center[1];node._gz=center[2];node.x=.5+center[0]*.38;node.y=.51+center[1]*.38;}else{node.x=center[0];node.y=center[1];}
+      node._layoutAnchor=true; node._overviewCommunity=overviewCommunities.has(node._layoutCommunity); node._overviewVisible=node._overviewCommunity; node._overviewLabel=overviewLabels.has(node._layoutCommunity); node._primaryParent=null;
       return;
     }
     const index=communityCounts[node._layoutCommunity]||0; communityCounts[node._layoutCommunity]=index+1;
     const angle=index*2.399963+universeRand(node.id)*.45;
     const radius=.05*Math.sqrt(universeRand(node.id,1));
-    node.x=center[0]+Math.cos(angle)*radius;
-    node.y=center[1]+Math.sin(angle)*radius*.78;
+    if(branchVector){const point=universeSpherePoint(center,.035+.045*Math.sqrt(universeRand(node.id,1)),angle);node._gx=point[0];node._gy=point[1];node._gz=point[2];node.x=.5+point[0]*.38;node.y=.51+point[1]*.38;}else{node.x=center[0]+Math.cos(angle)*radius;node.y=center[1]+Math.sin(angle)*radius*.78;}
     node._overviewCommunity=overviewCommunities.has(node._layoutCommunity);
     node._overviewVisible=node._overviewCommunity&&node.id===communityHubs.get(node._layoutCommunity);
     node._overviewLabel=node._overviewVisible&&overviewLabels.has(node._layoutCommunity);
@@ -628,28 +634,30 @@ function initUniverse(snapshot,lens="universe"){
     if(!mobileOverview&&incident)drawUniverseCommunitySpokes(ctx,state,screen,renderable,incident);
     if(state.webgl)drawUniverseWebGL(state.webgl,state,screen,mobileOverview?()=>false:renderable,overview);
     state.edges.forEach(edge=>{
-      if(mobileOverview||!incident) return;
       const a=nodeMap[edge.source],b=nodeMap[edge.target];if(!renderable(a)||!renderable(b)) return;
+      const memoryDependency=a.kind==="memory"&&b.kind==="memory"&&(edge.kind==="explicit"||edge.kind==="inferred"||!edge.kind);
+      if(mobileOverview||(!incident&&!memoryDependency)) return;
       const backbone=a._primaryParent===b.id||b._primaryParent===a.id;
       const sameMemory=a.kind==="memory"&&b.kind==="memory"&&a._layoutCommunity===b._layoutCommunity;
       const endpointProminent=a.kind!=="memory"||b.kind!=="memory"||sameMemory;
       const hot=incident&&(a===incident||b===incident);
       const sameCluster=a.kind==="memory"&&b.kind==="memory"&&a._clusterIndex===b._clusterIndex;
-      if(!hot&&!backbone&&edge.kind==="inferred"&&!sameCluster) return;
-      if(!hot&&!backbone&&edge.kind==="explicit"&&!endpointProminent) return;
-      const layer=hot?2:(backbone&&(edge.kind==="structural"||edge.kind==="explicit")?1:0);edgeLayers[layer].push({edge,a,b,hot,backbone});
+      if(!hot&&!memoryDependency&&!backbone&&edge.kind==="inferred"&&!sameCluster) return;
+      if(!hot&&!memoryDependency&&!backbone&&edge.kind==="explicit"&&!endpointProminent) return;
+      const layer=hot?2:(memoryDependency?1:(backbone&&(edge.kind==="structural"||edge.kind==="explicit")?1:0));edgeLayers[layer].push({edge,a,b,hot,backbone,memoryDependency});
     });
-    edgeLayers.forEach((layer,index)=>layer.forEach(({edge,a,b,hot,backbone})=>{
+    edgeLayers.forEach((layer,index)=>layer.forEach(({edge,a,b,hot,backbone,memoryDependency})=>{
       const pa=screen(a),pb=screen(b),focus=focused(a)&&focused(b),sameRegion=universeRegion(a)===universeRegion(b),sameMemory=a.kind==="memory"&&b.kind==="memory"&&a._layoutCommunity===b._layoutCommunity;
       const distance=Math.max(1,Math.hypot(pb.x-pa.x,pb.y-pa.y)),bend=((universeHash(a.id+"|"+b.id)%2000)/1000-.5)*Math.min(70,distance*.2),normal={x:-(pb.y-pa.y)/distance*bend,y:(pb.x-pa.x)/distance*bend};
       ctx.beginPath();ctx.moveTo(pa.x,pa.y);ctx.quadraticCurveTo((pa.x+pb.x)/2+normal.x,(pa.y+pb.y)/2+normal.y,pb.x,pb.y);
       if(hot) {ctx.strokeStyle="rgba(36,98,192,.92)";ctx.lineWidth=2;}
+      else if(memoryDependency) {ctx.strokeStyle=edge.kind==="inferred"?"rgba(63,111,186,.16)":"rgba(47,101,184,.22)";ctx.lineWidth=.65;}
       else if(backbone&&edge.kind==="structural") {ctx.strokeStyle=focus?"rgba(184,105,47,.64)":"rgba(184,105,47,.22)";ctx.lineWidth=1.25;}
       else if(backbone&&edge.kind==="explicit") {ctx.strokeStyle=focus?"rgba(47,101,184,.28)":"rgba(47,101,184,.08)";ctx.lineWidth=.85;}
       else if(edge.kind==="explicit") {ctx.strokeStyle=focus?"rgba(47,101,184,.16)":"rgba(47,101,184,.05)";ctx.lineWidth=.7;}
       else if(edge.kind==="inferred") {ctx.strokeStyle=sameMemory?universeNodeColor(a):sameRegion?"#52687d":"#52687d";ctx.lineWidth=.5;}
       else {ctx.strokeStyle=sameMemory?universeNodeColor(a):sameRegion?"#52687d":"#52687d";ctx.lineWidth=sameMemory?.55:.4;}
-      ctx.globalAlpha=hot?1:(edge.kind==="inferred"||(!edge.kind&&sameMemory)?.08:.18)*(.35+Math.max(0,Math.min(1,(pa.depth+pb.depth+2)/4))*.65);ctx.setLineDash([]);ctx.stroke();ctx.globalAlpha=1;
+      ctx.globalAlpha=hot?1:(memoryDependency?1:(edge.kind==="inferred"||(!edge.kind&&sameMemory)?.08:.18))*(.35+Math.max(0,Math.min(1,(pa.depth+pb.depth+2)/4))*.65);ctx.setLineDash([]);ctx.stroke();ctx.globalAlpha=1;
     }));
     let visibleCount=0,renderedCount=0;
     nodes.forEach(node=>{

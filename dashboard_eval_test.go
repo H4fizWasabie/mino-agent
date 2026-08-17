@@ -123,6 +123,7 @@ equal(src.includes("function drawMobileUniverseOverview"),true,"mobile branch fa
 equal(src.includes("const overviewMode=()=>"),true,"progressive overview mode");
 equal(src.includes("_overviewVisible"),true,"overview hierarchy markers");
 equal(src.includes("_primaryParent"),true,"backbone parent knowledge");
+equal(src.includes("memoryDependency"),true,"memory dependencies remain visible in overview");
 const before=nodes.map(n=>n.x+","+n.y).join("|");
 const st={edges:[],nodeMap:Object.fromEntries(nodes.map(n=>[n.id,n]))};
 const fresh={id:"new1",kind:"tool",label:"new"};
@@ -320,7 +321,7 @@ function extract(name){
   }
   throw new Error("unterminated "+name);
 }
-const names=["universeHash","universeRand","universeRegion","universeFocus","universeNodeLink","universeRegionCenters","universeLandmarkCount","universeLandmarkStyle","universeDefaultZoom","universeDensityLevel","universeLayout","universeClusterKey","universeCenterRegion","focusUniverseRegion","focusUniverseCamera","rotateUniverseCamera","universeSearchResults","universeBranch","universeBranchAnchors","universeBranchVectors","universeBranchTotal","universeProjectionMerge","universeDetailNeedsRefresh","universeEntityResponseCurrent","universeAdjacency","layoutMemoryBranch","layoutIdentityBranch","layoutWorkBranch"];
+const names=["universeHash","universeRand","universeRegion","universeFocus","universeNodeLink","universeRegionCenters","universeLandmarkCount","universeLandmarkStyle","universeDefaultZoom","universeDensityLevel","universeLayout","universeClusterKey","universeCenterRegion","focusUniverseRegion","focusUniverseCamera","rotateUniverseCamera","universeSearchResults","universeBranch","universeBranchAnchors","universeBranchVectors","universeBranchTotal","universeProjectionMerge","universeDetailNeedsRefresh","universeEntityResponseCurrent","universeAdjacency","universeSpherePoint","layoutMemoryBranch","layoutIdentityBranch","layoutWorkBranch"];
 const box={location:{hash:"#universe"},universePendingRegion:null};vm.runInNewContext(names.map(extract).join("\n"),box);
 function assert(ok,label){if(!ok)throw new Error(label)}
 assert(box.universeHash("memory:a")===box.universeHash("memory:a"),"stable hash");
@@ -365,8 +366,10 @@ const edges=Array.from({length:63},(_,i)=>({source:"memory:"+i,target:"memory:"+
 const first=make(),second=make();box.universeLayout(first,edges);box.universeLayout(second,edges);
 assert(JSON.stringify(first.map(n=>[n._gx,n._gy,n._gz]))===JSON.stringify(second.map(n=>[n._gx,n._gy,n._gz])),"deterministic geography");
 assert(first.every(n=>Math.abs(Math.hypot(n._gx,n._gy,n._gz)-1)<.01),"nodes remain on the spherical atlas");
-assert(first.every(n=>n._layoutCommunity==="memory:0"),"stored community remains explicit in presentation state");
-assert(first.slice(1).every(n=>n._primaryParent===first[0].id),"community leaves retain their visual hub");
+assert(new Set(first.map(n=>n._layoutCommunity)).size>1,"real memory topology derives local communities");
+assert(first.filter(n=>n._primaryParent).every(n=>first.some(parent=>parent.id===n._primaryParent&&parent._layoutCommunity===n._layoutCommunity)),"community leaves retain a local visual hub");
+const memoryVector=box.universeBranchVectors().memories;
+assert(first.every(n=>n._gx*memoryVector[0]+n._gy*memoryVector[1]+n._gz*memoryVector[2]>.88),"memory nodes stay close to the memory landmark");
 const scale=Array.from({length:4096},(_,i)=>({id:"memory:scale-"+i,kind:"memory",community:i,state:"semantic"}));
 box.universeLayout(scale,[]);
 assert(scale.filter(n=>n._overviewVisible).length<=120,"large atlases keep overview disclosure bounded");
