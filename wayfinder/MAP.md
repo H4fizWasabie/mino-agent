@@ -231,3 +231,43 @@ A stuck or failing Mino pages the owner within minutes, not hours; a crash leave
 - New observability sinks/dashboards
 - The 6h dead-man's switch semantics (slow backstop stays)
 - The DRF-001 judgment gap (verification ≠ visibility)
+
+---
+
+# Mino Playbook Personas — Wayfinder Map
+
+## Destination
+
+Every playbook run wears a lean, purpose-built prompt profile instead of Mino's full chat
+personality: harness rails + one identity anchor + a per-playbook agent persona (a "hat" the same
+brain wears — single-agent architecture, no new runtime). Each playbook binds deterministically to
+one hat from a shared roster, so refining a hat improves every playbook wearing it.
+
+Measurable: playbook runs carry no chat-voice sections (~70% system-prompt cut per call), all 15
+playbooks bound to 6 roster hats, and one week of live runs at same-or-better
+cost-per-verified-story vs the pre-persona week.
+
+## Decisions so far
+
+- Personas proven in the zero-code interim (CONTEXT.md blocks, this week): more verified stories
+  at same-or-lower cost, visible discipline. 15 playbooks / 16 stage contracts wear 6 hats today.
+- Persona grammar is "operating as", never "you are" — stance/mission/lens/voice only, no
+  identity claims; rails (harness-owned) override any persona instruction.
+- Rails extraction must include the `notify: true` → Telegram rule — model-delivered, the runner
+  does not enforce it (only missed-schedule notification is enforced in code).
+- The roster binds deterministically from `config.md` (`agent: <name>`), not fuzzy-matched like
+  skills — byte-stable per run, warm prefix cache across same-hat runs.
+- Interim hats stay in CONTEXT.md until the runner change lands; backups exist
+  (`CONTEXT.md.bak-persona`).
+
+## Frontier (open tickets)
+
+- [PSN-001 — Playbook persona profile swap](tickets/psn-001-playbook-persona-profile.md) — the
+  runner-level change: `BuildPlaybookSystem` branches to rails + anchor + persona, `agents/`
+  roster, `config.md` validation, seam tests, release lane.
+
+## Out of scope
+
+- Multi-agent execution / new runtimes (canonical loop stays the sole agent loop)
+- Per-stage personas (YAGNI — 12 of 15 playbooks are single-stage)
+- Rewriting the chat system prompt (chat profile stays as-is)
