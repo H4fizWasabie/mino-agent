@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -141,6 +142,64 @@ func TestSchemasForContextKeepsCoreAndRetrievesSpecialist(t *testing.T) {
 	}
 	if !names["remember"] || !names["run_playbook"] || !names["bash"] {
 		t.Fatalf("essential tools missing: %v", names)
+	}
+}
+
+func TestSchemasForContextUserWordsSurviveSystemPromptWordBudget(t *testing.T) {
+	// Live 2026-08-17: "remind me ..." never surfaced create_reminder — the
+	// FTS word budget (80 unique words, document order) was consumed by the
+	// system prompt before the user message was reached, so the purpose-built
+	// tool never entered the schema and the model fell back to bash+sqlite.
+	// The user's own words must enter the query first, like the MCP gate
+	// already does with oneTurnText.
+	db := Connect(t.TempDir())
+	defer db.Close()
+	r := NewRegistry()
+	r.SetSearchDB(db)
+	for _, name := range []string{"remember", "read_file", "write_file", "save_note", "search_web", "bash", "list_playbooks", "run_playbook", "send_document", "note_session"} {
+		r.Register(&Tool{Name: name, Description: name + " everyday capability", Schema: map[string]any{"type": "object"}})
+	}
+	// Real descriptions (the model's actual schema text) — reminder tools
+	// match only on reminder-vocabulary tokens, never on the system prompt's
+	// playbook/schedule vocabulary.
+	r.Register(&Tool{Name: "create_reminder", Description: "Create a one-time reminder that Mino will send to the owner's Telegram chat. Resolve relative dates using the configured timezone and provide an ISO 8601 time.", Schema: map[string]any{"type": "object"}})
+	r.Register(&Tool{Name: "list_reminders", Description: "List pending one-time reminders in the configured timezone. Use when asked about a meeting, appointment, or deadline that Mino was asked to remind about.", Schema: map[string]any{"type": "object"}})
+	r.Register(&Tool{Name: "cancel_reminder", Description: "Cancel a pending reminder by its numeric ID.", Schema: map[string]any{"type": "object"}})
+
+	// Filler tools whose descriptions repeat the system prompt vocabulary —
+	// they match dozens of query terms and crowd the top-16 bm25 rank, the
+	// live shape (72-tool catalog vs 23 here).
+	fillers := []string{"schedule_playbook", "manage_playbook", "audit_playbook", "fetch_url", "list_schedules", "cancel_schedule", "edit_file", "threads_post", "graphify_query", "graphify_path", "graphify_explain", "codegraph_query", "system_check", "send_message", "view_image", "list_files", "grep_files", "git_status", "git_diff", "capture_playbook", "split_stage", "taskify", "query_audit", "request_approval", "write_unit", "install_package", "screenshot"}
+	for i, name := range fillers {
+		r.Register(&Tool{Name: name, Description: fmt.Sprintf("playbook schedule stage contract state file workspace skill install update journal audit approval privilege sudoers config reload provider model graph query path explain code read write edit grep glob status diff render capture page url server dashboard api universe endpoint auth token clock timezone iteration loop guard gate bounded cap budget verify discipline snapshot #%d", i), Schema: map[string]any{"type": "object"}})
+	}
+
+	// A system prompt with more than 80 unique words, followed by the user
+	// message — the live toolSelectionContext shape (system first, truncated
+	// to 24000 chars). Vocabulary deliberately avoids the reminder tool
+	// descriptions: in production the truncation window lands mid-prompt and
+	// the state map (the only "reminder" tokens) is sliced off.
+	// 102 unique words — none overlap the reminder tool descriptions — so the
+	// 80-word budget fills from system vocabulary and the user message's
+	// "remind"/"reminder" never enter the FTS query (the live shape).
+	sysVocab := strings.Split("playbook schedule stage contract state file workspace skill install update journal audit approval privilege sudoers config reload provider model graph query path explain code write edit grep glob status diff render capture page url server dashboard api universe endpoint auth token clock iteration loop guard gate bounded cap budget verify discipline snapshot route fact stale live truth workflow directory home package rollback health binary swap migrate schema table index keyword vector embed openrouter fallback vision image pixel canvas draw zoom density depth galaxy orbital sphere landscape portrait mobile desktop zoom lens search inspect node edge community branch trunk overview renderer", " ")
+	var sys strings.Builder
+	for len(sys.String()) < 13400 {
+		for _, w := range sysVocab {
+			sys.WriteString(w + " ")
+		}
+		sys.WriteString(". ")
+	}
+
+	fullCtx := toolSelectionContext(sys.String(), []Message{{Role: "user", Content: "Mino, remind me of this later.. Around 2.30pm. This vetplus sales reps want to have meeting with me."}})
+	oneTurn := "Mino, remind me of this later.. Around 2.30pm. This vetplus sales reps want to have meeting with me."
+	got := r.SchemasForContext("", fullCtx, oneTurn)
+	names := make(map[string]bool, len(got))
+	for _, schema := range got {
+		names[schema.Name] = true
+	}
+	if !names["create_reminder"] {
+		t.Fatalf("create_reminder was starved by the system prompt word budget: %v", names)
 	}
 }
 

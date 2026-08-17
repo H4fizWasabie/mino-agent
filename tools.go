@@ -302,9 +302,14 @@ func (r *Registry) SchemasForContext(sessionID string, fullCtx string, oneTurnTe
 		add(name)
 	}
 
-	// Built-in tools: keyword FTS5 on full context is the single discovery
-	// layer (issue #179: semantic selection removed).
-	for _, name := range r.searchToolNames(fullCtx) {
+	// Built-in tools: keyword FTS5 on the user's own words is the primary
+	// signal, full context the fallback (issue #179: semantic selection
+	// removed). Live 2026-08-17: the 80-word budget was consumed by system
+	// prompt vocabulary before the user message was reached, so a "remind me"
+	// request never surfaced create_reminder and the model fell back to
+	// bash+sqlite. oneTurnText is the last user message + reply — the same
+	// signal the MCP gate below already uses.
+	for _, name := range r.searchToolNames(oneTurnText + "\n" + fullCtx) {
 		if !strings.HasPrefix(name, "MCP_") {
 			add(name)
 		}
