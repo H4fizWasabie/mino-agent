@@ -585,7 +585,7 @@ func handleQueryAPI(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	cols, _ := rows.Columns()
-	var result [][]any
+	result := [][]any{} // non-nil so zero-row queries marshal to [] not null (dashboard reads r.rows.length)
 	for rows.Next() {
 		vals := make([]any, len(cols))
 		ptrs := make([]any, len(cols))

@@ -334,3 +334,24 @@ func TestServeDashboardReportsBindConflict(t *testing.T) {
 		t.Fatal("bind conflict on an occupied port must return an error")
 	}
 }
+
+func TestQueryAPIZeroRowsReturnsArrayNotNull(t *testing.T) {
+	home := t.TempDir()
+	previous := dashCore
+	dashCore = &Core{DB: Connect(home)}
+	defer func() { dashCore = previous }()
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/query", strings.NewReader(`{"sql":"SELECT * FROM chat_log WHERE 0"}`))
+	handleQueryAPI(rr, req)
+
+	var resp struct {
+		Rows []any `json:"rows"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Rows == nil {
+		t.Fatal("rows must be [] not null so the dashboard can read r.rows.length")
+	}
+}

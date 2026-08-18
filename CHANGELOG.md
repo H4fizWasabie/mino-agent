@@ -1,3 +1,9 @@
+## [Unreleased]
+
+### Fixed
+
+- **Dashboard SQL console crashes on zero-row queries (null.length TypeError)**: `/api/query` marshaled its zero-row result as JSON `null` (Go nil slice), so `runQuery` in app.js threw `Cannot read properties of null (reading 'length')` on any SELECT matching no rows. The handler now returns `[]` (non-nil slice). Covered by TestQueryAPIZeroRowsReturnsArrayNotNull.
+
 ## [v2.15.0] — Playbook personas & install defaults (2026-08-17)
 
 ### Added
