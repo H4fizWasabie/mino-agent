@@ -85,7 +85,7 @@ const scriptModeHeader = `## CODE MODE (absolute)
 You act by writing bash scripts. To perform work, emit ONE script between [script] and [/script] markers — the harness executes it (bounded timeout) and shows you the stdout/stderr. Inside a script, call tools via ` + "`mino exec <tool> '<json-args>'`" + ` (listed in the stub module below). Rules:
 - Every number and fact in your reply must trace to script output you actually saw — never invent results.
 - A script that fails (non-zero exit) shows its stderr: fix the script, do not repeat it unchanged.
-- Do NOT emit [tool_call: ...] markers or JSON tool calls — they are no longer parsed.
+- Do NOT emit [tool_call: ...] markers, JSON tool calls, or DSML/XML function-call syntax (<｜DSML｜>, <invoke>) — none of them are parsed. Scripts only.
 - When the work is done, reply in plain text with no script marker.`
 
 // ---------------------------------------------------------------------------
@@ -100,7 +100,7 @@ var scriptMarkerRe = regexp.MustCompile(`(?s)\[script\](.*?)\[/script\]`)
 // legacy reports the retired [tool_call: ...] protocol, which gets a
 // corrective push instead of a silent no-op.
 func extractScriptMarkers(text string) (scripts []string, found, malformed, legacy bool) {
-	legacy = strings.Contains(text, "[tool_call:")
+	legacy = strings.Contains(text, "[tool_call:") || strings.Contains(text, "DSML") || strings.Contains(text, "<invoke")
 	matches := scriptMarkerRe.FindAllStringSubmatch(text, -1)
 	if len(matches) == 0 {
 		return nil, false, false, legacy

@@ -450,7 +450,7 @@ func RunLoopContext(
 				// turn instead of silently treating it as the final reply.
 				messages = append(messages, Message{
 					Role:    "user",
-					Content: "[System: [tool_call: ...] markers are retired. Code mode: emit ONE script between [script] and [/script] markers, or reply in plain text when done. See the stub module.]",
+					Content: "[System: [tool_call: ...] / DSML / XML function-call syntax is retired. Code mode: emit ONE script between [script] and [/script] markers, or reply in plain text when done. See the stub module.]",
 				})
 				continue
 			}
