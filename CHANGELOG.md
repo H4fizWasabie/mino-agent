@@ -1,4 +1,9 @@
-## [v2.17.0] — compose_message tool (2026-08-19)
+## [v2.17.1] — compose_message output-only fix (2026-08-19)
+
+### Fixed
+
+- **compose_message returned the model's reasoning text** when the provider streams thinking as output text (observed live on the morning-briefing pilot). The system prompt now demands the final message only — no reasoning, no preamble. (One-line prompt change, committed directly to master as a hotfix while the scheduled pilots' notify legs already depended on it; the release lane resumes for #271.)
+ — compose_message tool (2026-08-19)
 
 - **`compose_message` tool — LLM-synthesized Telegram reports for script-backed playbooks (closes #277, SCR-002)**: scripts' notify legs pass their verified digest; ONE bounded single-turn provider call (no tools array, no iteration loop, no serialization — the degeneration class is structurally impossible) returns the message. Fixed system prompt pins the verification discipline (digest-only facts, never fabricate), ~300 token cap, Mino voice. Reachable via `mino exec compose_message`; every call lands in tool_calls + audit. Cost per run ~2–4k tokens vs the 104–381k LLM-run baselines. (Why: owner feedback — scripted pilots' template messages "are not the same since last time"; the LLM belongs at the human interface, code underneath. Tests: `TestComposeMessageToolSingleTurnSynthesis`, `TestComposeMessageToolErrorPaths`, `TestComposeSystemPromptSynthesisDiscipline` + the REL-04 seam.)
 
