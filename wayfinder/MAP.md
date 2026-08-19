@@ -193,6 +193,12 @@ Mino's context is lean at the eager-injection layer (skills loaded by section, n
 - [TOOL-006 — Native screenshot capability](tickets/tool-006-native-screenshot.md) (**resolved**, #239) — the harness had `view_image` (read) but no `screenshot` (capture); auth'd JS dashboards cost ~15 bootstrap iterations of wkhtmltoimage/curl/playwright/proxy work (live 2026-08-16). New `screenshot` tool: URL or local file → wkhtmltoimage (host tool) → PNG in the RUN-007 spill store → path for `view_image`; every failure names the requirement (headless browser via `install_package`) — the #235 no-phantom-success contract.
 - **Static system prompt is thin (~2.4k tok), not fat** — measured; trimming it is a low-value/high-regression lever. The real token cost is the [eager skill injection](#170), not the static prompt.
 - **Tool-schema union is correct as-is** — chat=20 wide (legit), automation=8 tight (legit).
+- [CTX-025 — daily-ai-concept 50-iteration burn](tickets/ctx-025-playbook-context-bloat.md) —
+  first failure in 13 runs (08-19): remember graph dumps (~100k chars) ballooned
+  context 4.6k→29k in-tokens, iteration-2 parse failure started a degeneration
+  spiral (empty args, raw JSON), 9 repetition signals ignored, 50-cap was the
+  only stop. Fix direction: bounded remember contract (A) → state-reset +
+  divergence detector (B) → code mode eliminates the class (#271, C).
 
 ## Out of scope
 - Context-budget telemetry (#2) — rejected pre-#240; the #171 stop-on-spin guard stops repetition, but live evidence (2026-08-16: 30-iteration turns at 30k+ context) showed the model still needed its own budget numbers — now shipped as per-turn budget awareness (CTX-024).
