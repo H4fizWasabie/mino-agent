@@ -462,14 +462,12 @@ func (c *Client) isAnthropic() bool {
 func (c *Client) createAnthropic(ctx context.Context, model string, messages []Message, maxTokens int, system string, tools []ToolDef, stream bool, onText func(string)) (*LLMResponse, error) {
 	// build Anthropic Messages API payload
 	var anthropicTools []map[string]any
-	if tools != nil {
-		for _, t := range tools {
-			anthropicTools = append(anthropicTools, map[string]any{
-				"name":         t.Name,
-				"description":  t.Description,
-				"input_schema": t.Parameters,
-			})
-		}
+	for _, t := range tools {
+		anthropicTools = append(anthropicTools, map[string]any{
+			"name":         t.Name,
+			"description":  t.Description,
+			"input_schema": t.Parameters,
+		})
 	}
 
 	// Prompt caching: cache system + all but the last 2 messages.

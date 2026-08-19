@@ -266,10 +266,7 @@ var runPlain = func(ctx context.Context, argv []string) (string, error) {
 // pkgInstalled probes whether a Debian package is currently installed.
 func pkgInstalled(ctx context.Context, pkg string) bool {
 	_, err := runPlain(ctx, []string{"dpkg-query", "-W", "-f=${Status}", pkg})
-	if err != nil {
-		return false
-	}
-	return true
+	return err == nil
 }
 
 // resolveUnit maps a unit name to its canonical systemd identity:
