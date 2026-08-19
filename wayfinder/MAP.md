@@ -271,3 +271,62 @@ cost-per-verified-story vs the pre-persona week.
 - Multi-agent execution / new runtimes (canonical loop stays the sole agent loop)
 - Per-stage personas (YAGNI — 12 of 15 playbooks are single-stage)
 - Rewriting the chat system prompt (chat profile stays as-is)
+
+---
+
+# Mino Playbook Execution — Wayfinder Map
+
+## Destination
+
+Scheduled playbooks run as deterministic scripts when the task is procedural —
+the LLM manages and observes, it does not execute. Script runs keep the same
+visibility standard as LLM runs: journal record, `runs/` output, one notice on
+failure, never silent.
+
+Measurable: script-backed scheduled sessions drop from 1,490 tool calls/week
+(live 2026-08-12→19, ~46% of all calls) to ~0; same outputs still delivered vs
+the pre-conversion week; every non-zero exit produces exactly one notice.
+
+## Frontier (open tickets)
+
+- [SCR-001 — Playbook scripts](tickets/scr-001-playbook-scripts.md) — optional
+  `script.sh`/`script.py` per playbook, scheduler executes directly, LLM
+  authors/reviews/handles exceptions; hybrid script + observation + checkpoint
+  stages; pilot on read-only playbooks (weekly-audit, weekly-cost) first.
+
+## Out of scope
+
+- Judgment playbooks (analysis, owner interaction) — stay LLM-driven.
+- Cron/ticker semantics — SCH epic owns scheduling.
+- Full job framework (roadmap: playbooks, not a job framework).
+
+---
+
+# Mino Tool Execution — Wayfinder Map
+
+## Destination
+
+The loop can execute a model-written script against tool stubs in one pass —
+one inference + one subprocess instead of one round trip per tool link — while
+JSON tool calling stays the default until per-task metrics say otherwise.
+Model trust is gated per model (write-code probe), never assumed.
+
+Measurable: `tool_calls.iteration` populated (column exists, INSERT never
+passes it — but traces already record it: mean 7–12 iterations/turn live
+2026-08-17→19, up to the 30 cap);
+average turns-per-task drops for code-mode tasks vs the JSON baseline;
+parse-failure/repetition machinery goes dormant, proven by traces.
+
+## Frontier (open tickets)
+
+- [CDE-001 — Code mode](tickets/cde-001-code-mode.md) — populate the unused
+  `tool_calls.iteration` column, then an opt-in loop branch that generates
+  Python stubs for the selected schema set, runs the model's script in a
+  subprocess, and captures stdout to the journal; JSON path stays default.
+
+## Out of scope
+
+- Tool registry redesign / sliding selection — TOOL-001..006 own that.
+- Scheduled playbook execution — SCR-001 owns scheduled runs.
+- Native provider code-mode features — provider-coupling-averse (Provider
+  Coupling map); the harness owns the seam.
