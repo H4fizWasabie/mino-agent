@@ -1,4 +1,8 @@
-## [v2.18.1] — code mode: fenced scripts + worked example (2026-08-20)
+## [Unreleased]
+
+- **Hybrid stage runner — script + LLM stages in one playbook (closes #280, SCR-003)**: a stage dir carrying `script.sh` is a script-backed stage (CONTEXT.md optional — the script IS the contract); the workspace stage loop dispatches by kind. Script stages run fail-fast (no retry — deterministic by design), cwd = the run-scoped stage dir so relative paths (`output/`, `../NN-name/output/`) resolve inside the run record — the hybrid payload seam (LLM stage writes output/payload.json, the next script stage reads it) needs no absolute paths in committed scripts. Non-zero exit or a missing declared output fails the stage and the run with one Telegram page (never silent). Validation: `validateScriptFile` (bash -n + tool scan) is the single shared seam for playbook-level and per-stage scripts; the schedule gate and boot re-check inherit it. `run_playbook` runs hybrid playbooks. `PlaybookRunStage` records script runs (additive, schema-light). (Why: instagram needs LLM-compose → script-post; fully-scripted and fully-LLM playbooks already run. Tests: `TestHybridPlaybookRunsScriptThenLLMStage`, `TestHybridPlaybookScriptStageFailureFailsRun`, `TestRunScriptStageExecutesAndRecords`, `TestValidateStageScriptsRejectsBadBash`, `TestValidateScriptFile` + REL-04 seams.)
+
+ — code mode: fenced scripts + worked example (2026-08-20)
 
 ### Fixed
 
