@@ -15,6 +15,10 @@ import (
 func workingMemoryPath(home string) string { return filepath.Join(home, "working_memory.md") }
 func patternsPath(home string) string      { return filepath.Join(home, "patterns.md") }
 
+// workingMemoryMaxBytes caps each scratchpad file so a runaway write loop
+// cannot wedge read_file's 16KB default read window (issue #263).
+const workingMemoryMaxBytes = 32 << 10
+
 // AppendWorkingMemory adds a timestamped operational note under the section.
 func AppendWorkingMemory(home, section, line string) bool {
 	path := workingMemoryPath(home)
