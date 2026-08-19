@@ -38,8 +38,12 @@ func TestOSV04ReminderQuestionUsesReminderStoreNotCalendar(t *testing.T) {
 		r.Register(tool)
 	}
 
+	// CDE-001: the model acts by script. The script must read the reminder
+	// STORE (the reminders table), never the calendar — OSV-04's intent
+	// survives code mode.
+	t.Setenv("HOME", home)
 	client := &fakeClient{script: []*LLMResponse{
-		scriptedResp([]ContentBlock{toolBlock("list_reminders", map[string]any{})}, "tool_use"),
+		scriptedResp([]ContentBlock{scriptBlock(`sqlite3 "$HOME/state.db" "SELECT message FROM reminders"`)}, "stop"),
 		scriptedResp([]ContentBlock{textBlock("Your last Arachem meeting reminder is Friday 7 Aug at 12:30 — a system reminder, never in your calendar.")}, "stop"),
 	}}
 	msgs := []Message{{Role: "user", Content: "When was my last Arachem meeting?"}}
@@ -50,26 +54,20 @@ func TestOSV04ReminderQuestionUsesReminderStoreNotCalendar(t *testing.T) {
 	if !strings.Contains(result.Reply, "7 Aug") || !strings.Contains(result.Reply, "12:30") {
 		t.Fatalf("reply does not answer from the reminder store: %q", result.Reply)
 	}
-	if len(result.ToolCalls) != 1 || result.ToolCalls[0].Name != "list_reminders" {
-		t.Fatalf("tool calls = %v, want exactly [list_reminders]", result.ToolCalls)
+	// CDE-001: the model's only action is a script — the script must reach
+	// for the reminder store (reminders table), never the calendar tools.
+	if len(result.ToolCalls) != 1 {
+		t.Fatalf("want exactly one script call, got %#v", result.ToolCalls)
 	}
-	for _, tc := range result.ToolCalls {
-		if tc.Name == "list_events" || tc.Name == "create_event" {
-			t.Fatalf("calendar tool invoked: %s", tc.Name)
-		}
+	head, _ := result.ToolCalls[0].Args["head"].(string)
+	if !strings.Contains(head, "reminders") {
+		t.Fatalf("script head = %q, want the reminders table (the reminder store, not the calendar)", head)
 	}
-	if !strings.Contains(result.ToolCalls[0].Output, "Arachem") || !strings.Contains(result.ToolCalls[0].Output, "12:30") {
-		t.Fatalf("list_reminders output missing meeting: %q", result.ToolCalls[0].Output)
-	}
-	// The harness offered the reminder store in the schema set.
-	offered := false
-	for _, s := range client.toolSets[0] {
-		if s.Name == "list_reminders" {
-			offered = true
-		}
-	}
-	if !offered {
-		t.Fatal("list_reminders not offered to the model")
+	// No calendar tool can be invoked in code mode anyway (scripts only) —
+	// the head assertion above is the store check. The stub module offers
+	// the whole registry to scripts, reminder store included.
+	if !strings.Contains(r.StubModule(), "list_reminders") {
+		t.Fatal("list_reminders missing from the stub module")
 	}
 }
 

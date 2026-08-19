@@ -44,6 +44,11 @@ func textBlock(text string) ContentBlock {
 	return ContentBlock{Type: "text", Text: text}
 }
 
+// scriptBlock renders a code-mode [script] marker as a text block (CDE-001).
+func scriptBlock(script string) ContentBlock {
+	return textBlock("[script]\n" + script + "\n[/script]")
+}
+
 func toolBlock(name string, args map[string]any) ContentBlock {
 	return ContentBlock{Type: "tool_use", ID: "tu_1", Name: name, Input: args}
 }

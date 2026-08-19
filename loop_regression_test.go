@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,46 +69,18 @@ func (b *blockingClient) CreateContextNoReasoning(ctx context.Context, session s
 // json.Unmarshal rejects \' as an invalid escape, the call was silently
 // dropped, and the loop declared the stage complete without writing
 // output/result.md. The parser must repair the args and keep the call.
-func TestExtractTextToolUsesRepairsShellEscapes(t *testing.T) {
-	text := `[tool_call: bash({"command":"echo -n 'Most people use AI to confirm what they already think.\n\nAsk AI to play devil\'s advocate. Ask it to tell you what you\'re missing.' | wc -c"})]`
-	uses, found, _ := extractTextToolUses(text)
-	if !found {
-		t.Fatal("marker not found")
-	}
-	if len(uses) != 1 {
-		t.Fatalf("got %d uses, want 1 (the malformed marker must not be dropped)", len(uses))
-	}
-	if uses[0].Name != "bash" {
-		t.Fatalf("tool name = %q, want bash", uses[0].Name)
-	}
-	args := uses[0].Input.(map[string]any)
-	cmd, _ := args["command"].(string)
-	if !strings.Contains(cmd, "devil's advocate") {
-		t.Fatalf("command not repaired: %q", cmd)
-	}
-}
 
 // A marker that still fails after repair must be reported as found-but-broken
 // so the loop pushes the model to re-emit instead of treating it as "done".
-func TestExtractTextToolUsesReportsUnparseableMarker(t *testing.T) {
-	uses, found, failed := extractTextToolUses(`[tool_call: bash({not valid json at all!!})]`)
-	if !found {
-		t.Fatal("marker should be reported as found")
-	}
-	if len(uses) != 0 {
-		t.Fatalf("got %d uses, want 0 for unparseable marker", len(uses))
-	}
-	if !strings.Contains(failed, "not valid json") {
-		t.Fatalf("failed marker snippet not surfaced: %q", failed)
-	}
-}
 
 // Loop-level: an unparseable marker must trigger a corrective push and another
 // iteration, not a silent "complete" on the first turn.
 func TestLoopPushesOnUnparseableMarker(t *testing.T) {
 	tools := NewRegistry()
 	client := &fakeClient{script: []*LLMResponse{
-		scriptedResp([]ContentBlock{textBlock(`[tool_call: bash({broken})]`)}, "stop"),
+		// retired protocol: a [tool_call: ...] marker must get the
+		// code-mode corrective push, not a silent no-op completion
+		scriptedResp([]ContentBlock{textBlock(`[tool_call: bash({command: "echo hi"})]`)}, "stop"),
 		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
 	}}
 	result := RunLoopContext(context.Background(), client, "marker-loop", "", []Message{{Role: "user", Content: "go"}}, tools, 5, 100, nil, false, "")
@@ -119,12 +92,12 @@ func TestLoopPushesOnUnparseableMarker(t *testing.T) {
 	}
 	pushed := false
 	for _, m := range client.messages[1] {
-		if strings.Contains(m.Content, "could not be parsed") {
+		if strings.Contains(m.Content, "retired") {
 			pushed = true
 		}
 	}
 	if !pushed {
-		t.Fatal("corrective push missing from second call's messages")
+		t.Fatal("code-mode corrective push missing from second call's messages")
 	}
 }
 
@@ -158,7 +131,7 @@ func TestStageLoopRequiresOutputBeforeComplete(t *testing.T) {
 	// turn writes the file, and the third completes.
 	client := &fakeClient{script: []*LLMResponse{
 		scriptedResp([]ContentBlock{textBlock("done, no output written")}, "stop"),
-		scriptedResp([]ContentBlock{toolBlock("write_file", map[string]any{"path": out, "content": "ok"})}, "tool_use"),
+		scriptedResp([]ContentBlock{scriptBlock("printf ok > " + out)}, "stop"),
 		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
 	}}
 	ctx := context.WithValue(context.Background(), stageOutputsKey{}, []string{out})
@@ -204,29 +177,20 @@ func TestLoopNoPushOutsideStage(t *testing.T) {
 // tool_calls JSON doesn't parse; the loop must NOT execute the tool with
 // garbage, and must return the raw string so the model can self-correct.
 func TestLoopSurfacesMalformedNativeArgs(t *testing.T) {
-	executions := 0
+	// CDE-001: native tool calls cannot occur (no tools array is sent). The
+	// sibling failure — an empty [script] marker — must push, not execute.
 	tools := NewRegistry()
-	tools.Register(&Tool{
-		Name: "probe", Schema: map[string]any{"type": "object", "properties": map[string]any{}},
-		Fn: func(map[string]any) string {
-			executions++
-			return "observed"
-		},
-	})
 	client := &fakeClient{script: []*LLMResponse{
-		// native tool_use whose args were unparseable at the provider layer
-		scriptedResp([]ContentBlock{toolBlock("probe", map[string]any{"__raw_arguments__": "{broken json"})}, "tool_use"),
+		scriptedResp([]ContentBlock{textBlock("[script]\n[/script]")}, "stop"),
+		scriptedResp([]ContentBlock{scriptBlock("echo recovered")}, "stop"),
 		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
 	}}
 	result := RunLoopContext(context.Background(), client, "native-args", "", []Message{{Role: "user", Content: "go"}}, tools, 5, 100, nil, false, "")
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete", result.Status)
 	}
-	if executions != 0 {
-		t.Fatalf("tool executed %d times, want 0 (malformed args must not run the tool)", executions)
-	}
-	if len(result.ToolCalls) != 1 || !strings.Contains(result.ToolCalls[0].Output, "{broken json") {
-		t.Fatalf("raw args not surfaced to the model: %#v", result.ToolCalls)
+	if len(result.ToolCalls) != 1 || result.ToolCalls[0].Name != "script" {
+		t.Fatalf("want exactly one script call after the malformed-marker push, got %#v", result.ToolCalls)
 	}
 }
 
@@ -242,7 +206,7 @@ func TestStageRewriteStreakTripwire(t *testing.T) {
 	client := &fakeClient{}
 	out := "/tmp/stage-out/result.md"
 	for i := 0; i < 8; i++ {
-		client.script = append(client.script, scriptedResp([]ContentBlock{toolBlock("write_file", map[string]any{"path": out})}, "tool_use"))
+		client.script = append(client.script, scriptedResp([]ContentBlock{scriptBlock("echo rewrite > " + out)}, "stop"))
 	}
 	client.script = append(client.script, scriptedResp([]ContentBlock{textBlock("done")}, "stop"))
 	ctx := context.WithValue(context.Background(), traceTagKey{}, map[string]string{"playbook": "p", "stage": "01-x"})
@@ -250,17 +214,20 @@ func TestStageRewriteStreakTripwire(t *testing.T) {
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete", result.Status)
 	}
-	// The corrective push must have been sent after the 6th consecutive rewrite.
+	// CDE-001: with code mode the write_file-specific rewrite tripwire is
+	// dormant (scripts produce "script" calls, not write_file calls) — the
+	// #171 repetition guard covers the same failure: identical script heads
+	// must trigger the CHANGE APPROACH injection.
 	pushed := false
 	for _, msgs := range client.messages {
 		for _, m := range msgs {
-			if strings.Contains(m.Content, "rewritten "+out+" repeatedly") {
+			if strings.Contains(m.Content, "repeated the identical tool call") && strings.Contains(m.Content, "CHANGE APPROACH") {
 				pushed = true
 			}
 		}
 	}
 	if !pushed {
-		t.Fatal("rewrite-streak push missing from model messages")
+		t.Fatal("repetition-guard push missing from model messages")
 	}
 }
 
@@ -347,9 +314,8 @@ func TestLoopPushesOnUnverifiedMutationClaim(t *testing.T) {
 // before it reaches the user — the exact 2026-08-09 threads case.
 func TestLoopCorrectsContradictedFailureClaim(t *testing.T) {
 	tools := NewRegistry()
-	tools.Register(&Tool{Name: "write_file", Schema: map[string]any{"type": "object"}, Fn: func(map[string]any) string { return "Wrote 123 bytes to /tmp/x.md" }})
 	client := &fakeClient{script: []*LLMResponse{
-		scriptedResp([]ContentBlock{toolBlock("write_file", map[string]any{"path": "/tmp/x.md"})}, "tool_use"),
+		scriptedResp([]ContentBlock{scriptBlock("echo Wrote 123 bytes to /tmp/x.md")}, "stop"),
 		scriptedResp([]ContentBlock{textBlock("the edit was rejected")}, "stop"),
 		scriptedResp([]ContentBlock{textBlock("Checking the result again — it did land. Done.")}, "stop"),
 	}}
@@ -359,11 +325,11 @@ func TestLoopCorrectsContradictedFailureClaim(t *testing.T) {
 		t.Fatalf("status = %q, want complete", result.Status)
 	}
 	if len(client.messages) < 3 {
-		t.Fatalf("model called %d times, want 3 (tool, claim, corrected)", len(client.messages))
+		t.Fatalf("model called %d times, want 3 (script, claim, corrected)", len(client.messages))
 	}
 	pushed := false
 	for _, m := range client.messages[2] {
-		if strings.Contains(m.Content, "tool results show success") && strings.Contains(m.Content, "write_file") {
+		if strings.Contains(m.Content, "tool results show success") && strings.Contains(m.Content, "script") {
 			pushed = true
 		}
 	}
@@ -376,9 +342,8 @@ func TestLoopCorrectsContradictedFailureClaim(t *testing.T) {
 // while the tool result shows an error. Same bounded check, other direction.
 func TestLoopCorrectsContradictedSuccessClaim(t *testing.T) {
 	tools := NewRegistry()
-	tools.Register(&Tool{Name: "write_file", Schema: map[string]any{"type": "object"}, Fn: func(map[string]any) string { return "Error writing /tmp/x.md: permission denied" }})
 	client := &fakeClient{script: []*LLMResponse{
-		scriptedResp([]ContentBlock{toolBlock("write_file", map[string]any{"path": "/tmp/x.md"})}, "tool_use"),
+		scriptedResp([]ContentBlock{scriptBlock("echo Error writing /tmp/x.md: permission denied; exit 1")}, "stop"),
 		scriptedResp([]ContentBlock{textBlock("I fixed the file")}, "stop"),
 		scriptedResp([]ContentBlock{textBlock("Retrying with the right permissions.")}, "stop"),
 	}}
@@ -416,8 +381,11 @@ func TestLoopNoPushOnConsistentOutcomes(t *testing.T) {
 			tools := NewRegistry()
 			var script []*LLMResponse
 			if tc.out != "" {
-				tools.Register(&Tool{Name: "write_file", Schema: map[string]any{"type": "object"}, Fn: func(map[string]any) string { return tc.out }})
-				script = append(script, scriptedResp([]ContentBlock{toolBlock("write_file", map[string]any{"path": "/tmp/x.md"})}, "tool_use"))
+				cmd := "echo " + tc.out
+				if strings.HasPrefix(tc.out, "Error") {
+					cmd += "; exit 1"
+				}
+				script = append(script, scriptedResp([]ContentBlock{scriptBlock(cmd)}, "stop"))
 			}
 			script = append(script, scriptedResp([]ContentBlock{textBlock(tc.reply)}, "stop"))
 			client := &fakeClient{script: script}
@@ -473,14 +441,14 @@ func TestLoopAbortsAfterSixConsecutiveParseFailures(t *testing.T) {
 	tools := NewRegistry()
 	script := make([]*LLMResponse, 0, 8)
 	for i := 0; i < 8; i++ {
-		script = append(script, scriptedResp([]ContentBlock{textBlock("[tool_call: bash({broken)")}, "stop"))
+		script = append(script, scriptedResp([]ContentBlock{textBlock("[script]\n[/script]")}, "stop"))
 	}
 	client := &fakeClient{script: script}
 	result := RunLoopContext(context.Background(), client, "parse-loop", "", []Message{{Role: "user", Content: "go"}}, tools, 10, 100, nil, false, "")
 	if result.Status != "error" {
 		t.Fatalf("status = %q, want error", result.Status)
 	}
-	if !strings.Contains(result.Reply, "repeatedly emitted unparseable tool calls") {
+	if !strings.Contains(result.Reply, "repeatedly emitted malformed script markers") {
 		t.Fatalf("reply = %q, want the parse-abort diagnosis", result.Reply)
 	}
 	if result.Iterations != 6 {
@@ -504,8 +472,8 @@ func TestLoopAbortsAfterSixTotalParseFailuresWithInterleavedSuccesses(t *testing
 	// Args vary so the loop detector does not fire before the parse guard.
 	script := make([]*LLMResponse, 0, 14)
 	for i := 0; i < 7; i++ {
-		script = append(script, scriptedResp([]ContentBlock{textBlock("[tool_call: echo({broken)")}, "stop"))
-		script = append(script, scriptedResp([]ContentBlock{toolBlock("echo", map[string]any{"n": float64(i)})}, "tool_use"))
+		script = append(script, scriptedResp([]ContentBlock{textBlock("[script]\n[/script]")}, "stop"))
+		script = append(script, scriptedResp([]ContentBlock{scriptBlock("echo n=" + fmt.Sprint(i))}, "stop"))
 	}
 	client := &fakeClient{script: script}
 	result := RunLoopContext(context.Background(), client, "parse-alternating", "", []Message{{Role: "user", Content: "go"}}, tools, 30, 100, nil, false, "")
@@ -521,9 +489,9 @@ func TestLoopAbortsAfterSixTotalParseFailuresWithInterleavedSuccesses(t *testing
 func TestLoopEscalatesParsePushAfterThreeFailures(t *testing.T) {
 	tools := NewRegistry()
 	client := &fakeClient{script: []*LLMResponse{
-		scriptedResp([]ContentBlock{textBlock("[tool_call: bash({broken)")}, "stop"),
-		scriptedResp([]ContentBlock{textBlock("[tool_call: bash({broken)")}, "stop"),
-		scriptedResp([]ContentBlock{textBlock("[tool_call: bash({broken)")}, "stop"),
+		scriptedResp([]ContentBlock{textBlock("[script]\n[/script]")}, "stop"),
+		scriptedResp([]ContentBlock{textBlock("[script]\n[/script]")}, "stop"),
+		scriptedResp([]ContentBlock{textBlock("[script]\n[/script]")}, "stop"),
 		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
 	}}
 	result := RunLoopContext(context.Background(), client, "parse-escalate", "", []Message{{Role: "user", Content: "go"}}, tools, 10, 100, nil, false, "")
@@ -532,7 +500,7 @@ func TestLoopEscalatesParsePushAfterThreeFailures(t *testing.T) {
 	}
 	escalated := false
 	for _, m := range client.messages[3] { // the 4th call sees the escalated push
-		if strings.Contains(m.Content, "STOP re-emitting the same shape") {
+		if strings.Contains(m.Content, "were empty or malformed") {
 			escalated = true
 		}
 	}
@@ -546,12 +514,12 @@ func TestLoopParseCounterResetsOnSuccess(t *testing.T) {
 	tools := NewRegistry()
 	tools.Register(&Tool{Name: "ping", Description: "p", Schema: map[string]any{"type": "object", "properties": map[string]any{}}, Fn: func(map[string]any) string { return "pong" }})
 	client := &fakeClient{script: []*LLMResponse{
-		scriptedResp([]ContentBlock{textBlock("[tool_call: bash({broken)")}, "stop"),
-		scriptedResp([]ContentBlock{textBlock("[tool_call: bash({broken)")}, "stop"),
-		scriptedResp([]ContentBlock{toolBlock("ping", map[string]any{})}, "tool_use"),
-		scriptedResp([]ContentBlock{textBlock("[tool_call: bash({broken)")}, "stop"),
-		scriptedResp([]ContentBlock{textBlock("[tool_call: bash({broken)")}, "stop"),
-		scriptedResp([]ContentBlock{textBlock("[tool_call: bash({broken)")}, "stop"),
+		scriptedResp([]ContentBlock{textBlock("[script]\n[/script]")}, "stop"),
+		scriptedResp([]ContentBlock{textBlock("[script]\n[/script]")}, "stop"),
+		scriptedResp([]ContentBlock{scriptBlock("echo pong")}, "stop"),
+		scriptedResp([]ContentBlock{textBlock("[script]\n[/script]")}, "stop"),
+		scriptedResp([]ContentBlock{textBlock("[script]\n[/script]")}, "stop"),
+		scriptedResp([]ContentBlock{textBlock("[script]\n[/script]")}, "stop"),
 		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
 	}}
 	result := RunLoopContext(context.Background(), client, "parse-reset", "", []Message{{Role: "user", Content: "go"}}, tools, 10, 100, nil, false, "")
@@ -562,7 +530,7 @@ func TestLoopParseCounterResetsOnSuccess(t *testing.T) {
 	// — only 2 consecutive failures at that point.
 	escalatedEarly := false
 	for _, m := range client.messages[2] {
-		if strings.Contains(m.Content, "STOP re-emitting") {
+		if strings.Contains(m.Content, "were empty or malformed") {
 			escalatedEarly = true
 		}
 	}
@@ -572,7 +540,7 @@ func TestLoopParseCounterResetsOnSuccess(t *testing.T) {
 	// The 7th call (3 failures after the reset) must carry it.
 	escalatedLate := false
 	for _, m := range client.messages[6] {
-		if strings.Contains(m.Content, "STOP re-emitting") {
+		if strings.Contains(m.Content, "were empty or malformed") {
 			escalatedLate = true
 		}
 	}
@@ -584,54 +552,8 @@ func TestLoopParseCounterResetsOnSuccess(t *testing.T) {
 // #110: hand-written JSON sloppiness that must survive the lenient repair —
 // fences, single-quoted strings, unquoted keys, and combinations. Valid JSON
 // must parse on the strict path untouched.
-func TestParseToolArgsJSONLenient(t *testing.T) {
-	cases := []struct {
-		name string
-		json string
-		want string // key whose value must be present
-	}{
-		{"valid untouched", `{"path":"/x","limit":5}`, "path"},
-		{"shell escapes", `{"command":"echo 'devil\'s advocate'"}` + "", "command"},
-		{"trailing comma", `{"path":"/x",}`, "path"},
-		{"fenced", "```json\n{\"path\": \"/x\"}\n```", "path"},
-		{"single quotes", `{'path': '/x', 'limit': 5}`, "path"},
-		{"unquoted keys", `{path: "/x", limit: 5}`, "path"},
-		{"single quotes + unquoted keys", `{path: '/x', limit: 5}`, "path"},
-	}
-	for _, c := range cases {
-		args, ok := parseToolArgsJSON(c.json)
-		if !ok {
-			t.Errorf("%s: parse failed for %s", c.name, c.json)
-			continue
-		}
-		if _, exists := args[c.want]; !exists {
-			t.Errorf("%s: key %q missing in %v", c.name, c.want, args)
-		}
-	}
-	// Genuinely broken JSON must still fail.
-	if _, ok := parseToolArgsJSON(`{not valid json at all!!}`); ok {
-		t.Fatal("broken JSON parsed")
-	}
-}
 
 // #110: the full marker path repairs each shape end to end.
-func TestExtractTextToolUsesLenientShapes(t *testing.T) {
-	cases := []string{
-		`[tool_call: read_file({'path': '/tmp/x'})]`,
-		"[tool_call: read_file(```json\n{\"path\": \"/tmp/x\"}\n```)]",
-		`[tool_call: read_file({path: '/tmp/x'})]`,
-	}
-	for _, text := range cases {
-		uses, found, failed := extractTextToolUses(text)
-		if !found || len(uses) != 1 {
-			t.Fatalf("marker %q: found=%v uses=%d failed=%q", text, found, len(uses), failed)
-		}
-		args := uses[0].Input.(map[string]any)
-		if args["path"] != "/tmp/x" {
-			t.Fatalf("marker %q: path = %v", text, args["path"])
-		}
-	}
-}
 
 // T8 (#103 follow-up): the view_image task argument maps to curated prompts —
 // critique/OCR/describe get dedicated variants, empty keeps the original
@@ -667,60 +589,9 @@ func TestVisionPromptVariants(t *testing.T) {
 // pushed the model to re-emit the same shape until the iteration cap — a FB
 // publish call burned ~20 iterations this way. The tolerant fallback must
 // recover these while leaving ordinary prose alone.
-func TestExtractTextToolUsesRecoversBareMarkers(t *testing.T) {
-	cases := []struct {
-		name string
-		text string
-		want string // expected tool name parsed
-	}{
-		// Exact failing shape from the VPS (FB publish, _FLAT variant).
-		{
-			"flat-bare",
-			`MCP_composio_COMPOSIO_MULTI_EXECUTE_TOOL_FLAT({"arguments_json":"{\"page_id\": \"911623135577188\"}"})`,
-			"MCP_composio_COMPOSIO_MULTI_EXECUTE_TOOL_FLAT",
-		},
-		{
-			"bash-bare",
-			`bash({"command":"ls -la"})`,
-			"bash",
-		},
-		{
-			"read-file-bare",
-			`read_file({"path":"/tmp/x"})`,
-			"read_file",
-		},
-		{
-			"prose-ignored",
-			`I will now call the tool like this: doThing("not json here"). none.`,
-			"", // args are not a JSON object -> not a tool call
-		},
-	}
-	for _, c := range cases {
-		uses, found, _ := extractTextToolUses(c.text)
-		if c.want == "" {
-			if found || len(uses) != 0 {
-				t.Errorf("%s: prose misread as tool call (found=%v uses=%d)", c.name, found, len(uses))
-			}
-			continue
-		}
-		if !found || len(uses) != 1 {
-			t.Fatalf("%s: got found=%v uses=%d, want a single %q", c.name, found, len(uses), c.want)
-		}
-		if uses[0].Name != c.want {
-			t.Fatalf("%s: name = %q, want %q", c.name, uses[0].Name, c.want)
-		}
-	}
-}
 
 // The bare fallback must not shadow the strict prefixed format, and a broken
 // bare call (args not JSON) must not be dispatched as a tool call.
-func TestExtractBareToolUsesSkipsNonJSONArgs(t *testing.T) {
-	// args is a plain string, not a JSON object -> skip, no false positive.
-	uses, found, _ := extractTextToolUses(`echo read_file("/tmp/x") to view`)
-	if found || len(uses) != 0 {
-		t.Fatalf("non-JSON bare call dispatched: found=%v uses=%d", found, len(uses))
-	}
-}
 
 // #161: the iteration-cap reply must report progress and offer a decision point
 // instead of a bare "(stopped after N iterations)", so the user knows what was
@@ -766,7 +637,7 @@ func TestLoopIterationAwarenessRepeatedTool(t *testing.T) {
 	})
 	var script []*LLMResponse
 	for i := 0; i < 4; i++ {
-		script = append(script, scriptedResp([]ContentBlock{toolBlock("bounce", map[string]any{"k": "v"})}, "tool_use"))
+		script = append(script, scriptedResp([]ContentBlock{scriptBlock("echo bounced")}, "stop"))
 	}
 	script = append(script, scriptedResp([]ContentBlock{textBlock("done")}, "stop"))
 	client := &fakeClient{script: script}
@@ -793,7 +664,7 @@ func TestLoopLogsMidflightRedirectSignal(t *testing.T) {
 	tools.Register(&Tool{Name: "bounce", Description: "returns fixed output", Fn: func(args map[string]any) string { return "bounced" }})
 	var script []*LLMResponse
 	for i := 0; i < 4; i++ {
-		script = append(script, scriptedResp([]ContentBlock{toolBlock("bounce", map[string]any{"k": "v"})}, "tool_use"))
+		script = append(script, scriptedResp([]ContentBlock{scriptBlock("echo bounced")}, "stop"))
 	}
 	script = append(script, scriptedResp([]ContentBlock{textBlock("done")}, "stop"))
 	client := &fakeClient{script: script}
@@ -821,33 +692,3 @@ func TestLoopLogsMidflightRedirectSignal(t *testing.T) {
 // CTX-022 C: provenance gate — a web search whose query overlaps a turn's
 // earlier user-provenanced recall must produce a warning; non-overlapping
 // queries and recalls without user provenance must stay silent.
-func TestProvenanceGateWarnsOnSearchAfterUserFact(t *testing.T) {
-	userFact := "Mino's own GitHub repo is H4fizWasabie/mino-agent (not Agent-Reach)  # abah_mino_repo_identity\n  matched: subject: agent-reach; user-provenanced\n  → [supersedes] the owner requested deletion on 2026-08-14  # deletion_fact"
-	plainFact := "No memories found for: something else"
-
-	cases := []struct {
-		name      string
-		calls     []ToolCall
-		query     string
-		wantWarn  bool
-	}{
-		{"overlapping query warns", []ToolCall{{Name: "remember", Output: userFact}}, "Agent-Reach repo status", true},
-		{"non-overlapping query silent", []ToolCall{{Name: "remember", Output: userFact}}, "weather in kuala lumpur", false},
-		{"no user provenance silent", []ToolCall{{Name: "remember", Output: plainFact}}, "Agent-Reach repo status", false},
-		{"no prior remember silent", []ToolCall{{Name: "read_file", Output: "x"}}, "Agent-Reach repo status", false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			warn := provenanceSearchWarning(c.calls, map[string]any{"query": c.query})
-			if c.wantWarn && warn == "" {
-				t.Fatal("expected provenance warning, got none")
-			}
-			if !c.wantWarn && warn != "" {
-				t.Fatalf("unexpected provenance warning: %q", warn)
-			}
-			if c.wantWarn && !strings.Contains(warn, "user-authored fact") {
-				t.Fatalf("warning missing provenance framing: %q", warn)
-			}
-		})
-	}
-}

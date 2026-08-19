@@ -35,6 +35,7 @@ func runExecTool(w *Core, args []string) int {
 	}
 	ctx := context.WithValue(context.Background(), sessionIDKey{}, execSession())
 	out := w.Tools.ExecuteContext(ctx, args[0], argv)
+	out = maybeConvertVision(ctx, out, argv, w.Client, execSession())
 	fmt.Println(out)
 	if execFailed(out) {
 		return 1
@@ -55,3 +56,19 @@ func execSession() string {
 // failed. Binary by design — scripts branch on one bit and never parse
 // message text.
 func execFailed(out string) bool { return strings.HasPrefix(out, "Error:") }
+
+// maybeConvertVision (T8, map #88): the main brain never carries image
+// bytes. With code mode (#271) the loop's per-call conversion moved here —
+// a script's `mino exec view_image` would otherwise print the raw data URL
+// into context. Convert to vision-model text before stdout.
+func maybeConvertVision(ctx context.Context, out string, argv map[string]any, client LLMClient, sessionID string) string {
+	if !strings.HasPrefix(out, "data:image/") || client == nil {
+		return out
+	}
+	task, _ := argv["task"].(string)
+	desc, err := describeImage(ctx, client, sessionID, out, task, 600)
+	if err == nil {
+		return "[view_image: " + desc + "]"
+	}
+	return "Error: vision analysis failed: " + err.Error()
+}

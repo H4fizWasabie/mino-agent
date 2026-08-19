@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -428,12 +428,13 @@ func TestLoopHardStopsAfterThreeDetections(t *testing.T) {
 		Name: "probe", Schema: map[string]any{"type": "object", "properties": map[string]any{}},
 		Fn: func(map[string]any) string { return "observed" },
 	})
-	// Varying args exercise the same-name loop path (identical-args repeats
-	// trigger earlier); 8 scripted probe calls > loopNameThreshold(6) so the
-	// third consecutive detection fires at iteration 8 and must hard-stop.
+	// Varying script bodies exercise the same-name loop path (identical
+	// scripts trigger the repetition guard earlier); 8 scripted runs >
+	// loopNameThreshold(6) so the third consecutive detection fires at
+	// iteration 8 and must hard-stop.
 	script := make([]*LLMResponse, 8)
 	for i := range script {
-		script[i] = scriptedResp([]ContentBlock{toolBlock("probe", map[string]any{"n": i})}, "tool_use")
+		script[i] = scriptedResp([]ContentBlock{scriptBlock("echo probe step " + fmt.Sprint(i))}, "stop")
 	}
 	client := &fakeClient{script: script}
 	result := RunLoopContext(context.Background(), client, "loop-stop", "", []Message{{Role: "user", Content: "go"}}, tools, 20, 100, nil, false, "")
@@ -456,8 +457,8 @@ func TestLoopExecutesModelRequestedToolsWithoutDedupState(t *testing.T) {
 		},
 	})
 	client := &fakeClient{script: []*LLMResponse{
-		scriptedResp([]ContentBlock{toolBlock("probe", map[string]any{})}, "tool_use"),
-		scriptedResp([]ContentBlock{toolBlock("probe", map[string]any{})}, "tool_use"),
+		scriptedResp([]ContentBlock{scriptBlock("echo first probe")}, "stop"),
+		scriptedResp([]ContentBlock{scriptBlock("echo second probe")}, "stop"),
 		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
 	}}
 
@@ -465,8 +466,13 @@ func TestLoopExecutesModelRequestedToolsWithoutDedupState(t *testing.T) {
 	if result.Status != "complete" || result.Reply != "done" {
 		t.Fatalf("result = %#v", result)
 	}
-	if executions != 2 || len(result.ToolCalls) != 2 {
-		t.Fatalf("executions=%d calls=%d, want 2/2", executions, len(result.ToolCalls))
+	if len(result.ToolCalls) != 2 {
+		t.Fatalf("script runs = %d, want 2", len(result.ToolCalls))
+	}
+	for i, tc := range result.ToolCalls {
+		if tc.Name != "script" || !strings.Contains(tc.Output, "probe") {
+			t.Fatalf("call %d = %#v, want script call with probe output", i, tc)
+		}
 	}
 }
 
@@ -491,47 +497,10 @@ func TestExplicitPlaybookCommandDetection(t *testing.T) {
 	}
 }
 
-func TestSchemaDiagMeasuresRealBytesAndHeavySchemas(t *testing.T) {
-	big := ToolDef{
-		Name:        "big_tool",
-		Description: "d",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"a": map[string]any{"type": "string", "description": strings.Repeat("x", 2000)},
-			},
-		},
-	}
-	small := ToolDef{Name: "small_tool", Description: "d", Parameters: map[string]any{"type": "object"}}
-	bytes, heavy := schemaDiag([]ToolDef{small, big})
-	if bytes <= 0 {
-		t.Fatal("schema bytes = 0")
-	}
-	// Real JSON bytes, not the +200/name+description estimate: big_tool alone
-	// must exceed 2000 (its property description) plus overhead.
-	if len(heavy) != 2 {
-		t.Fatalf("heavy = %d entries, want 2", len(heavy))
-	}
-	if heavy[0]["name"] != "big_tool" || heavy[1]["name"] != "small_tool" {
-		t.Fatalf("heavy order = %v, want big_tool first", heavy)
-	}
-	if chars, ok := heavy[0]["chars"].(int); !ok || chars <= 2000 {
-		t.Fatalf("big_tool chars = %#v, want int > 2000", heavy[0]["chars"])
-	}
-	// Cap at five entries.
-	six := make([]ToolDef, 6)
-	for i := range six {
-		six[i] = ToolDef{Name: string(rune('a' + i)), Parameters: map[string]any{"type": "object"}}
-	}
-	if _, heavy := schemaDiag(six); len(heavy) != 5 {
-		t.Fatalf("schemaDiag capped heavy = %d, want 5", len(heavy))
-	}
-	if bytes, heavy := schemaDiag(nil); bytes != 0 || heavy != nil {
-		t.Fatalf("schemaDiag(nil) = %d,%v want 0,nil", bytes, heavy)
-	}
-}
 
 func TestContextDiagTraceLogsRealSchemaBytes(t *testing.T) {
+	// CDE-001 (#271): the context_diag trace reports the stub module's size
+	// (schema_count is 0 — the JSON tools array is gone).
 	home := t.TempDir()
 	tools := NewRegistry()
 	tools.Register(&Tool{Name: "read_file", Description: strings.Repeat("d", 2000), Schema: map[string]any{"type": "object", "properties": map[string]any{"p": map[string]any{"type": "string", "description": strings.Repeat("x", 1500)}}}})
@@ -557,18 +526,15 @@ func TestContextDiagTraceLogsRealSchemaBytes(t *testing.T) {
 	if !found {
 		t.Fatal("no context_diag event in trace")
 	}
-	bytes, ok := diag["schema_bytes"].(float64)
-	if !ok || int(bytes) <= 1000 {
-		t.Fatalf("schema_bytes = %#v, want > 1000 (real serialized JSON including the capped description)", diag["schema_bytes"])
+	// CDE-001: the JSON tools array is gone — the diag reports the stub
+	// module's size instead (schema_count must be 0).
+	count, ok := diag["schema_count"].(float64)
+	if !ok || int(count) != 0 {
+		t.Fatalf("schema_count = %#v, want 0 (no JSON tools array in code mode)", diag["schema_count"])
 	}
-	// Compaction strips property prose: the 1500-char property description
-	// must not survive into the payload.
-	if int(bytes) > 3000 {
-		t.Fatalf("schema_bytes = %v, want ≤ 3000 (property descriptions stripped)", diag["schema_bytes"])
-	}
-	heavy, ok := diag["schema_heavy"].([]any)
-	if !ok || len(heavy) == 0 {
-		t.Fatalf("schema_heavy = %#v, want non-empty", diag["schema_heavy"])
+	stub, ok := diag["stub_chars"].(float64)
+	if !ok || int(stub) <= 1000 {
+		t.Fatalf("stub_chars = %#v, want > 1000 (the rendered stub module with both tools)", diag["stub_chars"])
 	}
 }
 
@@ -648,137 +614,50 @@ func TestAddExchangeTruncatesToolTrails(t *testing.T) {
 // provider for the rest of the turn and the provider prompt cache is not
 // broken by per-iteration image blobs.
 func TestLoopConvertsViewImageToVisionText(t *testing.T) {
+	// T8 (map #88) with code mode (#271): the vision conversion moved from
+	// the loop's tool-call path to the exec path — a script's
+	// `mino exec view_image` must yield vision-model text, never a raw
+	// data URL in context.
 	img := filepath.Join(t.TempDir(), "photo.png")
 	if err := os.WriteFile(img, []byte("fake-png-bytes"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	tools := NewRegistry()
-	tools.Register(makeViewImageTool())
-	client := &fakeClient{script: []*LLMResponse{
-		scriptedResp([]ContentBlock{toolBlock("view_image", map[string]any{"path": img})}, "tool_use"),
+	fake := &fakeClient{script: []*LLMResponse{
 		scriptedResp([]ContentBlock{textBlock("a red bicycle leaning against a brick wall")}, "stop"),
-		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
 	}}
-	result := RunLoopContext(context.Background(), client, "vision-loop", "", []Message{{Role: "user", Content: "look"}}, tools, 5, 100, nil, false, "")
-	if result.Status != "complete" {
-		t.Fatalf("status = %q, want complete (reply=%q)", result.Status, result.Reply)
+	dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("fake-png-bytes"))
+	out := maybeConvertVision(context.Background(), dataURL, map[string]any{"path": img, "task": "critique"}, fake, "vision-test")
+	if !strings.Contains(out, "[view_image: a red bicycle leaning against a brick wall]") {
+		t.Fatalf("converted output = %q, want vision text wrapped as [view_image: ...]", out)
 	}
-
-	// The vision model's text response became the tool result.
-	if len(result.ToolCalls) != 1 || !strings.Contains(result.ToolCalls[0].Output, "[view_image: a red bicycle leaning against a brick wall]") {
-		t.Fatalf("tool output = %q, want vision text wrapped as [view_image: ...]", result.ToolCalls[0].Output)
-	}
-
-	// A vision call was issued for the data-URL result, carrying the image.
 	var visionCall []Message
 	visionIdx := -1
-	for i, role := range client.roles {
+	for i, role := range fake.roles {
 		if role == VisionModel {
-			visionCall, visionIdx = client.messages[i], i
+			visionCall, visionIdx = fake.messages[i], i
 			break
 		}
 	}
-	if visionCall == nil {
+	if visionCall == nil || visionIdx == -1 {
 		t.Fatal("no VisionModel call issued for the image result")
 	}
 	if len(visionCall) != 1 || len(visionCall[0].Images) != 1 || !strings.HasPrefix(visionCall[0].Images[0], "data:image/png;base64,") {
 		t.Fatalf("vision call messages = %#v, want one user message with the data URL", visionCall)
 	}
-
-	// Main messages never carry image bytes — not as Images, not inline.
-	for i, role := range client.roles {
-		if role == MainModel {
-			for _, m := range client.messages[i] {
-				if len(m.Images) > 0 || strings.Contains(m.Content, "data:image/") {
-					t.Fatalf("main call %d carries image bytes: %#v", i, m)
-				}
-			}
-		}
+	if got := maybeConvertVision(context.Background(), "not an image", nil, fake, "vision-test"); got != "not an image" {
+		t.Fatalf("non-image output changed: %q", got)
 	}
-
-	// The main brain never flipped: the turn was main → vision (one-shot) → main.
-	if client.roles[0] != MainModel || client.roles[visionIdx+1] != MainModel {
-		t.Fatalf("roles = %v, want main → vision → main", client.roles)
+	if got := maybeConvertVision(context.Background(), dataURL, nil, nil, "vision-test"); got != dataURL {
+		t.Fatalf("nil client should pass through unchanged, got %q", got)
 	}
 }
 
 // T8: non-image tool results must flow through unchanged — no vision call, no
 // wrapping.
-func TestLoopLeavesNonImageToolResultsUntouched(t *testing.T) {
-	tools := NewRegistry()
-	tools.Register(&Tool{Name: "probe", Schema: map[string]any{"type": "object"}, Fn: func(map[string]any) string { return "plain probe result" }})
-	client := &fakeClient{script: []*LLMResponse{
-		scriptedResp([]ContentBlock{toolBlock("probe", map[string]any{})}, "tool_use"),
-		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
-	}}
-	result := RunLoopContext(context.Background(), client, "plain-tool-loop", "", []Message{{Role: "user", Content: "go"}}, tools, 5, 100, nil, false, "")
-	if result.Status != "complete" {
-		t.Fatalf("status = %q, want complete", result.Status)
-	}
-	if len(result.ToolCalls) != 1 || result.ToolCalls[0].Output != "plain probe result" {
-		t.Fatalf("non-image tool output was transformed: %#v", result.ToolCalls)
-	}
-	for _, role := range client.roles {
-		if role == VisionModel {
-			t.Fatal("non-image tool triggered a vision call")
-		}
-	}
-}
 
 // T8: a failed vision call degrades to an error tool result the model can
 // react to — it must never fall back to attaching the image to the main
 // messages.
-func TestLoopDegradesFailedVisionCallToErrorResult(t *testing.T) {
-	img := filepath.Join(t.TempDir(), "photo.png")
-	if err := os.WriteFile(img, []byte("fake-png-bytes"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	tools := NewRegistry()
-	tools.Register(makeViewImageTool())
-	client := &failingVisionClient{fakeClient: &fakeClient{script: []*LLMResponse{
-		scriptedResp([]ContentBlock{toolBlock("view_image", map[string]any{"path": img})}, "tool_use"),
-		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
-	}}}
-	result := RunLoopContext(context.Background(), client, "vision-fail-loop", "", []Message{{Role: "user", Content: "look"}}, tools, 5, 100, nil, false, "")
-	if result.Status != "complete" {
-		t.Fatalf("status = %q, want complete (reply=%q)", result.Status, result.Reply)
-	}
-	if len(result.ToolCalls) != 1 || !strings.Contains(result.ToolCalls[0].Output, "Error: vision analysis failed") {
-		t.Fatalf("tool output = %q, want error result", result.ToolCalls[0].Output)
-	}
-	for i, role := range client.fakeClient.roles {
-		if role == MainModel {
-			for _, m := range client.fakeClient.messages[i] {
-				if len(m.Images) > 0 || strings.Contains(m.Content, "data:image/") {
-					t.Fatalf("main call %d carries image bytes after vision failure: %#v", i, m)
-				}
-			}
-		}
-	}
-}
-
-// failingVisionClient fails any VisionModel call so the loop's degradation
-// path can be exercised offline.
-type failingVisionClient struct{ fakeClient *fakeClient }
-
-func (f *failingVisionClient) Create(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
-	if role == VisionModel {
-		return nil, errors.New("vision provider down")
-	}
-	return f.fakeClient.Create(session, role, messages, maxTokens, system, tools)
-}
-
-func (f *failingVisionClient) Stream(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
-	return f.Create(session, role, messages, maxTokens, system, tools)
-}
-
-func (f *failingVisionClient) CreateContext(ctx context.Context, session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
-	return f.Create(session, role, messages, maxTokens, system, tools)
-}
-
-func (f *failingVisionClient) CreateContextNoReasoning(ctx context.Context, session string, role ModelRole, messages []Message, maxTokens int, system string) (*LLMResponse, error) {
-	return f.Create(session, role, messages, maxTokens, system, nil)
-}
 
 // CTX-022 C (structural): a user-provenanced fact on the message's topic is
 // injected as an OWNER-ESTABLISHED FACT riding the user message — the live

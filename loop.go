@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"strconv"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -209,7 +210,7 @@ func outcomeContradiction(reply string, calls []ToolCall) string {
 	failed, succeeded := 0, 0
 	var successEv, failEv string
 	for _, c := range calls {
-		if strings.HasPrefix(c.Output, "Error") {
+		if scriptCallFailed(c) {
 			failed++
 			if failEv == "" {
 				failEv = fmt.Sprintf("%s%v", c.Name, c.Args)
@@ -234,6 +235,22 @@ func outcomeContradiction(reply string, calls []ToolCall) string {
 		return fmt.Sprintf("[System: your reply claims an operation succeeded, but this turn's tool results show errors — e.g. %s. Do not claim success; retry the operation or report the actual error.]", failEv)
 	}
 	return ""
+}
+
+// scriptCallFailed reports whether a ToolCall (native or code-mode "script")
+// ended in failure. Script outputs carry the "[script exit N]" wrapper; a
+// native call's output is the raw tool result (Error: prefix convention).
+func scriptCallFailed(c ToolCall) bool {
+	if strings.HasPrefix(c.Output, "[script exit") {
+		if i := strings.Index(c.Output, "]"); i > 0 {
+			codeStr := strings.TrimSpace(strings.TrimPrefix(c.Output[:i], "[script exit"))
+			if code, err := strconv.Atoi(codeStr); err == nil {
+				return code != 0 || strings.Contains(c.Output[i:], "\nError:")
+			}
+		}
+		return true
+	}
+	return strings.HasPrefix(c.Output, "Error")
 }
 
 func lastUserText(messages []Message) string {
@@ -311,22 +328,16 @@ func RunLoopContext(
 	loopDetections := 0
 	lastRewritePush := ""
 
-	// Tool schemas are computed ONCE per turn, not per iteration. The selected
-	// schema set feeds the `tools` array in the request payload; recomputing it
-	// against the growing message history drifts the set mid-turn and breaks the
-	// provider's prompt-prefix cache on every iteration (observed: iteration 2
-	// cached 64/10671 tokens). Selection still happens against the full context
-	// available at turn start, so specialist tools for the task are included.
+	// CDE-001 (#271): code mode — no JSON tools array. The stub module (the
+	// registry rendered as compact text) joins the system prompt ONCE per
+	// turn; it is byte-stable, so the provider prefix cache stays warm.
+	// Stage runs pass a filtered registry (Tools.Only), so the stub is
+	// stage-scoped automatically; chat runs get the full registry. The
+	// sliding schema-selection machinery is retired from the loop path.
 	oneTurnText := lastTurnContext(messages)
-	schemas := tools.SchemasForContext(sessionID, toolSelectionContext(system, messages), oneTurnText)
-	schemaChars := 0
-	schemaNames := make([]string, 0, len(schemas))
-	for _, s := range schemas {
-		schemaChars += len(s.Name) + len(s.Description) + 200 // ~params JSON
-		schemaNames = append(schemaNames, s.Name)
-	}
-	schemaBytes, schemaHeavy := schemaDiag(schemas)
-	trace("context_diag", map[string]any{"system_chars": len(system), "msg_count": len(messages), "schema_count": len(schemas), "schema_names": schemaNames, "schema_est_chars": schemaChars, "schema_bytes": schemaBytes, "schema_heavy": schemaHeavy, "one_turn_chars": len(oneTurnText)})
+	schemas := []ToolDef(nil)
+	system = system + "\n\n" + tools.StubModule()
+	trace("context_diag", map[string]any{"system_chars": len(system), "msg_count": len(messages), "schema_count": 0, "stub_chars": len(tools.StubModule()), "one_turn_chars": len(oneTurnText)})
 
 	mutationChecked := false // push the unverified-mutation-claim correction at most once per turn
 	claimChecked := false    // push the contradicted-outcome-claim correction at most once per turn
@@ -419,50 +430,58 @@ func RunLoopContext(
 
 		messages = append(messages, Message{Role: "assistant", Content: assembleAssistantContent(resp.Content)})
 
-		toolUses := extractToolUses(resp.Content)
+		// CDE-001 (#271): code mode — the model's only action is a [script]
+		// marker. Native tool calls cannot occur (no tools array is sent);
+		// the old text-marker [tool_call: ...] protocol is retired.
+		var scripts []string
 		markerFound := false
-		failedMarker := ""
-		if len(toolUses) == 0 {
-			toolUses, markerFound, failedMarker = extractTextToolUses(extractText(resp.Content))
-		}
+		markerMalformed := false
+		legacyMarker := false
+		scripts, markerFound, markerMalformed, legacyMarker = extractScriptMarkers(extractText(resp.Content))
 
-		// No tool calls = LLM is done — unless a text tool-call marker was
-		// detected but failed to parse (the call was dropped, not absent), or
-		// the stage's declared outputs are still missing. Both get a corrective
-		// push and another iteration instead of a silent "complete".
-		if len(toolUses) == 0 {
+		// No script = LLM is done — unless a [script] marker was detected but
+		// malformed (the call was dropped, not absent), or the stage's declared
+		// outputs are still missing. Both get a corrective push and another
+		// iteration instead of a silent "complete".
+		if len(scripts) == 0 {
+			if legacyMarker {
+				// Retired protocol (CDE-001): the model reached for
+				// [tool_call: ...] — push the code-mode correction once per
+				// turn instead of silently treating it as the final reply.
+				messages = append(messages, Message{
+					Role:    "user",
+					Content: "[System: [tool_call: ...] markers are retired. Code mode: emit ONE script between [script] and [/script] markers, or reply in plain text when done. See the stub module.]",
+				})
+				continue
+			}
 			if markerFound {
 				parseFailures++
 				// Circuit breaker (issue #24): a model stuck in a broken marker
 				// shape repeats the same failure — the identical push does not
 				// help, so escalate, then abort with a diagnosis instead of
-				// burning to the iteration cap (observed 2026-08-08: 16
-				// consecutive failures on the facebook run, iters 35-50).
-				// CTX-006: the count is per-turn TOTAL, not a streak — on
-				// 2026-08-10 the CHEM 15 turn failed at iters 4, 11-14, 16,
-				// 24-26 (9 total) yet never hit 6 consecutive, so the old
-				// streak guard never fired and the run burned to the cap.
+				// burning to the iteration cap. CTX-006: the count is per-turn
+				// TOTAL, not a streak.
 				if parseFailures >= 6 {
-					slog.Error("repeated unparseable tool markers", "session_id", sessionID, "iteration", i, "failures", parseFailures)
+					slog.Error("repeated malformed script markers", "session_id", sessionID, "iteration", i, "failures", parseFailures)
 					trace("tool_call_parse_aborted", map[string]any{"iteration": i, "failures": parseFailures})
 					result.Status = "error"
-					result.Reply = fmt.Sprintf("(error: repeatedly emitted unparseable tool calls after %d attempts)", parseFailures)
+					result.Reply = fmt.Sprintf("(error: repeatedly emitted malformed script markers after %d attempts)", parseFailures)
 					return result
 				}
-				slog.Warn("unparseable tool_call marker", "session_id", sessionID, "iteration", i, "failures", parseFailures, "marker", failedMarker)
+				slog.Warn("malformed script marker", "session_id", sessionID, "iteration", i, "failures", parseFailures)
 				if audit, ok := ctx.Value(auditKey{}).(func(string, string, int)); ok {
-					audit("tool_call_parse_failed", fmt.Sprintf("text marker found but args did not parse (failure %d)", parseFailures), i)
+					audit("tool_call_parse_failed", fmt.Sprintf("script marker found but empty (failure %d)", parseFailures), i)
 				}
-				trace("tool_call_parse_failed", map[string]any{"iteration": i, "failures": parseFailures, "marker": failedMarker})
+				trace("tool_call_parse_failed", map[string]any{"iteration": i, "failures": parseFailures, "malformed": markerMalformed})
 				if parseFailures >= 3 {
 					messages = append(messages, Message{
 						Role:    "user",
-						Content: "[System: your last " + fmt.Sprint(parseFailures) + " tool calls failed to parse. STOP re-emitting the same shape — use native function calling, or call the _FLAT variant of the tool with arguments as a JSON string. Inspect the tool schema before retrying.]",
+						Content: "[System: your last " + fmt.Sprint(parseFailures) + " script markers were empty or malformed. Emit ONE script between [script] and [/script] — non-empty bash. Inspect the stub module before retrying.]",
 					})
 				} else {
 					messages = append(messages, Message{
 						Role:    "user",
-						Content: "[System: your previous tool call could not be parsed — re-emit it in the exact format [tool_call: name({...})] with valid JSON, or use native function calling.]",
+						Content: "[System: your previous [script] marker contained no script. Re-emit it as [script]#!/bin/bash\n...\n[/script] with real commands.]",
 					})
 				}
 				continue
@@ -519,72 +538,40 @@ func RunLoopContext(
 			return result
 		}
 
-		// Execute tools and feed results back
-		// CTX-006: no parseFailures reset here. The counter is per-turn total —
-		// a model that alternates success and malformed markers (2026-08-10
-		// CHEM 15) degrades just as surely as one stuck in a streak, and both
-		// must abort at the same bound.
+		// Execute scripts and feed results back (CDE-001, #271).
+		// CTX-006: no parseFailures reset here — the counter is per-turn total.
+		// Each script runs through the denylist gate BEFORE execution; a
+		// flagged script never runs and the model gets the reason. Script
+		// runs are recorded as synthetic ToolCalls (name "script") so the
+		// repetition guard, loop detection, mutation check and outcome
+		// contradiction machinery all keep working unchanged.
 		toolResults := make([]map[string]any, 0)
-		provenanceWarned := false // CTX-022 C: warn once per turn
-		for _, tc := range toolUses {
-			args, _ := tc.Input.(map[string]any)
+		for si, script := range scripts {
+			head := firstScriptLine(script)
 
-			// Update snapshot before running tool
+			// Update snapshot before running
 			if update, ok := ctx.Value(snapshotKey{}).(func(LoopSnapshot)); ok {
-				update(LoopSnapshot{Iteration: i, Status: "running_tool", CurrentTool: fmt.Sprintf("%s(%v)", tc.Name, args)})
+				update(LoopSnapshot{Iteration: i, Status: "running_tool", CurrentTool: "script: " + head})
 			}
 
-			// Malformed native tool-call args (provider.go injected
-			// __raw_arguments__ and logged the raw string). Never execute a tool
-			// with garbage input: return the raw string as the result so the
-			// model sees exactly what it emitted and can re-emit valid JSON.
 			var raw string
-			if rawArgs, bad := args["__raw_arguments__"]; bad {
-				raw = fmt.Sprintf("Error: tool call arguments did not parse as JSON. Raw arguments: %v. Re-emit this call with valid JSON arguments.", rawArgs)
+			if reason := gateScript(script); reason != "" {
+				raw = "Error: script blocked by the harness gate (" + reason + "). Rewrite without the blocked construct — the gate is absolute."
 			} else {
-				raw = tools.ExecuteContext(ctx, tc.Name, args)
+				output, code := runLoopScript(ctx, script, sessionID)
+				raw = fmt.Sprintf("[script exit %d]\n%s", code, output)
 			}
 			if ctx.Err() != nil {
 				result.Status = "cancelled"
 				result.Reply = "Stopped."
 				return result
 			}
-			// CTX-022 C: provenance gate — when the model reaches for the web
-			// after recall returned user-provenanced facts on the same subject,
-			// inject a mid-flight warning naming the memory fact. The harness
-			// owns source weighting; the model must not re-litigate the owner's
-			// own fact against live data (2026-08-15 demo: web search overrode
-			// a user-provenanced deletion fact).
-			if tc.Name == "search_web" && !provenanceWarned {
-				if warn := provenanceSearchWarning(result.ToolCalls, args); warn != "" {
-					provenanceWarned = true
-					messages = append(messages, Message{Role: "user", Content: warn})
-					trace("provenance_gate", map[string]any{"iteration": i})
-				}
-			}
-			if tc.Name == "view_image" && strings.HasPrefix(raw, "data:image/") {
-				// T8 (map #88): the data URL is converted to vision-model text
-				// here instead of being attached to the main messages — the
-				// main brain never carries image bytes, so it stays on the main
-				// provider for the rest of the turn and the provider prompt
-				// cache is not broken by per-iteration image blobs.
-				task, _ := args["task"].(string)
-				desc, err := describeImage(ctx, client, sessionID, raw, task, maxTokens)
-				if err != nil {
-					// A failed vision call degrades to an error tool result the
-					// model can react to; never fall back to attaching the image.
-					slog.Warn("view_image vision call failed", "session_id", sessionID, "error", err)
-					trace("vision", map[string]any{"ok": false, "error": err.Error()})
-					raw = "Error: vision analysis failed: " + err.Error()
-				} else {
-					trace("vision", map[string]any{"ok": true, "chars": len(desc)})
-					raw = "[view_image: " + desc + "]"
-				}
-			}
-			output := prepareToolOutput(traceHome, sessionID, i, tc.Name, raw)
-			result.ToolCalls = append(result.ToolCalls, ToolCall{Name: tc.Name, Args: args, Output: output})
+			output := prepareToolOutput(traceHome, sessionID, i, "script", raw)
+			args := map[string]any{"head": head}
+			result.ToolCalls = append(result.ToolCalls, ToolCall{Name: "script", Args: args, Output: output})
+			tools.LogScriptRun(ctx, sessionID, script, raw, toolOutputStatus(raw))
 
-			// Update snapshot with tool result
+			// Update snapshot with result
 			if update, ok := ctx.Value(snapshotKey{}).(func(LoopSnapshot)); ok {
 				history := make([]string, 0)
 				for _, tc := range result.ToolCalls {
@@ -593,13 +580,13 @@ func RunLoopContext(
 				update(LoopSnapshot{Iteration: i, Status: "thinking", LastOutput: output, ToolHistory: history})
 			}
 
-			notify(obs, "tool", map[string]any{"tool": tc.Name, "args": args, "status": toolOutputStatus(raw)})
-			trace("tool", map[string]any{"tool": tc.Name, "args": args, "status": toolOutputStatus(raw)})
+			notify(obs, "tool", map[string]any{"tool": "script", "args": args, "status": toolOutputStatus(raw)})
+			trace("script", map[string]any{"iteration": i, "head": head, "status": toolOutputStatus(raw)})
 
 			toolResults = append(toolResults, map[string]any{
 				"type":        "tool_result",
-				"tool_use_id": tc.ID,
-				"tool":        tc.Name,
+				"tool_use_id": fmt.Sprintf("script_%d", si),
+				"tool":        "script",
 				"content":     output,
 			})
 		}
@@ -725,45 +712,7 @@ func stageRewriteStreak(calls []ToolCall) string {
 // to the provider plus the five heaviest schemas. schema_est_chars (+200 per
 // schema) undercounts MCP executor schemas by ~4×, so compaction and capping
 // decisions are sized from the real number.
-func schemaDiag(schemas []ToolDef) (bytes int, heavy []map[string]any) {
-	if len(schemas) == 0 {
-		return 0, nil
-	}
-	raw, err := json.Marshal(schemas)
-	if err != nil {
-		return 0, nil
-	}
-	bytes = len(raw)
-	type sized struct {
-		name string
-		size int
-	}
-	all := make([]sized, 0, len(schemas))
-	for _, s := range schemas {
-		if b, err := json.Marshal(s); err == nil {
-			all = append(all, sized{s.Name, len(b)})
-		}
-	}
-	sort.Slice(all, func(i, j int) bool { return all[i].size > all[j].size })
-	for i := 0; i < len(all) && i < 5; i++ {
-		heavy = append(heavy, map[string]any{"name": all[i].name, "chars": all[i].size})
-	}
-	return bytes, heavy
-}
 
-func toolSelectionContext(system string, messages []Message) string {
-	var b strings.Builder
-	b.WriteString(system)
-	for _, message := range messages {
-		b.WriteString("\n")
-		b.WriteString(message.Content)
-	}
-	text := b.String()
-	if len(text) > 24000 {
-		text = text[len(text)-24000:]
-	}
-	return text
-}
 
 // lastTurnContext returns the last user message + last assistant reply for
 // targeted tool matching (semantic embedding and MCP keyword gating).
@@ -835,65 +784,8 @@ func extractToolUses(blocks []ContentBlock) []ContentBlock {
 // retry loop until the iteration cap (observed: a FB publish call burned
 // ~20 iterations re-emitting MCP_composio_..._FLAT({...})). When no prefixed
 // marker is found, fall back to scanning bare name({json}) calls.
-func extractTextToolUses(text string) ([]ContentBlock, bool, string) {
-	uses, markerFound, failed := extractPrefixedToolUses(text)
-	if len(uses) > 0 || markerFound {
-		return uses, markerFound, failed
-	}
-	return extractBareToolUses(text)
-}
 
 // extractPrefixedToolUses scans for [tool_call: name({...})] markers.
-func extractPrefixedToolUses(text string) ([]ContentBlock, bool, string) {
-	var uses []ContentBlock
-	markerFound := false
-	failed := ""
-	marker := "[tool_call:"
-	for {
-		idx := strings.Index(text, marker)
-		if idx == -1 {
-			break
-		}
-		markerFound = true
-		text = text[idx+len(marker):]
-		paren := strings.IndexByte(text, '(')
-		if paren == -1 {
-			failed = markerSnippet(text)
-			break
-		}
-		name := strings.TrimSpace(text[:paren])
-		text = text[paren+1:]
-		if len(text) == 0 || text[0] != '{' {
-			// The model may wrap the args in a markdown code fence inside the
-			// marker: [tool_call: name(```json\n{...}\n```)]. Strip it before
-			// giving up.
-			if fenced := stripJSONFences(text); len(fenced) > 0 && fenced[0] == '{' {
-				text = fenced
-			} else {
-				failed = markerSnippet(text)
-				break
-			}
-		}
-		argsJSON, rest := extractBalancedJSON(text)
-		if argsJSON == "" {
-			failed = markerSnippet(text)
-			break
-		}
-		text = rest
-		args, ok := parseToolArgsJSON(argsJSON)
-		if !ok {
-			failed = markerSnippet(name + "(" + argsJSON + ")")
-			continue // keep scanning for later markers; caller sees markerFound
-		}
-		uses = append(uses, ContentBlock{
-			Type:  "tool_use",
-			ID:    fmt.Sprintf("txt_%d", len(uses)),
-			Name:  name,
-			Input: args,
-		})
-	}
-	return uses, markerFound, failed
-}
 
 // bareToolNameRe matches a bare tool-call start: an identifier immediately
 // followed by '(' and a JSON object — e.g. "bash({"command":...})" or
@@ -901,260 +793,40 @@ func extractPrefixedToolUses(text string) ([]ContentBlock, bool, string) {
 // Used as the tolerant fallback (see extractTextToolUses). The paren/JSON
 // shape is required so ordinary prose ("seen({"..."})") is not misread as
 // a tool call.
-var bareToolNameRe = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_:]*)\s*\(\s*(\{)`)
 
 // extractBareToolUses scans for bare name({...}) tool calls when no prefixed
 // [tool_call:] markers exist. Only emits a use when the args parse as JSON
 // and the name is identifier-shaped; anything else is left alone so prose is
 // not spuriously dispatched as a tool call.
-func extractBareToolUses(text string) ([]ContentBlock, bool, string) {
-	var uses []ContentBlock
-	for {
-		loc := bareToolNameRe.FindStringSubmatchIndex(text)
-		if loc == nil {
-			break
-		}
-		name := text[loc[2]:loc[3]]
-		braceAt := loc[4]
-		argsJSON, rest := extractBalancedJSON(text[braceAt:])
-		// Advance past this candidate regardless so the scan always moves.
-		if argsJSON != "" {
-			args, ok := parseToolArgsJSON(argsJSON)
-			if ok {
-				uses = append(uses, ContentBlock{
-					Type:  "tool_use",
-					ID:    fmt.Sprintf("txt_%d", len(uses)),
-					Name:  name,
-					Input: args,
-				})
-			}
-			text = rest
-		} else {
-			// Not a JSON object after the paren — skip the opening brace char
-			// and continue scanning onward.
-			text = text[braceAt+1:]
-		}
-	}
-	return uses, len(uses) > 0, ""
-}
 
 // markerSnippet bounds the diagnostic text so a pathological marker cannot
 // flood the trace or logs.
-func markerSnippet(s string) string {
-	const max = 200
-	s = strings.Join(strings.Fields(s), " ")
-	if len(s) > max {
-		s = s[:max] + "…"
-	}
-	return s
-}
 
 // parseToolArgsJSON parses tool-call args, trying progressively lenient
 // repairs of common model sloppiness in hand-written JSON: shell-style
 // escapes (devil\'s), trailing commas, stray newlines, markdown fences,
 // single-quoted strings, and unquoted keys. Valid JSON parses on the first
 // attempt and is never transformed.
-func parseToolArgsJSON(s string) (map[string]any, bool) {
-	var args map[string]any
-	if json.Unmarshal([]byte(s), &args) == nil {
-		return args, true
-	}
-	for _, variant := range repairToolArgsVariants(s) {
-		if json.Unmarshal([]byte(variant), &args) == nil {
-			return args, true
-		}
-	}
-	return nil, false
-}
 
 // repairToolArgsVariants returns deterministic lenient repairs, cheapest
 // first. Each is applied to the original text (fence stripping runs first,
 // then the standard repair).
-func repairToolArgsVariants(s string) []string {
-	base := repairToolArgsJSON(s)
-	sq := singleQuotesToDouble(base)
-	return []string{
-		base,
-		repairToolArgsJSON(stripJSONFences(s)),
-		sq,
-		quoteUnquotedKeys(base),
-		quoteUnquotedKeys(sq),
-	}
-}
 
 // stripJSONFences removes a ```json / ``` code fence wrapped around the args.
-func stripJSONFences(s string) string {
-	s = strings.TrimSpace(s)
-	if !strings.HasPrefix(s, "```") {
-		return s
-	}
-	if i := strings.IndexByte(s, '\n'); i != -1 {
-		s = s[i+1:]
-	} else {
-		s = s[3:]
-	}
-	s = strings.TrimSpace(s)
-	if strings.HasSuffix(s, "```") {
-		s = strings.TrimSpace(s[:len(s)-3])
-	}
-	return s
-}
 
 // singleQuotesToDouble converts single-quoted strings to double-quoted, the
 // shape models emit when they write JSON by hand ({'path': '/x'}). Only ever
 // applied as a repair variant — the result must still parse to be used.
-func singleQuotesToDouble(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
-	inDQ := false
-	inSQ := false
-	escaped := false
-	for _, c := range s {
-		if escaped {
-			b.WriteRune(c)
-			escaped = false
-			continue
-		}
-		switch {
-		case c == '\\' && (inDQ || inSQ):
-			b.WriteRune(c)
-			escaped = true
-		case inSQ:
-			if c == '\'' {
-				b.WriteRune('"')
-				inSQ = false
-			} else {
-				b.WriteRune(c)
-			}
-		case inDQ:
-			if c == '"' {
-				inDQ = false
-			}
-			b.WriteRune(c)
-		case c == '\'':
-			b.WriteRune('"')
-			inSQ = true
-		case c == '"':
-			b.WriteRune(c)
-			inDQ = true
-		default:
-			b.WriteRune(c)
-		}
-	}
-	return b.String()
-}
 
 // quoteUnquotedKeys adds quotes around unquoted object keys ({path: /x} ->
 // {"path": /x}). Only ever applied as a repair variant.
-func quoteUnquotedKeys(s string) string {
-	var b strings.Builder
-	b.Grow(len(s) + 8)
-	inDQ := false
-	escaped := false
-	// Classic loop: the body skips ahead (i = j-1) after quoting a key,
-	// which range iteration would ignore.
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if escaped {
-			b.WriteByte(c)
-			escaped = false
-			continue
-		}
-		if inDQ {
-			b.WriteByte(c)
-			if c == '\\' {
-				escaped = true
-			} else if c == '"' {
-				inDQ = false
-			}
-			continue
-		}
-		if c == '"' {
-			inDQ = true
-			b.WriteByte(c)
-			continue
-		}
-		// Outside strings: a word right after { or , that is followed by :
-		// is an unquoted key.
-		if c == '{' || c == ',' {
-			b.WriteByte(c)
-			j := i + 1
-			for j < len(s) && (s[j] == ' ' || s[j] == '\t' || s[j] == '\n' || s[j] == '\r') {
-				b.WriteByte(s[j])
-				j++
-			}
-			start := j
-			for j < len(s) && isKeyChar(s[j]) {
-				j++
-			}
-			if j > start && j < len(s) && s[j] == ':' && s[start] != '"' {
-				b.WriteByte('"')
-				b.WriteString(s[start:j])
-				b.WriteByte('"')
-				i = j - 1
-				continue
-			}
-			if j > start {
-				b.WriteString(s[start:j])
-				i = j - 1
-			}
-			continue
-		}
-		b.WriteByte(c)
-	}
-	return b.String()
-}
 
-func isKeyChar(c byte) bool {
-	return c == '_' || c == '-' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
-}
 
 // repairToolArgsJSON tolerates the JSON sloppiness models emit when writing
 // tool calls by hand instead of using native function calling.
-func repairToolArgsJSON(s string) string {
-	s = strings.ReplaceAll(s, `\'`, `'`)
-	s = strings.ReplaceAll(s, ",}", "}")
-	s = strings.ReplaceAll(s, ",]", "]")
-	return s
-}
 
 // extractBalancedJSON extracts a brace-balanced JSON string, handling
 // nested objects, strings, and escapes. Returns the JSON and remaining text.
-func extractBalancedJSON(s string) (jsonStr string, remaining string) {
-	if len(s) == 0 || s[0] != '{' {
-		return "", s
-	}
-	depth := 0
-	inString := false
-	escaped := false
-	for i, c := range s {
-		if escaped {
-			escaped = false
-			continue
-		}
-		if inString {
-			if c == '\\' {
-				escaped = true
-			}
-			if c == '"' {
-				inString = false
-			}
-			continue
-		}
-		switch c {
-		case '"':
-			inString = true
-		case '{':
-			depth++
-		case '}':
-			depth--
-			if depth == 0 {
-				return s[:i+1], s[i+1:]
-			}
-		}
-	}
-	return "", s
-}
 
 func lastUserContent(messages []Message) string {
 	for i := len(messages) - 1; i >= 0; i-- {
@@ -1224,20 +896,6 @@ func firstFactSubjectLine(out string) string {
 // overlaps this web-search query, it returns the same warning. Empty when no
 // conflict signal exists. (The proactive gate on search_web itself covers the
 // model-skipped-remember case; this covers remember-then-search.)
-func provenanceSearchWarning(calls []ToolCall, args map[string]any) string {
-	query, _ := args["query"].(string)
-	if query == "" {
-		return ""
-	}
-	for _, c := range calls {
-		if c.Name == "remember" {
-			if warn := provenanceGateWarning(c.Output, query); warn != "" {
-				return warn
-			}
-		}
-	}
-	return ""
-}
 
 type traceFile struct {
 	date string
