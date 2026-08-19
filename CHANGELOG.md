@@ -1,4 +1,4 @@
-## [Unreleased]
+## [v2.15.1] — Audit cleanup: dead code, style, outbox, working memory (2026-08-19)
 
 ### Removed
 
