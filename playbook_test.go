@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1340,11 +1341,7 @@ func TestCatchUpRecordsMissedRunAndNotifiesOnce(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0].MissedAt == "" {
 		t.Fatalf("missed run not recorded: %+v (err %v)", got, err)
 	}
-	outbox := filepath.Join(home, "outbox", "msg_owner.txt")
-	data, err := os.ReadFile(outbox)
-	if err != nil {
-		t.Fatalf("no missed-run notice in outbox: %v", err)
-	}
+	data := outboxText(t, home)
 	if !strings.Contains(string(data), "daily") {
 		t.Fatalf("missed-run notice missing schedule name: %s", data)
 	}
@@ -1374,8 +1371,8 @@ func TestCatchUpNeverRunScheduleIsNotAMiss(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0].MissedAt != "" {
 		t.Fatalf("never-run schedule marked missed: %+v (err %v)", got, err)
 	}
-	if _, err := os.Stat(filepath.Join(home, "outbox", "msg_owner.txt")); !os.IsNotExist(err) {
-		t.Fatalf("never-run schedule notified: %v", err)
+	if latestOutboxDraft(home) != "" {
+		t.Fatalf("never-run schedule notified")
 	}
 }
 
@@ -1619,11 +1616,22 @@ func scheduleHealthEntry(t *testing.T, home, name string) PlaybookSchedule {
 
 func outboxText(t *testing.T, home string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(home, "outbox", "msg_owner.txt"))
+	data, err := os.ReadFile(latestOutboxDraft(home))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+// latestOutboxDraft returns the path of the newest msg_* draft in the outbox,
+// or "" when none exists. UnixNano-suffixed names sort chronologically.
+func latestOutboxDraft(home string) string {
+	drafts, _ := filepath.Glob(filepath.Join(home, "outbox", "msg_*"))
+	if len(drafts) == 0 {
+		return ""
+	}
+	sort.Strings(drafts)
+	return drafts[len(drafts)-1]
 }
 
 func writeHealthSchedule(t *testing.T, home, name string, streak int, lastFail, alerted string) {
@@ -1680,7 +1688,7 @@ func TestAlertScheduleHealth(t *testing.T) {
 			core := &Core{Settings: &Settings{Home: home}}
 			alertScheduleHealth(core, scheduleHealthEntry(t, home, "tribal"), tc.result, tc.now)
 			got := ""
-			if data, err := os.ReadFile(filepath.Join(home, "outbox", "msg_owner.txt")); err == nil {
+			if data, err := os.ReadFile(latestOutboxDraft(home)); err == nil {
 				got = string(data)
 			}
 			if tc.wantMsg == "" && got != "" {
@@ -1770,8 +1778,8 @@ func TestFireScheduleRetriesIterationLimitOnce(t *testing.T) {
 	fireSchedule(core, sched, at, run)
 	waitForCalls(t, &calls, 2)
 	// The retry succeeded → no alert, streak reset.
-	if _, err := os.Stat(filepath.Join(home, "outbox", "msg_owner.txt")); !os.IsNotExist(err) {
-		t.Fatalf("successful retry must not alert: %v", err)
+	if latestOutboxDraft(home) != "" {
+		t.Fatalf("successful retry must not alert")
 	}
 	if after := scheduleHealthEntry(t, home, "tribal"); after.FailStreak != 0 || after.AlertedDay != "" {
 		t.Fatalf("successful retry must reset health counters: %+v", after)

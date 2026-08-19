@@ -678,7 +678,7 @@ func TestSendMessageNormalizesLiteralNewlines(t *testing.T) {
 	if !strings.Contains(got, "drafted") {
 		t.Fatalf("unexpected result: %q", got)
 	}
-	data, err := os.ReadFile(filepath.Join(home, "outbox", "msg_abah.txt"))
+	data, err := os.ReadFile(latestOutboxDraft(home))
 	if err != nil {
 		t.Fatal(err)
 	}
