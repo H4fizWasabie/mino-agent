@@ -64,33 +64,7 @@ func hasPlaybookScript(home, name string) bool {
 // Comment lines are skipped: a comment mentioning a tool is not an
 // invocation.
 func validatePlaybookScript(core *Core, name string) error {
-	path := filepath.Join(core.Settings.Home, "playbooks", name, scriptFileName)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("%s: no %s present", name, scriptFileName)
-	}
-	if out, err := exec.Command("bash", "-n", path).CombinedOutput(); err != nil {
-		return fmt.Errorf("%s: bash -n failed: %v\n%s", name, err, strings.TrimSpace(string(out)))
-	}
-	known := map[string]bool{}
-	for _, tool := range core.Tools.Catalog() {
-		known[tool.Name] = true
-	}
-	var unknown []string
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "#") {
-			continue
-		}
-		for _, m := range minoExecToolRe.FindAllStringSubmatch(line, -1) {
-			if !known[m[1]] {
-				unknown = append(unknown, m[1])
-			}
-		}
-	}
-	if len(unknown) > 0 {
-		return fmt.Errorf("%s: unknown tool(s) in script: %s", name, strings.Join(unknown, ", "))
-	}
-	return nil
+	return validateScriptFile(core, filepath.Join(core.Settings.Home, "playbooks", name, scriptFileName), name)
 }
 
 // runScheduledPlaybook is the scheduler's dispatch seam (named, REL-04):
@@ -217,4 +191,127 @@ func recheckScheduledScriptsAt(core *Core) {
 			recordScheduleError(core.Settings.Home, s.Name, msg)
 		}
 	}
+}
+// runScriptStage executes a stage's committed script.sh (SCR-003 hybrid
+// runner) and records the run like any stage: output to
+// runs/<id>/stages/<NN-name>/script-output.txt, exit code on the stage
+// record. Fail-fast by design: scripts are deterministic — a non-zero exit
+// or a missing declared output fails the stage, no retry (owner decision c).
+// Returns the combined output and the exit code.
+func runScriptStage(ctx context.Context, core *Core, pb *PlaybookWorkspace, run *PlaybookRun, stage *WorkspaceStage, sessionID string) (string, int, error) {
+	script := filepath.Join(stage.Dir, stage.Script)
+	if _, err := os.Stat(script); err != nil {
+		return "", 1, fmt.Errorf("stage %02d-%s: %s missing: %v", stage.Number, stage.Name, stage.Script, err)
+	}
+	stageDir := filepath.Join(core.Settings.Home, "playbooks", pb.Name, "runs", run.ID, "stages", fmt.Sprintf("%02d-%s", stage.Number, stage.Name))
+	outPath := filepath.Join(stageDir, "script-output.txt")
+	if err := os.MkdirAll(filepath.Join(stageDir, "output"), 0700); err != nil {
+		return "", 1, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, scriptRunTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, script)
+	// cwd = the run-scoped stage dir: the script's relative paths (output/,
+	// ../NN-name/output/) resolve inside the run record — consistent with the
+	// LLM path's outputs, and the hybrid payload seam (LLM stage writes
+	// output/payload.json, the next script stage reads ../NN-name/output/)
+	// works without any absolute paths in committed scripts.
+	cmd.Dir = stageDir
+	cmd.Env = scriptEnv(sessionID)
+	out, err := cmd.CombinedOutput()
+	output := string(out)
+	if werr := os.WriteFile(outPath, out, 0600); werr != nil {
+		return output, 1, werr
+	}
+	if ctx.Err() != nil {
+		return output, 1, fmt.Errorf("stage script timed out after %s", scriptRunTimeout)
+	}
+	if err == nil {
+		return output, 0, nil
+	}
+	if ee, ok := err.(*exec.ExitError); ok {
+		return output, ee.ExitCode(), nil
+	}
+	return output, 1, err
+}
+
+// missingStageOutputFiles lists the stage's declared outputs absent on disk
+// after a script stage ran — the deterministic equivalent of the LLM path's
+// output verification (a script that does not produce its contract fails).
+func missingStageOutputFiles(pb *PlaybookWorkspace, run *PlaybookRun, stage *WorkspaceStage) []string {
+	var missing []string
+	for _, o := range stage.Outputs {
+		p := playbookRunOutputPath(pb, run, *stage, o)
+		if _, err := os.Stat(p); err != nil {
+			missing = append(missing, p)
+		}
+	}
+	return missing
+}
+
+// validateStageScripts runs the shared validator over every stage's script.sh
+// (SCR-003): the schedule gate and boot re-check cover hybrid playbooks via
+// this single seam, called at run start — an invalid stage script fails the
+// run loudly, never silently skips.
+func validateStageScripts(core *Core, pb *PlaybookWorkspace) error {
+	for _, stage := range pb.Stages {
+		if stage.Script == "" {
+			continue
+		}
+		if err := validateScriptFile(core, filepath.Join(stage.Dir, stage.Script), fmt.Sprintf("%02d-%s", stage.Number, stage.Name)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateScriptFile is the shared single-script check (bash -n + tool scan),
+// used by the playbook-level validator and each stage validator.
+func validateScriptFile(core *Core, path, label string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("%s: no %s present", label, filepath.Base(path))
+	}
+	if out, err := exec.Command("bash", "-n", path).CombinedOutput(); err != nil {
+		return fmt.Errorf("%s: bash -n failed: %v\n%s", label, err, strings.TrimSpace(string(out)))
+	}
+	known := map[string]bool{}
+	for _, tool := range core.Tools.Catalog() {
+		known[tool.Name] = true
+	}
+	var unknown []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		for _, m := range minoExecToolRe.FindAllStringSubmatch(line, -1) {
+			if !known[m[1]] {
+				unknown = append(unknown, m[1])
+			}
+		}
+	}
+	if len(unknown) > 0 {
+		return fmt.Errorf("%s: unknown tool(s) in script: %s", label, strings.Join(unknown, ", "))
+	}
+	return nil
+}
+
+// tailOf returns the last n bytes of a string — for failure diagnostics.
+func tailOf(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
+}
+
+// existingStageOutputs lists the stage's declared outputs present on disk.
+func existingStageOutputs(pb *PlaybookWorkspace, run *PlaybookRun, stage *WorkspaceStage) []string {
+	var found []string
+	for _, o := range stage.Outputs {
+		p := playbookRunOutputPath(pb, run, *stage, o)
+		if _, err := os.Stat(p); err == nil {
+			found = append(found, p)
+		}
+	}
+	return found
 }
