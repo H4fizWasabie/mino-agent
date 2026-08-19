@@ -1,7 +1,6 @@
 # Mino Tool Execution — Code Mode (CDE-001)
 
-Status: **OPEN** — wayfinder ticket, design discussed 2026-08-19 (discussion mode);
-no implementation yet.
+Status: **RESOLVED** — implemented in v2.18.0/v2.18.1 (2026-08-20, closes #271): stub module, script markers (+fenced bash), denylist gate, script runner with minimal env, synthetic ToolCalls keep the guard machinery, JSON path removed (schema selection, tool-call parsing, JSON repair family deleted), vision conversion moved to the exec seam, observational probe via `tool_calls` rows named `script`. Live-verified: chat turn (2 iterations), playbook stage execution, stage-smoke gate. The mid-flight provenance warning awaits a script-aware form (structural CTX-022 C injection remains).
 
 ## Decisions (2026-08-19 discussion)
 
