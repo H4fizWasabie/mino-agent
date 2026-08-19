@@ -152,6 +152,17 @@ func main() {
 		return
 	}
 
+	// SCR-001: `mino exec <tool> [args-json]` — the stub layer playbook
+	// scripts call. Partial boot by construction (registry + DB + MCP +
+	// extensions; no loop/Telegram/scheduler), same route as `mino remember`.
+	// Close explicitly: os.Exit skips the deferred Close, which would orphan
+	// the extension children NewCore spawned.
+	if len(os.Args) > 1 && os.Args[1] == "exec" {
+		code := runExecTool(w, os.Args[2:])
+		w.Close()
+		os.Exit(code)
+	}
+
 	// cost-watch's autonomous pinning rewrites providers.json and signals mino;
 	// hot-reload the routing list instead of waiting for a restart. The heal
 	// runs first (RUN-005): validate the config set, revert anything bad from

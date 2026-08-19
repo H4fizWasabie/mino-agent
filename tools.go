@@ -38,6 +38,7 @@ type ToolFunc func(args map[string]any) string
 type ContextToolFunc func(context.Context, map[string]any) string
 type sessionIDKey struct{}
 type userMessageKey struct{}
+type iterationKey struct{}
 
 type ToolBehavior uint8
 
@@ -650,9 +651,13 @@ func (r *Registry) ExecuteContext(ctx context.Context, name string, args map[str
 		if v := ctx.Value(sessionIDKey{}); v != nil {
 			sid, _ = v.(string)
 		}
+		iter := 0
+		if v := ctx.Value(iterationKey{}); v != nil {
+			iter, _ = v.(int)
+		}
 		r.logDB.Exec(
-			"INSERT INTO tool_calls (session_id, tool_name, args, output_summary, status) VALUES (?,?,?,?,?)",
-			sid, name, string(argsJSON), summary, status,
+			"INSERT INTO tool_calls (session_id, tool_name, args, output_summary, status, iteration) VALUES (?,?,?,?,?,?)",
+			sid, name, string(argsJSON), summary, status, iter,
 		)
 		_ = start // silence unused warning
 	}

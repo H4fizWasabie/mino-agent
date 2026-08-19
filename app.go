@@ -184,7 +184,7 @@ func NewCore() *Core {
 	tools.Register(behaves(makeTaskifyTool(w), BehaviorMutate))
 	tools.Register(behaves(makeSplitStageTool(w), BehaviorMutate))
 	tools.Register(behaves(makeCapturePlaybookTool(w), BehaviorMutate))
-	tools.Register(behaves(makeSchedulePlaybookTool(s.Home, s.Timezone), BehaviorMutate))
+	tools.Register(behaves(makeSchedulePlaybookTool(w), BehaviorMutate))
 	tools.Register(behaves(makeListSchedulesTool(s.Home), BehaviorObserve))
 	tools.Register(behaves(makeCancelScheduleTool(s.Home), BehaviorMutate))
 	// seed example playbook if none exist

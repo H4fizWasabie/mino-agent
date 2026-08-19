@@ -107,6 +107,43 @@ func TestParseCFImage(t *testing.T) {
 	}
 }
 
+// #272 warm-up: tool_calls.iteration existed in the schema but the INSERT
+// never passed it. The loop now carries the iteration in the context, so a
+// tool call records which loop step produced it — the pilot measurement
+// column rides the exec path too (0 = unset, e.g. non-loop callers).
+func TestToolCallLogsIterationFromContext(t *testing.T) {
+	db := Connect(t.TempDir())
+	defer db.Close()
+	r := NewRegistry()
+	r.SetLogDB(db)
+	r.Register(&Tool{Name: "ping", Fn: func(args map[string]any) string { return "pong" }})
+
+	ctx := context.WithValue(context.Background(), iterationKey{}, 7)
+	if out := r.ExecuteContext(ctx, "ping", map[string]any{}); out != "pong" {
+		t.Fatalf("execute = %q", out)
+	}
+	if out := r.ExecuteContext(context.Background(), "ping", map[string]any{}); out != "pong" {
+		t.Fatalf("execute = %q", out)
+	}
+
+	var its []int
+	rows, err := db.Query("SELECT iteration FROM tool_calls ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var it int
+		if err := rows.Scan(&it); err != nil {
+			t.Fatal(err)
+		}
+		its = append(its, it)
+	}
+	if len(its) != 2 || its[0] != 7 || its[1] != 0 {
+		t.Fatalf("iteration column = %v, want [7 0]", its)
+	}
+}
+
 // OBS-002: Only-derived (playbook stage) registries must inherit the audit
 // plumbing — a fresh registry with nil auditFile/logDB made every tool call
 // inside a stage invisible to audit.jsonl (live evidence 2026-08-15: 61

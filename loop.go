@@ -344,6 +344,10 @@ func RunLoopContext(
 			return result
 		}
 		result.Iterations = i
+		// Carry the iteration into tool execution so tool_calls rows record
+		// which loop step produced them (#272 warm-up: the column existed but
+		// the INSERT never passed it).
+		ctx = context.WithValue(ctx, iterationKey{}, i)
 
 		// Update nervous system snapshot
 		if update, ok := ctx.Value(snapshotKey{}).(func(LoopSnapshot)); ok {

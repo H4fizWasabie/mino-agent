@@ -75,6 +75,11 @@ type PlaybookRun struct {
 	// #237: the owner's approval of the run's gate — set by the harness
 	// (approvePendingTaskGate); the model can never approve its own run.
 	GateApproved bool `json:"gate_approved,omitempty"`
+	// SCR-001 (#272): script-backed runs — additive, schema-light (RUN-004
+	// rollback stays valid: old state.json files read these as zero/empty).
+	Script       string `json:"script,omitempty"`         // script.sh when script-backed
+	ScriptOutput string `json:"script_output,omitempty"`  // runs/<id>/script-output.txt
+	ExitCode     int    `json:"exit_code"`                // script exit status (0 when unset)
 }
 
 type PlaybookRunStage struct {
@@ -143,9 +148,12 @@ func loadPlaybookWorkspace(home, name string) (*PlaybookWorkspace, error) {
 		parseWorkspaceConfig(data, pb)
 	}
 	entries, err := os.ReadDir(filepath.Join(dir, "stages"))
-	if err != nil {
-		return nil, fmt.Errorf("playbook %s requires stages/: %w", name, err)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("playbook %s: read stages/: %w", name, err)
 	}
+	// A missing stages/ is legal for a script-backed playbook (SCR-001):
+	// script.sh replaces the LLM stages entirely, so there is nothing to
+	// enumerate. The scheduler dispatches scripts before the LLM path.
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -157,7 +165,12 @@ func loadPlaybookWorkspace(home, name string) (*PlaybookWorkspace, error) {
 		pb.Stages = append(pb.Stages, *stage)
 	}
 	if len(pb.Stages) == 0 {
-		return nil, fmt.Errorf("playbook %s has no stages", name)
+		// A script-backed playbook (SCR-001) legitimately has no LLM stages:
+		// script.sh replaces them entirely. Everything else still requires at
+		// least one stage.
+		if info, serr := os.Stat(filepath.Join(dir, scriptFileName)); serr != nil || info.IsDir() {
+			return nil, fmt.Errorf("playbook %s has no stages", name)
+		}
 	}
 	sort.Slice(pb.Stages, func(i, j int) bool {
 		if pb.Stages[i].Number != pb.Stages[j].Number {
@@ -749,6 +762,14 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 	pb, err := loadPlaybookWorkspace(core.Settings.Home, name)
 	if err != nil {
 		return nil, err
+	}
+	// SCR-001: a script-backed playbook has no LLM stages — the scheduler
+	// runs script.sh. Running it through the LLM path would "complete" with
+	// zero work and zero deliverables, so refuse honestly: the LLM manages
+	// scripted playbooks (manage_playbook script validate, schedule), it
+	// does not execute them.
+	if len(pb.Stages) == 0 {
+		return nil, fmt.Errorf("playbook %s is script-backed (%s) — the scheduler runs it; run_playbook cannot", name, scriptFileName)
 	}
 	if err := validateWorkspaceStageTools(pb, core.Tools); err != nil {
 		return nil, err
