@@ -1,7 +1,10 @@
 # Mino Playbook Execution — Script Runs (SCR-001)
 
-Status: **RESOLVED** — implementation landed (2026-08-19, #272 Phase 1: `mino exec`
-stub layer, script-backed stages, validation). Pilot conversions are follow-up ops.
+Status: **RESOLVED (engine)** — implementation landed (2026-08-19, #272 Phase 1:
+`mino exec` stub layer, script-backed stages, validation). Pilot conversions
+(weekly-audit → gmail → instagram hybrid) + the before/after protocol are
+follow-up ops tracked against the baselines below; the ticket's measurables
+are satisfied only once those run.
 
 ## Before/After protocol (owner request, 2026-08-19)
 

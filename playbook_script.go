@@ -30,8 +30,25 @@ const scriptFileName = "script.sh"
 var scriptRunTimeout = 30 * time.Minute
 
 // minoExecToolRe finds `mino exec <tool>` invocations for the tool-name
-// scan in validatePlaybookScript.
-var minoExecToolRe = regexp.MustCompile(`\bmino exec\s+([a-z0-9_-]+)`)
+// scan in validatePlaybookScript. Case-insensitive: MCP tools register
+// under uppercase names (MCP_composio_*), and the registry lookup stays
+// exact-case — a lowercase "mcp_..." invocation correctly reports unknown.
+var minoExecToolRe = regexp.MustCompile(`(?i)\bmino exec\s+([a-z0-9_-]+)`)
+
+// scriptEnv is the minimal environment for script children. The mino
+// process runs with EnvironmentFile=mino.env (systemd), so os.Environ()
+// carries every provider key and the bot token — a committed script must
+// never inherit those. Only the essentials ride along; secrets stay in the
+// binary, resolved internally by `mino exec` (SCR-001).
+func scriptEnv(sessionID string) []string {
+	return []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + os.Getenv("HOME"),
+		"TZ=" + os.Getenv("TZ"),
+		"LANG=" + os.Getenv("LANG"),
+		"MINO_EXEC_SESSION=" + sessionID,
+	}
+}
 
 // hasPlaybookScript reports whether the playbook carries script.sh.
 func hasPlaybookScript(home, name string) bool {
@@ -163,7 +180,7 @@ func runScriptCommand(ctx context.Context, script, dir, sessionID string) ([]byt
 	defer cancel()
 	cmd := exec.CommandContext(ctx, script)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "MINO_EXEC_SESSION="+sessionID)
+	cmd.Env = scriptEnv(sessionID)
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
 		return out, 1, fmt.Errorf("script timed out after %s", scriptRunTimeout)

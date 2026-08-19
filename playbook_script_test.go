@@ -118,6 +118,34 @@ func TestRunScriptCommandCarriesRunSession(t *testing.T) {
 	}
 }
 
+func TestRunScriptCommandScrubsProcessSecrets(t *testing.T) {
+	// The mino process runs with EnvironmentFile=mino.env (systemd), so the
+	// process env carries every token. Script children must never inherit
+	// them — only the minimal scriptEnv set rides along.
+	t.Setenv("MINO_BOT_TOKEN", "super-secret-token")
+	t.Setenv("MINO_ANTHROPIC_KEY", "another-secret")
+	script := filepath.Join(t.TempDir(), "script.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/bash\nenv | sort\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	out, code, err := runScriptCommand(context.Background(), script, filepath.Dir(script), "scheduled-daily")
+	if err != nil || code != 0 {
+		t.Fatalf("run: code %d err %v", code, err)
+	}
+	env := string(out)
+	for _, secret := range []string{"MINO_BOT_TOKEN", "MINO_ANTHROPIC_KEY", "super-secret-token"} {
+		if strings.Contains(env, secret) {
+			t.Fatalf("script inherited secret %q — env scrub failed", secret)
+		}
+	}
+	if !strings.Contains(env, "MINO_EXEC_SESSION=scheduled-daily") {
+		t.Fatalf("script missing MINO_EXEC_SESSION: %s", env)
+	}
+	if !strings.Contains(env, "PATH=") {
+		t.Fatalf("script missing PATH: %s", env)
+	}
+}
+
 func TestRunScriptCommandTimeout(t *testing.T) {
 	old := scriptRunTimeout
 	scriptRunTimeout = 200 * time.Millisecond

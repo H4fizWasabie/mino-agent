@@ -427,6 +427,7 @@ func TestValidatePlaybookScript(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(&Tool{Name: "post", Fn: func(map[string]any) string { return "" }})
 	reg.Register(&Tool{Name: "log", Fn: func(map[string]any) string { return "" }})
+	reg.Register(&Tool{Name: "MCP_composio_COMPOSIO_MULTI_EXECUTE_TOOL", Fn: func(map[string]any) string { return "" }})
 
 	cases := []struct {
 		name   string
@@ -436,8 +437,11 @@ func TestValidatePlaybookScript(t *testing.T) {
 		{"missing script", "", "no script.sh present"},
 		{"bash syntax error", "if then\n", "bash -n failed"},
 		{"unknown tool", "mino exec post ...\nmino exec fake_tool {...}\n", "unknown tool(s) in script: fake_tool"},
+		{"unknown MCP-style tool", "mino exec MCP_composio_COMPOSIO_MULTI_EXECUTE_TOOL {...}\nmino exec MCP_missing_TOOL {...}\n", "unknown tool(s) in script: MCP_missing_TOOL"},
+		{"lowercase mcp invocation is unknown", "mino exec mcp_composio_composio_multi_execute_tool {...}\n", "unknown tool(s) in script: mcp_composio_composio_multi_execute_tool"},
 		{"comment mentioning a tool is not an invocation", "# mino exec fake_tool would not run\nmino exec post {...}\n", ""},
 		{"valid script", "#!/bin/bash\nmino exec post '{\"text\":\"hi\"}' || exit 1\nmino exec log {...}\n", ""},
+		{"valid MCP-style call", "mino exec MCP_composio_COMPOSIO_MULTI_EXECUTE_TOOL {...}\n", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
