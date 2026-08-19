@@ -293,6 +293,10 @@ the pre-conversion week; every non-zero exit produces exactly one notice.
   `script.sh`/`script.py` per playbook, scheduler executes directly, LLM
   authors/reviews/handles exceptions; hybrid script + observation + checkpoint
   stages; pilot on read-only playbooks (weekly-audit, weekly-cost) first.
+- [SCR-002 — LLM-synthesized Telegram reports](tickets/scr-002-compose-message.md) —
+  `compose_message` tool: scripts' notify legs call it with their verified
+  digest; one bounded single-turn provider call (no tools, no loop, ~2–4k
+  tokens/run); reports read like Mino again while the ~99% token cut survives.
 
 ## Out of scope
 
