@@ -548,6 +548,7 @@ var promptAssemblySeams = []string{
 	"gatePauseReply",
 	"approvePendingTaskGate",
 	"runScheduledPlaybook",
+	"composeSystemPrompt",
 	"validatePlaybookScript",
 }
 

@@ -43,7 +43,7 @@ convenient. Not a throwaway: the tool is the bounded primitive either way.
    no tools); returns the message text or `Error:`.
 2. Script updates (all three pilots + future conversions): notify leg becomes
    `MSG=$(mino exec compose_message "$(jq -nc --arg d "<digest>" '{digest: $d}')")`
-   → `send_message {"message": $MSG, "to": "Abah"}`. Digest per playbook:
+   → `send_message {"message": $MSG, "to": "<owner>"}`. Digest per playbook:
    gmail = count + IDs summary; weekly-cost = spend table + posts + issues;
    daily-ai-concept = concept + snippet + v-number.
 3. Tests: tool test with a fake client (prompt shape, bounded output, Error on
