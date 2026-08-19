@@ -81,7 +81,7 @@ func TestApprovalStagePagesAndExecutesOnApprove(t *testing.T) {
 	id := stageForApproval(t, g, ctx, command, target)
 
 	// The real outbox carried the page with the exact op and the reply format.
-	page, err := os.ReadFile(filepath.Join(home, "outbox", "msg_owner.txt"))
+	page, err := os.ReadFile(latestOutboxDraft(home))
 	if err != nil {
 		t.Fatalf("outbox page missing: %v", err)
 	}

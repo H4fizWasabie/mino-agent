@@ -128,14 +128,14 @@ func TestAlertRunCost(t *testing.T) {
 	// A cheap run (below the ceiling) must not alert.
 	writeUsage(t, home, "tencent/hy3:tencent", "scheduled-tribal", fire.Add(time.Minute).Format(time.RFC3339), 1_000_000, 0, 0)
 	alertRunCost(core, scheduleHealthEntry(t, home, "tribal"), fire)
-	if _, err := os.Stat(filepath.Join(home, "outbox", "msg_owner.txt")); err == nil {
+	if latestOutboxDraft(home) != "" {
 		t.Fatal("cheap run must not alert")
 	}
 
 	// A $3.30 run (25M hy3 input) triggers once, deduped for the day.
 	writeUsage(t, home, "tencent/hy3:tencent", "scheduled-tribal", fire.Add(2*time.Minute).Format(time.RFC3339), 25_000_000, 0, 0)
 	alertRunCost(core, scheduleHealthEntry(t, home, "tribal"), fire)
-	msg, err := os.ReadFile(filepath.Join(home, "outbox", "msg_owner.txt"))
+	msg, err := os.ReadFile(latestOutboxDraft(home))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestAlertRunCost(t *testing.T) {
 		t.Fatalf("run alert = %q, want tribal + cost over $2", msg)
 	}
 	alertRunCost(core, scheduleHealthEntry(t, home, "tribal"), fire)
-	data, _ := os.ReadFile(filepath.Join(home, "outbox", "msg_owner.txt"))
+	data, _ := os.ReadFile(latestOutboxDraft(home))
 	if string(data) != string(msg) {
 		t.Fatal("second overrun the same day must not produce a second alert")
 	}
@@ -159,7 +159,7 @@ func TestCheckMonthlyCostOnce(t *testing.T) {
 	}
 	now := time.Date(2026, 8, 31, 23, 59, 0, 0, loc)
 	checkMonthlyCostOnce(core, now)
-	msg, err := os.ReadFile(filepath.Join(home, "outbox", "msg_owner.txt"))
+	msg, err := os.ReadFile(latestOutboxDraft(home))
 	if err != nil {
 		t.Fatalf("crossing $25 must alert: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestCheckMonthlyCostOnce(t *testing.T) {
 	}
 	// Same-day re-check and a later check in the same month: no second alert.
 	checkMonthlyCostOnce(core, now.Add(time.Hour))
-	data, _ := os.ReadFile(filepath.Join(home, "outbox", "msg_owner.txt"))
+	data, _ := os.ReadFile(latestOutboxDraft(home))
 	if string(data) != string(msg) {
 		t.Fatal("monthly alert must fire once per month")
 	}
@@ -177,7 +177,7 @@ func TestCheckMonthlyCostOnce(t *testing.T) {
 	home2 := t.TempDir()
 	core2 := &Core{Settings: &Settings{Home: home2, Timezone: "Asia/Kuala_Lumpur"}}
 	checkMonthlyCostOnce(core2, now.Add(24*time.Hour))
-	if _, err := os.Stat(filepath.Join(home2, "outbox", "msg_owner.txt")); err == nil {
+	if latestOutboxDraft(home2) != "" {
 		t.Fatal("cheap month must not alert")
 	}
 }

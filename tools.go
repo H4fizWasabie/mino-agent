@@ -1505,8 +1505,7 @@ func makeMessagesTool(home string) *Tool {
 			// arrived with literal "\n\n" between paragraphs. Normalize at the
 			// tool boundary so every channel gets real line breaks.
 			msg = strings.ReplaceAll(msg, `\n`, "\n")
-			queueOutbox(home, to, msg)
-			path := filepath.Join(home, "outbox", fmt.Sprintf("msg_%s.txt", to))
+			path := queueOutbox(home, to, msg)
 			return fmt.Sprintf("Message to %s drafted at %s", to, path)
 		},
 	}

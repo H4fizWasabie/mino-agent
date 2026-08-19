@@ -45,7 +45,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -108,8 +107,8 @@ func NewApprovalGate(home string, j *OpJournal) *ApprovalGate {
 		journal: j,
 		pending: map[int64]*pendingApproval{},
 		page: func(msg string) error {
-			queueOutbox(home, "owner", msg)
-			if _, err := os.Stat(filepath.Join(home, "outbox", "msg_owner.txt")); err != nil {
+			path := queueOutbox(home, "owner", msg)
+			if _, err := os.Stat(path); err != nil {
 				return fmt.Errorf("approval page not written to outbox: %v", err)
 			}
 			return nil

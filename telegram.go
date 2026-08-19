@@ -35,12 +35,15 @@ func runOutboxDispatcher(core *Core) {
 }
 
 // queueOutbox drafts a message to the outbox; the outbox dispatcher delivers
-// it to the owner's Telegram. Same path send_message uses.
-func queueOutbox(home, to, msg string) {
+// it to the owner's Telegram. Same path send_message uses. Returns the draft
+// path — unique per write (UnixNano suffix, like doc_*), so concurrent
+// writers can never interleave with the dispatcher's read.
+func queueOutbox(home, to, msg string) string {
 	outboxDir := filepath.Join(home, "outbox")
 	os.MkdirAll(outboxDir, 0700)
-	path := filepath.Join(outboxDir, fmt.Sprintf("msg_%s.txt", to))
+	path := filepath.Join(outboxDir, fmt.Sprintf("msg_%s_%d.txt", to, time.Now().UnixNano()))
 	os.WriteFile(path, []byte(msg), 0644)
+	return path
 }
 
 // queueDocument validates a local file and drafts it to the outbox as a
