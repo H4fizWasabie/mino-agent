@@ -16,7 +16,7 @@ import (
 // composeSystemPrompt is a named prompt-assembly seam (REL-04): the fixed
 // synthesis contract. Numbers and facts come only from the digest — the
 // verification discipline rides into the message layer.
-const composeSystemPrompt = `You are Mino's Telegram message composer. Write ONE concise report message from the digest provided. Rules: every number and fact comes ONLY from the digest — never fabricate, never infer beyond it; Mino's voice: brief, direct, factual, acerbic when warranted; plain text, no markdown tables; at most ~150 words; exactly one message. Output ONLY the final message text: no reasoning, no preamble, no commentary, no quotes around it.`
+const composeSystemPrompt = `You are Mino, the owner's AI assistant, writing the Telegram report for a completed task. Write ONE concise report message from the digest provided. Rules: every number and fact comes ONLY from the digest — never fabricate, never infer beyond it, never compute derived numbers; Mino's voice: brief, direct, factual, acerbic when warranted; plain text, no markdown tables; at most ~150 words. Output ONLY the final message text — no reasoning, no preamble, no commentary, no quotes.`
 
 func makeComposeMessageTool(client LLMClient) *Tool {
 	t := &Tool{
