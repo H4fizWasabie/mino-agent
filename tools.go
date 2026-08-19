@@ -1931,10 +1931,13 @@ func makeWorkingMemoryTool(home string, mem *Memory) *Tool {
 			section, _ := args["section"].(string)
 			content, _ := args["content"].(string)
 			PruneRecentFixes(home, 7*24*time.Hour)
+			if st, err := os.Stat(filepath.Join(home, "working_memory.md")); err == nil && st.Size() > workingMemoryMaxBytes {
+				return "Working memory is full (32KB cap). Promote durable items to save_note, then trim working_memory.md."
+			}
 			if !AppendWorkingMemory(home, section, content) {
 				return fmt.Sprintf("Working memory already contains [%s]: %s", section, content)
 			}
-			return fmt.Sprintf("Added to working memory [%s]: %s (working_memory.md)", section, content)
+			return fmt.Sprintf("Added to working memory [%s]: %s (working_memory.md). Consult this file with read_file when a future turn touches this topic; promote durable items to save_note.", section, content)
 		},
 	}
 }
@@ -1952,10 +1955,13 @@ func makePatternTool(home string, mem *Memory) *Tool {
 		},
 		Fn: func(args map[string]any) string {
 			rule, _ := args["rule"].(string)
+			if st, err := os.Stat(filepath.Join(home, "patterns.md")); err == nil && st.Size() > workingMemoryMaxBytes {
+				return "Patterns file is full (32KB cap). Promote durable rules to save_note, then trim patterns.md."
+			}
 			if !AddPattern(home, rule) {
 				return "Pattern already saved: " + rule
 			}
-			return fmt.Sprintf("Pattern saved: %s (patterns.md)", rule)
+			return fmt.Sprintf("Pattern saved: %s (patterns.md). Consult with read_file when a future turn matches this pattern.", rule)
 		},
 	}
 }
