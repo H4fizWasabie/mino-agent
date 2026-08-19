@@ -41,6 +41,10 @@ func TestExtractScriptMarkers(t *testing.T) {
 	if found {
 		t.Fatal("plain text must not report markers")
 	}
+	fenced, _, _, _ := extractScriptMarkers("here:\n```bash\necho fenced\n```")
+	if len(fenced) != 1 || fenced[0] != "echo fenced" {
+		t.Fatalf("fenced script not extracted: %v", fenced)
+	}
 }
 
 func TestGateScript(t *testing.T) {

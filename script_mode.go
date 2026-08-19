@@ -86,12 +86,23 @@ You act by writing bash scripts. To perform work, emit ONE script between [scrip
 - Every number and fact in your reply must trace to script output you actually saw — never invent results.
 - A script that fails (non-zero exit) shows its stderr: fix the script, do not repeat it unchanged.
 - Do NOT emit [tool_call: ...] markers, JSON tool calls, or DSML/XML function-call syntax (<｜DSML｜>, <invoke>) — none of them are parsed. Scripts only.
-- When the work is done, reply in plain text with no script marker.`
+- When the work is done, reply in plain text with no script marker.
+- Example — run the system_check tool and see its output:
+[script]
+/usr/local/bin/mino exec system_check '{}'
+[/script]
+(a fenced bash code block is also accepted.)`
 
 // ---------------------------------------------------------------------------
 // Script marker extraction
 
 var scriptMarkerRe = regexp.MustCompile(`(?s)\[script\](.*?)\[/script\]`)
+
+// fencedScriptRe matches ```bash ... ``` code blocks — the model's trained
+// pattern for "write a script". Treated as scripts alongside [script]
+// markers (CDE-001 live finding: deepseek-v4-flash reaches for fences and
+// DSML, never the custom marker, until shown an example).
+var fencedScriptRe = regexp.MustCompile("(?s)```(?:bash|sh)?\\s*\\n(.*?)```")
 
 // extractScriptMarkers returns the scripts between [script]..[/script]
 // markers. found reports whether any marker appeared; malformed reports a
@@ -102,6 +113,9 @@ var scriptMarkerRe = regexp.MustCompile(`(?s)\[script\](.*?)\[/script\]`)
 func extractScriptMarkers(text string) (scripts []string, found, malformed, legacy bool) {
 	legacy = strings.Contains(text, "[tool_call:") || strings.Contains(text, "DSML") || strings.Contains(text, "<invoke")
 	matches := scriptMarkerRe.FindAllStringSubmatch(text, -1)
+	if len(matches) == 0 {
+		matches = fencedScriptRe.FindAllStringSubmatch(text, -1)
+	}
 	if len(matches) == 0 {
 		return nil, false, false, legacy
 	}
