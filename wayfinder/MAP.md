@@ -303,6 +303,11 @@ the pre-conversion week; every non-zero exit produces exactly one notice.
   `compose_message` tool: scripts' notify legs call it with their verified
   digest; one bounded single-turn provider call (no tools, no loop, ~2–4k
   tokens/run); reports read like Mino again while the ~99% token cut survives.
+- [SCR-003 — Hybrid stage runner](tickets/scr-003-hybrid-stage-runner.md) —
+  per-stage `script.sh` marks a script-backed stage (either/or with
+  CONTEXT.md); the stage loop dispatches by kind; validation extends to all
+  stage scripts; instagram converts to LLM-compose → script-post (6.34M →
+  ~300–600k tokens/wk).
 
 ## Out of scope
 
