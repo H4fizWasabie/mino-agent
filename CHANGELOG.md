@@ -2,6 +2,8 @@
 
 ### Added
 
+- **`mino exec <tool> [args-json]` — the stub layer for playbook scripts (#272)**: a new subcommand boots the registry, DB, MCP bridge and extensions (the same partial-boot route as `mino remember` — no loop, no Telegram, no scheduler), executes one tool, and lands the call in `tool_calls` + the audit log like any loop call. Exit contract is binary: 0 when the tool ran clean, 1 when the result starts with `Error:` or the invocation itself failed — scripts read one bit (`if ! mino exec ...; then exit 1; fi`) and never parse message text. Calls made by a scheduled script attribute to the run session via `MINO_EXEC_SESSION` (set by the scheduler); interactive calls land under `cli-exec`. (Why: SCR-001's design — the binary is the stub layer, so scripts are deterministic bash and secrets never appear in them. Tests: `TestRunExecToolRecordsCallUnderSession`, `TestRunExecToolFailures`, `TestExecFailed`, `TestExecSession`.)
+
 - **`tool_calls.iteration` is populated (warm-up for #272)**: the loop now carries its iteration index into tool execution, so every `tool_calls` row records which loop step produced it — the column existed since the schema's first cut, but the INSERT at `tools.go` never passed it. Non-loop callers default to 0. (Why: the playbook-script pilots need per-run measurement attribution from the dashboard, and the iteration column is the cheapest existing surface — zero schema change. Test: `TestToolCallLogsIterationFromContext`.)
 
 ## [v2.15.1] — Audit cleanup: dead code, style, outbox, working memory (2026-08-19)
