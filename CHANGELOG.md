@@ -1,3 +1,9 @@
+## [Unreleased]
+
+### Added
+
+- **`tool_calls.iteration` is populated (warm-up for #272)**: the loop now carries its iteration index into tool execution, so every `tool_calls` row records which loop step produced it — the column existed since the schema's first cut, but the INSERT at `tools.go` never passed it. Non-loop callers default to 0. (Why: the playbook-script pilots need per-run measurement attribution from the dashboard, and the iteration column is the cheapest existing surface — zero schema change. Test: `TestToolCallLogsIterationFromContext`.)
+
 ## [v2.15.1] — Audit cleanup: dead code, style, outbox, working memory (2026-08-19)
 
 ### Removed
