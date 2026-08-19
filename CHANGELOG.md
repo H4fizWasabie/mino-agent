@@ -1,4 +1,9 @@
-## [v2.17.1] — compose_message output-only fix (2026-08-19)
+## [v2.17.2] — compose_message persona prompt (2026-08-19)
+
+### Fixed
+
+- **compose_message still returned reasoning text** (v2.17.1's output-only directive was insufficient). Provider-matrix test (OpenRouter, deepseek-v4-flash, reasoning high): a bare/short system prompt makes the model stream thinking into content (or leave content empty); a rich Mino-persona prompt yields clean content — the same condition the main loop enjoys. composeSystemPrompt is now the full persona + discipline + output contract. (Hotfix on master, same lane note as v2.17.1.)
+ — compose_message output-only fix (2026-08-19)
 
 ### Fixed
 
