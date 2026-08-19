@@ -840,12 +840,6 @@ func playbookRunList(home, name string) []map[string]any {
 	return runs
 }
 
-func sortedFiles(pattern string) []string {
-	files, _ := filepath.Glob(pattern)
-	sort.Strings(files)
-	return files
-}
-
 // loadGraphIndex reads the memory graph index.json and returns it as a JSON object.
 func loadGraphIndex(dir string) any {
 	data, err := os.ReadFile(filepath.Join(dir, "index.json"))

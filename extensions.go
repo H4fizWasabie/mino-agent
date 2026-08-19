@@ -152,35 +152,6 @@ func MakeReloadPluginsTool(home string, r *Registry, bridge *MCPBridge) *Tool {
 	}
 }
 
-// CheckExtensions polls all extension /check endpoints for alerts.
-// Returns any alert messages found.
-func CheckExtensions(home string) []string {
-	path := filepath.Join(home, "extensions.json")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	var configs []ExtensionConfig
-	if err := json.Unmarshal(data, &configs); err != nil {
-		return nil
-	}
-	var alerts []string
-	for _, c := range configs {
-		resp, err := httpGetJSON(c.URL + "/check")
-		if err != nil {
-			continue
-		}
-		var check struct {
-			Alert   bool   `json:"alert"`
-			Message string `json:"message"`
-		}
-		if json.Unmarshal([]byte(resp), &check) == nil && check.Alert {
-			alerts = append(alerts, fmt.Sprintf("[%s] %s", c.Name, check.Message))
-		}
-	}
-	return alerts
-}
-
 // trigramSimilarity computes Jaccard similarity over character trigrams.
 // Both strings are capped at 500 chars. Used for §21 extension retry detection.
 func trigramSimilarity(a, b string) float64 {

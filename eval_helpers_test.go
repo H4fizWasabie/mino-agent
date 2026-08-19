@@ -2,9 +2,6 @@ package main
 
 import (
 	"context"
-	"os"
-	"path/filepath"
-	"testing"
 )
 
 // fakeClient plays back scripted LLMResponses — the "model" for offline tests.
@@ -15,13 +12,6 @@ type fakeClient struct {
 	messages [][]Message
 	toolSets [][]ToolDef
 	roles    []ModelRole
-}
-
-type streamingFake struct{ *fakeClient }
-
-func (f *streamingFake) Stream(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
-	onText("Let me read it...")
-	return f.Create(session, role, messages, maxTokens, system, tools)
 }
 
 func (f *fakeClient) Create(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
@@ -60,21 +50,6 @@ func scriptedResp(blocks []ContentBlock, stopReason string) *LLMResponse {
 		Usage:      UsageInfo{InputTokens: 10, OutputTokens: 10},
 		Content:    blocks,
 	}
-}
-
-// makeTestHome creates an isolated temp dir for each test.
-func makeTestHome(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, "traces"), 0700)
-	return dir
-}
-
-// makeEvalTools creates the same tools BuildRegistry would, but isolated.
-func makeEvalTools(home string) *Registry {
-	db := Connect(home)
-	mem := NewMemory(db, nil, &Settings{Home: home, TopK: 4, ConsolidateEvery: 0})
-	return BuildRegistry(db, home, "/", mem)
 }
 
 // --- Tests ---
