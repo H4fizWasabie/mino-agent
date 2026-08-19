@@ -5,25 +5,33 @@ import (
 	"time"
 )
 
+// stallPredicate is the wedge signature (turn in flight, no loop activity past
+// the threshold) — the shape checkLoopStall inlines in production.
+func stallPredicate(threshold time.Duration) bool {
+	loopWatch.mu.Lock()
+	defer loopWatch.mu.Unlock()
+	return loopWatch.inFlight > 0 && time.Since(loopWatch.lastActivity) > threshold
+}
+
 // OBS-001: the stall heartbeat fires on per-active-turn staleness — the wedge
 // signature (turn in flight, no loop activity) — and pages once per episode.
 func TestLoopStallHeartbeat(t *testing.T) {
 	loopWatch = loopWatchState{} // clean slate
 
 	// No turn in flight → never stalled.
-	if loopStalled(time.Second) {
+	if stallPredicate(time.Second) {
 		t.Fatal("stalled with no in-flight turn")
 	}
 	markTurnStart()
 	markLoopActivity()
-	if loopStalled(time.Second) {
+	if stallPredicate(time.Second) {
 		t.Fatal("stalled with fresh activity")
 	}
 	// Age the activity past the threshold.
 	loopWatch.mu.Lock()
 	loopWatch.lastActivity = time.Now().Add(-2 * time.Second)
 	loopWatch.mu.Unlock()
-	if !loopStalled(time.Second) {
+	if !stallPredicate(time.Second) {
 		t.Fatal("not stalled after threshold — wedge undetected")
 	}
 
@@ -41,7 +49,7 @@ func TestLoopStallHeartbeat(t *testing.T) {
 
 	// Turn ends → episode resolved → next stall can page again.
 	markTurnEnd()
-	if loopStalled(time.Second) {
+	if stallPredicate(time.Second) {
 		t.Fatal("stalled after turn ended")
 	}
 	markTurnStart()
@@ -77,12 +85,12 @@ func TestLogTraceFeedsLoopWatch(t *testing.T) {
 	loopWatch.lastActivity = time.Now().Add(-2 * time.Second)
 	loopWatch.mu.Unlock()
 	logTrace(home, "graph_edge_judgment", nil) // would refresh if wrongly counted
-	if !loopStalled(time.Second) {
+	if !stallPredicate(time.Second) {
 		t.Fatal("background trace refreshed the loop clock — wedge undetected")
 	}
 	// Real loop activity does refresh.
 	logTrace(home, "tool", map[string]any{"tool": "bash"})
-	if loopStalled(time.Second) {
+	if stallPredicate(time.Second) {
 		t.Fatal("loop activity did not refresh the clock")
 	}
 	logTrace(home, "turn_end", nil)

@@ -43,10 +43,6 @@ func checkAlerts(db *sql.DB, notifyFn func(string), checkInterval time.Duration,
 	}
 }
 
-// sqliteNow returns the current time formatted for SQLite datetime comparisons.
-// SQLite's datetime('now') produces "2006-01-02 15:04:05", not RFC3339.
-func sqliteNow() string { return time.Now().UTC().Format("2006-01-02 15:04:05") }
-
 func stopAlerts() {
 	close(alerts.stopCh)
 }
@@ -165,14 +161,6 @@ func markTurnEnd() {
 	if loopWatch.inFlight == 0 {
 		loopWatch.alerted = false // episode resolved — allow the next page
 	}
-}
-
-// loopStalled reports whether an in-flight turn has produced no loop
-// activity for the threshold — the wedge signature.
-func loopStalled(threshold time.Duration) bool {
-	loopWatch.mu.Lock()
-	defer loopWatch.mu.Unlock()
-	return loopWatch.inFlight > 0 && time.Since(loopWatch.lastActivity) > threshold
 }
 
 // checkLoopStall pages once per stall episode: a turn is in flight, no loop

@@ -14,10 +14,6 @@ import (
 // coding_tools.go — language-agnostic coding tools.
 // All tools shell out to CLI binaries following the same pattern as runBash.
 
-func runCoding(binary string, args ...string) (string, error) {
-	return runCodingContext(context.Background(), 2*time.Minute, binary, args...)
-}
-
 func runCodingContext(parent context.Context, timeout time.Duration, binary string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
@@ -25,11 +21,6 @@ func runCodingContext(parent context.Context, timeout time.Duration, binary stri
 	cmd.Dir = "" // relative paths resolve from working directory
 	out, err := cmd.CombinedOutput()
 	return string(out), err
-}
-
-// ponytail: if primary binary not found, try fallback
-func runCodingFallback(primary string, primaryArgs []string, fallback string, fallbackArgs []string) string {
-	return runCodingFallbackContext(context.Background(), 2*time.Minute, primary, primaryArgs, fallback, fallbackArgs)
 }
 
 func runCodingFallbackContext(ctx context.Context, timeout time.Duration, primary string, primaryArgs []string, fallback string, fallbackArgs []string) string {

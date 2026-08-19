@@ -15,12 +15,6 @@ import (
 func workingMemoryPath(home string) string { return filepath.Join(home, "working_memory.md") }
 func patternsPath(home string) string      { return filepath.Join(home, "patterns.md") }
 
-// LoadWorkingMemory returns the full content or empty string.
-func LoadWorkingMemory(home string) string {
-	data, _ := os.ReadFile(workingMemoryPath(home))
-	return string(data)
-}
-
 // AppendWorkingMemory adds a timestamped operational note under the section.
 func AppendWorkingMemory(home, section, line string) bool {
 	path := workingMemoryPath(home)
@@ -38,12 +32,6 @@ func AppendWorkingMemory(home, section, line string) bool {
 	content += "- " + entry + "\n"
 	os.WriteFile(path, []byte(strings.TrimSpace(content)+"\n"), 0644)
 	return true
-}
-
-// LoadPatterns returns all patterns.
-func LoadPatterns(home string) string {
-	data, _ := os.ReadFile(patternsPath(home))
-	return string(data)
 }
 
 // AddPattern appends a unique "When X, do Y" rule.

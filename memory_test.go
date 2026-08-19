@@ -415,14 +415,22 @@ func TestWorkingMemoryPrunesRecentFixesAndPatternsDeduplicate(t *testing.T) {
 	old := time.Now().UTC().Add(-8 * 24 * time.Hour).Format("2006-01-02 15:04")
 	path := filepath.Join(home, "working_memory.md")
 	content := "## Recent Fixes\n- " + old + " | obsolete fix\n\n## System Status\n- keep this\n"
+	readHomeFile := func(t *testing.T, p string) []byte {
+		t.Helper()
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
 	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
 	removed := PruneRecentFixes(home, 7*24*time.Hour)
-	if len(removed) != 1 || removed[0] != "obsolete fix" || strings.Contains(LoadWorkingMemory(home), "obsolete fix") {
+	if len(removed) != 1 || removed[0] != "obsolete fix" || strings.Contains(string(readHomeFile(t, path)), "obsolete fix") {
 		t.Fatalf("recent fixes were not pruned: %#v", removed)
 	}
-	if !AppendWorkingMemory(home, "Recent Fixes", "new fix") || !strings.Contains(LoadWorkingMemory(home), " | new fix") {
+	if !AppendWorkingMemory(home, "Recent Fixes", "new fix") || !strings.Contains(string(readHomeFile(t, path)), " | new fix") {
 		t.Fatal("working-memory entry was not timestamped")
 	}
 	if !AddPattern(home, "When tests fail, inspect isolation first") {

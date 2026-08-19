@@ -278,15 +278,6 @@ func (w *Core) recordTelegramNotification(chatID int64, reply string) {
 	conversation.Session.AddNotification(reply)
 }
 
-func (w *Core) sendNotification(result *LoopResult) {
-	w.notifyMu.RLock()
-	notify := w.notifyTelegram
-	w.notifyMu.RUnlock()
-	if notify != nil {
-		notify(result)
-	}
-}
-
 // sendAlertMessage sends a plain text alert to Telegram if configured.
 func (w *Core) sendAlertMessage(msg string) {
 	w.notifyMu.RLock()

@@ -93,7 +93,6 @@ type ApprovalGate struct {
 	home    string
 	journal *OpJournal
 	pending map[int64]*pendingApproval
-	nextID  int64
 
 	page func(msg string) error                                   // pages the owner (real: outbox draft)
 	exec func(ctx context.Context, argv []string) (string, error) // executes an approved command (real: plain exec)

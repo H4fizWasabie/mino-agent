@@ -251,14 +251,6 @@ func sameBuildAsRelease(exe, tag, assetName string) bool {
 	return strings.EqualFold(sum, want)
 }
 
-// appendDeploymentLog records one line per successful update — timestamp,
-// version, verified checksum, binary path. Append-only, 0600, never rotated
-// by the updater (the owner can prune it). Rollback lines share the shape
-// via recordDeployment (rollback.go, RUN-004).
-func appendDeploymentLog(home, tag, exe, sum string) {
-	recordDeployment(home, "update", tag, sum, exe)
-}
-
 func fetchLatestRelease() (string, error) {
 	req, _ := http.NewRequest("GET", releasesURL, nil)
 	req.Header.Set("Accept", "application/vnd.github+json")

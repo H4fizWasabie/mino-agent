@@ -45,11 +45,6 @@ type LLMClient interface {
 	Stream(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error)
 }
 
-type contextLLMClient interface {
-	CreateContext(context.Context, string, ModelRole, []Message, int, string, []ToolDef) (*LLMResponse, error)
-	StreamContext(context.Context, string, ModelRole, []Message, int, string, []ToolDef, func(string)) (*LLMResponse, error)
-}
-
 func RunLoop(
 	client LLMClient,
 	sessionID string,
