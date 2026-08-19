@@ -6,6 +6,8 @@
 
 ### Fixed
 
+- **staticcheck style sweep (closes #265)**: all 10 remaining staticcheck findings fixed — 8× numeric `405` status in the dashboard (chat, chat-stream, query, settings, and route-switch handlers) now use `http.StatusMethodNotAllowed`; `pkgInstalled` (privilege.go) returns `err == nil` directly instead of an `if/return false; return true` pair; `createAnthropic` drops the unnecessary `if tools != nil` wrap around a range (range over nil is a no-op). Zero behavior change — staticcheck is now clean across the repo (0 findings).
+
 - **Dashboard SQL console crashes on zero-row queries (null.length TypeError)**: `/api/query` marshaled its zero-row result as JSON `null` (Go nil slice), so `runQuery` in app.js threw `Cannot read properties of null (reading 'length')` on any SELECT matching no rows. The handler now returns `[]` (non-nil slice). Covered by TestQueryAPIZeroRowsReturnsArrayNotNull.
 
 ## [v2.15.0] — Playbook personas & install defaults (2026-08-17)

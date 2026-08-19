@@ -149,7 +149,7 @@ func registerDashboardRoutes(mux *http.ServeMux, memDir string) {
 
 func handleChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
-		http.Error(w, "POST only", 405)
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
 	if dashCore.Client == nil {
@@ -206,7 +206,7 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 
 func handleChatStream(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
-		http.Error(w, "POST only", 405)
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
 	if dashCore.Client == nil {
@@ -1074,7 +1074,7 @@ func evalReport(home string) map[string]any {
 // Generates a manual eval case from the interaction.
 func handleEvalThumbsUp(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", 405)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	var req struct {
@@ -1325,7 +1325,7 @@ func handleAuthAPI(w http.ResponseWriter, r *http.Request) {
 		dashCore.AuthStore.Delete(provider)
 		json.NewEncoder(w).Encode(map[string]any{"ok": true})
 	default:
-		http.Error(w, "GET, POST, or DELETE", 405)
+		http.Error(w, "GET, POST, or DELETE", http.StatusMethodNotAllowed)
 	}
 }
 
@@ -1373,7 +1373,7 @@ func handleSwitchAPI(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"ok": true, "active": body.Provider,
 			"model": dashCore.Client.ActiveModel(body.Session), "reasoning": dashCore.Client.ActiveReasoning(body.Session)})
 	default:
-		http.Error(w, "GET or POST", 405)
+		http.Error(w, "GET or POST", http.StatusMethodNotAllowed)
 	}
 }
 
@@ -1458,7 +1458,7 @@ func handleProvidersAPI(w http.ResponseWriter, r *http.Request) {
 		dashCore.Client.ReloadProviders(dashCore.Settings.Home)
 		json.NewEncoder(w).Encode(map[string]any{"ok": true})
 	default:
-		http.Error(w, "POST or DELETE", 405)
+		http.Error(w, "POST or DELETE", http.StatusMethodNotAllowed)
 	}
 }
 
@@ -1598,13 +1598,13 @@ func handleOAuthDevice(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewEncoder(w).Encode(map[string]any{"ok": true})
 	default:
-		http.Error(w, "POST or GET", 405)
+		http.Error(w, "POST or GET", http.StatusMethodNotAllowed)
 	}
 }
 
 func handleSettingsAPI(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
-		http.Error(w, "POST only", 405)
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
 	var body struct {
