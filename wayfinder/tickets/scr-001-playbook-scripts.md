@@ -1,7 +1,7 @@
 # Mino Playbook Execution — Script Runs (SCR-001)
 
-Status: **OPEN** — wayfinder ticket, design discussed 2026-08-19 (discussion mode);
-no implementation yet.
+Status: **RESOLVED** — implementation landed (2026-08-19, #272 Phase 1: `mino exec`
+stub layer, script-backed stages, validation). Pilot conversions are follow-up ops.
 
 ## Before/After protocol (owner request, 2026-08-19)
 

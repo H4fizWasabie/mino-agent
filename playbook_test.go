@@ -1887,7 +1887,7 @@ func TestSchedulePlaybookAcceptsDays(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "playbooks", "weekly-audit", "CONTEXT.md"), []byte("# Weekly audit\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	tool := makeSchedulePlaybookTool(home, "Asia/Kuala_Lumpur")
+	tool := makeSchedulePlaybookTool(&Core{Settings: &Settings{Home: home, Timezone: "Asia/Kuala_Lumpur"}})
 	call := func(args map[string]any) string { return tool.ContextFn(context.Background(), args) }
 	got := call(map[string]any{"name": "weekly-audit", "time": "18:00", "days": []any{"sunday"}})
 	if !strings.Contains(got, "on sunday") {

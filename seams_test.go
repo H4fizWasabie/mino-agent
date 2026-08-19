@@ -10,6 +10,7 @@ package main
 // tests on the path while 366 tests sat elsewhere) without coverage noise.
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -402,6 +403,123 @@ func TestBuildPlaybookSystemFailsLoudlyOnMissingPersona(t *testing.T) {
 	}
 }
 
+// --- seam: validatePlaybookScript (SCR-001, #272) ---
+
+// writeScriptPlaybook lays down a minimal playbook dir with the given
+// script.sh content and returns the home dir.
+func writeScriptPlaybook(t *testing.T, home, name, script string) {
+	t.Helper()
+	dir := filepath.Join(home, "playbooks", name)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "CONTEXT.md"), []byte("# "+name+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if script != "" {
+		if err := os.WriteFile(filepath.Join(dir, "script.sh"), []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestValidatePlaybookScript(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(&Tool{Name: "post", Fn: func(map[string]any) string { return "" }})
+	reg.Register(&Tool{Name: "log", Fn: func(map[string]any) string { return "" }})
+
+	cases := []struct {
+		name   string
+		script string
+		want   string // substring of the expected error; empty = valid
+	}{
+		{"missing script", "", "no script.sh present"},
+		{"bash syntax error", "if then\n", "bash -n failed"},
+		{"unknown tool", "mino exec post ...\nmino exec fake_tool {...}\n", "unknown tool(s) in script: fake_tool"},
+		{"comment mentioning a tool is not an invocation", "# mino exec fake_tool would not run\nmino exec post {...}\n", ""},
+		{"valid script", "#!/bin/bash\nmino exec post '{\"text\":\"hi\"}' || exit 1\nmino exec log {...}\n", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			writeScriptPlaybook(t, home, "daily", tc.script)
+			core := &Core{Settings: &Settings{Home: home}, Tools: reg}
+			err := validatePlaybookScript(core, "daily")
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("expected valid, got: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected error containing %q, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+// --- seam: runScheduledPlaybook (SCR-001, #272) ---
+
+// TestRunScheduledPlaybookScriptDispatch covers the dispatch seam: a
+// script-having playbook runs its script (exit 0 → complete); an invalid
+// script is never executed — the run fails with the validation reason and
+// the marker file proves bash never ran.
+func TestRunScheduledPlaybookScriptDispatch(t *testing.T) {
+	// Valid script: writes a marker, exits 0.
+	home := t.TempDir()
+	writeScriptPlaybook(t, home, "daily", "#!/bin/bash\ntouch "+filepath.Join(home, "ran")+"\n")
+	core := &Core{Settings: &Settings{Home: home}, Tools: NewRegistry()}
+	res, err := runScheduledPlaybook(context.Background(), core, "daily", "Scheduled run", "scheduled-daily", nil)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Status != "complete" || res.StagesRun != 1 {
+		t.Fatalf("result = %+v, want complete/1 stage", res)
+	}
+	if _, err := os.Stat(filepath.Join(home, "ran")); err != nil {
+		t.Fatal("script never executed")
+	}
+
+	// Invalid script: refused, and the marker proves bash never ran it.
+	home2 := t.TempDir()
+	writeScriptPlaybook(t, home2, "daily", "#!/bin/bash\nmino exec fake_tool {}\ntouch "+filepath.Join(home2, "ran")+"\n")
+	core2 := &Core{Settings: &Settings{Home: home2}, Tools: NewRegistry()}
+	res2, err2 := runScheduledPlaybook(context.Background(), core2, "daily", "Scheduled run", "scheduled-daily", nil)
+	if err2 != nil {
+		t.Fatalf("run: %v", err2)
+	}
+	if res2.Status != "failed" || !strings.Contains(res2.Reply, "script validation failed") {
+		t.Fatalf("result = %+v, want failed with validation reason", res2)
+	}
+	if _, err := os.Stat(filepath.Join(home2, "ran")); !os.IsNotExist(err) {
+		t.Fatal("invalid script must never be executed")
+	}
+}
+
+// TestRunScheduledPlaybookNoScriptFallsThroughToLLMPath locks the other
+// branch: a playbook without script.sh keeps the LLM runner. The proof is
+// RunPlaybook's own stage validation error — the script path would fail
+// with "no script.sh present", so a stage-level error can only come from
+// the LLM runner (no provider call needed to reach it).
+func TestRunScheduledPlaybookNoScriptFallsThroughToLLMPath(t *testing.T) {
+	home := t.TempDir()
+	writeScriptPlaybook(t, home, "daily", "")
+	// One stage declaring an unknown tool: loadWorkspaceStage accepts it,
+	// RunPlaybook's validation refuses it — the refusal text names the stage.
+	stageDir := filepath.Join(home, "playbooks", "daily", "stages", "01-gather")
+	if err := os.MkdirAll(stageDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "CONTEXT.md"), []byte("# Gather\n\n## Process\n\n1. Do it.\n\n## Tools\n\n- zzz_tool\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	core := &Core{Settings: &Settings{Home: home}, Tools: NewRegistry()}
+	_, err := runScheduledPlaybook(context.Background(), core, "daily", "Scheduled run", "scheduled-daily", nil)
+	if err == nil || strings.Contains(err.Error(), "no script.sh") || !strings.Contains(err.Error(), "stage") {
+		t.Fatalf("err = %v, want RunPlaybook's stage validation error (LLM path)", err)
+	}
+}
+
 // --- presence check (REL-04, #134) ---
 
 // promptAssemblySeams are the named functions that render model-visible text
@@ -425,6 +543,8 @@ var promptAssemblySeams = []string{
 	"splitOfferText",
 	"gatePauseReply",
 	"approvePendingTaskGate",
+	"runScheduledPlaybook",
+	"validatePlaybookScript",
 }
 
 func TestPromptAssemblySeamsCovered(t *testing.T) {

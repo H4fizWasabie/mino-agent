@@ -106,7 +106,7 @@ func TestOSV04ToolResultsReportDestinationAndState(t *testing.T) {
 		makeCreateSkillTool(home, mem),
 		makeWorkingMemoryTool(home, mem),
 		makePatternTool(home, mem),
-		makeSchedulePlaybookTool(home, "Asia/Kuala_Lumpur"),
+		makeSchedulePlaybookTool(&Core{Settings: &Settings{Home: home, Timezone: "Asia/Kuala_Lumpur"}, Tools: r}),
 	) {
 		r.Register(tool)
 	}

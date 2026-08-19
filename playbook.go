@@ -519,12 +519,13 @@ func makeManagePlaybookTool(core *Core) *Tool {
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"action":        map[string]any{"type": "string", "enum": []string{"create", "inspect", "validate", "update", "delete"}},
+				"action":        map[string]any{"type": "string", "enum": []string{"create", "inspect", "validate", "update", "delete", "script"}},
 				"name":          map[string]any{"type": "string", "description": "Short hyphenated playbook name"},
 				"context":       map[string]any{"type": "string", "description": "Root CONTEXT.md content; required to create, optional to update"},
 				"config":        map[string]any{"type": "string", "description": "config.md content; optional"},
 				"stage_name":    map[string]any{"type": "string", "description": "NN-stage folder to add or update"},
 				"stage_context": map[string]any{"type": "string", "description": "Stage CONTEXT.md content used with stage_name"},
+				"script_action": map[string]any{"type": "string", "enum": []string{"validate"}, "description": "Sub-action for action=script: validate the playbook's committed script.sh (bash -n + tool-name scan)"},
 				"stages":        map[string]any{"type": "array", "description": "Initial stages for create", "items": map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}, "context": map[string]any{"type": "string"}}, "required": []string{"name", "context"}}},
 			},
 			"required": []string{"action", "name"},
@@ -545,12 +546,22 @@ func makeManagePlaybookTool(core *Core) *Tool {
 					return fmt.Sprintf("Error: %v", err)
 				}
 				return fmt.Sprintf("Playbook %s is valid.", name)
+			case "script":
+				// SCR-001: script validation — the same seam that gates
+				// scheduling and the boot re-check.
+				if sub, _ := args["script_action"].(string); sub != "validate" {
+					return "Error: script action must be validate"
+				}
+				if err := validatePlaybookScript(core, name); err != nil {
+					return fmt.Sprintf("Error: %v", err)
+				}
+				return fmt.Sprintf("Script for %s is valid.", name)
 			case "update":
 				return updateManagedPlaybook(core, name, args)
 			case "delete":
 				return deleteManagedPlaybook(core, name)
 			default:
-				return "Error: action must be create, inspect, validate, update, or delete"
+				return "Error: action must be create, inspect, validate, update, delete, or script"
 			}
 		},
 	}
@@ -879,7 +890,9 @@ func saveSchedules(home string, scheds []PlaybookSchedule) error {
 	return os.WriteFile(path, data, 0600)
 }
 
-func makeSchedulePlaybookTool(home, timezone string) *Tool {
+func makeSchedulePlaybookTool(core *Core) *Tool {
+	home := core.Settings.Home
+	timezone := core.Settings.Timezone
 	return &Tool{
 		Name:        "schedule_playbook",
 		Description: "Schedule an existing playbook to run daily at a local time. Mino's in-process scheduler will execute it and the output will be visible in the dashboard under the scheduled-<name> session.",
@@ -924,6 +937,14 @@ func makeSchedulePlaybookTool(home, timezone string) *Tool {
 			}
 			if _, err := loadPlaybookWorkspace(home, name); err != nil {
 				return fmt.Sprintf("Error: %v", err)
+			}
+			// SCR-001: a scheduled script-having playbook must pass the same
+			// validation seam the boot re-check uses — an invalid script
+			// refuses scheduling instead of being set up to fail loudly.
+			if hasPlaybookScript(home, name) {
+				if err := validatePlaybookScript(core, name); err != nil {
+					return fmt.Sprintf("Error: not scheduling %s: invalid script: %v", name, err)
+				}
 			}
 			scheds, err := loadSchedules(home)
 			if err != nil {
@@ -1155,7 +1176,11 @@ func listActiveTasksPlaybook(home string) []map[string]any {
 // catch-up pass (same-day misses fire late, older misses are recorded and
 // notified), then checks schedules.json every minute.
 func runScheduleDispatcher(core *Core) {
-	catchUpSchedulesAt(core, time.Now(), RunPlaybook)
+	// Boot: loud-skip schedules whose committed script no longer validates
+	// (SCR-001), then fire same-day misses as usual through the same
+	// script-aware runner the tick path uses.
+	recheckScheduledScriptsAt(core)
+	catchUpSchedulesAt(core, time.Now(), runScheduledPlaybook)
 
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -1166,7 +1191,7 @@ func runScheduleDispatcher(core *Core) {
 }
 
 func dispatchDueSchedules(core *Core) {
-	dispatchDueSchedulesAt(core, time.Now(), RunPlaybook)
+	dispatchDueSchedulesAt(core, time.Now(), runScheduledPlaybook)
 }
 
 type scheduledPlaybookRunner func(context.Context, *Core, string, string, string, Observer) (*PlaybookResult, error)
