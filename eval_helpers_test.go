@@ -35,6 +35,10 @@ func (f *fakeClient) CreateContext(ctx context.Context, session string, role Mod
 	return f.Create(session, role, messages, maxTokens, system, tools)
 }
 
+func (f *fakeClient) CreateContextNoReasoning(ctx context.Context, session string, role ModelRole, messages []Message, maxTokens int, system string) (*LLMResponse, error) {
+	return f.Create(session, role, messages, maxTokens, system, nil)
+}
+
 // helpers to build scripted responses
 func textBlock(text string) ContentBlock {
 	return ContentBlock{Type: "text", Text: text}

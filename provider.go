@@ -94,10 +94,10 @@ func (c *Client) Stream(model string, messages []Message, maxTokens int, system 
 // and the existing timeout/cancel mechanisms work as designed.
 
 func (c *Client) create(ctx context.Context, model, reasoning string, messages []Message, maxTokens int, system string, tools []ToolDef, stream, jsonOutput bool, onText func(string)) (*LLMResponse, error) {
-	return c.createWithRouting(ctx, model, reasoning, messages, maxTokens, system, tools, stream, jsonOutput, onText, c.providerRouting, "")
+	return c.createWithRouting(ctx, model, reasoning, messages, maxTokens, system, tools, stream, jsonOutput, false, onText, c.providerRouting, "")
 }
 
-func (c *Client) createWithRouting(ctx context.Context, model, reasoning string, messages []Message, maxTokens int, system string, tools []ToolDef, stream, jsonOutput bool, onText func(string), routing []string, sessionID string) (*LLMResponse, error) {
+func (c *Client) createWithRouting(ctx context.Context, model, reasoning string, messages []Message, maxTokens int, system string, tools []ToolDef, stream, jsonOutput, disableReasoning bool, onText func(string), routing []string, sessionID string) (*LLMResponse, error) {
 	if c.isCodex() {
 		return c.createCodex(ctx, model, reasoning, messages, system, tools, onText)
 	}
@@ -138,7 +138,12 @@ func (c *Client) createWithRouting(ctx context.Context, model, reasoning string,
 	if sessionID != "" {
 		payload["session_id"] = sessionID
 	}
-	if reasoning != "" {
+	if disableReasoning {
+		// compose_message (SCR-002): reasoning models stream thinking as
+		// content when content would be empty — kill reasoning entirely for
+		// one-shot synthesis (same flag the jsonOutput path uses).
+		payload["reasoning"] = map[string]bool{"enabled": false}
+	} else if reasoning != "" {
 		payload["reasoning_effort"] = reasoning
 	}
 	if tools != nil {

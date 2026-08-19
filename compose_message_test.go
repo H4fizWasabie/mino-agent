@@ -59,6 +59,10 @@ func (e *errClient) CreateContext(ctx context.Context, session string, role Mode
 	return e.Create(session, role, messages, maxTokens, system, tools)
 }
 
+func (e *errClient) CreateContextNoReasoning(ctx context.Context, session string, role ModelRole, messages []Message, maxTokens int, system string) (*LLMResponse, error) {
+	return e.Create(session, role, messages, maxTokens, system, nil)
+}
+
 func TestComposeMessageToolErrorPaths(t *testing.T) {
 	t.Run("empty digest", func(t *testing.T) {
 		tool := makeComposeMessageTool(&fakeClient{})

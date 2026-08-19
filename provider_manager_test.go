@@ -279,11 +279,34 @@ func TestNoSessionIDSentToOpenRouter(t *testing.T) {
 		}
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{}}`)), Header: make(http.Header)}, nil
 	})}
-	if _, err := c.createWithRouting(context.Background(), "model-a", "", nil, 10, "system", nil, false, false, nil, nil, ""); err != nil {
+	if _, err := c.createWithRouting(context.Background(), "model-a", "", nil, 10, "system", nil, false, false, false, nil, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := payload["session_id"]; ok {
 		t.Fatalf("session_id = %#v, want absent (it breaks DeepInfra prompt caching)", payload["session_id"])
+	}
+}
+
+func TestDisableReasoningPayload(t *testing.T) {
+	// SCR-002: compose_message must not stream reasoning as content — the
+	// transport sends reasoning: {enabled: false} and omits reasoning_effort.
+	var payload map[string]any
+	c := NewClient("key", "https://openrouter.ai/api/v1")
+	c.client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			return nil, err
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{}}`)), Header: make(http.Header)}, nil
+	})}
+	if _, err := c.createWithRouting(context.Background(), "model-a", "high", nil, 10, "system", nil, false, false, true, nil, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	r, ok := payload["reasoning"].(map[string]any)
+	if !ok || r["enabled"] != false {
+		t.Fatalf("reasoning = %#v, want {enabled: false}", payload["reasoning"])
+	}
+	if _, ok := payload["reasoning_effort"]; ok {
+		t.Fatalf("reasoning_effort present when reasoning disabled: %#v", payload["reasoning_effort"])
 	}
 }
 

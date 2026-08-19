@@ -56,6 +56,10 @@ func (b *blockingClient) Stream(session string, role ModelRole, messages []Messa
 	return b.Create(session, role, messages, maxTokens, system, tools)
 }
 
+func (b *blockingClient) CreateContextNoReasoning(ctx context.Context, session string, role ModelRole, messages []Message, maxTokens int, system string) (*LLMResponse, error) {
+	return b.Create(session, role, messages, maxTokens, system, nil)
+}
+
 // Regression 2026-08-07: the threads-ai-learning publish stage failed because
 // mimo-v2.5 emitted a text marker whose JSON args used shell-style \' escapes:
 //

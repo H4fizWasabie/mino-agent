@@ -42,6 +42,7 @@ func notify(obs Observer, kind string, data map[string]any) {
 type LLMClient interface {
 	Create(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error)
 	CreateContext(context.Context, string, ModelRole, []Message, int, string, []ToolDef) (*LLMResponse, error)
+	CreateContextNoReasoning(context.Context, string, ModelRole, []Message, int, string) (*LLMResponse, error)
 	Stream(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error)
 }
 

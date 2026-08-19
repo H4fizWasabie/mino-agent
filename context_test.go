@@ -776,6 +776,10 @@ func (f *failingVisionClient) CreateContext(ctx context.Context, session string,
 	return f.Create(session, role, messages, maxTokens, system, tools)
 }
 
+func (f *failingVisionClient) CreateContextNoReasoning(ctx context.Context, session string, role ModelRole, messages []Message, maxTokens int, system string) (*LLMResponse, error) {
+	return f.Create(session, role, messages, maxTokens, system, nil)
+}
+
 // CTX-022 C (structural): a user-provenanced fact on the message's topic is
 // injected as an OWNER-ESTABLISHED FACT riding the user message — the live
 // test proved a warning inside search results can be ignored, so the fact

@@ -44,8 +44,8 @@ func makeComposeMessageTool(client LLMClient) *Tool {
 				sid = s
 			}
 		}
-		resp, err := client.CreateContext(ctx, sid, MainModel,
-			[]Message{{Role: "user", Content: digest}}, 300, composeSystemPrompt, nil)
+		resp, err := client.CreateContextNoReasoning(ctx, sid, MainModel,
+			[]Message{{Role: "user", Content: digest}}, 300, composeSystemPrompt)
 		if err != nil {
 			return "Error: compose_message: " + err.Error()
 		}

@@ -1,4 +1,10 @@
-## [v2.17.2] — compose_message persona prompt (2026-08-19)
+## [v2.17.3] — compose_message reasoning disable (2026-08-19)
+
+### Fixed
+
+- **compose_message reasoning leak, structural fix**: the transport promotes `reasoning` to `content` when content is empty (#163 MiMo fallback) — with reasoning_effort=high, deepseek-v4-flash streams thinking into that slot for one-shot synthesis. New `CreateContextNoReasoning` path (LLMClient interface + ProviderManager + transport flag) sends `reasoning: {enabled: false}` — the same mechanism jsonOutput tasks use — so the synthesis call cannot think out loud at all. The rich persona prompt (v2.17.2) stays as the message-quality contract; this kills the failure class at the transport.
+- Test: `TestDisableReasoningPayload` (payload assertion) + updated fakes.
+ — compose_message persona prompt (2026-08-19)
 
 ### Fixed
 
