@@ -56,6 +56,14 @@ Current single stage `01-compose-and-post` splits in two:
 - Posts still delivered (same count/week as the LLM baseline).
 - Script stages fail loudly — no silent misses.
 
+## Owner revisit (2026-08-20, paused)
+
+Paused after the runner shipped. Owner's direction for the revisit: most
+hybrid playbooks' parts can likely be FULL scripts — the LLM stage's creative
+surface is smaller than assumed (the instagram compose stage is the only
+candidate so far). Revisit the fleet with "script-first, LLM-only-where-
+unavoidable" as the lens.
+
 ## Out of scope
 
 - Mixed stages (CONTEXT.md + script.sh in one stage) — YAGNI.
