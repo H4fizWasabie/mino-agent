@@ -37,6 +37,9 @@ type WorkspaceStage struct {
 	Name    string
 	Dir     string
 	Context string
+	// Script is script.sh when the stage is script-backed (issue #304): the
+	// harness executes it directly, zero inference. "" = LLM stage.
+	Script  string
 	Inputs  []StageInput
 	Tools   []string
 	Outputs []StageOutput
@@ -86,6 +89,10 @@ type PlaybookRunStage struct {
 	Error     string    `json:"error,omitempty"`
 	StartedAt time.Time `json:"started_at,omitempty"`
 	EndedAt   time.Time `json:"ended_at,omitempty"`
+	// Script-stage records (issue #304): additive, schema-light.
+	Script       string `json:"script,omitempty"`        // script.sh when script-backed
+	ScriptOutput string `json:"script_output,omitempty"` // runs/<id>/stages/<NN-name>/script-output.txt
+	ExitCode     int    `json:"exit_code"`               // script exit status (0 when unset)
 }
 
 func validWeekday(d string) bool {
@@ -172,7 +179,10 @@ func loadPlaybookWorkspace(home, name string) (*PlaybookWorkspace, error) {
 		if pb.Stages[i].Number < 0 {
 			return nil, fmt.Errorf("playbook %s stage %q must start with NN-", name, pb.Stages[i].Name)
 		}
-		if len(pb.Stages[i].Outputs) == 0 {
+		if len(pb.Stages[i].Outputs) == 0 && pb.Stages[i].Script == "" {
+			// issue #304: a script-backed stage without CONTEXT.md declares no
+			// outputs — its contract is the script itself (exit code + stdout).
+			// With a CONTEXT.md, declared outputs are verified.
 			return nil, fmt.Errorf("playbook %s stage %d has no declared outputs", name, pb.Stages[i].Number)
 		}
 	}
@@ -204,7 +214,11 @@ func parseWorkspaceConfig(data []byte, pb *PlaybookWorkspace) {
 func loadWorkspaceStage(dir, folder string) (*WorkspaceStage, error) {
 	data, err := os.ReadFile(filepath.Join(dir, "CONTEXT.md"))
 	if err != nil {
-		return nil, fmt.Errorf("stage %s requires CONTEXT.md", folder)
+		// issue #304: a script-backed stage (script.sh in the stage dir) has
+		// no CONTEXT.md — the script IS the stage contract.
+		if _, serr := os.Stat(filepath.Join(dir, scriptFileName)); serr != nil {
+			return nil, fmt.Errorf("stage %s requires CONTEXT.md", folder)
+		}
 	}
 	parts := strings.SplitN(folder, "-", 2)
 	if len(parts) != 2 {
@@ -216,6 +230,9 @@ func loadWorkspaceStage(dir, folder string) (*WorkspaceStage, error) {
 	}
 	context := string(data)
 	stage := &WorkspaceStage{Number: number, Name: parts[1], Dir: dir, Context: context}
+	if info, serr := os.Stat(filepath.Join(dir, scriptFileName)); serr == nil && !info.IsDir() {
+		stage.Script = scriptFileName
+	}
 	stage.Inputs = parseStageInputs(extractSection(context, "## Inputs"))
 	stage.Tools = parseStageTools(extractSection(context, "## Tools"))
 	stage.Outputs = parseStageOutputs(extractSection(context, "## Outputs"))
@@ -753,6 +770,12 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 	if err := validateWorkspaceStageTools(pb, core.Tools); err != nil {
 		return nil, err
 	}
+	// issue #304: every stage script.sh passes the shared validation seam
+	// (bash -n + tool scan) before the run — an invalid script fails the run
+	// loudly, never silently skips.
+	if err := validateStageScripts(core, pb); err != nil {
+		return nil, err
+	}
 	// PSN-001: a roster file deleted out from under a playbook fails pre-run,
 	// not mid-stage — the persona is bound before the run starts.
 	if err := validatePlaybookPersona(core.Settings.Home, pb); err != nil {
@@ -818,6 +841,69 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 		stage, ok := workspaceStageFor(pb, state.Number, state.Name)
 		if !ok {
 			return nil, fmt.Errorf("playbook %s run %s references missing stage %d", name, run.ID, state.Number)
+		}
+		// issue #304: a script-backed stage is deterministic — fail-fast, no
+		// retry (owner decision c). Non-zero exit or a missing declared
+		// output fails the stage and the run, never silently.
+		if stage.Script != "" {
+			state.Attempts++
+			state.StartedAt = time.Now().UTC()
+			state.Status = "running"
+			state.Error = ""
+			state.Script = stage.Script
+			if err := savePlaybookRun(pb, run); err != nil {
+				return nil, err
+			}
+			// Tag trace events inside this stage with its playbook/stage/run
+			// identity so the dashboard can group stage work instead of
+			// flattening it; the tags also put any tool-path write under the
+			// playbookWriteGuard's run-scoped writable zone.
+			stageCtx := context.WithValue(ctx, traceTagKey{}, map[string]string{
+				"playbook": pb.Name,
+				"stage":    fmt.Sprintf("%02d-%s", stage.Number, stage.Name),
+				"run":      run.ID,
+			})
+			out, code, runErr := runScriptStage(stageCtx, core, pb, run, &stage)
+			state.EndedAt = time.Now().UTC()
+			state.ScriptOutput = filepath.Join("runs", run.ID, "stages", fmt.Sprintf("%02d-%s", stage.Number, stage.Name), "script-output.txt")
+			state.ExitCode = code
+			result.StagesRun++
+			missing := missingStageOutputFiles(pb, run, &stage)
+			if runErr != nil || code != 0 || len(missing) > 0 {
+				reason := fmt.Sprintf("script stage %02d-%s: exit %d", stage.Number, stage.Name, code)
+				if len(missing) > 0 {
+					reason += fmt.Sprintf(", missing declared output(s): %s", strings.Join(missing, ", "))
+				}
+				if runErr != nil {
+					reason += ": " + runErr.Error()
+				}
+				state.Status = "failed"
+				state.Error = reason
+				run.Status = "failed"
+				_ = savePlaybookRun(pb, run)
+				result.Status = "failed"
+				result.Reply = fmt.Sprintf("Run %s stopped at stage %02d-%s: %s", run.ID, stage.Number, stage.Name, reason)
+				logTrace(core.Settings.Home, "script_stage_failed", map[string]any{
+					"playbook": pb.Name, "stage": fmt.Sprintf("%02d-%s", stage.Number, stage.Name),
+					"run": run.ID, "exit_code": code, "output_tail": tailOf(out, 200),
+				})
+				core.auditLog(sessionID, "script_stage_failed", reason, 0)
+				return result, nil
+			}
+			state.Status = "complete"
+			state.Outputs = existingStageOutputs(pb, run, &stage)
+			run.Status = "running"
+			result.Outputs = append(result.Outputs, state.Outputs...)
+			if err := savePlaybookRun(pb, run); err != nil {
+				return nil, err
+			}
+			logTrace(core.Settings.Home, "script_stage", map[string]any{
+				"playbook": pb.Name, "stage": fmt.Sprintf("%02d-%s", stage.Number, stage.Name),
+				"run": run.ID, "exit_code": code, "output_chars": len(out),
+			})
+			// OBS-002: every script-stage execution is an auditable action.
+			core.auditLog(sessionID, "script_stage", fmt.Sprintf("%s stage %02d-%s: script exit %d, run %s", pb.Name, stage.Number, stage.Name, code, run.ID), 0)
+			continue
 		}
 		// #237 approval gate (taskified runs): the stage right after the
 		// config's gate stage runs only after the owner approved the gate
