@@ -1,6 +1,6 @@
 # Playbook Personas — per-run prompt profile (system-prompt substitution, not addition)
 
-Status: **OPEN** (design agreed in discussion; implementation pending)
+Status: **RESOLVED** (2026-08-20 — shipped on master, commits d4bacd7 persona swap, 7d87475 fail-loud persona load + shared frontmatter regex, b40e62c roster seed + default playbook hats)
 
 ## Question
 

@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"strconv"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -14,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -349,6 +349,16 @@ func RunLoopContext(
 	repStreak := 0
 	var lastToolSig string
 
+	// CTX-025 fix-B: divergence detector state. The baseline is the input
+	// token count of iteration 1 (the stage prompt is byte-stable, so growth
+	// past 3x baseline means context bloat from tool results, not the prompt).
+	// The reset fires once per turn; baseMsgCount is the snapshot of the
+	// message stack at loop start (system + stage prompt) that a reset
+	// truncates back to — clearing the accumulated exploration noise.
+	divergenceBaseline := 0
+	divergenceReset := false
+	baseMsgCount := len(messages)
+
 	for i := 1; i <= maxIter; i++ {
 		if ctx.Err() != nil {
 			result.Status = "cancelled"
@@ -420,6 +430,12 @@ func RunLoopContext(
 
 		result.TokensIn += resp.Usage.InputTokens
 		result.TokensOut += resp.Usage.OutputTokens
+
+		// CTX-025 fix-B: stabilize the divergence baseline from the first
+		// iteration's input tokens (byte-stable stage prompt + stub module).
+		if divergenceBaseline == 0 && resp.Usage.InputTokens > 0 {
+			divergenceBaseline = resp.Usage.InputTokens
+		}
 
 		notify(obs, "llm", map[string]any{
 			"iteration":  i,
@@ -592,6 +608,31 @@ func RunLoopContext(
 		}
 		messages = append(messages, Message{Role: "user", Content: formatToolResults(toolResults)})
 
+		// CTX-025 fix-B: divergence detector — in-tokens > 3× the iteration-1
+		// baseline within the first 10 iterations while the stage's required
+		// outputs are still missing = exploration without production (the
+		// daily-ai-concept 982k-token burn; the chat-driven instagram test's
+		// 29-iteration explore loop). Fire once per turn: state-reset the
+		// context back to the stage prompt, re-inject the required outputs,
+		// and push the model to converge instead of continuing to explore.
+		if !divergenceReset && len(traceTags) > 0 && i <= 10 && divergenceBaseline > 0 &&
+			resp.Usage.InputTokens > 3*divergenceBaseline {
+			if missing := missingStageOutputs(ctx); len(missing) > 0 {
+				divergenceReset = true
+				slog.Error("stage divergence detected — resetting turn context", "session_id", sessionID, "iteration", i, "in_tokens", resp.Usage.InputTokens, "baseline", divergenceBaseline, "missing", missing)
+				trace("midflight_signal", map[string]any{"signal": "divergence", "iteration": i, "in_tokens": resp.Usage.InputTokens, "baseline": divergenceBaseline, "missing": missing})
+				if audit, ok := ctx.Value(auditKey{}).(func(string, string, int)); ok {
+					audit("divergence_reset", strings.Join(missing, ", "), i)
+				}
+				messages = messages[:baseMsgCount]
+				messages = append(messages, Message{
+					Role:    "user",
+					Content: fmt.Sprintf("[System: divergence reset — your context grew to %d tokens (%dx baseline) without producing the required output(s): %s. Prior exploration results are cleared. Re-read the stage contract above and WRITE the required outputs now — do not explore further.]", resp.Usage.InputTokens, resp.Usage.InputTokens/divergenceBaseline, strings.Join(missing, ", ")),
+				})
+				continue
+			}
+		}
+
 		// Loop detection: check for repeated identical tool calls. Skipped inside
 		// playbook stages: a stage whose whitelist is only search_web + write_file
 		// legitimately calls search_web many times — that is the stage's job, and
@@ -713,7 +754,6 @@ func stageRewriteStreak(calls []ToolCall) string {
 // schema) undercounts MCP executor schemas by ~4×, so compaction and capping
 // decisions are sized from the real number.
 
-
 // lastTurnContext returns the last user message + last assistant reply for
 // targeted tool matching (semantic embedding and MCP keyword gating).
 func lastTurnContext(messages []Message) string {
@@ -820,7 +860,6 @@ func extractToolUses(blocks []ContentBlock) []ContentBlock {
 
 // quoteUnquotedKeys adds quotes around unquoted object keys ({path: /x} ->
 // {"path": /x}). Only ever applied as a repair variant.
-
 
 // repairToolArgsJSON tolerates the JSON sloppiness models emit when writing
 // tool calls by hand instead of using native function calling.

@@ -1,8 +1,6 @@
 # Hybrid Stage Runner — script + LLM stages in one playbook (SCR-003)
 
-Status: **OPEN** — follow-up to SCR-001 (Phase 1 shipped the all-or-nothing
-runner: playbook-level `script.sh` OR LLM stages). Design settled 2026-08-20
-(owner agreed a/b/c).
+Status: **RESOLVED** (2026-08-20 — runner shipped as v2.19.0, closes #280, commits 84f3966/e825f34). Revisit direction (script-first lens) recorded below as the owner's standing instruction; #283 review-gated stages (script.sh + CONTEXT.md in one stage) extend this ticket's shape — the script does the work, the LLM only gates (observe/reason/act → VERDICT), so the old "mixed stages — YAGNI" out-of-scope line is superseded by the gate design.
 
 ## Question
 
