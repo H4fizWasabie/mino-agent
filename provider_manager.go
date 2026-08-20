@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -243,6 +245,20 @@ func (m *ProviderManager) callContextWithConfig(ctx context.Context, session str
 			lastErr = err
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
+			}
+			// #285: a TIMEOUT is a failover trigger, not an in-place retry
+			// spiral. One in-place retry (the 2026-08-20 evidence: a dead
+			// deepseek was retried 3x on the same provider while healthy
+			// fallbacks sat idle), then move to the next-priority provider —
+			// the circuit breaker still trips on repeated failures, but the
+			// call lands elsewhere instead of burning 3x the wall clock on a
+			// dead endpoint. Only non-timeout errors keep the full 3x in-place
+			// budget (transient 5xx-style blips deserve local retries).
+			var netErr net.Error
+			isTimeout := errors.As(err, &netErr) && netErr.Timeout()
+			if isTimeout && attempt >= 1 {
+				slog.Warn("provider timeout — failing over to next provider", "provider", p.Name, "role", role, "error", err)
+				break
 			}
 			if attempt < 2 {
 				timer := time.NewTimer(time.Duration(1<<attempt) * time.Second)

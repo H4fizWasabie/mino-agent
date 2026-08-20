@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"context"
 	"encoding/json"
 	"errors"
@@ -452,5 +453,49 @@ func TestReloadProvidersSignalsConfigChangeOnce(t *testing.T) {
 	}
 	if again := m.ConsumeConfigChange(); !again.IsZero() {
 		t.Fatalf("unchanged reload must not signal, got %v", again)
+	}
+}
+
+// #285: a timeout on the primary fails over to the next provider after ONE
+// in-place retry — not the old 3x same-provider spiral (the 2026-08-20
+// deepseek evidence: 3 timeouts on the same dead provider while healthy
+// fallbacks sat idle).
+func TestTimeoutFailsOverAfterOneRetry(t *testing.T) {
+	m := testManager()
+	var calls []string
+	resp, err := m.callWithConfig("s", MainModel, func(_ *Client, model, _ string, _ ProviderConfig) (*LLMResponse, error) {
+		calls = append(calls, model)
+		if model == "mimo" {
+			return nil, &net.OpError{Op: "read", Err: context.DeadlineExceeded}
+		}
+		return &LLMResponse{FinalText: model}, nil
+	})
+	if err != nil || resp.FinalText != "backup" {
+		t.Fatalf("resp=%+v err=%v", resp, err)
+	}
+	// One in-place retry on mimo (attempts 0+1), then failover to backup —
+	// never the old 3x same-provider spiral.
+	if len(calls) != 3 || calls[2] != "backup" {
+		t.Fatalf("calls = %v, want [mimo mimo backup] (one retry then failover)", calls)
+	}
+}
+
+// #285: a non-timeout error keeps the full 3x in-place retry budget.
+func TestNonTimeoutKeepsThreeRetries(t *testing.T) {
+	m := testManager()
+	calls := 0
+	_, err := m.callWithConfig("s", MainModel, func(_ *Client, model, _ string, _ ProviderConfig) (*LLMResponse, error) {
+		calls++
+		if model == "mimo" {
+			return nil, errors.New("500 boom")
+		}
+		return &LLMResponse{FinalText: model}, nil
+	})
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	// 3 in-place retries on mimo, THEN failover to backup.
+	if calls != 4 {
+		t.Fatalf("calls = %d, want 4 (3 in-place retries on mimo then failover)", calls)
 	}
 }
