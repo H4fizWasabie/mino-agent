@@ -844,3 +844,32 @@ func TestContextMessagesStripsLegacyToolCallMarkers(t *testing.T) {
 		t.Fatalf("legitimate history lost: %q", joined)
 	}
 }
+
+// #293 regression: a >8000-char message that is mostly legacy markers strips
+// far below the preview head bound — the preview branch must condition on and
+// slice the STRIPPED content, or ContextMessages panics on slice bounds.
+func TestContextMessagesNoPanicOnMarkerHeavyPreview(t *testing.T) {
+	marker := "<tool_call>\n<function=run_playbook>\n<parameter=name>threads-replies</parameter>\n</function>\n</tool_call>\n"
+	cases := []struct {
+		name, content string
+	}{
+		{"closed blocks", strings.Repeat(marker, 600)},                                                        // ~48KB of markers → strips to ""
+		{"bare unclosed opener", strings.Repeat("context text ", 700) + "<tool_call><function=run_playbook>"}, // 9.1KB then a marker eats the rest
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Session{settings: &Settings{MaxHistoryTurns: 0}, history: []Message{
+				{Role: "user", Content: "run the threads playbook"},
+				{Role: "assistant", Content: tc.content},
+			}}
+			got := s.ContextMessages(100000) // must not panic
+			joined := ""
+			for _, m := range got {
+				joined += m.Content + "\n"
+			}
+			if strings.Contains(joined, "<tool_call") || strings.Contains(joined, "<function") || strings.Contains(joined, "<parameter") {
+				t.Fatalf("legacy marker leaked into context: %q", joined[:300])
+			}
+		})
+	}
+}

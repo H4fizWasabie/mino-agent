@@ -193,7 +193,7 @@ func (s *Session) buildSystem(userMessage, source string, includePlaybookRouting
 		"\nAction-grounding (CTX-016): claiming you completed an action — consolidated, sent, posted, updated, scheduled, cleaned — requires that you actually called the relevant tool in THIS turn and that you restate its exact result (the count, ID, or status the tool returned). If you did not call the tool, or the tool returned 0/nothing, say so plainly ('I didn't run it', 'nothing was eligible') — never report a fabricated count or success to make the reply look done. A completion claim with no matching tool call in this turn is a lie, not a summary.",
 		"\nSYSTEM STATE MAP (where Mino's own operations put things — OSV-02):\n- Reminders → SQLite `reminders` table (one-time, delivered to Telegram). NOT the user's calendar — never search a calendar for a reminder.\n- Facts and notes (save_note, manage_memory) → `memories/*.md` under MINO_HOME, keyed by fact id.\n- Working memory → `working_memory.md`; patterns → `patterns.md`.\n- Playbook schedules → `schedules.json`; playbooks → `playbooks/<name>/`.\n- Calendar events → `calendar_events` (SQLite) + `calendar.ics`.\n- Skills → `skills/<slug>/SKILL.md`.\n- Replied-comments ledger → `data/threads-replies/replied-threads.md`.\n- Audit trail of tool calls → `audit.jsonl`.\n- Dynamic state (pending reminders, schedule health, service status) → call system_check.",
 		"\nTool preference: prefer the purpose-built tool for a job over hand-rolling it — use convert_doc for document files (docx, pdf, xlsx, pptx) instead of parsing them with bash/python; use dedicated tools before generic workarounds.",
-		"\nTool calls: use native function calling when the API provides it. Do NOT write tool calls as plain text like [tool_call: ...] — text markers are a fallback that is only parsed when the JSON inside is exactly valid (no shell-style escapes like \\'). The legacy XML form <tool_call><function=...> is NEVER parsed — never emit it."
+		"\nTool calls: use native function calling when the API provides it. Do NOT write tool calls as plain text like [tool_call: ...] — text markers are a fallback that is only parsed when the JSON inside is exactly valid (no shell-style escapes like \\'). The legacy XML form <tool_call><function=...> is NEVER parsed — never emit it.",
 		"\nIteration discipline (issues #171): each turn has a limited iteration budget, reported to you as you go. If you have repeated the same tool call several times with no progress, or you are deep into the budget without a result — CHANGE APPROACH or state explicitly why you are abandoning the current one. Do not keep retrying the same thing to the iteration cap.",
 		"\nMid-flight discipline (CTX-019): when a system observation tells you to change approach or abandon (repeated tool, near the iteration cap, or lost context), CHANGE BEHAVIOR immediately — take a genuinely different action, read session_notes to recover the method, or state the blocker and stop. Do NOT re-narrate why you are stuck; a self-explanation mid-flight is provisional at best. Acting on the verified signal beats explaining it.",
 	}
@@ -454,17 +454,20 @@ func (s *Session) ContextMessages(maxChars int) []Message {
 	history := make([]Message, len(s.history))
 	for i, message := range s.history {
 		history[i] = message
-		history[i].Content = stripLegacyToolCallXML(history[i].Content)
-		if len(message.Content) > inputPreviewLimit {
+		stripped := stripLegacyToolCallXML(history[i].Content)
+		history[i].Content = stripped
+		if len(stripped) > inputPreviewLimit {
 			// Head+tail preview instead of a bare pointer: large messages are
 			// usually replies whose trailing [tools used:] records carry the
 			// method (DB paths, commands) the next turn needs. A bare pointer
 			// left the model amnesiac — CHEM 15 incident (2026-08-10).
-			stripped := history[i].Content
+			// Condition and bounds on the STRIPPED content (#293): a marker-heavy
+			// message can shrink far below the original length, so slicing the
+			// stripped copy with original-derived bounds would panic.
 			head := inputPreviewLimit / 2
 			history[i].Content = fmt.Sprintf(
 				"[Large previous %s message (%d chars); full text is in the session log.\nHEAD:\n%s\n...\nTAIL:\n%s",
-				message.Role, len(message.Content), stripped[:head], stripped[len(stripped)-head:])
+				message.Role, len(stripped), stripped[:head], stripped[len(stripped)-head:])
 		}
 	}
 
