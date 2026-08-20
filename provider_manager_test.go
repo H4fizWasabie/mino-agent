@@ -105,7 +105,9 @@ func TestPreferredModelAndReasoningFollowProvider(t *testing.T) {
 	}
 }
 
-func failCall(*Client, string, string, ProviderConfig) (*LLMResponse, error) { return nil, errors.New("down") }
+func failCall(*Client, string, string, ProviderConfig) (*LLMResponse, error) {
+	return nil, errors.New("down")
+}
 
 func TestRetryBackoff(t *testing.T) {
 	m := testManager()
@@ -192,7 +194,6 @@ func visionManager() *ProviderManager {
 		state:  map[string]*providerState{"pro": {}, "omni": {}},
 		sticky: map[string]string{},
 		now:    func() time.Time { return time.Unix(100, 0) },
-		
 	}
 }
 
@@ -346,9 +347,9 @@ func TestStripProviderPin(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"deepseek/deepseek-v4-flash-0731:deepinfra", "deepseek/deepseek-v4-flash-0731"},
 		{"deepseek/deepseek-v4-flash-0731", "deepseek/deepseek-v4-flash-0731"},
-		{"mimo-v2.5", "mimo-v2.5"},                     // no slash, no pin
-		{"deepseek-v4-flash", "deepseek-v4-flash"},      // direct-API model, no pin
-		{"o3:nightly", "o3:nightly"},                    // ':' before slash is part of id
+		{"mimo-v2.5", "mimo-v2.5"},                 // no slash, no pin
+		{"deepseek-v4-flash", "deepseek-v4-flash"}, // direct-API model, no pin
+		{"o3:nightly", "o3:nightly"},               // ':' before slash is part of id
 	}
 	for _, c := range cases {
 		if got := stripProviderPin(c.in); got != c.want {
@@ -475,5 +476,50 @@ func TestReloadProvidersSignalsConfigChangeOnce(t *testing.T) {
 	}
 	if again := m.ConsumeConfigChange(); !again.IsZero() {
 		t.Fatalf("unchanged reload must not signal, got %v", again)
+	}
+}
+
+// #286: a priority change is a model-intent change — a session pinned to a
+// provider whose priority moved must re-resolve to the new top after reload,
+// not silently stay on the old provider.
+func TestReloadClearsStickyWhenPriorityChanges(t *testing.T) {
+	home := t.TempDir()
+	// start: deepseek prio 1 (top), mimo-pro prio 2
+	cfg := `{"providers": [
+		{"name": "deepseek", "base_url": "https://x", "model": "deepseek/deepseek-v4-flash-0731", "priority": 1},
+		{"name": "mimo-pro", "base_url": "https://x", "model": "xiaomi/mimo-v2.5-pro", "priority": 2}
+	]}`
+	if err := os.WriteFile(filepath.Join(home, "providers.json"), []byte(cfg), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m := &ProviderManager{
+		clients:   map[string]*Client{},
+		state:     map[string]*providerState{},
+		sticky:    map[string]string{},
+		preferred: map[string]providerPreference{},
+		authStore: &AuthStore{data: map[string]AuthEntry{"deepseek": {Key: "k"}, "mimo-pro": {Key: "k"}}},
+		now:       time.Now,
+	}
+	if err := m.ReloadProviders(home); err != nil {
+		t.Fatal(err)
+	}
+	// session pins deepseek
+	m.success("sched-x", MainModel, "deepseek")
+	if got := m.candidates("sched-x", MainModel)[0].Name; got != "deepseek" {
+		t.Fatalf("pinned = %s, want deepseek", got)
+	}
+	// owner swaps priority: mimo-pro becomes top
+	cfg2 := `{"providers": [
+		{"name": "deepseek", "base_url": "https://x", "model": "deepseek/deepseek-v4-flash-0731", "priority": 2},
+		{"name": "mimo-pro", "base_url": "https://x", "model": "xiaomi/mimo-v2.5-pro", "priority": 1}
+	]}`
+	if err := os.WriteFile(filepath.Join(home, "providers.json"), []byte(cfg2), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.ReloadProviders(home); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.candidates("sched-x", MainModel)[0].Name; got != "mimo-pro" {
+		t.Fatalf("after priority swap, first = %s, want mimo-pro (sticky cleared)", got)
 	}
 }

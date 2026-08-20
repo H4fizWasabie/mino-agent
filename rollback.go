@@ -423,4 +423,10 @@ func recordDeployment(home, action, tag, sum, exe string) {
 	}
 	defer f.Close()
 	fmt.Fprintf(f, "%s %s=%s sha256=%s binary=%s\n", time.Now().UTC().Format(time.RFC3339), action, tag, sum, exe)
+	// #288: the version marker must reflect the actual running binary, written
+	// atomically with the deployment record (the old hand-maintained file
+	// lagged the swap and misled ops). Best-effort — the log is the record.
+	if action == "update" {
+		_ = os.WriteFile(filepath.Join(home, "deployed-version"), []byte(tag+"\n"), 0600)
+	}
 }

@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
-	"strconv"
 	"os"
 	"os/exec"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -170,7 +170,7 @@ func gateScript(script string) string {
 // (secrets never reach scripts — systemd's EnvironmentFile=mino.env puts
 // every token in the process env; only the essentials ride along). Returns
 // the combined output (bounded) and the exit code.
-func runLoopScript(ctx context.Context, script, sessionID string) (string, int) {
+func runLoopScript(ctx context.Context, script, sessionID string, allowedTools []string) (string, int) {
 	ctx, cancel := context.WithTimeout(ctx, loopScriptTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "bash", "-c", script)
@@ -180,6 +180,11 @@ func runLoopScript(ctx context.Context, script, sessionID string) (string, int) 
 		"TZ=" + os.Getenv("TZ"),
 		"LANG=" + os.Getenv("LANG"),
 		"MINO_EXEC_SESSION=" + sessionID,
+		// ARCH-001 (#290): the stage tool boundary. When set, mino exec
+		// inside this script refuses tools not in the comma list — the
+		// subprocess cannot reach the full registry. Empty = unrestricted
+		// (chat turns, interactive exec).
+		"MINO_EXEC_ALLOWED_TOOLS=" + strings.Join(allowedTools, ","),
 	}
 	out, err := cmd.CombinedOutput()
 	output := string(out)

@@ -189,6 +189,20 @@ type ToolInfo struct {
 }
 
 // Catalog returns the tool catalog for the dashboard Tools > Available sub-tab.
+// ToolNames returns the registry's tool names, sorted. ARCH-001 (#290): the
+// loop exports this as MINO_EXEC_ALLOWED_TOOLS so mino exec inside a script
+// can enforce the same boundary the stub module shows.
+func (r *Registry) ToolNames() []string {
+	r.toolsMu.RLock()
+	names := make([]string, 0, len(r.tools))
+	for name := range r.tools {
+		names = append(names, name)
+	}
+	r.toolsMu.RUnlock()
+	sort.Strings(names)
+	return names
+}
+
 func (r *Registry) Catalog() []ToolInfo {
 	r.toolsMu.RLock()
 	catalog := make([]ToolInfo, 0, len(r.tools))
