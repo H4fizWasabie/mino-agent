@@ -1197,6 +1197,9 @@ type reviewGate struct {
 // with an explicit reason — the gate is never a rubber stamp.
 func runReviewGate(ctx context.Context, core *Core, pb *PlaybookWorkspace, run *PlaybookRun, stage *WorkspaceStage, sessionID, system string, obs Observer) reviewGate {
 	gate := reviewGate{}
+	// Mark this loop as a review gate so the loop refuses plan-only
+	// completions (no tool calls = not a verdict, push to act instead).
+	ctx = context.WithValue(ctx, reviewGateKey{}, true)
 	stageTools := core.Tools
 	if len(stage.Tools) > 0 {
 		stageTools = core.Tools.Only(stage.Tools...)

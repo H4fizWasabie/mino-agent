@@ -758,3 +758,47 @@ func TestLoopDivergenceSkippedOutsideStage(t *testing.T) {
 		t.Fatalf("status = %q, want complete (no reset outside stages)", result.Status)
 	}
 }
+
+// #283 review-gate guard: a gate whose turn produces NO tool calls (a
+// plan-only reply) must not complete — the loop pushes "you must ACT" and
+// continues instead. Live: instagram 02-compose gate replied "Let me start
+// by reading..." with no script, the loop completed turn 1, and the run
+// failed on a missing VERDICT.
+func TestLoopReviewGatePlanOnlyDoesNotComplete(t *testing.T) {
+	tools := NewRegistry()
+	client := &fakeClient{script: []*LLMResponse{
+		scriptedResp([]ContentBlock{textBlock("Let me start by reading the payload and viewing the image.")}, "stop"),
+		scriptedResp([]ContentBlock{textBlock("VERDICT: PASS")}, "stop"),
+	}}
+	ctx := context.WithValue(context.Background(), reviewGateKey{}, true)
+	result := RunLoopContext(ctx, client, "gate", "", []Message{{Role: "user", Content: "gate the stage"}}, tools, 8, 100, nil, false, t.TempDir())
+	if result.Status != "complete" {
+		t.Fatalf("status = %q, want complete after the corrective push", result.Status)
+	}
+	// The second LLM call must have received the plan-only correction.
+	if len(client.messages) < 2 {
+		t.Fatalf("model called %d times, want 2 (plan-only → push → verdict)", len(client.messages))
+	}
+	var pushed bool
+	for _, m := range client.messages[1] {
+		if strings.Contains(m.Content, "must ACT") {
+			pushed = true
+		}
+	}
+	if !pushed {
+		t.Fatal("plan-only correction missing from the second call's messages")
+	}
+}
+
+// Control: outside a review gate, a plan-only reply still completes (the
+// guard must not leak into normal turns).
+func TestLoopPlanOnlyCompletesOutsideGate(t *testing.T) {
+	tools := NewRegistry()
+	client := &fakeClient{script: []*LLMResponse{
+		scriptedResp([]ContentBlock{textBlock("Let me think about this.")}, "stop"),
+	}}
+	result := RunLoopContext(context.Background(), client, "chat", "", []Message{{Role: "user", Content: "hi"}}, tools, 8, 100, nil, false, t.TempDir())
+	if result.Status != "complete" {
+		t.Fatalf("status = %q, want complete (no gate = plan-only completes)", result.Status)
+	}
+}

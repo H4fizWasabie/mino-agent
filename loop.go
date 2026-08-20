@@ -66,6 +66,8 @@ type traceTagKey struct{}
 
 type stageOutputsKey struct{}
 
+type reviewGateKey struct{}
+
 // traceTagsFromCtx returns the playbook/stage tag set on the context when the
 // loop is executing inside a playbook stage (see runWorkspacePlaybook).
 func traceTagsFromCtx(ctx context.Context) map[string]string {
@@ -341,6 +343,7 @@ func RunLoopContext(
 
 	mutationChecked := false // push the unverified-mutation-claim correction at most once per turn
 	claimChecked := false    // push the contradicted-outcome-claim correction at most once per turn
+	gatePlanChecked := false // review-gate: push the plan-only correction at most once per turn
 	parseFailures := 0       // per-turn unparseable text-marker calls (issue #24; CTX-006)
 
 	// #171 — per-turn repetition tracking for the awareness/containment
@@ -548,6 +551,23 @@ func RunLoopContext(
 						continue
 					}
 				}
+			}
+			// Review-gate guard (#283): a gate whose turn produced NO tool
+			// calls (plan-only reply) must not complete — the gate's contract
+			// is observe/act/verdict, and a plan is neither. Push the model to
+			// act (view_image / read_file / write_file via mino exec) instead
+			// of letting a planning reply count as done. Live: instagram
+			// 02-compose gate replied "Let me start by reading..." with no
+			// script and the loop completed turn 1, then failed on the
+			// missing VERDICT.
+			if _, isGate := ctx.Value(reviewGateKey{}).(bool); isGate && len(result.ToolCalls) == 0 && !gatePlanChecked {
+				gatePlanChecked = true
+				trace("midflight_signal", map[string]any{"signal": "gate_plan_only", "iteration": i})
+				messages = append(messages, Message{
+					Role:    "user",
+					Content: "[System: you are the review gate — you must ACT, not plan. Emit a script that observes the artifacts (read_file / view_image via `mino exec`) and performs the corrective work. A planning reply does not count. Then end with VERDICT: PASS or VERDICT: FAIL.]",
+				})
+				continue
 			}
 			result.Status = "complete"
 			result.Reply = extractText(resp.Content)

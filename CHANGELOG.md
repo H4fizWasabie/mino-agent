@@ -1,5 +1,11 @@
 # Changelog
 
+## [v2.20.1] — Review-gate plan-only guard (2026-08-20)
+
+### Fixed
+
+- **Review gate accepted a plan-only reply as done (#283 live)**: a gate whose first turn produced no tool calls (e.g. "Let me start by reading...") completed the loop with no VERDICT — the gate then false-failed on a missing verdict. The loop now pushes "you must ACT, not plan" (once per gate turn, `midflight_signal gate_plan_only` trace) and continues instead of completing; a VERDICT-only reply after the push completes normally. Chat turns untouched (gate-scoped by context). Observed live: instagram 02-compose gate replied with a plan, ran 0 work. Tests: `TestLoopReviewGatePlanOnlyDoesNotComplete`, `TestLoopPlanOnlyCompletesOutsideGate`.
+
 ## [v2.20.0] — Code-stage hardening (2026-08-20)
 
 ### Added
