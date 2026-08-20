@@ -4,11 +4,11 @@ package main
 // A definition describes stages; each run owns its own stage outputs and state.
 
 import (
-	"log/slog"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"database/sql"
 )
 
 type PlaybookWorkspace struct {
@@ -27,9 +29,9 @@ type PlaybookWorkspace struct {
 	// Agent is the config.md `agent:` binding — the roster persona this
 	// playbook's runs wear (PSN-001). Deterministic binding, never
 	// fuzzy-matched; resolved by validatePlaybookPersona.
-	Agent       string
-	Config      map[string]string
-	Stages      []WorkspaceStage
+	Agent  string
+	Config map[string]string
+	Stages []WorkspaceStage
 }
 
 type WorkspaceStage struct {
@@ -78,9 +80,9 @@ type PlaybookRun struct {
 	GateApproved bool `json:"gate_approved,omitempty"`
 	// SCR-001 (#272): script-backed runs — additive, schema-light (RUN-004
 	// rollback stays valid: old state.json files read these as zero/empty).
-	Script       string `json:"script,omitempty"`         // script.sh when script-backed
-	ScriptOutput string `json:"script_output,omitempty"`  // runs/<id>/script-output.txt
-	ExitCode     int    `json:"exit_code"`                // script exit status (0 when unset)
+	Script       string `json:"script,omitempty"`        // script.sh when script-backed
+	ScriptOutput string `json:"script_output,omitempty"` // runs/<id>/script-output.txt
+	ExitCode     int    `json:"exit_code"`               // script exit status (0 when unset)
 }
 
 type PlaybookRunStage struct {
@@ -92,9 +94,9 @@ type PlaybookRunStage struct {
 	Error        string    `json:"error,omitempty"`
 	StartedAt    time.Time `json:"started_at,omitempty"`
 	EndedAt      time.Time `json:"ended_at,omitempty"`
-	Script       string    `json:"script,omitempty"`       // script.sh when script-backed (SCR-003)
+	Script       string    `json:"script,omitempty"`        // script.sh when script-backed (SCR-003)
 	ScriptOutput string    `json:"script_output,omitempty"` // runs/<id>/stages/<NN-name>/script-output.txt
-	ExitCode     int       `json:"exit_code"`              // script exit status (0 when unset)
+	ExitCode     int       `json:"exit_code"`               // script exit status (0 when unset)
 }
 
 func validWeekday(d string) bool {
@@ -980,7 +982,15 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 			result.Reply = stageResult.Reply
 			result.StagesRun++
 			state.EndedAt = time.Now().UTC()
-			outputs, verifyErr = verifyWorkspaceStageOutputs(pb, run, stage, stageResult.ToolCalls)
+			// Code mode (#271): the loop's in-memory ToolCalls are synthetic
+			// "script" entries only — the real write_file/threads_post calls
+			// happen inside mino exec subprocesses and land in the tool_calls
+			// table under the run session. Hydrate them back so write
+			// attribution and ## Success outcome checks see the stage's actual
+			// tool work (fixes #282: tribal 00:30 published + wrote its log
+			// yet the stage false-failed). Windowed by the stage's own
+			// start/end so sibling stages in the same run can't leak in.
+			outputs, verifyErr = verifyWorkspaceStageOutputs(pb, run, stage, hydrateStageCalls(core.DB, sessionID, state.StartedAt, state.EndedAt, stageResult.ToolCalls))
 			// A stage's contract is its verified outputs: a runtime error after
 			// the work is written (e.g. a flaked final model call) must not fail
 			// the stage — only a cancelled run or unverified outputs do.
@@ -1090,6 +1100,45 @@ type outcomeFailure struct {
 
 func (e *outcomeFailure) Error() string {
 	return fmt.Sprintf("required outcome %q: no successful %s call recorded — publish or say why", e.Outcome, e.Tool)
+}
+
+// hydrateStageCalls merges the stage's own tool calls with the exec'd calls
+// recorded in tool_calls during the stage window. In code mode (#271) the
+// loop only records synthetic "script" ToolCalls — real tools run inside
+// `mino exec` subprocesses and their rows land in the DB under the run
+// session (MINO_EXEC_SESSION). Without them, write attribution and ## Success
+// outcome checks fail even when the work completed (fixes #282). The window
+// [start, end] scopes the rows to this stage so sibling stages sharing the
+// run session can't contaminate verification.
+// ponytail: output_summary is capped at 200 chars by the recorder; if a tool's
+// outcome ID ever sits beyond the cap, ## Success verification false-fails
+// here — switch the query to a full-output column when that happens.
+func hydrateStageCalls(db *sql.DB, sessionID string, start, end time.Time, calls []ToolCall) []ToolCall {
+	if db == nil {
+		return calls
+	}
+	rows, err := db.Query(
+		`SELECT tool_name, args, output_summary FROM tool_calls
+		 WHERE session_id = ? AND tool_name != 'script'
+		   AND created_at >= ? AND created_at <= ?`,
+		sessionID, start.UTC().Format("2006-01-02 15:04:05"), end.UTC().Format("2006-01-02 15:04:05"))
+	if err != nil {
+		return calls
+	}
+	defer rows.Close()
+	out := append([]ToolCall(nil), calls...)
+	for rows.Next() {
+		var name, argsJSON, output string
+		if err := rows.Scan(&name, &argsJSON, &output); err != nil {
+			continue
+		}
+		var args map[string]any
+		if json.Unmarshal([]byte(argsJSON), &args) != nil {
+			args = nil
+		}
+		out = append(out, ToolCall{Name: name, Args: args, Output: output})
+	}
+	return out
 }
 
 // verifyWorkspaceStageOutputs enforces write-attributed completion: a declared
