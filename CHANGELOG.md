@@ -1,5 +1,11 @@
 # Changelog
 
+## [v2.20.2] — Configurable LLM timeout (2026-08-20)
+
+### Fixed
+
+- **LLM client timeout 120s hardcoded — killed heavy non-streaming calls (fixes #289)**: provider.go hardcoded `&http.Client{Timeout: 120 * time.Second}`. Playbook compose stages send heavy non-streaming calls (persona + stub module + reasoning_effort=high + long context) that legitimately exceed 120s before the first byte — the client timeout fired mid-read with `context deadline exceeded (Client.Timeout or context cancellation while reading body)`, retried 3x in place, and wedged the run. Confirmed 2026-08-20: BOTH deepseek and mimo-pro showed identical timeouts while curl to OpenRouter was healthy (API 200 in 0.1s, heavy inference fine in <190s). The "provider storm" was a client timeout, not a provider outage. Fix: `NewClient` reads `MINO_LLM_TIMEOUT` env (default 5m) via `NewClientTimeout`; `NewClient` keeps the old 120s behavior for callers that want it (none currently — both provider-manager sites use the env-aware path). (Why: every compose stage and future gate would keep false-failing on long reasoning calls. Tests: `TestNewClientTimeoutFromEnv`, `TestNewClientDefaultTimeout`.)
+
 ## [v2.20.1] — Review-gate plan-only guard (2026-08-20)
 
 ### Fixed

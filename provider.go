@@ -67,10 +67,21 @@ type Client struct {
 }
 
 func NewClient(apiKey, baseURL string) *Client {
+	// #289: the default 120s http timeout kills heavy non-streaming reasoning
+	// calls (persona + stub + reasoning_effort=high can exceed 120s before the
+	// first byte). MINO_LLM_TIMEOUT (env, loaded by LoadSettings from
+	// mino.env) overrides; default 5m gives compose calls headroom.
+	timeout := envDuration("MINO_LLM_TIMEOUT", 5*time.Minute)
+	return NewClientTimeout(apiKey, baseURL, timeout)
+}
+
+// NewClientTimeout builds a client with an explicit HTTP timeout (#289):
+// the default 120s is too tight for heavy non-streaming reasoning calls.
+func NewClientTimeout(apiKey, baseURL string, timeout time.Duration) *Client {
 	return &Client{
 		apiKey:  apiKey,
 		baseURL: strings.TrimRight(baseURL, "/"),
-		client:  &http.Client{Timeout: 120 * time.Second},
+		client:  &http.Client{Timeout: timeout},
 	}
 }
 
@@ -229,7 +240,7 @@ func parseResponse(r io.Reader, jsonMode bool) (*LLMResponse, error) {
 				// surface the thinking trace under "reasoning" instead of
 				// DeepSeek's "reasoning_content". Capture both (see #163).
 				ReasoningAlt string `json:"reasoning"`
-				ToolCalls []struct {
+				ToolCalls    []struct {
 					ID       string `json:"id"`
 					Function struct {
 						Name      string `json:"name"`
@@ -340,7 +351,7 @@ func parseSSEStream(r io.Reader, onText func(string)) (*LLMResponse, error) {
 					ReasoningContent string `json:"reasoning_content"`
 					// Some providers send thinking under "reasoning" (see #163).
 					ReasoningAlt string `json:"reasoning"`
-					ToolCalls        []struct {
+					ToolCalls    []struct {
 						Index    int    `json:"index"`
 						ID       string `json:"id"`
 						Function struct {
