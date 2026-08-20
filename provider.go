@@ -66,11 +66,21 @@ type Client struct {
 	allowFallbacks  bool     // may fall back outside the routing list (default false = privacy-safe)
 }
 
+// NewClient builds the default LLM client. The HTTP timeout is configurable
+// via MINO_LLM_TIMEOUT, default 5 minutes (#311, ported from the v2.20-era
+// #289 fix): the old 120s default kills heavy non-streaming reasoning calls
+// (persona + stub + reasoning_effort=high can exceed 120s before the first
+// byte — observed 2026-08-20 blocking the ai-news-daily pilot run).
 func NewClient(apiKey, baseURL string) *Client {
+	return NewClientTimeout(apiKey, baseURL, envDuration("MINO_LLM_TIMEOUT", 5*time.Minute))
+}
+
+// NewClientTimeout builds a client with an explicit HTTP timeout (#289/#311).
+func NewClientTimeout(apiKey, baseURL string, timeout time.Duration) *Client {
 	return &Client{
 		apiKey:  apiKey,
 		baseURL: strings.TrimRight(baseURL, "/"),
-		client:  &http.Client{Timeout: 120 * time.Second},
+		client:  &http.Client{Timeout: timeout},
 	}
 }
 
