@@ -594,7 +594,11 @@ func RunLoopContext(
 			if reason := gateScript(script); reason != "" {
 				raw = "Error: script blocked by the harness gate (" + reason + "). Rewrite without the blocked construct — the gate is absolute."
 			} else {
-				output, code := runLoopScript(ctx, script, sessionID)
+				// ARCH-001 (#290): the script's mino exec calls are scoped to this
+				// loop's registry — the stage whitelist (Tools.Only) or the full
+				// registry for chat. The boundary travels in the env so the
+				// subprocess cannot reach tools the stub did not show.
+				output, code := runLoopScript(ctx, script, sessionID, tools.ToolNames())
 				raw = fmt.Sprintf("[script exit %d]\n%s", code, output)
 			}
 			if ctx.Err() != nil {

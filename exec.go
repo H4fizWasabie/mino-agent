@@ -33,6 +33,16 @@ func runExecTool(w *Core, args []string) int {
 			return 1
 		}
 	}
+	// ARCH-001 (#290): the stage tool boundary. A playbook script runs with
+	// MINO_EXEC_ALLOWED_TOOLS set to its stage's whitelist; mino exec refuses
+	// anything outside it (never silent — the model sees the reason and
+	// rewrites). Unset/empty = unrestricted (chat turns, interactive exec).
+	if allow := os.Getenv("MINO_EXEC_ALLOWED_TOOLS"); allow != "" {
+		if !execToolAllowed(args[0], allow) {
+			fmt.Fprintf(os.Stderr, "Error: tool %q is not allowed in this stage (whitelist: %s)", args[0], allow)
+			return 1
+		}
+	}
 	ctx := context.WithValue(context.Background(), sessionIDKey{}, execSession())
 	out := w.Tools.ExecuteContext(ctx, args[0], argv)
 	out = maybeConvertVision(ctx, out, argv, w.Client, execSession())
@@ -56,6 +66,18 @@ func execSession() string {
 // failed. Binary by design — scripts branch on one bit and never parse
 // message text.
 func execFailed(out string) bool { return strings.HasPrefix(out, "Error:") }
+
+// execToolAllowed is the ARCH-001 stage boundary: a tool name passes only if
+// the whitelist (comma list from MINO_EXEC_ALLOWED_TOOLS) contains it.
+// Pure function so the boundary is unit-testable without a subprocess.
+func execToolAllowed(tool, whitelist string) bool {
+	for _, name := range strings.Split(whitelist, ",") {
+		if name == tool {
+			return true
+		}
+	}
+	return false
+}
 
 // maybeConvertVision (T8, map #88): the main brain never carries image
 // bytes. With code mode (#271) the loop's per-call conversion moved here —

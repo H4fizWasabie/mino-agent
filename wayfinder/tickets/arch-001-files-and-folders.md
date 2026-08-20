@@ -1,6 +1,6 @@
 # Architecture — Playbooks as Files & Folders; LLM as Judgment Layer (ARCH-001)
 
-Status: **ACCEPTED** (owner decision 2026-08-20, from the agent-philosophy research docs)
+Status: **RESOLVED** (owner decision 2026-08-20 — architecture accepted; implementation tracked by GitHub issue #290 and the acceptance criteria below)
 
 ## The principle (three ideas combined)
 

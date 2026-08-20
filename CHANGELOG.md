@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Stage tool boundary enforced — mino exec scoped to the stage whitelist (closes #290, ARCH-001)**: a stage's declared Tools whitelist now filters BOTH the stub module text AND the actual `mino exec` subprocess. The loop exports the registry's tool names as `MINO_EXEC_ALLOWED_TOOLS` into the script env; `mino exec` refuses any tool outside it with a clear error + exit 1 (never silent). This closes the leak where a stage declaring read_file/write_file/bash still let the model call manage_playbook, run_playbook, search_web etc. — the observed trigger of the 41-call / 32-iteration meta-loop churn (threads-workplace-drama compose, 2026-08-20). Chat turns (no env) keep the full registry. The stub module was already stage-scoped via Tools.Only; the subprocess now matches it. (Why: ARCH-001 — the playbook is a filesystem state machine; the stage folder IS the boundary. The model's only product is the declared output file, using only whitelisted tools. Tests: `TestExecToolAllowed`, `TestExecRefusesToolOutsideStageWhitelist`, `TestExecAllowsWhitelistedTool`, `TestExecUnrestrictedWithoutEnv`.)
+
 ## [v2.20.2] — Configurable LLM timeout (2026-08-20)
 
 ### Fixed

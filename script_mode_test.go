@@ -75,11 +75,11 @@ func TestGateScript(t *testing.T) {
 }
 
 func TestRunLoopScriptExecutesAndBindsOutput(t *testing.T) {
-	out, code := runLoopScript(context.Background(), "echo hello-script; echo err-line >&2", "test-session")
+	out, code := runLoopScript(context.Background(), "echo hello-script; echo err-line >&2", "test-session", nil)
 	if code != 0 || !strings.Contains(out, "hello-script") || !strings.Contains(out, "err-line") {
 		t.Fatalf("out=%q code=%d, want both streams + exit 0", out, code)
 	}
-	_, code = runLoopScript(context.Background(), "exit 3", "test-session")
+	_, code = runLoopScript(context.Background(), "exit 3", "test-session", nil)
 	if code != 3 {
 		t.Fatalf("exit code = %d, want 3", code)
 	}
@@ -89,7 +89,7 @@ func TestRunLoopScriptTimeout(t *testing.T) {
 	old := loopScriptTimeout
 	loopScriptTimeout = 200 * time.Millisecond
 	defer func() { loopScriptTimeout = old }()
-	out, code := runLoopScript(context.Background(), "sleep 5", "test-session")
+	out, code := runLoopScript(context.Background(), "sleep 5", "test-session", nil)
 	if code == 0 || !strings.Contains(out, "timed out") {
 		t.Fatalf("out=%q code=%d, want timeout", out, code)
 	}
