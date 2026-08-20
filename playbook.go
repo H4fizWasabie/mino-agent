@@ -581,6 +581,11 @@ func validateManagedPlaybook(core *Core, name string) error {
 	if err := validateWorkspaceStageTools(pb, core.Tools); err != nil {
 		return err
 	}
+	// issue #304: script-backed stages get the shared validation seam (bash
+	// -n + tool scan) at edit time — a bad script never reaches a run.
+	if err := validateStageScripts(core, pb); err != nil {
+		return err
+	}
 	// PSN-001: the `agent:` reference is validated at edit time like declared
 	// tools — a missing persona refuses the playbook the same way an unknown
 	// tool does.
