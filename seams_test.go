@@ -425,6 +425,9 @@ var promptAssemblySeams = []string{
 	"splitOfferText",
 	"gatePauseReply",
 	"approvePendingTaskGate",
+	"ContextMessages",
+	"stripLegacyToolCallXML",
+
 }
 
 func TestPromptAssemblySeamsCovered(t *testing.T) {
