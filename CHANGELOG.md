@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [v2.20.0] — Code-stage hardening (2026-08-20)
 
 ### Added
 
