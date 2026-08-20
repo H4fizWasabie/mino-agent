@@ -692,3 +692,69 @@ func TestLoopLogsMidflightRedirectSignal(t *testing.T) {
 // CTX-022 C: provenance gate — a web search whose query overlaps a turn's
 // earlier user-provenanced recall must produce a warning; non-overlapping
 // queries and recalls without user provenance must stay silent.
+
+// CTX-025 fix-B: divergence detector — a stage whose input tokens balloon
+// past 3x the iteration-1 baseline within the first 10 iterations while its
+// required outputs are still missing must be state-reset once: context
+// truncated back to the stage prompt, required outputs re-injected. Recovery,
+// not another advisory — exploring is shut down so the stage converges.
+func TestLoopDivergenceResetClearsExploration(t *testing.T) {
+	tools := NewRegistry()
+	out := filepath.Join(t.TempDir(), "output", "payload.json")
+	ctx := context.WithValue(context.Background(), stageOutputsKey{}, []string{out})
+	ctx = context.WithValue(ctx, traceTagKey{}, map[string]string{"playbook": "p", "stage": "01-x", "run": "r"})
+	client := &fakeClient{script: []*LLMResponse{
+		scriptedResp([]ContentBlock{scriptBlock("echo explore")}, "stop"),
+		scriptedResp([]ContentBlock{scriptBlock("echo explore2")}, "stop"),
+		scriptedResp([]ContentBlock{scriptBlock("echo explore3")}, "stop"),
+		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
+	}}
+	// scriptedResp hardcodes 10/10 tokens — grow inputs to simulate bloat.
+	client.script[1].Usage.InputTokens = 10
+	client.script[2].Usage.InputTokens = 35
+	client.script[3].Usage.InputTokens = 40
+	home := t.TempDir()
+	_ = RunLoopContext(ctx, client, "s", "", []Message{{Role: "user", Content: "run"}}, tools, 10, 100, nil, false, home)
+	var sawReset bool
+	for _, m := range client.messages {
+		for _, msg := range m {
+			if strings.Contains(msg.Content, "divergence reset") {
+				sawReset = true
+			}
+		}
+	}
+	if !sawReset {
+		t.Fatal("divergence reset message never injected")
+	}
+	files, _ := filepath.Glob(filepath.Join(home, "traces", "*.jsonl"))
+	var traced bool
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.Contains(line, "midflight_signal") && strings.Contains(line, "divergence") {
+				traced = true
+			}
+		}
+	}
+	if !traced {
+		t.Fatal("midflight_signal divergence event was not logged to the trace")
+	}
+}
+
+// Control: token bloat alone does not reset a normal chat turn — the
+// detector is stage-scoped (traceTags must be present), so an explorative
+// chat session with growing context still completes normally.
+func TestLoopDivergenceSkippedOutsideStage(t *testing.T) {
+	tools := NewRegistry()
+	client := &fakeClient{script: []*LLMResponse{
+		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
+	}}
+	client.script[0].Usage.InputTokens = 400
+	result := RunLoopContext(context.Background(), client, "chat", "", []Message{{Role: "user", Content: "hi"}}, tools, 10, 100, nil, false, t.TempDir())
+	if result.Status != "complete" {
+		t.Fatalf("status = %q, want complete (no reset outside stages)", result.Status)
+	}
+}

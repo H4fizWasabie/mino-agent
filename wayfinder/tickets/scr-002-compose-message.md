@@ -1,6 +1,6 @@
 # LLM-Synthesized Telegram Reports for Script-Backed Playbooks (SCR-002)
 
-Status: **OPEN** — follow-up to SCR-001; owner feedback 2026-08-19: scripted
+Status: **RESOLVED** (2026-08-20 — shipped as v2.17.0→v2.17.3, closes #277, commits bed0cdb/57e2ea2/f0f546d/004ab7b): `compose_message` tool synthesizes Telegram reports for scripted playbooks; rich persona prompt + output-only directive + reasoning-disable at the transport (CreateContextNoReasoning) fixed the reasoning-as-content leak. Live: 6 scripted playbooks notify via compose_message at ~0 LLM tokens vs 104–381k baselines.
 playbooks' Telegram messages "are not the same since last time" (template-shaped
 vs LLM-synthesized).
 

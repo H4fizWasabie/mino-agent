@@ -4,11 +4,11 @@ package main
 // A definition describes stages; each run owns its own stage outputs and state.
 
 import (
-	"log/slog"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"database/sql"
 )
 
 type PlaybookWorkspace struct {
@@ -27,9 +29,9 @@ type PlaybookWorkspace struct {
 	// Agent is the config.md `agent:` binding — the roster persona this
 	// playbook's runs wear (PSN-001). Deterministic binding, never
 	// fuzzy-matched; resolved by validatePlaybookPersona.
-	Agent       string
-	Config      map[string]string
-	Stages      []WorkspaceStage
+	Agent  string
+	Config map[string]string
+	Stages []WorkspaceStage
 }
 
 type WorkspaceStage struct {
@@ -78,9 +80,9 @@ type PlaybookRun struct {
 	GateApproved bool `json:"gate_approved,omitempty"`
 	// SCR-001 (#272): script-backed runs — additive, schema-light (RUN-004
 	// rollback stays valid: old state.json files read these as zero/empty).
-	Script       string `json:"script,omitempty"`         // script.sh when script-backed
-	ScriptOutput string `json:"script_output,omitempty"`  // runs/<id>/script-output.txt
-	ExitCode     int    `json:"exit_code"`                // script exit status (0 when unset)
+	Script       string `json:"script,omitempty"`        // script.sh when script-backed
+	ScriptOutput string `json:"script_output,omitempty"` // runs/<id>/script-output.txt
+	ExitCode     int    `json:"exit_code"`               // script exit status (0 when unset)
 }
 
 type PlaybookRunStage struct {
@@ -92,9 +94,12 @@ type PlaybookRunStage struct {
 	Error        string    `json:"error,omitempty"`
 	StartedAt    time.Time `json:"started_at,omitempty"`
 	EndedAt      time.Time `json:"ended_at,omitempty"`
-	Script       string    `json:"script,omitempty"`       // script.sh when script-backed (SCR-003)
+	Script       string    `json:"script,omitempty"`        // script.sh when script-backed (SCR-003)
 	ScriptOutput string    `json:"script_output,omitempty"` // runs/<id>/stages/<NN-name>/script-output.txt
-	ExitCode     int       `json:"exit_code"`              // script exit status (0 when unset)
+	ExitCode     int       `json:"exit_code"`               // script exit status (0 when unset)
+	ReviewPass   bool      `json:"review_pass,omitempty"`   // #283 review-gate verdict (true = PASS)
+	ReviewReason string    `json:"review_reason,omitempty"` // FAIL reason or empty on PASS
+	ReviewReply  string    `json:"review_reply,omitempty"`  // gate's final plain-text reply
 }
 
 func validWeekday(d string) bool {
@@ -914,6 +919,40 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 				"playbook": pb.Name, "stage": fmt.Sprintf("%02d-%s", stage.Number, stage.Name),
 				"run": run.ID, "exit_code": code, "output_chars": len(out),
 			})
+			// SCR-003 #283: review-gated stage — script.sh + CONTEXT.md.
+			// The script did the deterministic work; a bounded review turn
+			// observes the produced artifacts, reasons against the CONTEXT
+			// contract, acts if needed, and ends with VERDICT: PASS/FAIL.
+			// FAIL (or a missing verdict) fails the stage and the run — the
+			// gate is a real contract, never a rubber stamp.
+			if stage.Context != "" {
+				gate := runReviewGate(stageCtx, core, pb, run, &stage, sessionID, system, obs)
+				state.ReviewPass = gate.pass
+				state.ReviewReason = gate.reason
+				state.ReviewReply = gate.reply
+				if err := savePlaybookRun(pb, run); err != nil {
+					return nil, err
+				}
+				if !gate.pass {
+					reason := fmt.Sprintf("review gate %02d-%s: %s", stage.Number, stage.Name, gate.reason)
+					state.Status = "failed"
+					state.Error = reason
+					run.Status = "failed"
+					_ = savePlaybookRun(pb, run)
+					result.Status = "failed"
+					result.Reply = fmt.Sprintf("Run %s stopped at stage %02d-%s: %s", run.ID, stage.Number, stage.Name, reason)
+					logTrace(core.Settings.Home, "script_stage_review_failed", map[string]any{
+						"playbook": pb.Name, "stage": fmt.Sprintf("%02d-%s", stage.Number, stage.Name),
+						"run": run.ID, "reason": gate.reason,
+					})
+					core.auditLog(sessionID, "script_stage_review_failed", reason, 0)
+					return result, nil
+				}
+				logTrace(core.Settings.Home, "script_stage_review_pass", map[string]any{
+					"playbook": pb.Name, "stage": fmt.Sprintf("%02d-%s", stage.Number, stage.Name),
+					"run": run.ID,
+				})
+			}
 			continue
 		}
 		// #237 approval gate (taskified runs): the stage right after the
@@ -980,7 +1019,15 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 			result.Reply = stageResult.Reply
 			result.StagesRun++
 			state.EndedAt = time.Now().UTC()
-			outputs, verifyErr = verifyWorkspaceStageOutputs(pb, run, stage, stageResult.ToolCalls)
+			// Code mode (#271): the loop's in-memory ToolCalls are synthetic
+			// "script" entries only — the real write_file/threads_post calls
+			// happen inside mino exec subprocesses and land in the tool_calls
+			// table under the run session. Hydrate them back so write
+			// attribution and ## Success outcome checks see the stage's actual
+			// tool work (fixes #282: tribal 00:30 published + wrote its log
+			// yet the stage false-failed). Windowed by the stage's own
+			// start/end so sibling stages in the same run can't leak in.
+			outputs, verifyErr = verifyWorkspaceStageOutputs(pb, run, stage, hydrateStageCalls(core.DB, sessionID, state.StartedAt, state.EndedAt, stageResult.ToolCalls))
 			// A stage's contract is its verified outputs: a runtime error after
 			// the work is written (e.g. a flaked final model call) must not fail
 			// the stage — only a cancelled run or unverified outputs do.
@@ -1090,6 +1137,121 @@ type outcomeFailure struct {
 
 func (e *outcomeFailure) Error() string {
 	return fmt.Sprintf("required outcome %q: no successful %s call recorded — publish or say why", e.Outcome, e.Tool)
+}
+
+// hydrateStageCalls merges the stage's own tool calls with the exec'd calls
+// recorded in tool_calls during the stage window. In code mode (#271) the
+// loop only records synthetic "script" ToolCalls — real tools run inside
+// `mino exec` subprocesses and their rows land in the DB under the run
+// session (MINO_EXEC_SESSION). Without them, write attribution and ## Success
+// outcome checks fail even when the work completed (fixes #282). The window
+// [start, end] scopes the rows to this stage so sibling stages sharing the
+// run session can't contaminate verification.
+// ponytail: output_summary is capped at 200 chars by the recorder; if a tool's
+// outcome ID ever sits beyond the cap, ## Success verification false-fails
+// here — switch the query to a full-output column when that happens.
+func hydrateStageCalls(db *sql.DB, sessionID string, start, end time.Time, calls []ToolCall) []ToolCall {
+	if db == nil {
+		return calls
+	}
+	rows, err := db.Query(
+		`SELECT tool_name, args, output_summary FROM tool_calls
+		 WHERE session_id = ? AND tool_name != 'script'
+		   AND created_at >= ? AND created_at <= ?`,
+		sessionID, start.UTC().Format("2006-01-02 15:04:05"), end.UTC().Format("2006-01-02 15:04:05"))
+	if err != nil {
+		return calls
+	}
+	defer rows.Close()
+	out := append([]ToolCall(nil), calls...)
+	for rows.Next() {
+		var name, argsJSON, output string
+		if err := rows.Scan(&name, &argsJSON, &output); err != nil {
+			continue
+		}
+		var args map[string]any
+		if json.Unmarshal([]byte(argsJSON), &args) != nil {
+			args = nil
+		}
+		out = append(out, ToolCall{Name: name, Args: args, Output: output})
+	}
+	return out
+}
+
+// reviewGate is the outcome of one review turn (#283).
+type reviewGate struct {
+	pass   bool
+	reason string
+	reply  string
+}
+
+// runReviewGate runs the bounded review turn for a script-backed stage with a
+// CONTEXT.md review contract. The script already did the work; the gate
+// observes the produced artifacts (read_file / view_image via mino exec),
+// reasons against the contract, acts if needed, and ends with a verdict.
+// The loop machinery is shared with work stages (code-mode scripts, trace
+// tagging, synthetic ToolCalls) so the gate is observable like any stage
+// work; maxStageReviewIterations keeps it a gate, not a work loop.
+// Verdict contract: the final plain-text reply must contain a line starting
+// "VERDICT: PASS" or "VERDICT: FAIL[: reason]". A missing verdict is a FAIL
+// with an explicit reason — the gate is never a rubber stamp.
+func runReviewGate(ctx context.Context, core *Core, pb *PlaybookWorkspace, run *PlaybookRun, stage *WorkspaceStage, sessionID, system string, obs Observer) reviewGate {
+	gate := reviewGate{}
+	stageTools := core.Tools
+	if len(stage.Tools) > 0 {
+		stageTools = core.Tools.Only(stage.Tools...)
+	}
+	messages := []Message{{
+		Role:    "user",
+		Content: buildReviewStagePrompt(pb, run, *stage, time.Now(), core.Settings.Location()) + "\n\n" + appendSystemTime("", time.Now(), core.Settings.Location()),
+	}}
+	result := runPlaybookStageLoop(ctx, core.Client, sessionID, system, messages, stageTools, maxStageReviewIterations, core.Settings.MaxTokens, obs, core.Settings.Home)
+	gate.reply = result.Reply
+	pass, reason, ok := parseStageVerdict(result.Reply)
+	if !ok {
+		gate.pass = false
+		gate.reason = fmt.Sprintf("review ended without a VERDICT line (iteration limit %d, status %s)", maxStageReviewIterations, result.Status)
+		return gate
+	}
+	gate.pass = pass
+	gate.reason = reason
+	return gate
+}
+
+// buildReviewStagePrompt renders the review-gate turn that follows a
+// script-backed stage carrying a CONTEXT.md review contract (#283). The
+// script already did the work; this turn is observe → reason → act → verdict,
+// not a work loop. The stage's declared outputs are listed with their run
+// paths so the model can read them (read_file / view_image via mino exec).
+func buildReviewStagePrompt(pb *PlaybookWorkspace, run *PlaybookRun, stage WorkspaceStage, now time.Time, loc *time.Location) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "You are the review gate for playbook %q, run %s, stage %02d-%s.\n\n", pb.Name, run.ID, stage.Number, stage.Name)
+	b.WriteString("The stage script ran and produced the declared outputs below. Your job is to OBSERVE them, REASON against the review contract, and ACT if the work does not meet it (corrective `mino exec` calls / scripts are allowed — e.g. regenerate a flawed image, fix a malformed file). When the work meets the contract, end your final plain-text reply with exactly one verdict line:\n\n`VERDICT: PASS`\n\nor, when it cannot be fixed within this turn:\n\n`VERDICT: FAIL: <concrete reason>`\n\nNever claim PASS without observing the actual artifacts (read them first).\n\n")
+	b.WriteString("## Review Contract\n\n")
+	b.WriteString(stage.Context)
+	b.WriteString("\n## Declared Outputs (run paths)\n")
+	for _, output := range stage.Outputs {
+		fmt.Fprintf(&b, "- %s: `%s`\n", output.Name, playbookRunOutputPath(pb, run, stage, output))
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+// parseStageVerdict extracts the review gate's verdict from the model's final
+// plain-text reply. Any verdict line wins; the first match is authoritative.
+func parseStageVerdict(reply string) (pass bool, reason string, ok bool) {
+	for _, line := range strings.Split(reply, "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "VERDICT: PASS"):
+			return true, "", true
+		case strings.HasPrefix(trimmed, "VERDICT: FAIL"):
+			reason = strings.TrimSpace(strings.TrimPrefix(trimmed, "VERDICT: FAIL"))
+			reason = strings.TrimPrefix(reason, ":")
+			return false, strings.TrimSpace(reason), true
+		}
+	}
+	return false, "", false
 }
 
 // verifyWorkspaceStageOutputs enforces write-attributed completion: a declared

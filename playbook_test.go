@@ -1510,6 +1510,7 @@ func TestVerifyStageSuccessOutcomes(t *testing.T) {
 			}
 		})
 	}
+
 	// Absent ## Success section = unchanged behavior: outputs alone pass.
 	home2 := t.TempDir()
 	writeWorkspaceStageTool(t, home2, "plain", "search_web")
@@ -1534,6 +1535,71 @@ func TestVerifyStageSuccessOutcomes(t *testing.T) {
 	}
 	if _, err := verifyWorkspaceStageOutputs(pb2, run2, stage2, []ToolCall{{Name: "write_file", Args: map[string]any{"path": path2}}}); err != nil {
 		t.Fatalf("stage without ## Success should verify on outputs alone, got %v", err)
+	}
+}
+
+func TestHydrateStageCallsMergesExecToolRows(t *testing.T) {
+	// Regression for #282: in code mode the loop records only synthetic
+	// "script" ToolCalls — the real write_file / threads_post calls happen in
+	// mino exec subprocesses and land in tool_calls under the run session.
+	// hydrateStageCalls must merge them back so stage verification sees the
+	// work (tribal 2026-08-20: published + wrote log, stage false-failed).
+	home := t.TempDir()
+	writeWorkspaceStageTool(t, home, "pub", "threads_post")
+	addStageSuccess(t, home, "pub", "Post published", "`threads_post` returned a post ID")
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	registry.Register(&Tool{Name: "threads_post", Behavior: BehaviorMutate})
+	pb, err := loadPlaybookWorkspace(home, "pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := loadOrCreatePlaybookRun(pb, registry, "run", "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage1, _ := workspaceStage(pb, 1)
+	out := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
+	if err := os.MkdirAll(filepath.Dir(out), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(out, []byte("battle log"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	db := Connect(home)
+	defer db.Close()
+	start := time.Now().UTC().Add(-time.Minute)
+	end := time.Now().UTC()
+	sid := "scheduled-tribal"
+	// The loop's own row (script) plus the exec'd rows the fix relies on.
+	if _, err := db.Exec(`INSERT INTO tool_calls (session_id, tool_name, args, output_summary, status, iteration) VALUES (?,?,?,?,?,?)`,
+		sid, "script", `{"head":"mino exec threads_post"}`, "ran", "ok", 3); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO tool_calls (session_id, tool_name, args, output_summary, status) VALUES (?,?,?,?,?)`,
+		sid, "write_file", `{"path":"`+out+`"}`, "wrote", "ok"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO tool_calls (session_id, tool_name, args, output_summary, status) VALUES (?,?,?,?,?)`,
+		sid, "threads_post", `{}`, `Post published, ID 73918123456789012`, "ok"); err != nil {
+		t.Fatal(err)
+	}
+	// A sibling-stage row outside the window must NOT leak into this stage.
+	if _, err := db.Exec(`INSERT INTO tool_calls (session_id, tool_name, args, output_summary, status, created_at) VALUES (?,?,?,?,?,?)`,
+		sid, "write_file", `{"path":"/nope"}`, "wrote", "ok", start.Add(-time.Hour).Format("2006-01-02 15:04:05")); err != nil {
+		t.Fatal(err)
+	}
+
+	// In-memory calls are script-only, exactly like a code-mode stage loop.
+	memCalls := []ToolCall{{Name: "script", Args: map[string]any{"head": "mino exec threads_post"}}}
+	hydrated := hydrateStageCalls(db, sid, start, end, memCalls)
+	if _, err := verifyWorkspaceStageOutputs(pb, run, stage1, hydrated); err != nil {
+		t.Fatalf("stage verification failed with hydrated calls: %v", err)
+	}
+	// Without hydration the same stage fails — proving the merge matters.
+	if _, err := verifyWorkspaceStageOutputs(pb, run, stage1, memCalls); err == nil {
+		t.Fatalf("expected unhydrated verification to fail")
 	}
 }
 

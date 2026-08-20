@@ -1,6 +1,6 @@
 # Context Bloat & Run Degeneration — daily-ai-concept 50-iteration burn (CTX-025)
 
-Status: **OPEN** — incident ticket, first failure of `daily-ai-concept` in 13 runs.
+Status: **RESOLVED** (2026-08-20 — all three fix arms landed): **A** contract-bound via scripting daily-ai-concept (scripted playbook, ~0 LLM tokens; failure class gone for it), **C** code mode (#271, v2.18) removed the malformed-serialization class, **B** harness recovery shipped as the stage-scoped divergence detector + state-reset turn (loop.go): in-tokens > 3× iteration-1 baseline within the first 10 iterations while required outputs are still missing → one midflight_signal divergence event, context truncated back to the stage prompt, required outputs re-injected, exploration forcibly stopped. The parse-failure/empty-args half of fix-B is inherently covered by code mode (no JSON to mis-serialize; the malformed-marker guard already exists). Live evidence: the chat-driven instagram test's 29-iteration explore loop is the pattern the detector now catches. Tests: `TestLoopDivergenceResetClearsExploration`, `TestLoopDivergenceSkippedOutsideStage`.
 
 ## Incident
 
