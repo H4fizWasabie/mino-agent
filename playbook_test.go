@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"reflect"
 	"sort"
 	"strings"
@@ -1902,5 +1903,28 @@ func TestSchedulePlaybookAcceptsDays(t *testing.T) {
 	}
 	if got := call(map[string]any{"name": "weekly-audit", "time": "18:00", "days": []any{"someday"}}); !strings.Contains(got, "invalid weekday") {
 		t.Fatalf("bad day = %q, want rejection", got)
+	}
+}
+
+func TestTakeRunLockBlocksSecondHolder(t *testing.T) {
+	home := t.TempDir()
+	release, err := takeRunLock(home, "mech")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A second flock must fail non-blockingly while the first is held.
+	f, err := os.OpenFile(filepath.Join(home, "run-locks", "mech.lock"), os.O_RDWR, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
+		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		t.Fatal("second flock succeeded while first held — updater would restart mid-run")
+	}
+	release()
+	// After release, the lock is free.
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatalf("lock not released: %v", err)
 	}
 }

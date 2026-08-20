@@ -125,8 +125,33 @@ func applyUpdate(exe, home, tag, sum, newPath string) error {
 		return fmt.Errorf("new binary failed health check (%v) — reverted to the previous binary; run 'mino rollback' to redo", err)
 	}
 
+	// #312/#288: keep the external updater (mino-self-update) in sync with
+	// reality. It compares GitHub latest against deployed-version — if a
+	// manual `mino update` doesn't write this marker, the hourly timer sees a
+	// stale version and re-deploys the SAME binary, restarting mino mid-run
+	// (killed the manual-306-pilot run, 2026-08-20). Written only after the
+	// swap is verified durable.
+	if err := writeDeployedVersion(home, tag); err != nil {
+		// Informational — the swap is already done and healthy; a marker
+		// write failure must not tear it down.
+		slog.Warn("write deployed-version marker failed", "error", err)
+	}
+
 	fmt.Printf("Updated to %s (verified %s, health check passed). Restart Mino to use the new version.\n", tag, sum)
 	return nil
+}
+
+// writeDeployedVersion records the running release tag in the home dir so
+// the external updater (mino-self-update, shell) can compare GitHub latest
+// against reality (#312/#288). Same file the shell updater reads:
+// /home/mino/.mino/deployed-version.
+func writeDeployedVersion(home, tag string) error {
+	path := filepath.Join(home, "deployed-version")
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(tag+"\n"), 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // DoRollback is the owner-call detection path (RUN-004): restores exe.prev

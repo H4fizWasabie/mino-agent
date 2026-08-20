@@ -1,6 +1,7 @@
 package main
 
 import (
+	"syscall"
 	"context"
 	"database/sql"
 	"embed"
@@ -41,6 +42,15 @@ type PlaybookResult struct {
 }
 
 func RunPlaybook(ctx context.Context, core *Core, name, request, sessionID string, obs Observer) (*PlaybookResult, error) {
+	// #309: hold a flock on run-locks/<name>.lock for the run's duration so
+	// the external updater (mino-self-update) defers its restart while a run
+	// is in flight — scheduled runs already protected it; manual run_playbook
+	// calls did not (killed the manual-306-pilot run, 2026-08-20).
+	unlock, err := takeRunLock(core.Settings.Home, name)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	result, err := runWorkspacePlaybook(ctx, core, name, request, sessionID, obs)
 	if err != nil {
 		return nil, err
@@ -249,6 +259,29 @@ func CreateExamplePlaybook(home string) error {
 
 // --- Tool ---
 
+// takeRunLock takes an exclusive flock on run-locks/<name>.lock, creating the
+// dir and file as needed. The lock is held for the run's duration; the
+// external updater's `flock -n` probe then fails and it defers the restart
+// (#309). Returns a release func.
+func takeRunLock(home, name string) (func(), error) {
+	dir := filepath.Join(home, "run-locks")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("run-lock dir: %w", err)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, name+".lock"), os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("run-lock: %w", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("run-lock flock: %w", err)
+	}
+	return func() {
+		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	}, nil
+}
+
 // makeRunPlaybookTool creates the run_playbook tool.
 // When the LLM calls this, the playbook runner executes the stages.
 func makeRunPlaybookTool(core *Core) *Tool {
@@ -314,6 +347,41 @@ func cleanPlaybookRequest(request string) string {
 		}
 	}
 	return strings.TrimRight(request, "\n")
+}
+
+// makeCancelRunTool creates the cancel_run tool (#310): the owner (or any
+// session) cancels a live playbook run by id. The run marks itself
+// interrupted cleanly at its next stage boundary — never silent, never a
+// stuck "running" record.
+func makeCancelRunTool() *Tool {
+	return &Tool{
+		Name:        "cancel_run",
+		Description: "Cancel a live playbook run by run id. The run records itself as interrupted (not failed) with the reason; partial outputs stay on disk. Use when the owner asks to stop a running playbook, or a run is visibly stuck.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"run_id":     map[string]any{"type": "string", "description": "The run id, e.g. 20260820T154236.682055440Z"},
+				"reason":     map[string]any{"type": "string", "description": "Optional cancellation reason, recorded on the run."},
+			},
+			"required": []string{"run_id"},
+		},
+		Fn: func(args map[string]any) string {
+			id, _ := args["run_id"].(string)
+			if id == "" {
+				return "Error: run_id is required"
+			}
+			reason, _ := args["reason"].(string)
+			if reason == "" {
+				reason = "cancelled by owner"
+			}
+			// Set the reason BEFORE cancelling so the runner picks it up.
+			setRunInterruptReason(id, reason)
+			if !cancelRun(id) {
+				return fmt.Sprintf("No live run %s found (already finished or not running)", id)
+			}
+			return fmt.Sprintf("Cancelling run %s (%s) — the run records itself interrupted.", id, reason)
+		},
+	}
 }
 
 // makeListPlaybooksTool creates the list_playbooks tool.

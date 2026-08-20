@@ -107,6 +107,19 @@ func main() {
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 
+	// #310: on termination (systemd stop / timer bounce / manual restart),
+	// cancel all in-flight playbook runs so each marks itself interrupted
+	// cleanly instead of being killed mid-write (the 2026-08-20 franken-run
+	// class). Bounded wait, then the default disposition proceeds.
+	sigterm := make(chan os.Signal, 1)
+	signal.Notify(sigterm, syscall.SIGTERM, os.Interrupt)
+	go func() {
+		<-sigterm
+		fmt.Fprintln(os.Stderr, "\nmino: cancelling in-flight playbook runs before exit...")
+		cancelAllRuns(3 * time.Second)
+		os.Exit(0)
+	}()
+
 	// Check for updates early (before full init, so it works even without API key).
 	s := LoadSettings()
 	if latest := CheckForUpdate(s.Home); latest != "" {
