@@ -1,9 +1,9 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -41,7 +41,7 @@ type ProviderConfig struct {
 	Transport       string   `json:"transport,omitempty"`              // wire family: "openai" (default) | "anthropic" | "codex" — declared, never sniffed (PRV-001)
 	ProviderRouting []string `json:"provider_routing,omitempty"`       // openrouter: force specific providers
 	SmallRouting    []string `json:"small_provider_routing,omitempty"` // openrouter route for background calls
-	AllowFallbacks  bool     `json:"allow_fallbacks,omitempty"`       // openrouter: may fall back OUTSIDE the routing list (default false = privacy-safe: only the listed hosts)
+	AllowFallbacks  bool     `json:"allow_fallbacks,omitempty"`        // openrouter: may fall back OUTSIDE the routing list (default false = privacy-safe: only the listed hosts)
 }
 
 type providerFile struct {
@@ -67,20 +67,20 @@ type ProviderOption struct {
 // ProviderManager applies priority, retries, fallback, a shared circuit breaker,
 // and per-session stickiness around OpenAI-compatible clients.
 type ProviderManager struct {
-	providers []ProviderConfig
-	clients   map[string]*Client
-	state     map[string]*providerState
-	sticky    map[string]string
-	preferred map[string]providerPreference
+	providers     []ProviderConfig
+	clients       map[string]*Client
+	state         map[string]*providerState
+	sticky        map[string]string
+	preferred     map[string]providerPreference
 	providersHash string
 	// config-change push signal (#204): set when ReloadProviders sees the
 	// providers.json content change; consumed by the loop's next turn so the
 	// brain re-verifies model-stack memory facts instead of answering stale.
 	configChangedAt time.Time
-	authStore *AuthStore
-	mu        sync.Mutex
-	authMu    sync.Mutex
-	now       func() time.Time
+	authStore       *AuthStore
+	mu              sync.Mutex
+	authMu          sync.Mutex
+	now             func() time.Time
 }
 
 func NewProviderManager(home string, legacy *Settings, authStore *AuthStore) (*ProviderManager, error) {
@@ -526,6 +526,15 @@ func (m *ProviderManager) ReloadProviders(home string) error {
 		m.configChangedAt = time.Now()
 	}
 	m.providersHash = h
+	// #286: a priority change is a model-intent change — sessions pinned to a
+	// provider whose priority moved must re-resolve to the new top instead of
+	// silently staying on the old provider (observed: deepseek prio1→prio2
+	// while sessions stayed pinned to it). Compare old vs new priority per
+	// name and clear sticky entries pointing at the moved provider.
+	oldPriority := map[string]int{}
+	for _, p := range m.providers {
+		oldPriority[p.Name] = p.Priority
+	}
 	// prune removed providers
 	seen := map[string]bool{}
 	for _, p := range configs {
@@ -546,6 +555,18 @@ func (m *ProviderManager) ReloadProviders(home string) error {
 			for k, v := range m.preferred {
 				if v.provider == name {
 					delete(m.preferred, k)
+				}
+			}
+		}
+	}
+	// #286: clear sticky entries whose provider's priority changed — a
+	// priority swap is an intent change; pinned sessions must not keep the
+	// old model.
+	for _, p := range configs {
+		if old, ok := oldPriority[p.Name]; ok && old != p.Priority {
+			for k, v := range m.sticky {
+				if v == p.Name {
+					delete(m.sticky, k)
 				}
 			}
 		}

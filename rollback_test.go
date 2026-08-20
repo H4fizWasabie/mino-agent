@@ -299,3 +299,24 @@ func TestStageStateSafetyList(t *testing.T) {
 		t.Errorf("staged mino.env lost a normal key: %s", e)
 	}
 }
+
+func TestRecordDeploymentWritesVersionMarker(t *testing.T) {
+	// #288: the version marker must be written atomically with the deployment
+	// record so it reflects the actual running binary (previously hand-maintained
+	// and lagging).
+	home := t.TempDir()
+	recordDeployment(home, "update", "v2.20.3", "abc123", "/usr/local/bin/mino")
+	data, err := os.ReadFile(filepath.Join(home, "deployed-version"))
+	if err != nil {
+		t.Fatalf("deployed-version not written: %v", err)
+	}
+	if got := strings.TrimSpace(string(data)); got != "v2.20.3" {
+		t.Fatalf("deployed-version = %q, want v2.20.3", got)
+	}
+	// rollback actions must NOT touch the marker
+	recordDeployment(home, "rollback", "v2.19.0", "oldsum", "/usr/local/bin/mino")
+	data, _ = os.ReadFile(filepath.Join(home, "deployed-version"))
+	if got := strings.TrimSpace(string(data)); got != "v2.20.3" {
+		t.Fatalf("rollback clobbered marker: %q", got)
+	}
+}
