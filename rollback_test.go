@@ -299,3 +299,17 @@ func TestStageStateSafetyList(t *testing.T) {
 		t.Errorf("staged mino.env lost a normal key: %s", e)
 	}
 }
+
+func TestWriteDeployedVersion(t *testing.T) {
+	home := t.TempDir()
+	if err := writeDeployedVersion(home, "v9.9.9"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, "deployed-version"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(data)); got != "v9.9.9" {
+		t.Fatalf("marker = %q, want v9.9.9", got)
+	}
+}
