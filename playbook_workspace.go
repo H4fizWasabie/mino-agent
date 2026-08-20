@@ -78,6 +78,12 @@ type PlaybookRun struct {
 	// #237: the owner's approval of the run's gate — set by the harness
 	// (approvePendingTaskGate); the model can never approve its own run.
 	GateApproved bool `json:"gate_approved,omitempty"`
+	// #310: content hash of the stage contracts at run start. A resume whose
+	// on-disk contracts differ fails loudly instead of continuing with stale
+	// in-memory logic (the 2026-08-20 franken-run class).
+	ContractHash string `json:"contract_hash,omitempty"`
+	// #310: why a run was interrupted ("cancelled by owner" / "daemon shutting down").
+	InterruptReason string `json:"interrupt_reason,omitempty"`
 }
 
 type PlaybookRunStage struct {
@@ -828,6 +834,32 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 		}
 	}
 
+	// #310: bind the stage contracts at run start. A resume whose on-disk
+	// contracts differ from this hash fails loudly instead of continuing with
+	// stale in-memory logic (the 2026-08-20 franken-run class). Skipped for
+	// taskified playbooks (approval_gate set): those are a different execution
+	// model where the harness itself owns mid-run contract changes via
+	// split_stage (act-b continuations legitimately extend the run record).
+	if !taskifiedPlaybook(pb) {
+		if run.ContractHash == "" {
+			run.ContractHash = stageContractHash(pb, run)
+		} else if run.ContractHash != stageContractHash(pb, run) {
+			// Resume with changed contracts: fail loud, never resume stale logic.
+			run.Status = "failed"
+			run.InterruptReason = "contract changed mid-run — manual review"
+			_ = savePlaybookRun(pb, run)
+			return nil, fmt.Errorf("playbook %s run %s: contract changed since run start — refusing to resume (manual review required)", name, run.ID)
+		}
+	}
+
+	// #310: cancellable run context — the cancel_run tool and the shutdown
+	// hook both cancel here; the stage loop checks ctx.Done() at each boundary
+	// and marks the run interrupted cleanly.
+	runCtx, cancelRunCtx := context.WithCancel(ctx)
+	defer cancelRunCtx()
+	deregister := registerRun(run.ID, cancelRunCtx)
+	defer deregister()
+
 	for {
 		state := nextPlaybookStage(run)
 		if state == nil {
@@ -838,6 +870,40 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 			result.Status = "complete"
 			return result, nil
 		}
+		// #310: cancellation check at the stage boundary — a cancelled run
+		// marks itself interrupted (distinct from failed) with the reason,
+		// keeps partial outputs on disk, never silent.
+		if runCtx.Err() != nil {
+			run.Status = "interrupted"
+			if reason := takeRunInterruptReason(run.ID); reason != "" {
+				run.InterruptReason = reason
+			} else if run.InterruptReason == "" {
+				run.InterruptReason = "cancelled"
+			}
+			for _, s := range run.Stages {
+				if s.Status == "running" {
+					s.Status = "interrupted"
+				}
+			}
+			_ = savePlaybookRun(pb, run)
+			result.Status = "interrupted"
+			result.Reply = fmt.Sprintf("Run %s interrupted: %s", run.ID, run.InterruptReason)
+			logTrace(core.Settings.Home, "run_interrupted", map[string]any{"playbook": name, "run": run.ID, "reason": run.InterruptReason})
+			core.auditLog(sessionID, "run_interrupted", run.InterruptReason, 0)
+			return result, nil
+		}
+		// #310: vanished run dir guard — the run record must still exist where
+		// the runner believes it is; if someone moved/archived it, fail loud.
+		if _, err := os.Stat(filepath.Join(playbookRunsDir(pb), run.ID)); err != nil {
+			run.Status = "failed"
+			run.InterruptReason = "run dir vanished during execution"
+			result.Status = "failed"
+			result.Reply = fmt.Sprintf("Run %s failed: run directory vanished during execution — manual review required", run.ID)
+			logTrace(core.Settings.Home, "run_dir_vanished", map[string]any{"playbook": name, "run": run.ID})
+			core.auditLog(sessionID, "run_dir_vanished", run.ID, 0)
+			return result, nil
+		}
+
 		stage, ok := workspaceStageFor(pb, state.Number, state.Name)
 		if !ok {
 			return nil, fmt.Errorf("playbook %s run %s references missing stage %d", name, run.ID, state.Number)

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -168,6 +170,41 @@ func existingStageOutputs(pb *PlaybookWorkspace, run *PlaybookRun, stage *Worksp
 		}
 	}
 	return found
+}
+
+// stageContractHash returns a content hash of the stage contracts the run
+// references (names, scripts, tools, outputs) — the run-start binding that
+// makes franken-resume impossible (#310). Computed over the stages present in
+// the run record: a taskify checkpoint split ADDS a stage mid-run by design
+// (act-b), which must not trip the check; a run referencing 1-news-report
+// while disk now has 1-judgment must fail loud.
+func stageContractHash(pb *PlaybookWorkspace, run *PlaybookRun) string {
+	h := sha256.New()
+	for _, rs := range run.Stages {
+		// Strict number+name match ONLY — never the number-fallback: the
+		// 2026-08-20 franken-resume ran a new stage under an old record via
+		// workspaceStageFor's fallback. A stage the run references that does
+		// not exist under its exact name hashes as MISSING and fails resume.
+		var stage *WorkspaceStage
+		for i := range pb.Stages {
+			if pb.Stages[i].Number == rs.Number && pb.Stages[i].Name == rs.Name {
+				stage = &pb.Stages[i]
+				break
+			}
+		}
+		if stage == nil {
+			fmt.Fprintf(h, "%d\x00%s\x00MISSING\x00", rs.Number, rs.Name)
+			continue
+		}
+		fmt.Fprintf(h, "%d\x00%s\x00%s\x00", stage.Number, stage.Name, stage.Script)
+		for _, t := range stage.Tools {
+			fmt.Fprintf(h, "t:%s\x00", t)
+		}
+		for _, o := range stage.Outputs {
+			fmt.Fprintf(h, "o:%s\x00", o.Path)
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // tailOf returns the last n bytes of a string — for failure diagnostics.
