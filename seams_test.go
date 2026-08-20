@@ -212,8 +212,8 @@ func TestBuildWorkspaceStagePromptIncludesContractAndRules(t *testing.T) {
 		Number:  1,
 		Name:    "provoke",
 		Context: "# Arena Post\n\n## Process\n\n1. Post it.\n\n## Tools\n\n- threads_post\n\n## Outputs\n\n| Artifact | Location | Format |\n| --- | --- | --- |\n| Battle log | `output/battle.md` | Markdown |\n",
-		Tools:    []string{"threads_post", "write_file"},
-		Outputs:  []StageOutput{{Name: "Battle log", Path: "output/battle.md"}},
+		Tools:   []string{"threads_post", "write_file"},
+		Outputs: []StageOutput{{Name: "Battle log", Path: "output/battle.md"}},
 	}
 	loc := time.FixedZone("MYT", 8*3600)
 	now := time.Date(2026, 8, 10, 8, 30, 0, 0, loc)
@@ -244,9 +244,9 @@ func TestVerifyWorkspaceStageOutputsSuccessOutcome(t *testing.T) {
 	pb := &PlaybookWorkspace{Dir: t.TempDir()}
 	run := &PlaybookRun{ID: "run"}
 	stage := WorkspaceStage{
-		Number: 1,
-		Name:   "post",
-		Dir:    filepath.Join(pb.Dir, "stages", "01-post"),
+		Number:  1,
+		Name:    "post",
+		Dir:     filepath.Join(pb.Dir, "stages", "01-post"),
 		Success: []StageSuccess{{Outcome: "Post published", Tool: "threads_post"}},
 	}
 	// The declared output must exist for the output check to pass; the
@@ -289,6 +289,58 @@ func TestVerifyWorkspaceStageOutputsSuccessOutcome(t *testing.T) {
 				t.Fatalf("expected error containing %q, got %v", tc.want, err)
 			}
 		})
+	}
+}
+
+// --- seam: buildReviewStagePrompt + parseStageVerdict (#283) ---
+
+func TestBuildReviewStagePrompt(t *testing.T) {
+	pb := &PlaybookWorkspace{Name: "tribal", Dir: "/x"}
+	run := &PlaybookRun{ID: "20260810T000000Z", Request: "Scheduled run"}
+	stage := WorkspaceStage{
+		Number:  2,
+		Name:    "post",
+		Context: "## Review Contract\n\nImage must be text-free.",
+		Outputs: []StageOutput{{Name: "Payload", Path: "output/payload.json"}},
+	}
+	loc := time.FixedZone("MYT", 8*3600)
+	now := time.Date(2026, 8, 10, 8, 30, 0, 0, loc)
+	msg := buildReviewStagePrompt(pb, run, stage, now, loc)
+	for _, want := range []string{
+		`You are the review gate for playbook "tribal"`,
+		"stage 02-post",
+		"VERDICT: PASS",
+		"VERDICT: FAIL: <concrete reason>",
+		"## Review Contract",
+		"Image must be text-free",
+		"- Payload: `" + filepath.Join("/x/runs/20260810T000000Z/stages/02-post/output/payload.json"),
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("buildReviewStagePrompt missing %q in:\n%s", want, msg)
+		}
+	}
+}
+
+func TestParseStageVerdict(t *testing.T) {
+	cases := []struct {
+		reply  string
+		pass   bool
+		reason string
+		ok     bool
+	}{
+		{"All good.\nVERDICT: PASS\n", true, "", true},
+		{"VERDICT: PASS", true, "", true},
+		{"VERDICT: FAIL: image has garbled text", false, "image has garbled text", true},
+		{"VERDICT: FAIL", false, "", true},
+		{"The image is fine.", false, "", false},
+		{"", false, "", false},
+		{"pass verdict: lower case is not the contract", false, "", false},
+	}
+	for _, tc := range cases {
+		pass, reason, ok := parseStageVerdict(tc.reply)
+		if pass != tc.pass || reason != tc.reason || ok != tc.ok {
+			t.Fatalf("parseStageVerdict(%q) = (%v, %q, %v), want (%v, %q, %v)", tc.reply, pass, reason, ok, tc.pass, tc.reason, tc.ok)
+		}
 	}
 }
 
@@ -552,6 +604,8 @@ var promptAssemblySeams = []string{
 	"validateScriptFile",
 	"composeSystemPrompt",
 	"validatePlaybookScript",
+	"buildReviewStagePrompt",
+	"parseStageVerdict",
 }
 
 func TestPromptAssemblySeamsCovered(t *testing.T) {

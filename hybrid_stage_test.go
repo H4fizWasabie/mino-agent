@@ -43,6 +43,110 @@ func writeHybridPlaybook(t *testing.T, home, name string) {
 	must("stages/02-post/script.sh", "#!/bin/bash\nprintf 'posted from script\\n' > output/posted.txt\n")
 }
 
+// writeReviewGatedPlaybook writes a script stage whose CONTEXT.md declares a
+// review contract (#283): script.sh does the work, the review turn gates it.
+func writeReviewGatedPlaybook(t *testing.T, home, name string) {
+	t.Helper()
+	dir := filepath.Join(home, "playbooks", name)
+	must := func(p, c string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, p)), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, p), []byte(c), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	must("CONTEXT.md", "# "+name+"\n")
+	must("config.md", "status: active\n")
+	// stage 01: script + CONTEXT review contract (the #283 shape)
+	must("stages/01-compose/script.sh", "#!/bin/bash\nprintf 'payload\\n' > output/payload.json\n")
+	must("stages/01-compose/CONTEXT.md", `# Compose
+
+## Process
+1. The script produced output/payload.json. Read it; it must contain "payload".
+
+## Tools
+- write_file
+
+## Outputs
+| Artifact | Location | Format |
+| --- | --- | --- |
+| Payload | output/payload.json | JSON |
+`)
+}
+
+func TestReviewGatedStagePassProceedsToNextStage(t *testing.T) {
+	home := t.TempDir()
+	writeReviewGatedPlaybook(t, home, "gated")
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	core := &Core{Settings: &Settings{Home: home, Workspace: home, MaxTokens: 100}, Tools: registry, Sessions: NewSessionManager(&Settings{Home: home, Workspace: home}, nil)}
+
+	oldLoop := runPlaybookStageLoop
+	defer func() { runPlaybookStageLoop = oldLoop }()
+	loops := 0
+	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
+		loops++
+		return &LoopResult{Status: "complete", Reply: "all good\nVERDICT: PASS", ToolCalls: []ToolCall{{Name: "script"}}}
+	}
+
+	result, err := RunPlaybook(context.Background(), core, "gated", "run it", "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "complete" {
+		t.Fatalf("status = %q, want complete (reply=%q)", result.Status, result.Reply)
+	}
+	if loops != 1 {
+		t.Fatalf("review gate loop called %d times, want 1", loops)
+	}
+}
+
+func TestReviewGateFailVerdictFailsRun(t *testing.T) {
+	home := t.TempDir()
+	writeReviewGatedPlaybook(t, home, "gated")
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	core := &Core{Settings: &Settings{Home: home, Workspace: home, MaxTokens: 100}, Tools: registry, Sessions: NewSessionManager(&Settings{Home: home, Workspace: home}, nil)}
+
+	oldLoop := runPlaybookStageLoop
+	defer func() { runPlaybookStageLoop = oldLoop }()
+	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
+		return &LoopResult{Status: "complete", Reply: "VERDICT: FAIL: image has garbled text", ToolCalls: []ToolCall{{Name: "script"}}}
+	}
+
+	result, err := RunPlaybook(context.Background(), core, "gated", "run it", "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "failed" || !strings.Contains(result.Reply, "image has garbled text") {
+		t.Fatalf("status = %q reply=%q, want failed with gate reason", result.Status, result.Reply)
+	}
+}
+
+func TestReviewGateMissingVerdictFailsRun(t *testing.T) {
+	home := t.TempDir()
+	writeReviewGatedPlaybook(t, home, "gated")
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	core := &Core{Settings: &Settings{Home: home, Workspace: home, MaxTokens: 100}, Tools: registry, Sessions: NewSessionManager(&Settings{Home: home, Workspace: home}, nil)}
+
+	oldLoop := runPlaybookStageLoop
+	defer func() { runPlaybookStageLoop = oldLoop }()
+	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
+		return &LoopResult{Status: "complete", Reply: "image looks fine to me", ToolCalls: []ToolCall{{Name: "script"}}}
+	}
+
+	result, err := RunPlaybook(context.Background(), core, "gated", "run it", "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "failed" || !strings.Contains(result.Reply, "without a VERDICT") {
+		t.Fatalf("status = %q reply=%q, want failed with missing-verdict reason", result.Status, result.Reply)
+	}
+}
+
 func TestHybridPlaybookRunsScriptThenLLMStage(t *testing.T) {
 	home := t.TempDir()
 	writeHybridPlaybook(t, home, "hybrid")

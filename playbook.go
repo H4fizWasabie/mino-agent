@@ -22,6 +22,13 @@ import (
 
 const maxStageIterations = 50
 
+// maxStageReviewIterations bounds the review-gate turn that follows a
+// script-backed stage with a CONTEXT.md review contract (#283): observe the
+// produced artifacts, reason, act (corrective mino exec calls) if needed,
+// then end with VERDICT: PASS / VERDICT: FAIL. A gate is a narrow check,
+// not a work loop — 8 iterations is generous for read/verify/decide.
+const maxStageReviewIterations = 8
+
 // maxStageAttempts bounds stage-level retries within a single run. Retry-safe
 // stages (read-only whitelist) get at most this many attempts; the failure of
 // each attempt is fed back into the stage context.
