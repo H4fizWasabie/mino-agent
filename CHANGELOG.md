@@ -1,3 +1,9 @@
+## [Unreleased]
+
+### Fixed
+
+- **Legacy `<tool_call>` XML markers stripped from injected history (closes #293)**: v2.20-era `<tool_call><function=...>` blocks sitting in session history were injected verbatim into the model's context — the harness only parses `[tool_call: name({...})]` markers (loop.go:818-902), so the model imitated the dead XML format it saw in its own past turns and the call was echoed as text instead of executed. `ContextMessages` now normalizes history at assembly time (`stripLegacyToolCallXML`), removing complete and truncated legacy blocks before preview/truncation so they never reach the model; the tool-call guidance line names the XML form explicitly as never-parsed. The parser is deliberately untouched — resurrecting the dead dialect is how this recurred. Covered by `TestStripLegacyToolCallXML`, `TestContextMessagesStripsLegacyToolCallMarkers`, `TestContextMessagesNoPanicOnMarkerHeavyPreview` (a marker-heavy message strips below the preview head bound — the preview conditions on the stripped content, so slice bounds stay safe), and the loop-level `TestLoopHistoryLegacyMarkersNoEcho` (one clean model call, no parse-failure push); `ContextMessages` and `stripLegacyToolCallXML` join the prompt-assembly seam list (REL-04). (Why: the data-level cleanup on the live install removes today's markers; this removes the recurrence vector — history is the only route the format reaches the model, and it is now sealed at the single assembly seam.)
+
 ## [v2.15.1] — Audit cleanup: dead code, style, outbox, working memory (2026-08-19)
 
 ### Removed

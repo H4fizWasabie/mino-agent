@@ -847,3 +847,30 @@ func TestProvenanceGateWarnsOnSearchAfterUserFact(t *testing.T) {
 		})
 	}
 }
+
+// #293: history containing legacy <tool_call> XML markers must be normalized
+// before injection — otherwise the model imitates the dead format, the harness
+// cannot parse it (tool_call_parse_failed), and the marker is echoed as text.
+// The loop must see a clean history and complete in one model call.
+func TestLoopHistoryLegacyMarkersNoEcho(t *testing.T) {
+	s := &Session{settings: &Settings{MaxHistoryTurns: 0}, history: []Message{
+		{Role: "user", Content: "run the threads playbook"},
+		{Role: "assistant", Content: "<tool_call>\n<function=run_playbook>\n<parameter=name>threads-replies</parameter>\n</function>\n</tool_call>"},
+		{Role: "user", Content: "did it work?"},
+	}}
+	client := &fakeClient{script: []*LLMResponse{
+		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
+	}}
+	result := RunLoopContext(context.Background(), client, "legacy-history", "", s.ContextMessages(100000), NewRegistry(), 5, 100, nil, false, "")
+	if result.Status != "complete" {
+		t.Fatalf("status = %q, want complete", result.Status)
+	}
+	if len(client.messages) != 1 {
+		t.Fatalf("model called %d times, want 1 (any extra call is a parse-failure push)", len(client.messages))
+	}
+	for _, m := range client.messages[0] {
+		if strings.Contains(m.Content, "<tool_call") || strings.Contains(m.Content, "<function") {
+			t.Fatalf("legacy marker leaked into the model: %q", m.Content)
+		}
+	}
+}
