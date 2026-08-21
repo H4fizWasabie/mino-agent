@@ -231,6 +231,47 @@ func TestPinOrderExcludesTrains(t *testing.T) {
 	}
 }
 
+func TestPinOrderUsesCacheMetricWhenConfigured(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.PinMetric = "cache"
+	cat := []catalogueEntry{
+		{Model: "m", Provider: "A", In: 0.40, Cache: 0.10, DataHandling: "zdr"}, // cheapest cache, pricier input
+		{Model: "m", Provider: "B", In: 0.05, Cache: 0.30, DataHandling: "zdr"}, // cheapest input, pricier cache
+	}
+	order := pinOrder(cfg, cat)
+	if len(order) != 2 || order[0] != "A" {
+		t.Fatalf("cache-metric order = %v, want [A B] (A wins on cache despite higher input)", order)
+	}
+}
+
+func TestPinOrderDefaultsToInputMetric(t *testing.T) {
+	cfg := defaultConfig() // no pin_metric -> input
+	cat := []catalogueEntry{
+		{Model: "m", Provider: "A", In: 0.40, Cache: 0.10, DataHandling: "zdr"},
+		{Model: "m", Provider: "B", In: 0.05, Cache: 0.30, DataHandling: "zdr"},
+	}
+	order := pinOrder(cfg, cat)
+	if len(order) != 2 || order[0] != "B" {
+		t.Fatalf("input-metric order = %v, want [B A] (B wins on input)", order)
+	}
+}
+
+func TestPinMetricPerModelOverride(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Models["m"] = modelConfig{URL: "https://x", Expected: 0.1, Threshold: 2, PinMetric: "cache"}
+	// stripped-slug match (config key may carry a :pin suffix)
+	cfg.Models["m:deepinfra"] = modelConfig{URL: "https://y", Expected: 0.1, Threshold: 2, PinMetric: "cache"}
+	if got := cfg.pinMetric("m"); got != "cache" {
+		t.Fatalf("pinMetric(m) = %q, want cache", got)
+	}
+	if got := cfg.pinMetric("m"); got != "cache" {
+		t.Fatalf("pinMetric(m) with pinned key = %q, want cache", got)
+	}
+	if got := cfg.pinMetric("other"); got != "input" {
+		t.Fatalf("pinMetric(other) = %q, want input", got)
+	}
+}
+
 func TestPinOrderCapsAtMaxPins(t *testing.T) {
 	cfg := defaultConfig()
 	var cat []catalogueEntry
