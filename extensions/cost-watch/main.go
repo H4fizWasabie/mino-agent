@@ -38,26 +38,30 @@ var (
 	// CTX-020 hot-reload: the config must live where the mino user (and thus
 	// the model) can write it — a root-owned /etc file makes "the model edits
 	// its own watchdog" dead on arrival. Legacy installs fall back to /etc.
-	configPath        = "/home/mino/.mino/cost-watch.json"
-	legacyConfigPath  = "/etc/mino-cost-watch.json"
-	providersPath     = "/home/mino/.mino/providers.json"
-	runLocksDir       = "/home/mino/.mino/run-locks"
-	cataloguePath     = "/home/mino/.mino/cost-catalogue.json"
+	configPath       = "/home/mino/.mino/cost-watch.json"
+	legacyConfigPath = "/etc/mino-cost-watch.json"
+	providersPath    = "/home/mino/.mino/providers.json"
+	runLocksDir      = "/home/mino/.mino/run-locks"
+	cataloguePath    = "/home/mino/.mino/cost-catalogue.json"
 )
 
 type modelConfig struct {
 	URL       string  `json:"url"`
 	Expected  float64 `json:"expected"`
 	Threshold float64 `json:"threshold"`
+	// PinMetric is the price field used for pin/report comparisons:
+	// "input" (default) or "cache" (input_cache_read). When empty, input.
+	PinMetric string `json:"pin_metric,omitempty"`
 }
 
 type config struct {
-	Listen               string                 `json:"listen"`
-	Port                 int                    `json:"port"`
-	Models               map[string]modelConfig `json:"models"`
-	Telegram             string                 `json:"telegram_chat_id"`
-	CatalogueRefreshMin  int                    `json:"catalogue_refresh_minutes"` // 0 = default 60
-	DataHandling         map[string]string      `json:"data_handling"`            // provider -> zdr|trains|unknown
+	Listen              string                 `json:"listen"`
+	Port                int                    `json:"port"`
+	Models              map[string]modelConfig `json:"models"`
+	PinMetric           string                 `json:"pin_metric,omitempty"` // global fallback: "cache" or "input"
+	Telegram            string                 `json:"telegram_chat_id"`
+	CatalogueRefreshMin int                    `json:"catalogue_refresh_minutes"` // 0 = default 60
+	DataHandling        map[string]string      `json:"data_handling"`             // provider -> zdr|trains|unknown
 }
 
 // catalogueEntry is one provider's price for a model (CTX-020). In/Out are
@@ -69,6 +73,7 @@ type catalogueEntry struct {
 	Provider     string  `json:"provider"`
 	In           float64 `json:"in"`
 	Out          float64 `json:"out"`
+	Cache        float64 `json:"cache"`
 	Discount     float64 `json:"discount"`
 	DataHandling string  `json:"data_handling"`
 }
@@ -85,8 +90,8 @@ func defaultConfig() *config {
 		Listen: "127.0.0.1",
 		Port:   9300,
 		Models: map[string]modelConfig{
-			"deepseek/deepseek-v4-flash-0731:deepinfra": {"https://openrouter.ai/deepseek/deepseek-v4-flash-0731", 0.08, 2.0},
-			"qwen/qwen3.7-flash":                        {"https://openrouter.ai/qwen/qwen3.7-flash", 0.03, 2.0},
+			"deepseek/deepseek-v4-flash-0731:deepinfra": {URL: "https://openrouter.ai/deepseek/deepseek-v4-flash-0731", Expected: 0.08, Threshold: 2.0},
+			"qwen/qwen3.7-flash":                        {URL: "https://openrouter.ai/qwen/qwen3.7-flash", Expected: 0.03, Threshold: 2.0},
 		},
 		DataHandling: map[string]string{
 			// Owner-vetted: retains prompts for caching, never trains (the
@@ -231,8 +236,15 @@ func checkModels(cfg *config) (map[string]map[string]any, map[string]string) {
 			continue
 		}
 		best := ""
+		metric := cfg.pinMetric(name)
+		price := func(p string) float64 {
+			if metric == "cache" {
+				return provs[p].Cache
+			}
+			return provs[p].Input
+		}
 		for p := range provs {
-			if best == "" || provs[p].Input < provs[best].Input {
+			if best == "" || price(p) < price(best) {
 				best = p
 			}
 		}
@@ -240,11 +252,12 @@ func checkModels(cfg *config) (map[string]map[string]any, map[string]string) {
 		prices[name] = map[string]any{
 			"best_provider": best, "best_input": b.Input,
 			"best_output": b.Output, "best_cache": b.Cache,
-			"discount": b.Discount, "providers": len(provs),
+			"pin_metric": metric,
+			"discount":   b.Discount, "providers": len(provs),
 		}
 		limit := m.Expected * m.Threshold
-		if b.Input > limit {
-			flags[name] = fmt.Sprintf("PRICE SPIKE: best $%.4f/M > expected $%.4f × %.1f (promo likely expired)", b.Input, m.Expected, m.Threshold)
+		if price(best) > limit {
+			flags[name] = fmt.Sprintf("PRICE SPIKE: best $%.4f/M (%s) > expected $%.4f × %.1f (promo likely expired)", price(best), metric, m.Expected, m.Threshold)
 		} else {
 			flags[name] = "ok"
 		}
@@ -351,9 +364,10 @@ func fetchCatalogue(cfg *config) (catalogue, error) {
 				Endpoints []struct {
 					Name    string `json:"name"`
 					Pricing struct {
-						Prompt     string  `json:"prompt"`
-						Completion string  `json:"completion"`
-						Discount   float64 `json:"discount"`
+						Prompt         string  `json:"prompt"`
+						Completion     string  `json:"completion"`
+						InputCacheRead string  `json:"input_cache_read"`
+						Discount       float64 `json:"discount"`
 					} `json:"pricing"`
 				} `json:"endpoints"`
 			} `json:"data"`
@@ -368,6 +382,7 @@ func fetchCatalogue(cfg *config) (catalogue, error) {
 			}
 			in, _ := strconv.ParseFloat(ep.Pricing.Prompt, 64)
 			out, _ := strconv.ParseFloat(ep.Pricing.Completion, 64)
+			cache, _ := strconv.ParseFloat(ep.Pricing.InputCacheRead, 64)
 			flag := cfg.DataHandling[provider]
 			if flag == "" {
 				flag = "unknown" // curated elsewhere; never scraped (verify-then-claim)
@@ -377,6 +392,7 @@ func fetchCatalogue(cfg *config) (catalogue, error) {
 				Provider:     provider,
 				In:           in * 1e6,
 				Out:          out * 1e6,
+				Cache:        cache * 1e6,
 				Discount:     ep.Pricing.Discount,
 				DataHandling: flag,
 			})
@@ -436,7 +452,25 @@ func (cfg *config) eligibleForPin(provider string) bool {
 }
 
 // pinOrder returns the routing order for one model slug: eligible providers
-// sorted by input price (cheapest first), capped at maxPins.
+// pinMetric resolves the effective pin/report metric for a model slug:
+// per-model PinMetric (matching may carry a :provider suffix, so compare on
+// the stripped slug), else the global PinMetric, else "input".
+func (cfg *config) pinMetric(slug string) string {
+	base := stripProviderPin(slug)
+	for k, m := range cfg.Models {
+		if stripProviderPin(k) == base && m.PinMetric == "cache" {
+			return "cache"
+		}
+	}
+	if cfg.PinMetric == "cache" {
+		return "cache"
+	}
+	return "input"
+}
+
+// pinOrder returns the routing order for one model slug: eligible providers
+// sorted by price (input or cache-read, per pinMetric; cheapest first),
+// capped at maxPins.
 func pinOrder(cfg *config, entries []catalogueEntry) []string {
 	var eligible []catalogueEntry
 	for _, e := range entries {
@@ -444,7 +478,17 @@ func pinOrder(cfg *config, entries []catalogueEntry) []string {
 			eligible = append(eligible, e)
 		}
 	}
-	sort.SliceStable(eligible, func(i, j int) bool { return eligible[i].In < eligible[j].In })
+	metric := "input"
+	if len(eligible) > 0 {
+		metric = cfg.pinMetric(eligible[0].Model)
+	}
+	less := func(i, j int) bool {
+		if metric == "cache" {
+			return eligible[i].Cache < eligible[j].Cache
+		}
+		return eligible[i].In < eligible[j].In
+	}
+	sort.SliceStable(eligible, less)
 	if len(eligible) > maxPins {
 		eligible = eligible[:maxPins]
 	}
