@@ -427,6 +427,7 @@ var promptAssemblySeams = []string{
 	"approvePendingTaskGate",
 	"ContextMessages",
 	"stripLegacyToolCallXML",
+	"buildCommunitySynthesisPrompt",
 
 }
 

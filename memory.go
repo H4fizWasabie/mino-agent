@@ -342,6 +342,176 @@ func playbookDistillSemantic(home, name string) bool {
 	return false
 }
 
+// --- Community synthesis (#321: distillation as knowledge accumulation) ---
+
+// synthFactID is the evolving fact id for a community: one fact per community,
+// rewritten in place each pass (no supersede chain — the audit log is the
+// history). Community numbers come from Louvain re-clustering, so a renumbered
+// community gets a fresh id and the old fact remains as its prior shape.
+func synthFactID(c int) string {
+	return fmt.Sprintf("syn_c%d", c)
+}
+
+// SynthesizeCommunitiesDue turns each community's episodic run nodes + semantic
+// facts into one evolving synthesis fact per community (#321). The first pass
+// covers everything (no synthesis facts exist yet — the backfill); later passes
+// touch only communities whose newest member fact is newer than their synthesis
+// fact, so cost stays proportional to actual change. User-provenanced facts are
+// hard inputs: never merged, never rewritten, never output — the synthesis fact
+// is additive with source "graph-synthesis". Returns the number of communities
+// synthesized.
+func (m *Memory) SynthesizeCommunitiesDue() (int, error) {
+	if m.client == nil {
+		return 0, nil
+	}
+	facts := m.graph.Facts()
+	communities := m.graph.Communities()
+	if len(communities) == 0 {
+		return 0, nil
+	}
+	byComm := make(map[int][]Fact)
+	for _, f := range facts {
+		c, ok := communities[f.ID]
+		if !ok {
+			continue
+		}
+		byComm[c] = append(byComm[c], f)
+	}
+	written := 0
+	for _, c := range sortedInts(byComm) {
+		members := byComm[c]
+		synth, exists := m.graph.FindFact(synthFactID(c))
+		// Changed? any member newer than the synthesis fact's at (or none yet).
+		if exists && !communityChanged(members, synth) {
+			continue
+		}
+		prompt := buildCommunitySynthesisPrompt(c, members, exists)
+		resp, err := m.client.CreateJSON("community-synthesis", SmallModel,
+			[]Message{{Role: "user", Content: prompt}}, 700, "")
+		if err != nil {
+			slog.Warn("community synthesis call failed", "community", c, "error", err)
+			continue
+		}
+		text := resp.FinalText
+		if text == "" {
+			for _, block := range resp.Content {
+				if block.Type == "text" {
+					text += block.Text
+				}
+			}
+		}
+		out, err := parseCommunitySynthesisResponse(text)
+		if err != nil {
+			slog.Warn("community synthesis response invalid", "community", c, "error", err)
+			continue
+		}
+		if out.Subject == "" {
+			continue
+		}
+		// Edges only to real, existing facts (validEdges filters); user facts
+		// are referenced, never replaced.
+		fact := Fact{
+			ID:      synthFactID(c),
+			Type:    "semantic",
+			Tier:    out.Tier,
+			Subject: out.Subject,
+			At:      time.Now().UTC(),
+			Why:     out.Why,
+			UseWhen: out.UseWhen,
+			Source:  "graph-synthesis",
+			Edges:   out.Edges,
+			Body:    out.Body,
+		}
+		if err := m.graph.ReplaceFact(fact); err != nil {
+			slog.Warn("community synthesis write failed", "community", c, "error", err)
+			continue
+		}
+		written++
+	}
+	return written, nil
+}
+
+// communityChanged reports whether any member fact is newer than the existing
+// synthesis fact — the incremental gate: untouched communities are not
+// re-synthesized (#321). A member is newer when it postdates the synthesis
+// fact's At; ties go to unchanged.
+func communityChanged(members []Fact, synth *Fact) bool {
+	if synth == nil {
+		return true
+	}
+	for _, f := range members {
+		if f.ID == synth.ID {
+			continue
+		}
+		if f.At.After(synth.At) {
+			return true
+		}
+	}
+	return false
+}
+
+// communitySynthesisOut is the parsed synthesis response: a label for the
+// community, a tier (owner/learning/run), and the evolving fact's fields.
+type communitySynthesisOut struct {
+	Label   string   `json:"label"`
+	Tier    string   `json:"tier"`
+	Subject string   `json:"subject"`
+	Body    string   `json:"body"`
+	Why     string   `json:"why"`
+	UseWhen []string `json:"use_when"`
+	Edges   []Edge   `json:"edges"`
+}
+
+func parseCommunitySynthesisResponse(text string) (communitySynthesisOut, error) {
+	text = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(text, "```json"), "```"))
+	for start := 0; start < len(text); start++ {
+		if text[start] != '{' {
+			continue
+		}
+		for end := start + 1; end <= len(text); end++ {
+			if text[end-1] != '}' || !json.Valid([]byte(text[start:end])) {
+				continue
+			}
+			var out communitySynthesisOut
+			if err := json.Unmarshal([]byte(text[start:end]), &out); err == nil {
+				return out, nil
+			}
+		}
+	}
+	return communitySynthesisOut{}, fmt.Errorf("no valid JSON object in response")
+}
+
+// buildCommunitySynthesisPrompt renders the model-visible contract for one
+// community's synthesis (#321). User-provenanced facts are listed as PROTECTED
+// inputs: the model must never rewrite, merge, or claim them — synthesis facts
+// are additive, tier-tagged, and reference existing facts via edges only.
+func buildCommunitySynthesisPrompt(c int, members []Fact, hasPrior bool) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "You are distilling one community of a personal knowledge graph into a single evolving fact (#321).\n\nCOMMUNITY %d, %d member facts. Existing synthesis fact: %v\n", c, len(members), hasPrior)
+	for _, f := range members {
+		subject := oneLine(f.Subject, 200)
+		body := oneLine(f.Body, 300)
+		if userProvenancedSource(f.Source) {
+			fmt.Fprintf(&b, "\n[PROTECTED USER FACT %s] %s", f.ID, subject)
+			if body != "" {
+				fmt.Fprintf(&b, " | %s", body)
+			}
+			fmt.Fprintf(&b, " — never rewrite, merge, or claim this fact; reference it only.")
+			continue
+		}
+		fmt.Fprintf(&b, "\n[FACT %s] %s", f.ID, subject)
+		if body != "" {
+			fmt.Fprintf(&b, " | %s", body)
+		}
+		if f.Why != "" {
+			fmt.Fprintf(&b, " | why: %s", oneLine(f.Why, 160))
+		}
+	}
+	b.WriteString("\n\nWrite ONE evolving synthesis fact that captures this community's current picture — patterns, trends, and outcomes visible only across the members. Reply ONLY JSON: {\"label\": \"<2-5 word community name>\", \"tier\": \"owner|learning|run\", \"subject\": \"<one sentence>\", \"body\": \"<2-4 sentences>\", \"why\": \"<1-2 sentences>\", \"use_when\": [\"<trigger phrase>\", ...], \"edges\": [{\"target\": \"<existing fact id>\", \"rel\": \"<relation>\"}]}")
+	b.WriteString("\nRules: tier=owner for communities about the owner's life/preferences, tier=learning for learned concepts, tier=run for playbook run outcomes. Edges must target the fact IDs listed above. Never invent IDs.")
+	return b.String()
+}
+
 // availableFactIDs returns a prompt-safe list of existing fact IDs.
 func (m *Memory) availableFactIDs() string {
 	var ids []string
@@ -1016,6 +1186,17 @@ func sortedCommunityIDs(byComm map[int][]string) []int {
 	return ids
 }
 
+// sortedInts returns the keys of an int-keyed map in ascending order — the
+// generic twin of sortedCommunityIDs (community synthesis groups []Fact).
+func sortedInts[T any](byComm map[int]T) []int {
+	ids := make([]int, 0, len(byComm))
+	for c := range byComm {
+		ids = append(ids, c)
+	}
+	sort.Ints(ids)
+	return ids
+}
+
 // JudgeChangedFacts gives every new or edited memory its own edge-judgment
 // pass (graphify-style incremental update). Bounded per pass; failures leave
 // the fact unjudged so the next pass retries. The deterministic recall floor
@@ -1214,6 +1395,25 @@ func ConsolidateMemory(s *Settings) {
 	m := NewMemory(db, client, s)
 	written := m.ConsolidateDue()
 	fmt.Printf("Consolidated %d durable graph facts\n", written)
+}
+
+// SynthesizeMemory runs the community synthesis pass on demand (#321): the
+// first run backfills every community; later runs touch only changed ones.
+func SynthesizeMemory(s *Settings) {
+	db := Connect(s.Home)
+	defer db.Close()
+	authStore := LoadAuthStore(s.Home)
+	client, err := NewProviderManager(s.Home, s, authStore)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "synthesis unavailable: %v\n", err)
+		return
+	}
+	m := NewMemory(db, client, s)
+	written, err := m.SynthesizeCommunitiesDue()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "synthesis incomplete: %v\n", err)
+	}
+	fmt.Printf("Synthesized %d community facts\n", written)
 }
 
 // --- Archive digest (MEM-08) ---
