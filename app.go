@@ -124,6 +124,24 @@ func NewCore() *Core {
 				}
 			}
 		})
+		safeGo("community-synthesis", func() { // #321: daily ~01:00 local — evolving fact per community
+			loc := s.Location()
+			for {
+				// Sleep until the next 01:00 local, then synthesize.
+				now := time.Now().In(loc)
+				next := time.Date(now.Year(), now.Month(), now.Day(), 1, 0, 0, 0, loc)
+				if !next.After(now) {
+					next = next.AddDate(0, 0, 1)
+				}
+				time.Sleep(time.Until(next))
+				n, err := mem.SynthesizeCommunitiesDue()
+				if err != nil {
+					slog.Warn("community synthesis incomplete", "error", err)
+				} else {
+					slog.Info("community synthesis", "communities", n)
+				}
+			}
+		})
 		safeGo("context-threshold", func() { // 5-minute threshold check — triggers when context nears 80% full
 			for {
 				time.Sleep(5 * time.Minute)

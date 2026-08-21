@@ -26,6 +26,7 @@ import (
 type Fact struct {
 	ID         string    `yaml:"id"`
 	Type       string    `yaml:"type"` // "semantic" or "episodic"
+	Tier       string    `yaml:"tier,omitempty"` // #321: "owner" | "learning" | "run" — recall/future passes weight by class
 	Subject    string    `yaml:"subject"`
 	At         time.Time `yaml:"at"`
 	StaleAfter time.Time `yaml:"stale_after,omitempty"` // DRF-002: volatile facts declare their own expiry ("current X" facts)
@@ -92,6 +93,7 @@ type GraphMemory struct {
 type indexEntry struct {
 	ID       string   `json:"id"`
 	Type     string   `json:"type"`
+	Tier     string   `json:"tier,omitempty"`
 	Subject  string   `json:"subject"`
 	At       string   `json:"at"`
 	Why      string   `json:"why,omitempty"`
@@ -189,6 +191,7 @@ func (gm *GraphMemory) loadIndex() bool {
 		gm.facts[id] = &Fact{
 			ID:       entry.ID,
 			Type:     entry.Type,
+			Tier:     entry.Tier,
 			Subject:  entry.Subject,
 			At:       at,
 			Why:      entry.Why,
@@ -225,6 +228,7 @@ func (gm *GraphMemory) saveIndex() {
 		entries[id] = indexEntry{
 			ID:       f.ID,
 			Type:     f.Type,
+			Tier:     f.Tier,
 			Subject:  f.Subject,
 			At:       f.At.Format(time.RFC3339),
 			Why:      f.Why,
@@ -1047,6 +1051,7 @@ func writeMarkdownFact(path string, fact Fact) error {
 	front := struct {
 		ID         string    `yaml:"id"`
 		Type       string    `yaml:"type"`
+		Tier       string    `yaml:"tier,omitempty"`
 		Subject    string    `yaml:"subject"`
 		At         time.Time `yaml:"at"`
 		StaleAfter time.Time `yaml:"stale_after,omitempty"`
@@ -1055,7 +1060,7 @@ func writeMarkdownFact(path string, fact Fact) error {
 		Source     string    `yaml:"source,omitempty"`
 		Feedback   int       `yaml:"feedback,omitempty"`
 		Edges      []Edge    `yaml:"edge,omitempty"`
-	}{fact.ID, fact.Type, fact.Subject, fact.At, fact.StaleAfter, fact.Why, fact.UseWhen, fact.Source, fact.Feedback, fact.Edges}
+	}{fact.ID, fact.Type, fact.Tier, fact.Subject, fact.At, fact.StaleAfter, fact.Why, fact.UseWhen, fact.Source, fact.Feedback, fact.Edges}
 	fm, err := yaml.Marshal(front)
 	if err != nil {
 		return err
@@ -1127,7 +1132,19 @@ func (gm *GraphMemory) Remember(query, turn string) string {
 	starts := gm.entryRanking(query, turn, gm.facts, true)
 	facts := gm.facts
 	fromArchive := false
+	// #320 Fix A: a thin live result first routes through the computed community
+	// index (labels + god nodes) before falling to archive — the graphify
+	// query → community → nodes shape, computed every 6h but never consumed by
+	// recall. Only facts in the matched communities are scored, so a dense
+	// graph costs a fraction of the full O(N) scan.
+	communityRouted := false
 	if len(starts) == 0 || starts[0].score < thinLiveScore {
+		if routed := gm.communityRouting(query, turn); len(routed) > 0 {
+			starts = routed
+			communityRouted = true
+		}
+	}
+	if !communityRouted && (len(starts) == 0 || starts[0].score < thinLiveScore) {
 		if archive := gm.archiveFactsLocked(); len(archive) > 0 {
 			if hits := gm.entryRanking(query, turn, archive, false); len(hits) > 0 {
 				starts = hits
@@ -1155,6 +1172,13 @@ func (gm *GraphMemory) Remember(query, turn string) string {
 		lines = append(lines, "[archived] — no current memories matched; showing archived facts")
 	}
 
+	// #320 Fix B: the neighborhood is context, not targets — cap total emitted
+	// lines so a dense graph cannot inject unbounded text into context on every
+	// iteration (measured max 165,304 chars before this). Starts keep full
+	// why/body; neighbors stay subject + relation only (MEM-04), and the whole
+	// neighborhood gets a hard line budget.
+	budget := recallNeighborhoodBudget
+
 	for _, start := range starts {
 		fact, ok := facts[start.id]
 		if !ok {
@@ -1175,14 +1199,99 @@ func (gm *GraphMemory) Remember(query, turn string) string {
 			lines = append(lines, "  matched: "+strings.Join(start.signals, "; "))
 		}
 		visited[fact.ID] = true
-		gm.bfsEdges(fact, "  ", 1, maxDepth, visited, &lines)
-		gm.bfsInbound(fact, "  ", 1, maxDepth, visited, &lines)
+		gm.bfsEdges(fact, "  ", 1, maxDepth, visited, &lines, &budget)
+		gm.bfsInbound(fact, "  ", 1, maxDepth, visited, &lines, &budget)
 	}
 
 	if len(lines) == 0 {
 		return fmt.Sprintf("No memories found for: %s", query)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// recallNeighborhoodBudget caps the BFS neighborhood lines emitted by remember
+// (#320 Fix B): neighbors are context, not targets — a dense graph must not
+// inject unbounded text into the context on every iteration.
+const recallNeighborhoodBudget = 40
+
+// communityRouting scores the computed community index (labels + god nodes)
+// against the query and returns the top-ranked facts within matched
+// communities. Returns nil when communities/labels are absent or nothing
+// scores. This is the graphify "query → community → nodes" shape wired into
+// recall (#320 Fix A).
+func (gm *GraphMemory) communityRouting(query, turn string) []rankedFact {
+	if len(gm.communities) == 0 {
+		return nil
+	}
+	queryWords := memoryTokenize(query)
+	if len(queryWords) == 0 {
+		return nil
+	}
+	// Score each community by label + god-node subject overlap with the query.
+	byComm := make(map[int][]string) // community → member fact ids
+	for id, c := range gm.communities {
+		byComm[c] = append(byComm[c], id)
+	}
+	godSet := make(map[string]bool, len(gm.gods))
+	for _, g := range gm.gods {
+		godSet[g] = true
+	}
+	type commScore struct {
+		c     int
+		score int
+	}
+	var scores []commScore
+	for c, ids := range byComm {
+		s := 0
+		if label, ok := gm.labels[fmt.Sprint(c)]; ok {
+			s += 20 * len(matchedWords(queryWords, strings.ToLower(label)))
+		}
+		for _, id := range ids {
+			if !godSet[id] {
+				continue
+			}
+			if f, ok := gm.facts[id]; ok {
+				s += 10 * len(matchedWords(queryWords, strings.ToLower(f.Subject)))
+			}
+		}
+		if s > 0 {
+			scores = append(scores, commScore{c: c, score: s})
+		}
+	}
+	if len(scores) == 0 {
+		return nil
+	}
+	sort.Slice(scores, func(i, j int) bool { return scores[i].score > scores[j].score })
+	if len(scores) > 2 {
+		scores = scores[:2]
+	}
+	// Score only facts inside the matched communities.
+	selected := make(map[string]*Fact)
+	for _, cs := range scores {
+		for _, id := range byComm[cs.c] {
+			if f, ok := gm.facts[id]; ok {
+				selected[id] = f
+			}
+		}
+	}
+	ranked := gm.entryRanking(query, turn, selected, true)
+	if len(ranked) > 0 {
+		ranked[0].signals = append(ranked[0].signals, "community-routed")
+		return ranked
+	}
+	// The query word lived in the community label, not any member text —
+	// surface the matched communities' god nodes as the entry points.
+	var gods []rankedFact
+	for _, cs := range scores {
+		for _, id := range byComm[cs.c] {
+			if !godSet[id] {
+				continue
+			}
+			gods = append(gods, rankedFact{id: id, score: 1, signals: []string{"community-routed"}})
+			break
+		}
+	}
+	return gods
 }
 
 // urlHostRe captures the host of an http(s) URL — the unit the conflict
@@ -1281,12 +1390,15 @@ func oneLine(s string, max int) string {
 }
 
 // bfsEdges traverses edges recursively, depth-limited.
-func (gm *GraphMemory) bfsEdges(fact *Fact, indent string, depth, maxDepth int, visited map[string]bool, lines *[]string) {
-	if depth > maxDepth {
+func (gm *GraphMemory) bfsEdges(fact *Fact, indent string, depth, maxDepth int, visited map[string]bool, lines *[]string, budget *int) {
+	if depth > maxDepth || *budget <= 0 {
 		return
 	}
 	nextIndent := indent + "  "
 	for _, edge := range fact.Edges {
+		if *budget <= 0 {
+			return
+		}
 		if !edgeTraversable(edge) {
 			continue
 		}
@@ -1296,22 +1408,30 @@ func (gm *GraphMemory) bfsEdges(fact *Fact, indent string, depth, maxDepth int, 
 		}
 		label := target.Subject
 		if visited[edge.Target] {
+			*budget--
 			*lines = append(*lines, fmt.Sprintf("%s→ [%s] %s  # %s (already shown)", indent, edge.Rel, label, edge.Target))
 			continue
 		}
 		visited[edge.Target] = true
+		*budget--
 		*lines = append(*lines, fmt.Sprintf("%s→ [%s] %s  # %s", indent, edge.Rel, label, edge.Target))
-		gm.bfsEdges(target, nextIndent, depth+1, maxDepth, visited, lines)
+		gm.bfsEdges(target, nextIndent, depth+1, maxDepth, visited, lines, budget)
 	}
 }
 
-func (gm *GraphMemory) bfsInbound(fact *Fact, indent string, depth, maxDepth int, visited map[string]bool, lines *[]string) {
-	if depth > maxDepth {
+func (gm *GraphMemory) bfsInbound(fact *Fact, indent string, depth, maxDepth int, visited map[string]bool, lines *[]string, budget *int) {
+	if depth > maxDepth || *budget <= 0 {
 		return
 	}
 	nextIndent := indent + "  "
 	for _, source := range gm.facts {
+		if *budget <= 0 {
+			return
+		}
 		for _, edge := range source.Edges {
+			if *budget <= 0 {
+				return
+			}
 			if edge.Target != fact.ID || !edgeTraversable(edge) {
 				continue
 			}
@@ -1319,9 +1439,10 @@ func (gm *GraphMemory) bfsInbound(fact *Fact, indent string, depth, maxDepth int
 				continue
 			}
 			visited[source.ID] = true
+			*budget--
 			*lines = append(*lines, fmt.Sprintf("%s← [%s] %s  # %s", indent, edge.Rel, source.Subject, source.ID))
-			gm.bfsInbound(source, nextIndent, depth+1, maxDepth, visited, lines)
-			gm.bfsEdges(source, nextIndent, depth+1, maxDepth, visited, lines)
+			gm.bfsInbound(source, nextIndent, depth+1, maxDepth, visited, lines, budget)
+			gm.bfsEdges(source, nextIndent, depth+1, maxDepth, visited, lines, budget)
 		}
 	}
 }

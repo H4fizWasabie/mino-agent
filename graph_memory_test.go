@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -669,6 +670,89 @@ func TestRemoveSupersedesIntoUserFacts(t *testing.T) {
 
 // issue #178: episodic facts never start a recall — they stay reachable as
 // BFS neighborhood context from semantic starts.
+// #320 Fix A: a thin free ranking routes through the computed community index
+// (labels + god nodes) before falling to archive — the graphify
+// query → community → nodes shape, wired into recall.
+func TestRememberCommunityRoutingRescuesThinQuery(t *testing.T) {
+	dir := t.TempDir()
+	gm := NewGraphMemory(dir, nil)
+	// Two communities: "VPS Ops" (god: vps) and "Cooking" (god: curry).
+	gm.RecordFact(Fact{ID: "vps", Type: "semantic", Subject: "VPS runs mino", Why: "hosts mino", UseWhen: []string{"deployment", "vps"}})
+	gm.RecordFact(Fact{ID: "curry", Type: "semantic", Subject: "Curry recipe", Why: "abah loves curry", UseWhen: []string{"dinner", "recipe"}})
+	gm.SetCommunities(map[string]int{"vps": 0, "curry": 1}, []string{"vps", "curry"}, map[string]string{"0": "VPS Ops", "1": "Cooking"})
+
+	// The query "ops" matches no fact text and no use_when (subject "VPS runs
+	// mino" has no "ops") — free ranking is thin. The community label "VPS
+	// Ops" routes to the vps god node.
+	got := gm.Remember("ops", "")
+	if !strings.Contains(got, "vps") {
+		t.Fatalf("community routing did not surface vps:\n%s", got)
+	}
+	if !strings.Contains(got, "community-routed") {
+		t.Fatalf("community-routed signal missing:\n%s", got)
+	}
+	if strings.Contains(got, "curry") {
+		t.Fatalf("unmatched community leaked into recall:\n%s", got)
+	}
+}
+
+// #320 Fix A: with no communities computed, routing is a no-op and the recall
+// falls through to the archive path unchanged.
+func TestRememberCommunityRoutingNoopWithoutCommunities(t *testing.T) {
+	dir := t.TempDir()
+	gm := NewGraphMemory(dir, nil)
+	gm.RecordFact(Fact{ID: "vps", Type: "semantic", Subject: "VPS runs mino", Why: "hosts mino", UseWhen: []string{"deployment", "vps"}})
+	got := gm.Remember("ops", "")
+	if !strings.Contains(got, "No memories found") {
+		t.Fatalf("no-communities recall changed behavior:\n%s", got)
+	}
+}
+
+// #320 Fix B: the BFS neighborhood gets a hard line budget so a dense graph
+// cannot inject unbounded text into context on every iteration.
+func TestRememberNeighborhoodBudgetCapsOutput(t *testing.T) {
+	dir := t.TempDir()
+	gm := NewGraphMemory(dir, nil)
+	gm.RecordFact(Fact{ID: "hub", Type: "semantic", Subject: "Central hub fact", Why: "hub", UseWhen: []string{"hub"}})
+	// 60 neighbors, each with its own 3 outgoing edges — a dense neighborhood
+	// that would previously emit hundreds of lines.
+	for i := 0; i < 60; i++ {
+		id := fmt.Sprintf("n%d", i)
+		edges := []Edge{{Target: fmt.Sprintf("m%d", i*3), Rel: "links"}, {Target: fmt.Sprintf("m%d", i*3+1), Rel: "links"}, {Target: fmt.Sprintf("m%d", i*3+2), Rel: "links"}}
+		gm.RecordFact(Fact{ID: id, Type: "semantic", Subject: fmt.Sprintf("Neighbor %d", i), Edges: edges})
+		gm.RecordFact(Fact{ID: fmt.Sprintf("m%d", i*3), Type: "semantic", Subject: fmt.Sprintf("M%d", i*3), Edges: []Edge{{Target: id, Rel: "linked_to"}}})
+		gm.RecordFact(Fact{ID: fmt.Sprintf("m%d", i*3+1), Type: "semantic", Subject: fmt.Sprintf("M%d", i*3+1), Edges: []Edge{{Target: id, Rel: "linked_to"}}})
+		gm.RecordFact(Fact{ID: fmt.Sprintf("m%d", i*3+2), Type: "semantic", Subject: fmt.Sprintf("M%d", i*3+2), Edges: []Edge{{Target: id, Rel: "linked_to"}}})
+	}
+	gm.RecordFact(Fact{ID: "hub", Type: "semantic", Subject: "Central hub fact", Why: "hub", UseWhen: []string{"hub"}, Edges: []Edge{{Target: "n0", Rel: "connects"}}})
+
+	got := gm.Remember("hub", "")
+	lines := strings.Split(strings.TrimSpace(got), "\n")
+	// Starts (subject+why+body+matched ≈ 4 lines) plus a bounded neighborhood.
+	if len(lines) > recallNeighborhoodBudget+8 {
+		t.Fatalf("recall output exceeded budget: %d lines (budget %d):\n%s", len(lines), recallNeighborhoodBudget, got)
+	}
+}
+
+// #321: the synthesis prompt marks user-provenanced facts as PROTECTED and
+// never invites rewriting them — the additive invariant lives in the contract.
+func TestBuildCommunitySynthesisPromptProtectsUserFacts(t *testing.T) {
+	members := []Fact{
+		{ID: "owner_thing", Source: "user", Subject: "Abah loves ayam gepuk", Why: "his favorite"},
+		{ID: "run_node", Type: "episodic", Source: "model-distill", Subject: "Posted IG 2026-08-21", Body: "posted OK"},
+	}
+	prompt := buildCommunitySynthesisPrompt(0, members, false)
+	if !strings.Contains(prompt, "PROTECTED USER FACT owner_thing") {
+		t.Fatalf("user fact not marked protected:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "never rewrite, merge, or claim this fact") {
+		t.Fatalf("protection rule missing:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "PROTECTED USER FACT run_node") {
+		t.Fatalf("non-user fact wrongly protected:\n%s", prompt)
+	}
+}
+
 func TestRememberExcludesEpisodicStarts(t *testing.T) {
 	gm := NewGraphMemory(t.TempDir(), nil)
 	if err := gm.RecordFact(Fact{ID: "ep_run", Type: "episodic", Subject: "Ran ai-news digest 2026-08-13", At: time.Now()}); err != nil {

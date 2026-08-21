@@ -1705,11 +1705,11 @@ func markitdownHTML(html string) string {
 func makeManageMemoryTool(mem *Memory) *Tool {
 	return &Tool{
 		Name:        "manage_memory",
-		Description: "Manage your own memory: correct, forget, confirm, or reject a stored fact — reject archives the fact immediately as outdated (active expiry); it stays answerable via remember, tagged [archived]. Or run maintenance yourself (status, consolidate, dedup, rebuild_edges, clean_edges, maintain, judge_edges, distill_outputs). Use fact actions only after an explicit user signal; maintenance actions are yours to run when memory needs it.",
+		Description: "Manage your own memory: correct, forget, confirm, or reject a stored fact — reject archives the fact immediately as outdated (active expiry); it stays answerable via remember, tagged [archived]. Or run maintenance yourself (status, consolidate, dedup, rebuild_edges, clean_edges, maintain, judge_edges, distill_outputs, synthesize). Use fact actions only after an explicit user signal; maintenance actions are yours to run when memory needs it.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"action":      map[string]any{"type": "string", "description": "'add', 'correct', 'forget', 'confirm', 'reject' (archives immediately — active expiry), 'status', 'consolidate', 'dedup', 'rebuild_edges', 'clean_edges', 'maintain', 'judge_edges', or 'distill_outputs'"},
+				"action":      map[string]any{"type": "string", "description": "'add', 'correct', 'forget', 'confirm', 'reject' (archives immediately — active expiry), 'status', 'consolidate', 'dedup', 'rebuild_edges', 'clean_edges', 'maintain', 'judge_edges', 'distill_outputs', or 'synthesize'"},
 				"subject":     map[string]any{"type": "string", "description": "Subject (fact actions only)"},
 				"content":     map[string]any{"type": "string", "description": "New content (for correct/add)"},
 				"stale_after": map[string]any{"type": "string", "description": "Optional expiry for volatile facts (DRF-002): duration like '7d' or '24h', or an RFC3339 timestamp. Config-mirror facts (current stack, current schedule) MUST set a short one — the live file/tool is the truth, the fact is a dated snapshot."},
@@ -1735,13 +1735,17 @@ func makeManageMemoryTool(mem *Memory) *Tool {
 				}
 				facts := 0
 				edges := 0
+				synth := 0
 				if mem.graph != nil {
 					for _, f := range mem.graph.Facts() {
 						facts++
 						edges += len(f.Edges)
+						if f.Source == "graph-synthesis" {
+							synth++
+						}
 					}
 				}
-				return fmt.Sprintf("memory: %d facts, %d edges, %d unconsolidated chat rows", facts, edges, unconsolidated)
+				return fmt.Sprintf("memory: %d facts, %d edges, %d synthesis facts (#321), %d unconsolidated chat rows", facts, edges, synth, unconsolidated)
 			case "consolidate":
 				var before int
 				mem.db.QueryRow("SELECT COUNT(*) FROM chat_log WHERE consolidated = 0").Scan(&before)
@@ -1780,6 +1784,12 @@ func makeManageMemoryTool(mem *Memory) *Tool {
 			case "distill_outputs":
 				n := mem.DistillOutputsDue()
 				return fmt.Sprintf("distilled %d playbook outputs", n)
+			case "synthesize":
+				n, err := mem.SynthesizeCommunitiesDue()
+				if err != nil {
+					return fmt.Sprintf("synthesis incomplete: %v", err)
+				}
+				return fmt.Sprintf("synthesized %d community facts (#321)", n)
 			}
 
 			if action == "add" {

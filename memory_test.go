@@ -983,6 +983,100 @@ func TestDistillGateSkipsSemanticFactsWhenNotWhitelisted(t *testing.T) {
 	}
 }
 
+// #321: the community synthesis pass turns a community's members into one
+// evolving fact (syn_c<N>), tier-tagged with source graph-synthesis; the
+// incremental gate skips untouched communities and rewrites changed ones.
+func TestSynthesizeCommunitiesDue(t *testing.T) {
+	dir := t.TempDir()
+	db := Connect(dir)
+	defer db.Close()
+	cfg := &Settings{Home: dir, MemoriesDir: filepath.Join(dir, "memories")}
+	gm := NewGraphMemory(cfg.MemoriesDir, cfg)
+
+	// Two communities: 0 = learning (daily-ai-concept), 1 = run noise.
+	gm.RecordFact(Fact{ID: "ai_concept", Type: "semantic", Subject: "Agentic RAG concept", At: time.Now().Add(-24 * time.Hour)})
+	gm.RecordFact(Fact{ID: "ep_run", Type: "episodic", Subject: "Ran ai-news 2026-08-20", At: time.Now().Add(-12 * time.Hour)})
+	gm.RecordFact(Fact{ID: "owner_thing", Type: "semantic", Source: "user", Subject: "Abah prefers script playbooks", At: time.Now().Add(-6 * time.Hour)})
+	gm.SetCommunities(map[string]int{"ai_concept": 0, "ep_run": 0, "owner_thing": 1}, []string{"ai_concept"}, map[string]string{"0": "AI Learning"})
+
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		// Community 0: learning. Community 1: owner.
+		if calls == 1 {
+			fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"label\":\"AI Learning\",\"tier\":\"learning\",\"subject\":\"Mino's agentic-AI learning\",\"body\":\"Concepts learned and run outcomes\",\"why\":\"knowledge compounds\",\"use_when\":[\"ai concepts\"],\"edges\":[{\"target\":\"ai_concept\",\"rel\":\"covers\"}]}"}}]}`)
+		} else {
+			fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"label\":\"Owner\",\"tier\":\"owner\",\"subject\":\"Abah's preferences\",\"body\":\"Owner facts preserved\",\"why\":\"owner info\",\"use_when\":[\"abah\"],\"edges\":[{\"target\":\"owner_thing\",\"rel\":\"concerns\"}]}"}}]}`)
+		}
+	}))
+	defer server.Close()
+	pm := &ProviderManager{
+		providers: []ProviderConfig{{Name: "fake", Priority: 1, BaseURL: server.URL, Model: "main", Small: "small"}},
+		clients:   map[string]*Client{"fake": NewClient("test-key", server.URL)},
+		state:     map[string]*providerState{"fake": {}}, sticky: map[string]string{}, preferred: map[string]providerPreference{},
+		now: time.Now,
+	}
+	m := &Memory{db: db, client: pm, cfg: cfg, graph: gm}
+
+	n, err := m.SynthesizeCommunitiesDue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("synthesized %d communities, want 2", n)
+	}
+	f, ok := gm.FindFact(synthFactID(0))
+	if !ok {
+		t.Fatal("community 0 synthesis fact missing")
+	}
+	if f.Source != "graph-synthesis" || f.Tier != "learning" {
+		t.Fatalf("syn fact = %+v", f)
+	}
+	if len(f.Edges) != 1 || f.Edges[0].Target != "ai_concept" {
+		t.Fatalf("syn edges = %+v", f.Edges)
+	}
+	o, ok := gm.FindFact(synthFactID(1))
+	if !ok || o.Tier != "owner" {
+		t.Fatalf("owner community syn fact = %+v ok=%v", o, ok)
+	}
+	// User fact untouched: still there, same source.
+	if uf, ok := gm.FindFact("owner_thing"); !ok || uf.Source != "user" {
+		t.Fatalf("user fact mutated: %+v ok=%v", uf, ok)
+	}
+
+	// Incremental gate: no new members → second pass skips everything.
+	callsBefore := calls
+	if n, _ := m.SynthesizeCommunitiesDue(); n != 0 {
+		t.Fatalf("unchanged pass synthesized %d, want 0", n)
+	}
+	if calls != callsBefore {
+		t.Fatalf("unchanged pass still called the model %d→%d", callsBefore, calls)
+	}
+
+	// A new member in community 0 → only that community rewrites.
+	gm.RecordFact(Fact{ID: "ai_concept_new", Type: "semantic", Subject: "New concept", At: time.Now()})
+	gm.SetCommunities(map[string]int{"ai_concept": 0, "ep_run": 0, "ai_concept_new": 0, "owner_thing": 1}, []string{"ai_concept"}, map[string]string{"0": "AI Learning"})
+	n, _ = m.SynthesizeCommunitiesDue()
+	if n != 1 {
+		t.Fatalf("changed pass synthesized %d, want 1", n)
+	}
+}
+
+// #321: tier round-trips through the .md front matter.
+func TestFactTierPersists(t *testing.T) {
+	dir := t.TempDir()
+	gm := NewGraphMemory(dir, nil)
+	if err := gm.RecordFact(Fact{ID: "t", Type: "semantic", Tier: "learning", Subject: "Tiered fact"}); err != nil {
+		t.Fatal(err)
+	}
+	gm2 := NewGraphMemory(dir, nil)
+	f, ok := gm2.FindFact("t")
+	if !ok || f.Tier != "learning" {
+		t.Fatalf("tier lost across reload: %+v ok=%v", f, ok)
+	}
+}
+
 func TestDashboardGraphPayloadIncludesCommunities(t *testing.T) {
 	home := t.TempDir()
 	db := Connect(home)

@@ -68,6 +68,10 @@ func main() {
 			s := LoadSettings()
 			ConsolidateMemory(s)
 			return
+		case "synthesize-memory", "--synthesize-memory":
+			s := LoadSettings()
+			SynthesizeMemory(s)
+			return
 		case "eval":
 			s := LoadSettings()
 			os.Exit(RunEval(s.Home))
