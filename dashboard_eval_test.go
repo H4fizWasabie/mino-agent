@@ -538,3 +538,56 @@ equal(box.workbenchMinimizeOnClose(true,true),false,"open workbench");
 		t.Fatalf("dashboard workbench behavior failed: %v\n%s", err, out)
 	}
 }
+
+func TestDashboardPlaybookRunsCappedWithExpander(t *testing.T) {
+	script, err := staticFiles.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, behavior := range []string{
+		`function playbookRunRow(pb,r)`,
+		`function splitPlaybookRuns(runs)`,
+		`splitPlaybookRuns(pb.runs||[])`,
+		`playbook-runs-more`,
+		"older run",
+	} {
+		if !strings.Contains(string(script), behavior) {
+			t.Errorf("playbook runs cap is missing %q", behavior)
+		}
+	}
+
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is required for dashboard behavior checks")
+	}
+	const harness = `
+const fs=require("fs"),vm=require("vm"),source=fs.readFileSync(process.argv[1],"utf8");
+function extract(name){
+  const start=source.indexOf("function "+name+"(");
+  if(start<0) throw new Error("missing "+name);
+  const brace=source.indexOf("{",start); let depth=0;
+  for(let i=brace;i<source.length;i++){
+    if(source[i]==="{") depth++;
+    else if(source[i]==="}"&&--depth===0) return source.slice(start,i+1);
+  }
+  throw new Error("unterminated "+name);
+}
+const box={}; vm.runInNewContext(extract("splitPlaybookRuns"),box);
+function equal(got,want,label){if(got!==want) throw new Error(label+": got "+got+", want "+want)}
+const many=Array.from({length:83},(_,i)=>({id:"r"+(83-i)}));
+let v=box.splitPlaybookRuns(many);
+equal(v.top.length,10,"inline cap");
+equal(v.rest.length,73,"expander remainder");
+equal(v.top[0].id,"r83","newest first");
+equal(v.rest[72].id,"r1","oldest last");
+v=box.splitPlaybookRuns(many.slice(0,10));
+equal(v.top.length,10,"exactly ten stays inline");
+equal(v.rest.length,0,"no expander at ten");
+v=box.splitPlaybookRuns([]);
+equal(v.top.length,0,"empty runs");
+`
+	cmd := exec.Command(node, "-e", harness, filepath.Join("static", "app.js"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("playbook runs cap behavior failed: %v\n%s", err, out)
+	}
+}

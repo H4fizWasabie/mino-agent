@@ -799,6 +799,15 @@ ${sk.body}`;
   }).join("") || `<div class="memory-empty"><span>⌘</span><strong>No skills loaded</strong><p>Create one in chat or place a SKILL.md in the skills folder.</p></div>`;
   return h;
 }
+// Run rows shown inline per playbook card (#323): the rest collapse behind
+// an "older runs" expander — runs are never pruned, so the list grows forever.
+function playbookRunRow(pb,r){
+  return `<div class="playbook-run ${esc(r.status)}"><code>${esc((r.id||"").slice(0,17))}</code><span class="srcpill ${r.status==="complete"?"good":"warn"}">${esc(r.status)}</span>${r.status==="failed"?`<a class="reveal del" onclick="delRun('${esc(pb.name)}','${esc(r.id)}')">delete</a>`:""}</div>`;
+}
+function splitPlaybookRuns(runs){
+  const cap=10;
+  return {top:runs.slice(0,cap),rest:runs.slice(cap)};
+}
 function memPlaybooks(d){
   const playbooks = d.playbooks || [];
   let h = `<section class="memory-tab-head"><div><span class="section-kicker">EXECUTABLE PROCEDURES</span><h2>Playbooks</h2><p>Filesystem state machines that Mino can choose to run through the normal runtime.</p></div><strong>${playbooks.length}</strong></section>
@@ -811,7 +820,7 @@ function memPlaybooks(d){
       <div class="playbook-meta"><span>${stages.length} stage${stages.length===1?"":"s"}</span>${pb.schedule?`<span>schedule · ${esc(pb.schedule)}</span>`:""}${pb.notify?`<span>Telegram delivery</span>`:""}</div>
       <div class="playbook-stages">${stages.map((stage,i)=>`<details class="playbook-stage" ${i===0?"open":""}><summary><b>${String(stage.number||i+1).padStart(2,"0")}</b><span>${esc(stage.name||"stage")}</span>${(stage.tools||[]).length?`<small>${stage.tools.map(t=>esc(t)).join(" · ")}</small>`:""}</summary>${stage.context?`<pre class="playbook-contract">${esc(stage.context)}</pre>`:`<div class="meta">No contract text</div>`}</details>`).join("")}</div>
       ${outputs.length?`<div class="playbook-outputs"><span>OUTPUT</span>${outputs.map(path=>`<code>${esc(path)}</code>`).join("")}</div>`:`<div class="meta playbook-empty-output">No output recorded yet</div>`}
-      ${(pb.runs||[]).length?`<div class="playbook-runs"><span>RUNS</span>${(pb.runs||[]).map(r=>`<div class="playbook-run ${esc(r.status)}"><code>${esc((r.id||"").slice(0,17))}</code><span class="srcpill ${r.status==="complete"?"good":"warn"}">${esc(r.status)}</span>${r.status==="failed"?`<a class="reveal del" onclick="delRun('${esc(pb.name)}','${esc(r.id)}')">delete</a>`:""}</div>`).join("")}</div>`:""}
+      ${(pb.runs||[]).length?(()=>{const {top,rest}=splitPlaybookRuns(pb.runs||[]);return `<div class="playbook-runs"><span>RUNS</span>${top.map(r=>playbookRunRow(pb,r)).join("")}${rest.length?`<details class="playbook-runs-more"><summary>${rest.length} older run${rest.length===1?"":"s"}</summary>${rest.map(r=>playbookRunRow(pb,r)).join("")}</details>`:""}</div>`})():""}
       <div class="memory-editor-actions"><span class="meta">${esc(pb.path||"")}</span>${reveal(pb.path||"","open folder")}</div></article>`;
   }).join("")}</div>`;
   return h;
