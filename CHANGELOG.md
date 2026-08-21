@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Changed
+
+- **Dashboard playbook cards cap the runs list at the latest 10 with an expander (closes #323)**: `memPlaybooks` rendered every run row of every playbook card, and run state is never pruned — long-lived playbooks grew unbounded lists re-rendered on each dashboard rebuild. Cards now show the 10 most recent runs inline (runs arrive newest-first); older runs collapse behind a `playbook-runs-more` `<details>` expander with a count, keeping failed-run delete actions reachable without pagination machinery. Covered by `TestDashboardPlaybookRunsCappedWithExpander` (presence checks + node harness over `splitPlaybookRuns`).
+
 ### Fixed
 
 - **Recall token burn: community-routed recall + bounded BFS neighborhood (closes #320)**: `remember` (in-loop, `mino remember` CLI, and the MCP/REST surface — all share `GraphMemory.Remember`) now routes a thin live result through the computed community index before falling to archive: community labels + god nodes are scored against the query, and only the matched communities' facts are ranked (the graphify query → community → nodes shape, computed every 6h but never consumed by recall before). A query word that lives only in a community label surfaces the community's god node as the entry. Separately, the BFS neighborhood gets a hard line budget (`recallNeighborhoodBudget` = 40): neighbors are context, not targets, so a dense graph can no longer inject unbounded text into context on every iteration (measured max 165,304 chars before this; starts keep full why/body, neighbors stay subject+relation per MEM-04). Covered by `TestRememberCommunityRoutingRescuesThinQuery`, `TestRememberCommunityRoutingNoopWithoutCommunities`, and `TestRememberNeighborhoodBudgetCapsOutput`. (Why: measured recall output was min 61 / median 6,194 / max 165,304 chars across 90 audit'd calls; the max was a BFS explosion from 3 starts × depth-2 × outbound+inbound edges, re-billed on every iteration of the turn.)
