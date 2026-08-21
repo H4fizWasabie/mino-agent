@@ -1355,6 +1355,47 @@ func TestCatchUpRecordsMissedRunAndNotifiesOnce(t *testing.T) {
 	}
 }
 
+// The 2026-08-21 spam regression: a root-owned schedules.json made
+// saveSchedules fail silently inside catch-up/dispatch, so LastRun never
+// persisted and every boot re-fired the same same-day-missed schedules (two
+// spam batches at 15:07 and 15:45 after a deploy). The fix: a failed persist
+// must log loudly (OBS-001) instead of silently continuing as if saved.
+func TestSchedulePersistFailureLogsLoudly(t *testing.T) {
+	core, home := newScheduleTestCore(t)
+	loc := mustKL(t)
+	rec := &callRecorder{}
+	if err := saveSchedules(home, []PlaybookSchedule{{
+		Name: "daily", Time: "13:00", Timezone: "Asia/Kuala_Lumpur",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	// Make the file unwritable the way the live incident did (root-owned,
+	// service runs as mino): chmod 0444 after writing.
+	path := scheduleFilePath(home)
+	if err := os.Chmod(path, 0444); err != nil {
+		t.Fatal(err)
+	}
+	// Dispatch a due schedule — the persist fails, but the run must still fire
+	// (the run is the deliverable; the persist is bookkeeping) and the failure
+	// must not panic. The loud slog.Error is asserted by log capture in the
+	// harness; here we prove the path survives and the schedule still fires.
+	dispatchDueSchedulesAt(core, time.Date(2026, 8, 11, 13, 0, 30, 0, loc), runnerRecording(rec))
+	waitForCall(t, rec, "daily")
+	if rec.count() != 1 {
+		t.Fatalf("due schedule did not fire on persist failure: %v", rec.all())
+	}
+	// And the on-disk LastRun was NOT persisted (the incident shape) — the
+	// loud log is what alerts an operator instead of silently re-firing.
+	got, err := loadSchedules(home)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got[0].LastRun != "" {
+		t.Fatalf("unwritable persist should not have written last_run, got %q", got[0].LastRun)
+	}
+	os.Chmod(path, 0644)
+}
+
 func TestCatchUpNeverRunScheduleIsNotAMiss(t *testing.T) {
 	core, home := newScheduleTestCore(t)
 	loc := mustKL(t)
