@@ -1305,7 +1305,13 @@ func dispatchDueSchedulesAt(core *Core, now time.Time, run scheduledPlaybookRunn
 		spawnScheduleRun(core, s, now, run)
 	}
 	if updated {
-		saveSchedules(core.Settings.Home, scheds)
+		// Loud, not silent (OBS-001): a root-owned or unwritable schedules.json
+		// made saveSchedules fail silently, LastRun never persisted, and every
+		// boot catch-up re-fired the same same-day-missed schedules (live
+		// 2026-08-21: two spam batches at 15:07 and 15:45 after a deploy).
+		if err := saveSchedules(core.Settings.Home, scheds); err != nil {
+			slog.Error("schedule dispatch: failed to persist last_run — schedules will re-fire on next boot", "error", err)
+		}
 	}
 }
 
@@ -1339,7 +1345,11 @@ func catchUpSchedulesAt(core *Core, now time.Time, run scheduledPlaybookRunner) 
 		}
 	}
 	if updated {
-		saveSchedules(core.Settings.Home, scheds)
+		// Loud, not silent (OBS-001): same class as dispatch — a failed persist
+		// means the same-day-missed schedules re-fire on the next boot.
+		if err := saveSchedules(core.Settings.Home, scheds); err != nil {
+			slog.Error("schedule catch-up: failed to persist last_run — schedules will re-fire on next boot", "error", err)
+		}
 	}
 }
 
