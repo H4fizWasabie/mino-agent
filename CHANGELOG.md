@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Era note — release lineage (v2.16–v2.20.3 abandoned)
+
+The active release line continues from **v2.15.1**. The v2.16.0–v2.20.3 versions were an experimental concept and are **abandoned**: those tags exist on GitHub but hang off a detached lineage (`backup/v2.16-v2.20-era` branch) and are NOT ancestors of master — no release after v2.15.1 contains that code, and none ever will.
+
+If you are updating in place from ≤v2.15.1 (`mino update`), this is safe and expected: the updater downloads one SHA256-verified binary built solely from its tag, and boot migrates your existing `~/.mino` state forward automatically (versioned schema migrations 0→7 in `db.go`, including the projects→playbook-folders and embeddings-removal steps). No mixed binary, no manual migration.
+
 ### Changed
 
 - **Archived dated drift docs into `archive/`**: `audit-pass1.md`, `docs/live-proof-20260814.md`, and `docs/model-research-openrouter-cheap.md` were one-time audit/proof/research snapshots sitting at the top level where an agent or reader could mistake them for current guidance. Moved (not deleted) into `archive/`; no code or doc links referenced them (link-resolution test passes unchanged).
