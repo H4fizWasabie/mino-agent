@@ -1,4 +1,4 @@
-## [Unreleased]
+## [v3.1.3] — taskify offer turn fence + observability (2026-08-22)
 
 ### Fixed
 
