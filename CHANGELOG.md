@@ -1,4 +1,4 @@
-## [Unreleased]
+## [v3.1.4] — taskify follow-ups: fence-lifted note, read-spiral nudge, cap checkpointing, write cap, auto-restart, CI gofmt gate (2026-08-22)
 
 ### Changed
 
