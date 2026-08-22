@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -872,5 +873,103 @@ func TestLoopHistoryLegacyMarkersNoEcho(t *testing.T) {
 		if strings.Contains(m.Content, "<tool_call") || strings.Contains(m.Content, "<function") {
 			t.Fatalf("legacy marker leaked into the model: %q", m.Content)
 		}
+	}
+}
+
+// #337 (finding 4): the read-spiral tripwire. The coding skill's
+// read-before-edit is right, but a session that ONLY reads is a spiral
+// (observed 2026-08-22: 60+ read_file calls on a taskified run until the
+// iteration cap stopped a strategy that was actually working). When
+// consecutive read_file calls exceed the threshold with no edit/write
+// attempt in between, the loop injects a mid-flight nudge. The test runs in
+// STAGE mode (traceTagKey set) because that is the taskified-run condition:
+// the main-loop detectLoop already hard-stops same-name streaks at ~8
+// reads, while stages skip detectLoop and only get the read-spiral nudge.
+func TestLoopReadSpiralNudge(t *testing.T) {
+	tools := NewRegistry()
+	tools.Register(&Tool{Name: "read_file", Description: "read", Fn: func(args map[string]any) string { return "contents" }})
+	tools.Register(&Tool{Name: "edit_file", Description: "edit", Fn: func(args map[string]any) string { return "edited" }})
+	var script []*LLMResponse
+	// unique args per read so the #171 identical-call nudge never fires —
+	// this test targets the read-spiral nudge alone
+	for i := 0; i < readSpiralThreshold+2; i++ {
+		script = append(script, scriptedResp([]ContentBlock{toolBlock("read_file", map[string]any{"path": fmt.Sprintf("f%d", i)})}, "tool_use"))
+	}
+	script = append(script, scriptedResp([]ContentBlock{textBlock("done")}, "stop"))
+	client := &fakeClient{script: script}
+	ctx := context.WithValue(context.Background(), traceTagKey{}, map[string]string{"playbook": "x", "stage": "02-act"})
+	RunLoopContext(ctx, client, "readspiral", "", []Message{{Role: "user", Content: "go"}}, tools, 30, 100, nil, false, "")
+
+	found := false
+	for _, msgs := range client.messages {
+		for _, m := range msgs {
+			if strings.Contains(m.Content, "read_file calls in a row") && strings.Contains(m.Content, "reading forever is a spiral") {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("read-spiral nudge was not injected")
+	}
+}
+
+// A read that is followed by an edit resets the streak — the nudge must not
+// fire for the read-before-edit rhythm the coding skill teaches.
+func TestLoopReadSpiralResetsOnEdit(t *testing.T) {
+	tools := NewRegistry()
+	tools.Register(&Tool{Name: "read_file", Description: "read", Fn: func(args map[string]any) string { return "contents" }})
+	tools.Register(&Tool{Name: "edit_file", Description: "edit", Fn: func(args map[string]any) string { return "edited" }})
+	var script []*LLMResponse
+	for i := 0; i < readSpiralThreshold+1; i++ {
+		// read then edit on every iteration: the write resets the streak
+		script = append(script, scriptedResp([]ContentBlock{
+			toolBlock("read_file", map[string]any{"path": fmt.Sprintf("f%d", i)}),
+			toolBlock("edit_file", map[string]any{"path": fmt.Sprintf("f%d", i), "oldText": "a", "newText": "b"}),
+		}, "tool_use"))
+	}
+	script = append(script, scriptedResp([]ContentBlock{textBlock("done")}, "stop"))
+	client := &fakeClient{script: script}
+	ctx := context.WithValue(context.Background(), traceTagKey{}, map[string]string{"playbook": "x", "stage": "02-act"})
+	RunLoopContext(ctx, client, "readedit", "", []Message{{Role: "user", Content: "go"}}, tools, 30, 100, nil, false, "")
+
+	for _, msgs := range client.messages {
+		for _, m := range msgs {
+			if strings.Contains(m.Content, "reading forever is a spiral") {
+				t.Fatal("read-spiral nudge fired despite edits between reads")
+			}
+		}
+	}
+}
+
+// CTX-019 family: the read-spiral redirect must be observable in the trace so
+// the post-mortem can verify whether the model followed it.
+func TestLoopLogsReadSpiralSignal(t *testing.T) {
+	tools := NewRegistry()
+	tools.Register(&Tool{Name: "read_file", Description: "read", Fn: func(args map[string]any) string { return "contents" }})
+	var script []*LLMResponse
+	for i := 0; i < readSpiralThreshold+2; i++ {
+		script = append(script, scriptedResp([]ContentBlock{toolBlock("read_file", map[string]any{"path": fmt.Sprintf("f%d", i)})}, "tool_use"))
+	}
+	script = append(script, scriptedResp([]ContentBlock{textBlock("done")}, "stop"))
+	client := &fakeClient{script: script}
+	home := t.TempDir()
+	ctx := context.WithValue(context.Background(), traceTagKey{}, map[string]string{"playbook": "x", "stage": "02-act"})
+	RunLoopContext(ctx, client, "readspiral", "", []Message{{Role: "user", Content: "go"}}, tools, 30, 100, nil, false, home)
+
+	found := false
+	files, _ := filepath.Glob(filepath.Join(home, "traces", "*.jsonl"))
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.Contains(line, "midflight_signal") && strings.Contains(line, "read_spiral") {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("midflight_signal read_spiral event was not logged to the trace")
 	}
 }
