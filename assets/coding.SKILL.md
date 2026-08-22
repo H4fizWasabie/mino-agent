@@ -59,7 +59,7 @@ For any change affecting >1 file or >20 lines:
 1. One logical change at a time.
 2. read_file → edit_file (prefer over write_file for targeted edits).
 3. Treat LOCAL WORKSPACE as the stable editing boundary on every installation. Edit existing local files in place. For a remote file, reuse a matching workspace copy or stage it locally, verify there, then sync back once.
-4. Never generate a large file in one tool call. Use targeted edit_file replacements, or write_file with mode=overwrite for the first chunk and mode=append for later chunks.
+4. Never generate a large file in one tool call (write_file caps at 16000 bytes per call — chunk above that, or use edit_file). Use targeted edit_file replacements, or write_file with mode=overwrite for the first chunk and mode=append for later chunks.
 5. Small steps. Commit after each working change.
 
 ## Phase 4: VERIFY

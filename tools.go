@@ -878,10 +878,19 @@ func makeReadTool() *Tool {
 	}
 }
 
+// writeChunkMaxBytes caps one write_file call (issue #331 finding 1): a
+// ~26KB single-shot write arrived provider-truncated (output budget), and
+// the mangled call was refused at the __raw_arguments__ gate — the model
+// learned nothing. Refusing here teaches the boundary from the tool itself;
+// the symmetric read_file cap (16000) gives the model one invariant: each
+// read/write call ≈ 16KB. Package var like updateHealthTimeout so tests can
+// shrink it.
+var writeChunkMaxBytes = 16000
+
 func makeWriteTool(workspace, home string) *Tool {
 	return &Tool{
 		Name:        "write_file",
-		Description: "Write or save content to a file. Use mode=overwrite for the first chunk and mode=append for later chunks when content may exceed the output budget. Prefer this over bash echo/redirect.",
+		Description: fmt.Sprintf("Write or save content to a file. Use mode=overwrite for the first chunk and mode=append for later chunks when content may exceed the output budget. Content larger than %d bytes MUST be written in chunks (mode=overwrite first, then mode=append) — a single larger call risks provider-side truncation of the tool call itself. Prefer this over bash echo/redirect.", writeChunkMaxBytes),
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -895,6 +904,9 @@ func makeWriteTool(workspace, home string) *Tool {
 			path, _ := args["path"].(string)
 			content, _ := args["content"].(string)
 			mode, _ := args["mode"].(string)
+			if len(content) > writeChunkMaxBytes {
+				return fmt.Sprintf("Error: content is %d bytes, over the %d-byte single-call cap. Write in chunks: mode=overwrite for the first chunk, then mode=append for each next chunk.", len(content), writeChunkMaxBytes)
+			}
 			if guard := playbookWriteGuard(home, path, ctx); guard != "" {
 				return "Error: " + guard
 			}
