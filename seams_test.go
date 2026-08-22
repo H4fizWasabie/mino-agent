@@ -422,6 +422,7 @@ var promptAssemblySeams = []string{
 	"contextBudgetBlock",
 	"taskIntentOffer",
 	"taskifyFenceLiftedNote",
+	"iterationCapReply",
 	"buildTaskifyStages",
 	"splitOfferText",
 	"gatePauseReply",
