@@ -555,3 +555,48 @@ func TestTaskifyStageContextIsolated(t *testing.T) {
 		}
 	}
 }
+
+// #329: the offer turn is mechanically fenced. Regression for 2026-08-22 —
+// a "Coding task:" turn executed a multi-phase redesign with no approval and
+// no scaffold, because the offer was prompt-only discipline.
+
+func TestTaskifyOfferTurnFencesWorkTools(t *testing.T) {
+	ctx := context.WithValue(context.Background(), taskifyOfferKey{}, true)
+	for _, name := range []string{"bash", "write_file", "edit_file", "sync_file", "taskify", "run_playbook"} {
+		if msg := taskifyOfferToolGuard(ctx, name); msg == "" {
+			t.Fatalf("work tool %q must be fenced on an offer turn", name)
+		}
+	}
+	// read/search/grounding tools stay available: the discussion is still real
+	for _, name := range []string{"read_file", "search_web", "fetch_url", "remember", "note_session"} {
+		if msg := taskifyOfferToolGuard(ctx, name); msg != "" {
+			t.Fatalf("grounding tool %q must stay available on an offer turn (got %q)", name, msg)
+		}
+	}
+	// no fence without the marker: normal turns execute everything
+	plain := context.Background()
+	if msg := taskifyOfferToolGuard(plain, "bash"); msg != "" {
+		t.Fatalf("bash on a non-offer turn must not be fenced (got %q)", msg)
+	}
+}
+
+func TestApplyTaskifyOffer(t *testing.T) {
+	msg := "Coding task: redesign my portfolio"
+	tail, fenced := applyTaskifyOffer("CLOCK", msg, false)
+	if !fenced {
+		t.Fatal("task-intent phrase must fence the turn")
+	}
+	if !strings.Contains(tail, taskifyOfferText) || !strings.Contains(tail, "CLOCK") {
+		t.Fatal("offer tail must carry the offer text and keep the rest of the tail")
+	}
+	// non-task message: no offer, no fence
+	tail2, fenced2 := applyTaskifyOffer("CLOCK", "what time is it?", false)
+	if fenced2 || strings.Contains(tail2, taskifyOfferText) {
+		t.Fatal("non-task message must not be offered or fenced")
+	}
+	// gate-approval turn: suppressed by design — approval is the start signal
+	_, fenced3 := applyTaskifyOffer("CLOCK", msg, true)
+	if fenced3 {
+		t.Fatal("gate-approval turn must not be re-offered or fenced")
+	}
+}

@@ -28,6 +28,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -37,6 +38,52 @@ import (
 )
 
 // --- Part 1: task-intent detection + the offer ---
+// #329: the offer is a discussion opener, but prompt-only discipline failed in
+// production (2026-08-22: a "Coding task:" turn executed a multi-phase
+// redesign with no approval and no scaffold). Two mechanical backstops close
+// it: the offer turn is FENCED (work-capable tools return an error telling
+// the model to discuss and wait), and the fence state is visible in traces.
+
+// taskifyOfferKey marks a turn whose user message matched task-intent phrasing
+// (set by RespondForContext; read by the loop's tool executor).
+type taskifyOfferKey struct{}
+
+// taskifyWorkTools are the tools capable of doing real work or scaffolding —
+// exactly what an offer turn must not start (owner lock 2026-08-16). Read,
+// search, fetch, note-taking, and owner communication stay available so the
+// discussion itself can be grounded.
+var taskifyWorkTools = map[string]bool{
+	"bash": true, "write_file": true, "edit_file": true, "sync_file": true,
+	"taskify": true, "run_playbook": true, "schedule_playbook": true,
+	"manage_playbook": true, "create_skill": true, "update_soul": true,
+	"manage_memory": true, "add_pattern": true, "add_working_memory": true,
+}
+
+// taskifyOfferToolGuard returns a tool-result error when name is a
+// work-capable tool called on a fenced offer turn, "" otherwise. The message
+// routes the model back to the offer's own discipline: discuss, then wait for
+// the owner's explicit approval before calling taskify.
+func taskifyOfferToolGuard(ctx context.Context, name string) string {
+	on, _ := ctx.Value(taskifyOfferKey{}).(bool)
+	if !on || !taskifyWorkTools[name] {
+		return ""
+	}
+	return "Error: [RUN-006d] this is a task-intent OFFER turn — work tools are fenced. Discuss the approach only, then stop and wait for my explicit approval. The taskify tool unlocks after I approve."
+}
+
+// applyTaskifyOffer injects the offer into the per-turn tail and reports
+// whether this turn is a fenced offer turn. Suppressed on the turn that just
+// approved a task gate: the approval is the start signal, not another offer.
+func applyTaskifyOffer(tail, userMessage string, gateRouted bool) (string, bool) {
+	if gateRouted {
+		return tail, false
+	}
+	offer := taskIntentOffer(userMessage)
+	if offer == "" {
+		return tail, false
+	}
+	return offer + "\n\n" + tail, true
+}
 
 var (
 	taskifyVerbRe   = regexp.MustCompile(`(?i)\b(build|redesign|fix|create|make)\b`)

@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Fixed
+
+- **taskify offer turn fenced + observable (closes #329)**: live 2026-08-22 — a chat message beginning with the exact intent phrase "Coding task:" executed a multi-phase portfolio redesign with no owner approval and no scaffold, because the offer was prompt-only discipline and its injection was invisible in traces (`logTrace` recorded the raw user message; the appended tail was unobservable, so "offer missing" and "offer ignored" were indistinguishable). Two mechanical backstops: (1) the offer turn is now FENCED — work-capable tools (`bash`, `write_file`, `edit_file`, `sync_file`, `taskify`, `run_playbook`, `schedule_playbook`, `manage_playbook`, `create_skill`, `update_soul`, `manage_memory`, `add_pattern`, `add_working_memory`) return a `RUN-006d` error instead of executing, while read/search/grounding tools stay available so the discussion is still real; the fence lifts on the next turn (an approval message routes through `approvePendingTaskGate` as before). (2) `turn_start` traces now carry `taskify_offer: true/false`, making injection observable. Tail injection factored into `applyTaskifyOffer` (gate-approval turns still suppress the offer — the approval is the start signal). Covered by `TestTaskifyOfferTurnFencesWorkTools` and `TestApplyTaskifyOffer`. The rewritten portfolio itself survived owner review — outcome fine, process wrong.
+
 ### Era note — release lineage (v2.16–v2.20.3 abandoned)
 
 The active release line continues from **v2.15.1**. The v2.16.0–v2.20.3 versions were an experimental concept and are **abandoned**: those tags exist on GitHub but hang off a detached lineage (`backup/v2.16-v2.20-era` branch) and are NOT ancestors of master — no release after v2.15.1 contains that code, and none ever will.

@@ -354,6 +354,7 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 		w.auditLog(sessionID, eventType, message, iteration)
 	})
 	system, routing := conversation.Session.BuildContext(userMessage, source)
+	offerTurn := false // #329: true when this turn is a fenced taskify offer turn
 	// #237: the owner's approval of a paused task gate is a harness decision
 	// (the model can never approve its own run — approval.go's RUN-006
 	// discipline). Detect the approval BEFORE the loop, mark the run approved
@@ -377,12 +378,13 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 		// #237 task-intent detection: the offer is a DISCUSSION OPENER — no
 		// scaffold, no work, until the owner approves (owner lock 2026-08-16).
 		// Suppressed on the turn that just approved the gate: the approval is
-		// the start signal, not another discussion.
-		if gateRouting == "" {
-			if offer := taskIntentOffer(userMessage); offer != "" {
-				tail = offer + "\n\n" + tail
-			}
-		}
+		// the start signal, not another discussion. #329: the offer turn is
+		// also FENCED — work tools are blocked for this turn (taskifyOfferKey)
+		// and the fence is visible in traces (taskify_offer marker).
+		var offerTurnLocal bool
+		tail, offerTurnLocal = applyTaskifyOffer(tail, userMessage, gateRouting != "")
+		offerTurn = offerTurnLocal
+		ctx = context.WithValue(ctx, taskifyOfferKey{}, offerTurn)
 		messages[len(messages)-1].Content += "\n\n" + tail
 	}
 	msgLen := 0
@@ -403,7 +405,7 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 			msgLen += len(block) + 2
 		}
 	}
-	logTrace(w.Settings.Home, "turn_start", map[string]any{"user_message": userMessage, "system_chars": len(system), "msg_count": len(messages), "msg_chars": msgLen})
+	logTrace(w.Settings.Home, "turn_start", map[string]any{"user_message": userMessage, "system_chars": len(system), "msg_count": len(messages), "msg_chars": msgLen, "taskify_offer": offerTurn})
 	if len(images) > 0 {
 		messages[len(messages)-1].Images = images
 	}
