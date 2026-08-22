@@ -692,7 +692,14 @@ func RunLoopContext(
 	}
 
 	result.Status = "iteration_limit"
-	result.Reply = iterationCapReply(maxIter, result.ToolCalls)
+	// #334 (finding 5): checkpoint the partial progress at cap time. The
+	// 30-iteration cap hit while the model's staged rebuild script was 5/8
+	// steps in (observed 2026-08-22); the resume turn then re-verified the
+	// whole workspace instead of continuing, because the cap reply listed
+	// only tool NAMES. The checkpoint carries each step with args + status,
+	// and the reply points the resume turn at it: one read, continue from
+	// the last successful step, never restart from scratch.
+	result.Reply = iterationCapReply(maxIter, result.ToolCalls, checkpointTurnProgress(traceHome, sessionID, result.ToolCalls))
 	return result
 }
 
@@ -701,8 +708,10 @@ func RunLoopContext(
 // what was attempted so the user (or a "continue") knows where work stops.
 // #161: a silent cap reply made every Continue blindly re-run the same dead
 // task; surfacing the completed tools + a continue/abandon decision point lets
-// the user (and the model on a later turn) resume meaningfully.
-func iterationCapReply(maxIter int, toolCalls []ToolCall) string {
+// the user (and the model on a later turn) resume meaningfully. #334: when a
+// checkpoint file exists, the reply names it — the resume turn reads it and
+// continues from the last successful step instead of re-deriving state.
+func iterationCapReply(maxIter int, toolCalls []ToolCall, checkpoint string) string {
 	done := make([]string, 0)
 	seen := map[string]bool{}
 	for _, tc := range toolCalls {
@@ -713,10 +722,60 @@ func iterationCapReply(maxIter int, toolCalls []ToolCall) string {
 	}
 	header := fmt.Sprintf("(stopped after %d iterations)", maxIter)
 	if len(done) == 0 {
+		if checkpoint != "" {
+			return header + " No tools were completed yet. Partial progress checkpointed at " + checkpoint + "."
+		}
 		return header + " No tools were completed yet."
 	}
-	return fmt.Sprintf("%s Completed steps: %s. Continue, or abandon the task? Reply \"continue\" to resume or describe what to change.",
+	reply := fmt.Sprintf("%s Completed steps: %s. Continue, or abandon the task? Reply \"continue\" to resume or describe what to change.",
 		header, strings.Join(done, ", "))
+	if checkpoint != "" {
+		reply += fmt.Sprintf(" Partial progress is checkpointed at %s — on resume, read that file first and continue from the last successful step; do not restart the task from scratch.", checkpoint)
+	}
+	return reply
+}
+
+// checkpointTurnProgress writes the capped turn's tool trail to a durable
+// checkpoint file (#334, finding 5): each step's tool, arguments (capped at
+// 500 chars per call — write_file content lives on disk, not in the trail),
+// and outcome. Returns the path, or "" when home is empty or the write
+// fails (the cap reply still works without it).
+func checkpointTurnProgress(home, sessionID string, toolCalls []ToolCall) string {
+	if home == "" || len(toolCalls) == 0 {
+		return ""
+	}
+	dir := filepath.Join(home, "checkpoints")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return ""
+	}
+	safe := strings.NewReplacer("/", "_", ":", "_", " ", "_").Replace(sessionID)
+	path := filepath.Join(dir, fmt.Sprintf("%s-%d.json", safe, time.Now().Unix()))
+	entries := make([]map[string]any, 0, len(toolCalls))
+	for i, tc := range toolCalls {
+		status := "ok"
+		if strings.HasPrefix(tc.Output, "Error") {
+			status = "error"
+		}
+		args, _ := json.Marshal(tc.Args)
+		if len(args) > 500 {
+			args = append(args[:500], []byte(`...`)...)
+		}
+		entries = append(entries, map[string]any{
+			"step":   i + 1,
+			"tool":   tc.Name,
+			"args":   string(args),
+			"status": status,
+		})
+	}
+	data, _ := json.MarshalIndent(map[string]any{
+		"session": sessionID,
+		"ts":      time.Now().UTC().Format(time.RFC3339),
+		"tools":   entries,
+	}, "", "  ")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return ""
+	}
+	return path
 }
 
 // stageRewriteStreak reports the output path being rewritten by a trailing run

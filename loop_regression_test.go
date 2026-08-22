@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -728,7 +729,7 @@ func TestIterationCapReplyReportsProgress(t *testing.T) {
 		{Name: "generate_image", Output: "path"},
 		{Name: "bash", Output: "ok"},
 	}
-	reply := iterationCapReply(50, calls)
+	reply := iterationCapReply(50, calls, "")
 	if !strings.Contains(reply, "stopped after 50 iterations") {
 		t.Fatalf("reply missing cap note: %q", reply)
 	}
@@ -744,7 +745,7 @@ func TestIterationCapReplyReportsProgress(t *testing.T) {
 }
 
 func TestIterationCapReplyNoTools(t *testing.T) {
-	reply := iterationCapReply(30, nil)
+	reply := iterationCapReply(30, nil, "")
 	if !strings.Contains(reply, "No tools were completed") {
 		t.Fatalf("reply should note no completion: %q", reply)
 	}
@@ -971,5 +972,90 @@ func TestLoopLogsReadSpiralSignal(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("midflight_signal read_spiral event was not logged to the trace")
+	}
+}
+
+// #334 (finding 5): the cap reply names the partial-progress checkpoint so
+// the resume turn reads it and continues from the last successful step
+// instead of re-deriving state from the whole capped turn's history.
+func TestIterationCapReplyNamesCheckpoint(t *testing.T) {
+	reply := iterationCapReply(30, []ToolCall{{Name: "bash"}}, "/home/x/.mino/checkpoints/tg_1-123.json")
+	if !strings.Contains(reply, "checkpointed at /home/x/.mino/checkpoints/tg_1-123.json") {
+		t.Fatalf("reply missing checkpoint path: %q", reply)
+	}
+	if !strings.Contains(reply, "do not restart the task from scratch") {
+		t.Fatalf("reply missing no-restart direction: %q", reply)
+	}
+	// without a checkpoint the text is unchanged from before
+	plain := iterationCapReply(30, []ToolCall{{Name: "bash"}}, "")
+	if strings.Contains(plain, "checkpoint") {
+		t.Fatalf("no checkpoint mention without a checkpoint file: %q", plain)
+	}
+}
+
+// The checkpoint captures each step's tool, args (capped), and outcome —
+// the information the resume turn needs to continue mid-strategy.
+func TestCheckpointTurnProgressWritesToolTrail(t *testing.T) {
+	home := t.TempDir()
+	calls := []ToolCall{
+		{Name: "bash", Args: map[string]any{"command": "cat > /tmp/rebuild.py << HEREDOC"}, Output: "ok"},
+		{Name: "edit_file", Args: map[string]any{"path": "/x/index.html"}, Output: "Error: refused"},
+		{Name: "bash", Args: map[string]any{"command": strings.Repeat("x", 600)}, Output: "ok"},
+	}
+	path := checkpointTurnProgress(home, "tg:123", calls)
+	if path == "" {
+		t.Fatal("checkpoint not written")
+	}
+	if !strings.Contains(path, filepath.Join(home, "checkpoints")) {
+		t.Fatalf("checkpoint path %q outside checkpoints dir", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ck struct {
+		Session string `json:"session"`
+		Tools   []struct {
+			Step   int    `json:"step"`
+			Tool   string `json:"tool"`
+			Args   string `json:"args"`
+			Status string `json:"status"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(data, &ck); err != nil {
+		t.Fatalf("checkpoint not valid JSON: %v", err)
+	}
+	if ck.Session != "tg:123" || len(ck.Tools) != 3 {
+		t.Fatalf("checkpoint header wrong: %+v", ck)
+	}
+	if ck.Tools[0].Status != "ok" || ck.Tools[1].Status != "error" {
+		t.Fatalf("step statuses wrong: %+v", ck.Tools)
+	}
+	if len(ck.Tools[2].Args) > 510 {
+		t.Fatalf("args not capped: %d chars", len(ck.Tools[2].Args))
+	}
+}
+
+// End-to-end: a turn that burns to the iteration cap leaves a checkpoint
+// file on disk under <home>/checkpoints, and the reply names it.
+func TestLoopWritesCheckpointOnIterationCap(t *testing.T) {
+	tools := NewRegistry()
+	tools.Register(&Tool{Name: "bounce", Description: "returns fixed output", Fn: func(args map[string]any) string { return "bounced" }})
+	var script []*LLMResponse
+	for i := 0; i < 6; i++ {
+		script = append(script, scriptedResp([]ContentBlock{toolBlock("bounce", map[string]any{"k": fmt.Sprintf("v%d", i)})}, "tool_use"))
+	}
+	client := &fakeClient{script: script}
+	home := t.TempDir()
+	res := RunLoopContext(context.Background(), client, "capck", "", []Message{{Role: "user", Content: "go"}}, tools, 5, 100, nil, false, home)
+	if res.Status != "iteration_limit" {
+		t.Fatalf("status = %q, want iteration_limit", res.Status)
+	}
+	files, _ := filepath.Glob(filepath.Join(home, "checkpoints", "*.json"))
+	if len(files) != 1 {
+		t.Fatalf("checkpoint files = %v, want exactly one", files)
+	}
+	if !strings.Contains(res.Reply, files[0]) {
+		t.Fatalf("cap reply does not name the checkpoint %s: %q", files[0], res.Reply)
 	}
 }
