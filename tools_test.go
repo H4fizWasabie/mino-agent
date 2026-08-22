@@ -801,3 +801,68 @@ func TestRegistryConcurrentRegisterCatalogRebuild(t *testing.T) {
 	}()
 	wg.Wait()
 }
+
+// --- write_file chunk cap (issue #331 finding 1) ---
+
+// The chunk cap must be a package var so tests shrink it; the description
+// advertises the same var (no drift possible between the guard and what the
+// model reads before emitting a call).
+func TestWriteFileChunkCapIsPackageVarAndAdvertised(t *testing.T) {
+	r := NewRegistry()
+	r.Register(makeWriteTool(t.TempDir(), t.TempDir()))
+	def := r.toolDef(r.tools["write_file"])
+	if !strings.Contains(def.Description, fmt.Sprintf("%d", writeChunkMaxBytes)) {
+		t.Fatalf("description does not advertise the cap %d: %.120q", writeChunkMaxBytes, def.Description)
+	}
+}
+
+// A single call over the cap is refused with chunking advice and writes
+// NOTHING — the deterministic backstop when the model ignores the skill
+// guidance (the observed failure: a ~26KB HTML write arrived provider-
+// truncated; the model learned nothing from the mangled-call error).
+func TestWriteFileOverCapRefusesWithChunkingAdvice(t *testing.T) {
+	home := t.TempDir()
+	r := NewRegistry()
+	r.Register(makeWriteTool(home, home))
+	prev := writeChunkMaxBytes
+	writeChunkMaxBytes = 100
+	defer func() { writeChunkMaxBytes = prev }()
+
+	target := filepath.Join(home, "big.html")
+	out := r.ExecuteContext(context.Background(), "write_file", map[string]any{
+		"path": target, "content": strings.Repeat("x", 101),
+	})
+	if !strings.Contains(out, "Write in chunks") {
+		t.Fatalf("output = %q, want chunking advice", out)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("refused write still created %s", target)
+	}
+}
+
+// At or under the cap the write succeeds — including the chunked overwrite
+// then append flow the advisory teaches for large files.
+func TestWriteFileUnderCapWritesAndAppendChunks(t *testing.T) {
+	home := t.TempDir()
+	r := NewRegistry()
+	r.Register(makeWriteTool(home, home))
+
+	target := filepath.Join(home, "chunked.txt")
+	if out := r.ExecuteContext(context.Background(), "write_file", map[string]any{
+		"path": target, "content": "first chunk",
+	}); !strings.Contains(out, "Wrote 11 bytes") {
+		t.Fatalf("overwrite output = %q", out)
+	}
+	if out := r.ExecuteContext(context.Background(), "write_file", map[string]any{
+		"path": target, "content": " + second", "mode": "append",
+	}); !strings.Contains(out, "Appended 9 bytes") {
+		t.Fatalf("append output = %q", out)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(data); got != "first chunk + second" {
+		t.Fatalf("chunked file = %q, want \"first chunk + second\"", got)
+	}
+}
