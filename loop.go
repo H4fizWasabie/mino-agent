@@ -337,6 +337,13 @@ func RunLoopContext(
 	repStreak := 0
 	var lastToolSig string
 
+	// #337 (finding 4) — read-spiral tracking: consecutive read_file calls
+	// without an edit/write attempt. The coding skill's read-before-edit is
+	// right; a session that ONLY reads is a spiral (observed 2026-08-22: 60+
+	// read_file calls on a taskified run until the iteration cap).
+	readsSinceWrite := 0
+	lastReadNudge := 0
+
 	for i := 1; i <= maxIter; i++ {
 		if ctx.Err() != nil {
 			result.Status = "cancelled"
@@ -584,6 +591,15 @@ func RunLoopContext(
 			output := prepareToolOutput(traceHome, sessionID, i, tc.Name, raw)
 			result.ToolCalls = append(result.ToolCalls, ToolCall{Name: tc.Name, Args: args, Output: output})
 
+			// #337 (finding 4): read-spiral accounting — read_file calls count
+			// up; any file mutation resets the streak.
+			switch tc.Name {
+			case "read_file":
+				readsSinceWrite++
+			case "edit_file", "write_file", "sync_file", "bash":
+				readsSinceWrite = 0
+			}
+
 			// Update snapshot with tool result
 			if update, ok := ctx.Value(snapshotKey{}).(func(LoopSnapshot)); ok {
 				history := make([]string, 0)
@@ -604,6 +620,19 @@ func RunLoopContext(
 			})
 		}
 		messages = append(messages, Message{Role: "user", Content: formatToolResults(toolResults)})
+
+		// #337 (finding 4): the read-spiral nudge. Read-before-edit is right;
+		// a session that ONLY reads is a spiral. Mid-flight so the model can
+		// diverge BEFORE the iteration cap — the cap reply stops the run, the
+		// nudge keeps it working.
+		if readsSinceWrite >= readSpiralThreshold && readsSinceWrite >= lastReadNudge+readSpiralRefire {
+			lastReadNudge = readsSinceWrite
+			messages = append(messages, Message{
+				Role:    "user",
+				Content: fmt.Sprintf("[System: you have made %d read_file calls in a row without any edit or write attempt. Reading before editing is right; reading forever is a spiral. Make the change you have been preparing (edit_file / write_file / bash), or state explicitly what you are blocked on and change approach. You have used %d of %d iterations.]", readsSinceWrite, i-1, maxIter),
+			})
+			trace("midflight_signal", map[string]any{"signal": "read_spiral", "iteration": i - 1, "reads": readsSinceWrite})
+		}
 
 		// Loop detection: check for repeated identical tool calls. Skipped inside
 		// playbook stages: a stage whose whitelist is only search_web + write_file
@@ -1317,6 +1346,15 @@ func closeTrace(home string) {
 // up to 8k chars each, re-sent on every iteration — dominating a 2.48M-token
 // run. The system prompt already coaches targeted slice reads.
 const artifactInlineLimit = 4000
+
+// readSpiralThreshold/Refire — the read-spiral tripwire (#337, finding 4):
+// consecutive read_file calls without any edit/write attempt. Fire the nudge
+// at the threshold, re-fire every readSpiralRefire more reads (escalation
+// without spam, same family as the #171 repStreak nudge).
+const (
+	readSpiralThreshold = 12
+	readSpiralRefire    = 10
+)
 
 // toolPreviewHead/Tail: how much of a compacted result stays inline after the
 // marker (the compactUserInput pattern).
