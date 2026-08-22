@@ -14,11 +14,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: gofmt (changed files only)
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE="HEAD~1"
+          fi
+          files=$(git diff --name-only "$BASE" HEAD -- '*.go')
+          if [ -z "$files" ]; then
+            echo "no .go files changed — gate skipped"
+            exit 0
+          fi
+          unformatted=$(gofmt -l $files)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed on changed files (run gofmt -w on these):"
+            echo "$unformatted"
+            exit 1
+          fi
+          echo "all changed .go files gofmt-clean"
 
       - name: Test
         run: go test -count=1 ./...

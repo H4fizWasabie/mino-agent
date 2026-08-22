@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Changed
+
+- **CI gofmt gate on changed files only**: new step in `ci.yml` runs `gofmt -l` over exactly the `.go` files a PR touches (base-sha diff; fallback `HEAD~1` on push). New PRs can no longer add formatting drift; pre-existing dirty files pass until touched, then heal in place. No repo-wide rewrite.
+
 ### Fixed
 
 - **Health-check readiness window 30s→60s in the update tests (closes #338)**: `TestVerifyNewBinaryHealthy` and the applyUpdate happy path boot the real binary against a staged home; the 30s window timed out at 32.24s on a loaded CI runner (PR #332: same commit, one red run one green). The window is now 60s — 2x headroom for a first-time staged Connect — while the timeout-branch test keeps its own short window and still pins the failure path. Test-only change; the production readiness window (`updateHealthTimeout` default) is untouched. (Why: a flaky gate burns reviewer time on reruns without testing anything.)
