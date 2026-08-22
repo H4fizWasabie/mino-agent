@@ -35,3 +35,6 @@ index.json
 /mino.env
 /mino.exe
 extensions/mino-memory/mino-memory
+
+# personal reference screenshots pasted for agent sessions
+/*.png
