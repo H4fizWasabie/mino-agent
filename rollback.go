@@ -21,6 +21,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -137,8 +138,74 @@ func applyUpdate(exe, home, tag, sum, newPath string) error {
 		slog.Warn("write deployed-version marker failed", "error", err)
 	}
 
-	fmt.Printf("Updated to %s (verified %s, health check passed). Restart Mino to use the new version.\n", tag, sum)
+	fmt.Printf("Updated to %s (verified %s, health check passed).\n", tag, sum)
+	maybeRestartService(home)
 	return nil
+}
+
+// sudoRun is the privileged-runner seam for the post-update restart (the
+// same test-seam family as runPlain in privilege.go).
+var sudoRun = runSudo
+
+// maybeRestartService rolls the running service onto the freshly swapped
+// binary (issue #331 #6): an update that ends in "Restart Mino…" and no
+// restart silently keeps old code live (observed 2026-08-22). Same boundary
+// as the restart_service tool (host_tools.go): identity-resolve via
+// `systemctl show`, whitelist check, journal intent FIRST — Run commits
+// synchronously, and the restart kills the serving process mid-call, so
+// nothing after it may be owed a write. Every refusal degrades to today's
+// manual message; the binary swap is already durable when this runs.
+func maybeRestartService(home string) {
+	unit := envOr("MINO_SERVICE", "mino.service")
+	if !unitNameRe.MatchString(unit) {
+		fmt.Printf("Restart Mino to use the new version (%q is not a valid unit name).\n", unit)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), hostOpTimeout)
+	defer cancel()
+	id, _, err := resolveUnit(ctx, unit)
+	if err != nil {
+		// No systemd here (dev box, Windows release asset) — nothing to roll.
+		fmt.Printf("Restart Mino to use the new version (no systemd unit %q found).\n", unit)
+		return
+	}
+	if id != unit {
+		fmt.Printf("Restart Mino to use the new version (%s resolves to %q, not %q — refusing).\n", unit, id, unit)
+		return
+	}
+	active, err := runPlain(ctx, []string{"systemctl", "is-active", unit})
+	if err != nil || strings.TrimSpace(active) != "active" {
+		fmt.Printf("Restart Mino to use the new version (%s is not active — nothing running to restart).\n", unit)
+		return
+	}
+	argv := []string{"/usr/bin/systemctl", "restart", unit}
+	if !allowSudo(home, argv) {
+		fmt.Printf("Restart Mino to use the new version (systemctl restart of %s%s).\n", unit, notWhitelisted)
+		return
+	}
+	j, jerr := openJournal(home)
+	if jerr != nil {
+		fmt.Printf("Restart Mino to use the new version (journal unavailable: %v — no restart without an entry).\n", jerr)
+		return
+	}
+	before, _ := json.Marshal(map[string]string{"active": "active"})
+	entry := &OpEntry{
+		OpType:      "service.restart",
+		Entity:      unit,
+		BeforeState: string(before),
+		AfterState:  `{"requested": true}`,
+	}
+	if _, jerr := j.Run(entry, nil); jerr != nil {
+		fmt.Printf("Restart Mino to use the new version (journal write failed: %v).\n", jerr)
+		return
+	}
+	// Print BEFORE the restart: a successful restart terminates the serving
+	// process (and any session riding it) during this call.
+	fmt.Printf("Restarting %s via systemd — the connection will drop; reconnect and verify with 'systemctl status' or the dashboard.\n", unit)
+	if _, err := sudoRun(ctx, argv); err != nil {
+		j.SetStatus(entry.ID, OpStatusFailed)
+		fmt.Printf("Error: auto-restart failed: %v — restart %s manually to use the new version.\n", err, unit)
+	}
 }
 
 // writeDeployedVersion records the running release tag in the home dir so
@@ -190,7 +257,8 @@ func DoRollback() error {
 		}
 	}
 	recordDeployment(home, "rollback", tag, sum, exe)
-	fmt.Printf("Rolled back to the previous binary (sha256 %s). Restart Mino to use it.\n", sum)
+	fmt.Printf("Rolled back to the previous binary (sha256 %s).\n", sum)
+	maybeRestartService(home)
 	return nil
 }
 

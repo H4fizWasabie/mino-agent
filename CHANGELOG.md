@@ -1,3 +1,9 @@
+## [Unreleased]
+
+### Fixed
+
+- **Updater and rollback auto-restart the running service (issue #331 finding 6)**: `mino update` completed with "Restart Mino to use the new version." — and if nobody (or no deploy script) followed through, the old binary kept serving silently while the release sat unused on disk. `applyUpdate` now attempts the rolling restart after the swap is verified durable: identity-resolve via `systemctl show` (a name that resolves to any other unit is refused), `is-active` probe, sudoers whitelist check — the exact boundary the model-facing `restart_service` tool uses — journal the `service.restart` intent FIRST (`OpJournal.Run` commits synchronously; nothing is owed a write past the restart call), print the connection-drop notice BEFORE issuing `systemctl restart`, then restart Mino's own unit (`MINO_SERVICE`, default `mino.service`). Every refusal path — no systemd (Windows assets ship in every release), foreign unit, inactive service, whitelist miss, journal unavailable — degrades to today's manual message; the already-swapped binary never regresses. `DoRollback` gets the same treatment: a rollback restores a known-good binary precisely to run it. Covered by `TestMaybeRestartServiceJournalsThenRestarts`, `TestMaybeRestartServiceNonSystemdSelfSkips`, `TestMaybeRestartServiceRefusesForeignUnit`, and `TestMaybeRestartServiceWhitelistRefusalSkips`. (Why: the update's last step was a request, not an effect — a forgotten manual step silently extended old-code runtime.)
+
 ## [v3.1.3] — taskify offer turn fence + observability (2026-08-22)
 
 ### Fixed

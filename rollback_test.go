@@ -10,6 +10,10 @@ package main
 // boot, not a self-consistent round-trip (the RUN-003 review lesson).
 
 import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -311,5 +315,145 @@ func TestWriteDeployedVersion(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(data)); got != "v9.9.9" {
 		t.Fatalf("marker = %q, want v9.9.9", got)
+	}
+}
+
+// --- maybeRestartService (issue #331 #6): the post-update rolling restart ---
+
+// stubSystemd replaces runPlain/sudoRun for maybeRestartService tests and
+// returns a restore func. plain dispatches on argv[1]: "show" answers the
+// resolveUnit probe, "is-active" answers the liveness probe.
+func stubSystemd(t *testing.T, showOut string, showErr error, isActive string, isActiveErr error, sudoCalls *[][]string) func() {
+	t.Helper()
+	prevPlain, prevSudo := runPlain, sudoRun
+	runPlain = func(ctx context.Context, argv []string) (string, error) {
+		switch argv[1] {
+		case "show":
+			return showOut, showErr
+		case "is-active":
+			return isActive, isActiveErr
+		}
+		return "", fmt.Errorf("unexpected probe %v", argv)
+	}
+	sudoRun = func(ctx context.Context, argv []string) (string, error) {
+		if sudoCalls != nil {
+			*sudoCalls = append(*sudoCalls, argv)
+		}
+		return "", nil
+	}
+	return func() { runPlain, sudoRun = prevPlain, prevSudo }
+}
+
+// captureStdout collects everything a fn prints, so tests can assert the
+// owner-facing message (the manual-restart fallback wording is contract).
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	prev := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	fn()
+	w.Close()
+	os.Stdout = prev
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	return buf.String()
+}
+
+const minoUnitShow = "Id=mino.service\nUnitFileState=enabled\n"
+
+// Happy path: unit resolves to itself, is active, whitelisted — journals the
+// restart intent FIRST (Run commits before the kill), then issues exactly
+// one systemctl restart.
+func TestMaybeRestartServiceJournalsThenRestarts(t *testing.T) {
+	home := testHome(t)
+	t.Setenv("MINO_SERVICE", "mino.service")
+	var calls [][]string
+	restore := stubSystemd(t, minoUnitShow, nil, "active", nil, &calls)
+	defer restore()
+
+	out := captureStdout(t, func() { maybeRestartService(home) })
+
+	if len(calls) != 1 || strings.Join(calls[0], " ") != "/usr/bin/systemctl restart mino.service" {
+		t.Fatalf("restart calls = %v, want one /usr/bin/systemctl restart mino.service", calls)
+	}
+	j, err := openJournal(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := j.LastOp("mino.service")
+	if err != nil || op.OpType != "service.restart" {
+		t.Fatalf("journal op = %+v, err = %v — restart ran without an entry", op, err)
+	}
+	// Print ordering: the drop notice must precede the restart in output,
+	// because nothing after a successful restart call gets printed.
+	if !strings.Contains(out, "Restarting mino.service") {
+		t.Fatalf("output missing restart notice: %q", out)
+	}
+}
+
+// The non-systemd path (Windows asset, dev box): resolveUnit fails → self-skip
+// with today's manual message. Named test so this cannot regress silently —
+// mino-windows-amd64.exe ships in every release.
+func TestMaybeRestartServiceNonSystemdSelfSkips(t *testing.T) {
+	home := testHome(t)
+	t.Setenv("MINO_SERVICE", "mino.service")
+	var calls [][]string
+	restore := stubSystemd(t, "", fmt.Errorf("exec: not found"), "", nil, &calls)
+	defer restore()
+
+	out := captureStdout(t, func() { maybeRestartService(home) })
+
+	if len(calls) != 0 {
+		t.Fatalf("restart attempted on non-systemd host: %v", calls)
+	}
+	if !strings.Contains(out, "Restart Mino to use the new version") {
+		t.Fatalf("manual fallback message missing: %q", out)
+	}
+}
+
+// A unit name that resolves to something else is never touched (the
+// restart_service identity rule).
+func TestMaybeRestartServiceRefusesForeignUnit(t *testing.T) {
+	home := testHome(t)
+	t.Setenv("MINO_SERVICE", "not-mino.service")
+	var calls [][]string
+	restore := stubSystemd(t, "Id=other.service\nUnitFileState=enabled\n", nil, "active", nil, &calls)
+	defer restore()
+
+	out := captureStdout(t, func() { maybeRestartService(home) })
+
+	if len(calls) != 0 {
+		t.Fatalf("restart attempted on foreign unit: %v", calls)
+	}
+	if !strings.Contains(out, "refusing") {
+		t.Fatalf("refusal message missing: %q", out)
+	}
+}
+
+// Outside the sudoers whitelist → manual fallback, no privileged call.
+func TestMaybeRestartServiceWhitelistRefusalSkips(t *testing.T) {
+	home := testHome(t)
+	t.Setenv("MINO_SERVICE", "mino.service")
+	sudoers := filepath.Join(t.TempDir(), "mino")
+	if err := os.WriteFile(sudoers, []byte("root ALL=(root) NOPASSWD: /usr/bin/apt-get install -y *\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MINO_SUDOERS_FILE", sudoers)
+	var calls [][]string
+	restore := stubSystemd(t, minoUnitShow, nil, "active", nil, &calls)
+	defer restore()
+
+	out := captureStdout(t, func() { maybeRestartService(home) })
+
+	if len(calls) != 0 {
+		t.Fatalf("restart attempted outside whitelist: %v", calls)
+	}
+	if !strings.Contains(out, "Restart Mino to use the new version") {
+		t.Fatalf("manual fallback message missing: %q", out)
 	}
 }
