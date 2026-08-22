@@ -354,7 +354,8 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 		w.auditLog(sessionID, eventType, message, iteration)
 	})
 	system, routing := conversation.Session.BuildContext(userMessage, source)
-	offerTurn := false // #329: true when this turn is a fenced taskify offer turn
+	offerTurn := false       // #329: true when this turn is a fenced taskify offer turn
+	fenceLiftedNote := false // #335: true when this turn carries the fence-lifted note
 	// #237: the owner's approval of a paused task gate is a harness decision
 	// (the model can never approve its own run — approval.go's RUN-006
 	// discipline). Detect the approval BEFORE the loop, mark the run approved
@@ -384,6 +385,14 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 		var offerTurnLocal bool
 		tail, offerTurnLocal = applyTaskifyOffer(tail, userMessage, gateRouting != "")
 		offerTurn = offerTurnLocal
+		// #335 (finding 2): the fence is per-turn, but the RUN-006d errors it
+		// left in history made later turns believe work stays blocked. The
+		// first UNFENCED turn after a fenced one carries the fence-lifted
+		// note; the session flag records this turn's state for the next one.
+		lastTurnFenced := conversation.Session.OfferFencedLastTurn()
+		fenceLiftedNote = !offerTurnLocal && lastTurnFenced
+		tail = applyFenceLiftedNote(tail, offerTurnLocal, lastTurnFenced)
+		conversation.Session.SetOfferFenced(offerTurnLocal)
 		ctx = context.WithValue(ctx, taskifyOfferKey{}, offerTurn)
 		messages[len(messages)-1].Content += "\n\n" + tail
 	}
@@ -405,7 +414,7 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 			msgLen += len(block) + 2
 		}
 	}
-	logTrace(w.Settings.Home, "turn_start", map[string]any{"user_message": userMessage, "system_chars": len(system), "msg_count": len(messages), "msg_chars": msgLen, "taskify_offer": offerTurn})
+	logTrace(w.Settings.Home, "turn_start", map[string]any{"user_message": userMessage, "system_chars": len(system), "msg_count": len(messages), "msg_chars": msgLen, "taskify_offer": offerTurn, "fence_lifted_note": fenceLiftedNote})
 	if len(images) > 0 {
 		messages[len(messages)-1].Images = images
 	}

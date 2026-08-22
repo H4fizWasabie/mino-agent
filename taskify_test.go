@@ -600,3 +600,54 @@ func TestApplyTaskifyOffer(t *testing.T) {
 		t.Fatal("gate-approval turn must not be re-offered or fenced")
 	}
 }
+
+// #335 (finding 2): after a fenced offer turn, the RUN-006d errors linger in
+// history and the model believes work stays blocked — later UNFENCED turns
+// refused to act even on explicit approval. The first unfenced turn after a
+// fenced one carries a fence-lifted note expiring those errors.
+
+func TestTaskifyFenceLiftedNote(t *testing.T) {
+	note := taskifyFenceLiftedNote()
+	for _, want := range []string{"fence lifted", "PREVIOUS turn only", "EXPIRED", "work tools are available", "call taskify now"} {
+		if !strings.Contains(note, want) {
+			t.Fatalf("note missing %q: %s", want, note)
+		}
+	}
+}
+
+// The note fires exactly once: on the first unfenced turn after a fenced
+// one. A re-fenced turn (the owner's next message carries task verbs again)
+// gets the offer, not the note; the following unfenced turn gets the note.
+func TestApplyFenceLiftedNote(t *testing.T) {
+	tail := "CLOCK"
+	// no previous fence → no note
+	if got := applyFenceLiftedNote(tail, false, false); got != tail {
+		t.Fatalf("unexpected note without a previous fence: %q", got)
+	}
+	// this turn is itself fenced → the offer + fence govern, no note
+	if got := applyFenceLiftedNote(tail, true, true); got != tail {
+		t.Fatalf("fenced turn must not carry the lifted note: %q", got)
+	}
+	// first unfenced turn after a fence → note appended
+	got := applyFenceLiftedNote(tail, false, true)
+	if !strings.Contains(got, taskifyFenceLiftedNote()) {
+		t.Fatalf("fence-lifted note missing on the post-fence turn: %q", got)
+	}
+}
+
+// Session-level: the flag records the fence state across turns (the app.go
+// wiring: fenced turn, then unfenced turn, then another unfenced turn).
+func TestSessionOfferFenceFlag(t *testing.T) {
+	s := NewSession(&Settings{}, nil)
+	if s.OfferFencedLastTurn() {
+		t.Fatal("fresh session must not report a previous fence")
+	}
+	s.SetOfferFenced(true)
+	if !s.OfferFencedLastTurn() {
+		t.Fatal("fenced turn must be visible to the next turn")
+	}
+	s.SetOfferFenced(false)
+	if s.OfferFencedLastTurn() {
+		t.Fatal("unfenced turn must reset the flag for the following turn")
+	}
+}

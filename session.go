@@ -66,11 +66,23 @@ type Session struct {
 	mem       *Memory
 	sessionID string
 	history   []Message
+	// offerFencedLast records whether the PREVIOUS turn was a fenced taskify
+	// offer turn (#335 finding 2) — the trigger for the fence-lifted note on
+	// the next unfenced turn. In-memory only: a restart re-injects the offer
+	// on the next task-verb message anyway.
+	offerFencedLast bool
 }
 
 func NewSession(s *Settings, mem *Memory) *Session {
 	return &Session{settings: s, mem: mem, sessionID: "default", history: make([]Message, 0)}
 }
+
+// OfferFencedLastTurn reports whether the previous turn carried the taskify
+// offer fence — the trigger for the fence-lifted note (applyFenceLiftedNote).
+func (s *Session) OfferFencedLastTurn() bool { return s.offerFencedLast }
+
+// SetOfferFenced records whether THIS turn was fenced, for the next turn.
+func (s *Session) SetOfferFenced(fenced bool) { s.offerFencedLast = fenced }
 
 // loadSoul — Core's load_soul(): editable persona file.
 func loadSoul(home string) string {

@@ -421,6 +421,7 @@ var promptAssemblySeams = []string{
 	"alertScheduleHealth",
 	"contextBudgetBlock",
 	"taskIntentOffer",
+	"taskifyFenceLiftedNote",
 	"buildTaskifyStages",
 	"splitOfferText",
 	"gatePauseReply",
