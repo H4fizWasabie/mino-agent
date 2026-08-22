@@ -85,6 +85,26 @@ func applyTaskifyOffer(tail, userMessage string, gateRouted bool) (string, bool)
 	return offer + "\n\n" + tail, true
 }
 
+// taskifyFenceLiftedNote is the per-turn note appended to the first
+// UNFENCED turn after a fenced offer turn (#335, finding 2): the RUN-006d
+// errors the fenced turn left in history taught the model work stays
+// blocked, so later turns refused to act even when the owner approved. The
+// note expires those errors and re-states the offer's real semantics.
+const taskifyFenceLiftedText = "Offer fence lifted: the taskify OFFER fence applied to the PREVIOUS turn only — any RUN-006d errors in the history above are EXPIRED, and work tools are available again this turn. The offer itself still stands: if the owner has just approved the task, call taskify now (the scaffold pauses at the owner-approval gate before anything executes); if the owner is still discussing, continue the discussion — do not start work without an explicit approval."
+
+func taskifyFenceLiftedNote() string { return taskifyFenceLiftedText }
+
+// applyFenceLiftedNote appends the fence-lifted note to a turn that follows
+// a fenced offer turn, so the model does not carry the fence forward
+// (#335). Returns the tail unchanged when this turn is itself fenced (the
+// offer + fence are re-injected) or the previous turn was not fenced.
+func applyFenceLiftedNote(tail string, thisTurnFenced, lastTurnFenced bool) string {
+	if !thisTurnFenced && lastTurnFenced {
+		return tail + "\n\n" + taskifyFenceLiftedNote()
+	}
+	return tail
+}
+
 var (
 	taskifyVerbRe   = regexp.MustCompile(`(?i)\b(build|redesign|fix|create|make)\b`)
 	taskifyPhraseRe = regexp.MustCompile(`(?i)\b(coding task|run this as a task)\b`)
