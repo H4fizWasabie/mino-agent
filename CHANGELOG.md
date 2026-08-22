@@ -2,6 +2,8 @@
 
 ### Changed
 
+- **Archived dated drift docs into `archive/`**: `audit-pass1.md`, `docs/live-proof-20260814.md`, and `docs/model-research-openrouter-cheap.md` were one-time audit/proof/research snapshots sitting at the top level where an agent or reader could mistake them for current guidance. Moved (not deleted) into `archive/`; no code or doc links referenced them (link-resolution test passes unchanged).
+
 - **Dashboard playbook cards cap the runs list at the latest 10 with an expander (closes #323)**: `memPlaybooks` rendered every run row of every playbook card, and run state is never pruned — long-lived playbooks grew unbounded lists re-rendered on each dashboard rebuild. Cards now show the 10 most recent runs inline (runs arrive newest-first); older runs collapse behind a `playbook-runs-more` `<details>` expander with a count, keeping failed-run delete actions reachable without pagination machinery. Covered by `TestDashboardPlaybookRunsCappedWithExpander` (presence checks + node harness over `splitPlaybookRuns`).
 
 ### Fixed
