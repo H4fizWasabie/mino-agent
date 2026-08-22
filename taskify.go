@@ -24,6 +24,11 @@
 // (02-...-b); the run then resumes mid-task, never from zero. The owner's
 // approval reply is intercepted by the harness (approvePendingTaskGate) — the
 // model can never approve its own gate (the RUN-006 discipline of approval.go).
+//
+// Owner approval convention: approve a taskified task with a bare word
+// (go / yes / approved) — avoid task verbs in the approval; verb-phrased
+// feedback re-fires the offer (by design, #336) and costs one extra approval
+// turn.
 
 package main
 

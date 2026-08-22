@@ -60,7 +60,12 @@ func TestVerifyNewBinaryHealthy(t *testing.T) {
 	bin := buildRealMino(t)
 	home := testHome(t)
 
-	if err := verifyNewBinary(bin, home, 30*time.Second); err != nil {
+	// #338: 60s window — the 30s window timed out at 32.24s on a loaded CI
+	// runner (PR #332 run; same commit passed on rerun + locally). The
+	// candidate boot includes a first-time Connect on a staged home; 2x
+	// headroom keeps the flake out of the gate while the timeout-branch test
+	// still pins the failure path with its own short window.
+	if err := verifyNewBinary(bin, home, 60*time.Second); err != nil {
 		t.Fatalf("verifyNewBinary: %v", err)
 	}
 }
@@ -111,7 +116,10 @@ func TestApplyUpdateHappyPathSwapsJournalsAndPassesHealthCheck(t *testing.T) {
 	writeExec(t, exe, "OLD-BINARY")
 	oldSum, _ := sha256File(exe)
 
-	updateHealthTimeout = 30 * time.Second
+	// #338: same 60s window as TestVerifyNewBinaryHealthy — this path also
+	// boots the real binary (first-time Connect on a staged home) and shared
+	// the flake on loaded runners.
+	updateHealthTimeout = 60 * time.Second
 	if err := applyUpdate(exe, home, "v9.9.9", sum, bin); err != nil {
 		t.Fatalf("applyUpdate: %v", err)
 	}
