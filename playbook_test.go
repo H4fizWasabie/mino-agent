@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"reflect"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -1197,6 +1197,14 @@ func TestClassifySchedule(t *testing.T) {
 		{"run exactly at occurrence covers", PlaybookSchedule{Time: "13:00", Timezone: tz, LastRun: today1300}, at(10, 13, 0), false, scheduleSkip},
 		{"yesterday's run does not cover today's occurrence", PlaybookSchedule{Time: "13:00", Timezone: tz, LastRun: yesterday09}, at(10, 13, 0), false, scheduleFire},
 		{"next-day old miss is missed", PlaybookSchedule{Time: "13:00", Timezone: tz, LastRun: yesterday09}, at(11, 8, 0), true, scheduleMissed},
+		// Day-gated schedules (#348): the most recent occurrence is the previous
+		// MATCHING weekday, not yesterday. Aug 9 and Aug 2 2026 are Sundays;
+		// 2026-08-02T10:00:00Z is Sunday 18:00 KL.
+		{"weekly covered by last week's run skips (boot before window, #348)", PlaybookSchedule{Time: "18:00", Timezone: tz, Days: []string{"sunday"}, LastRun: "2026-08-02T10:00:00Z"}, at(9, 17, 28), true, scheduleSkip},
+		{"weekly after window same day fires late in catch-up", PlaybookSchedule{Time: "18:00", Timezone: tz, Days: []string{"sunday"}}, at(9, 18, 30), true, scheduleFire},
+		{"weekly genuinely missed last week is missed", PlaybookSchedule{Time: "18:00", Timezone: tz, Days: []string{"sunday"}, LastRun: "2026-07-26T10:00:00Z"}, at(9, 17, 28), true, scheduleMissed},
+		{"weekly in window on matching day fires", PlaybookSchedule{Time: "18:00", Timezone: tz, Days: []string{"sunday"}}, at(9, 18, 0), false, scheduleFire},
+		{"weekly non-matching day skips even in catch-up", PlaybookSchedule{Time: "18:00", Timezone: tz, Days: []string{"sunday"}}, at(10, 12, 0), true, scheduleSkip},
 		{"never-run old occurrence is missed at classify level", PlaybookSchedule{Time: "13:00", Timezone: tz}, at(11, 8, 0), true, scheduleMissed},
 		{"future LastRun covers", PlaybookSchedule{Time: "13:00", Timezone: tz, LastRun: future}, at(10, 13, 0), false, scheduleSkip},
 		{"invalid timezone skips", PlaybookSchedule{Time: "13:00", Timezone: "Mars/Olympus"}, at(10, 13, 0), false, scheduleSkip},
