@@ -1,3 +1,11 @@
+## [v3.1.6] — schedule false-miss fix, disconnect-proof playbook runs (2026-08-23)
+
+### Fixed
+
+- **Day-gated schedules no longer flag a false miss on pre-window restarts (closes #348)**: \`classifySchedule\` resolved the most recent occurrence to "yesterday" when booting before today's window — correct for daily schedules (yesterday's run covers it), wrong for day-gated ones, where yesterday is never a matching weekday and nothing can ever cover it. Result: every restart on a matching day before the window stamped \`missed_at\` and sent a spurious Telegram notice (live 2026-08-23: weekly-audit flagged 32 minutes before its 18:00 KL window). The occurrence now walks back to the previous matching weekday (≤7 steps; \`days\` non-empty), so last week's run covers it; genuine misses still classify correctly. Five new table cases at the \`classifySchedule\` seam.
+
+- **Manual playbook runs survive a client disconnect (closes #316)**: the run context derived from the caller's request context, so a browser close / curl timeout / SSH teardown cancelled a long manual run mid-stage (\`runtime cancelled: Stopped\`) — real work lost and runs looking failed when only the client died. The run now derives from a detached parent: every caller value (session id, trace tags, audit/snapshot callbacks) still flows through, but caller cancellation does not. Cancellation stays owned by the run registry (#310): \`cancel_run\` and the shutdown hook still interrupt cleanly. When the caller is gone mid-run, the result is delivered via the existing outbox → Telegram instead of dying with the connection. Scheduler path unchanged. Covered by \`TestDetachCancelKeepsValuesSeversCancellation\`, \`TestManualRunSurvivesClientDisconnect\`, and \`TestRunPlaybookToolNoOutboxWhenClientConnected\`.
+
 ## [v3.1.5] — data residency: usage history into SQLite, trace retention (2026-08-22)
 
 ### Changed
