@@ -1509,6 +1509,39 @@ func pruneSpillsIfDue(home string) {
 	}
 	lastSpillPrune = time.Now()
 	pruneSpills(home)
+	pruneTraces(home) // DATA-002 (#345): traces had no retention; same sweep, same bound
+}
+
+// traceRetentionDays bounds traces/: daily trace files older than this are
+// pruned. 30 days matches the audit-event and spill horizons.
+const traceRetentionDays = 30
+
+// pruneTraces deletes traces/<date>.jsonl files older than traceRetentionDays
+// (DATA-002, #345). The date in the filename is the truth (files are written
+// by UTC date); mtime is the fallback for unparseable names. Removal races
+// with an active writer on today's file are benign: today's date never
+// parses as older than the cutoff, and a failed remove retries next sweep.
+func pruneTraces(home string) {
+	root := filepath.Join(home, "traces")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return // no traces dir yet
+	}
+	cutoff := time.Now().AddDate(0, 0, -traceRetentionDays).UTC()
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		old := false
+		if t, err := time.Parse("2006-01-02", strings.TrimSuffix(e.Name(), ".jsonl")); err == nil {
+			old = t.Before(cutoff)
+		} else if info, err := e.Info(); err == nil {
+			old = info.ModTime().Before(cutoff)
+		}
+		if old {
+			os.Remove(filepath.Join(root, e.Name()))
+		}
+	}
 }
 
 // pruneSpills deletes spill files older than spillRetention and the empty

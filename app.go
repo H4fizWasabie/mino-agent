@@ -49,7 +49,7 @@ type Core struct {
 	ext              *ExtensionSupervisor
 	mcp              *MCPBridge
 	approvals        *ApprovalGate // RUN-006: stage/page/approve gate for risky ops
-	snapshots        sync.Map // sessionID → *LoopSnapshot (ephemeral, per-loop state)
+	snapshots        sync.Map      // sessionID → *LoopSnapshot (ephemeral, per-loop state)
 }
 
 func NewCore() *Core {
@@ -63,7 +63,7 @@ func NewCore() *Core {
 		panic(fmt.Sprintf("initialize responsibilities: %v", err))
 	}
 	authStore := LoadAuthStore(s.Home)
-	client, err := NewProviderManager(s.Home, s, authStore)
+	client, err := NewProviderManager(s.Home, s, authStore, db)
 	if err != nil {
 		if !dashboardRequested() || !needsOnboarding(s.Home) {
 			panic(err)

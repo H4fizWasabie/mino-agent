@@ -8,12 +8,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -61,7 +61,7 @@ type Client struct {
 	baseURL         string
 	transport       string // wire family: "" / "openai" | "anthropic" | "codex" (declared in providers.json, PRV-001)
 	client          *http.Client
-	usageLogPath    string
+	usageDB         *sql.DB  // DATA-001 (#344): usage records land in state.db, not usage.jsonl
 	providerRouting []string // openrouter provider routing, e.g. ["DigitalOcean"]
 	allowFallbacks  bool     // may fall back outside the routing list (default false = privacy-safe)
 }
@@ -234,7 +234,7 @@ func parseResponse(r io.Reader, jsonMode bool) (*LLMResponse, error) {
 				// surface the thinking trace under "reasoning" instead of
 				// DeepSeek's "reasoning_content". Capture both (see #163).
 				ReasoningAlt string `json:"reasoning"`
-				ToolCalls []struct {
+				ToolCalls    []struct {
 					ID       string `json:"id"`
 					Function struct {
 						Name      string `json:"name"`
@@ -345,7 +345,7 @@ func parseSSEStream(r io.Reader, onText func(string)) (*LLMResponse, error) {
 					ReasoningContent string `json:"reasoning_content"`
 					// Some providers send thinking under "reasoning" (see #163).
 					ReasoningAlt string `json:"reasoning"`
-					ToolCalls        []struct {
+					ToolCalls    []struct {
 						Index    int    `json:"index"`
 						ID       string `json:"id"`
 						Function struct {
@@ -728,47 +728,29 @@ func parseAnthropicStream(r io.Reader, onText func(string)) (*LLMResponse, error
 	}, nil
 }
 
-// logUsage appends a usage record to usage.jsonl (Core format)
+// logUsage inserts a usage record into state.db (Core format fields kept as
+// columns — DATA-001, #344). Failure warns loudly, never drops silently
+// (#200: a silent drop blinded cost accounting for ~15 min on 2026-08-15).
 func (c *Client) logUsage(ctx context.Context, model string, resp *LLMResponse, startTime time.Time) {
-	if resp == nil || c.usageLogPath == "" {
+	if resp == nil || c.usageDB == nil {
 		return
 	}
 	sid := ""
 	if v := ctx.Value(sessionIDKey{}); v != nil {
 		sid, _ = v.(string)
 	}
-	record := map[string]any{
-		"ts":          time.Now().UTC().Format(time.RFC3339),
-		"provider":    "openai",
-		"model":       model,
-		"session_id":  sid,
-		"in":          resp.Usage.InputTokens,
-		"out":         resp.Usage.OutputTokens,
-		"cache_read":  resp.Usage.CacheReadTokens,
-		"cache_write": resp.Usage.CacheCreationTokens,
-		"latency_ms":  time.Since(startTime).Milliseconds(),
-	}
-	// Real provider-reported USD (issue #76): usage.jsonl is the source of
-	// truth for spend; the price table is only a fallback for providers that
-	// omit cost. Kept out of the record when 0 so legacy consumers see the
-	// same shape and the fallback path stays exercisable.
+	var cost any
 	if resp.Usage.CostUSD > 0 {
-		record["cost_usd"] = resp.Usage.CostUSD
+		cost = resp.Usage.CostUSD
 	}
-	data, _ := json.Marshal(record)
-	f, err := os.OpenFile(c.usageLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	_, err := c.usageDB.Exec(`INSERT INTO usage_log
+		(ts, provider, model, session_id, in_tokens, out_tokens, cache_read, cache_write, latency_ms, cost_usd)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		time.Now().UTC().Format(time.RFC3339), "openai", model, sid,
+		resp.Usage.InputTokens, resp.Usage.OutputTokens,
+		resp.Usage.CacheReadTokens, resp.Usage.CacheCreationTokens,
+		time.Since(startTime).Milliseconds(), cost)
 	if err != nil {
-		// Issue #200: a silent drop here made cost accounting go blind for
-		// ~15 min on 2026-08-15 (root-owned file, mino user, no log line).
-		slog.Warn("usage log open failed, dropping record", "path", c.usageLogPath, "error", err)
-		return
-	}
-	defer f.Close()
-	if _, err := f.Write(data); err != nil {
-		slog.Warn("usage log write failed, dropping record", "path", c.usageLogPath, "error", err)
-		return
-	}
-	if _, err := f.Write([]byte("\n")); err != nil {
-		slog.Warn("usage log write failed, dropping record", "path", c.usageLogPath, "error", err)
+		slog.Warn("usage log insert failed, dropping record", "error", err)
 	}
 }

@@ -2,16 +2,19 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
 
 // CurrentSchemaVersion is incremented when the schema changes in a way
 // that needs explicit migration. Add a migration function in runMigrations().
-const CurrentSchemaVersion = 7
+const CurrentSchemaVersion = 8
 
 // Simplified schema — single statements, no triggers with embedded semicolons.
 var schemaStatements = []string{
@@ -119,6 +122,23 @@ var schemaStatements = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_ops_journal_entity ON ops_journal(entity, id)`,
 	`CREATE VIRTUAL TABLE IF NOT EXISTS tool_catalog_fts USING fts5(name UNINDEXED, description, keywords)`,
+	// DATA-001 (#344): usage records move from the unbounded usage.jsonl into
+	// SQLite; columns mirror the legacy JSONL record fields.
+	`CREATE TABLE IF NOT EXISTS usage_log (
+		id INTEGER PRIMARY KEY,
+		ts TEXT NOT NULL,
+		provider TEXT NOT NULL DEFAULT '',
+		model TEXT NOT NULL DEFAULT '',
+		session_id TEXT NOT NULL DEFAULT '',
+		in_tokens INTEGER NOT NULL DEFAULT 0,
+		out_tokens INTEGER NOT NULL DEFAULT 0,
+		cache_read INTEGER NOT NULL DEFAULT 0,
+		cache_write INTEGER NOT NULL DEFAULT 0,
+		latency_ms INTEGER NOT NULL DEFAULT 0,
+		cost_usd REAL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_usage_log_ts ON usage_log(ts)`,
+	`CREATE INDEX IF NOT EXISTS idx_usage_log_session ON usage_log(session_id)`,
 	`CREATE TABLE IF NOT EXISTS _meta (
 		key TEXT PRIMARY KEY,
 		value TEXT NOT NULL
@@ -145,7 +165,7 @@ func Connect(home string) *sql.DB {
 			panic(fmt.Sprintf("initialize SQLite schema: %v", err))
 		}
 	}
-	runMigrations(db)
+	runMigrations(db, home)
 	if err := initAudit(db); err != nil {
 		panic(fmt.Sprintf("initialize audit schema: %v", err))
 	}
@@ -156,7 +176,7 @@ func Connect(home string) *sql.DB {
 // runMigrations gates versioned schema migrations by the _meta.schema_version key.
 // Legacy databases (no _meta table yet) start at version 0.
 // Each migration runs only if current < its target version, then bumps the version.
-func runMigrations(db *sql.DB) {
+func runMigrations(db *sql.DB, home string) {
 	var current int
 	err := db.QueryRow("SELECT value FROM _meta WHERE key = 'schema_version'").Scan(&current)
 	if err != nil {
@@ -188,6 +208,13 @@ func runMigrations(db *sql.DB) {
 		db.Exec("DROP TABLE IF EXISTS memory_embeddings")
 		current = 7
 	}
+	// v8: usage.jsonl → usage_log (DATA-001, #344). One-time backfill inside
+	// the migration: every install booting this version imports its existing
+	// JSONL history, then the file is renamed aside.
+	if current < 8 {
+		migrateUsageJSONL(db, home)
+		current = 8
+	}
 
 	if current != from {
 		db.Exec("UPDATE _meta SET value = ? WHERE key = 'schema_version'", fmt.Sprint(CurrentSchemaVersion))
@@ -217,4 +244,84 @@ func migrateChatLog(db *sql.DB) error {
 		db.Exec("ALTER TABLE chat_log ADD COLUMN source TEXT DEFAULT 'cli'")
 	}
 	return nil
+}
+
+// migrateUsageJSONL backfills the legacy usage.jsonl into usage_log (v8).
+// Crash-safe: all inserts plus the _meta marker commit in one transaction, so
+// a boot that dies mid-import never duplicates rows on the next one. The file
+// is renamed to usage.jsonl.imported only after a successful commit; a failed
+// rename is harmless (the marker prevents re-import).
+func migrateUsageJSONL(db *sql.DB, home string) {
+	var done string
+	if err := db.QueryRow(`SELECT value FROM _meta WHERE key = 'usage_backfilled'`).Scan(&done); err == nil && done == "1" {
+		return
+	}
+	path := filepath.Join(home, "usage.jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		// No legacy file (fresh install or already migrated): mark done.
+		db.Exec(`INSERT OR REPLACE INTO _meta (key, value) VALUES ('usage_backfilled', '1')`)
+		return
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		slog.Warn("usage backfill: begin failed", "error", err)
+		return
+	}
+	stmt, err := tx.Prepare(`INSERT INTO usage_log
+		(ts, provider, model, session_id, in_tokens, out_tokens, cache_read, cache_write, latency_ms, cost_usd)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		tx.Rollback()
+		slog.Warn("usage backfill: prepare failed", "error", err)
+		return
+	}
+	defer stmt.Close()
+	imported := 0
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var r struct {
+			TS         string  `json:"ts"`
+			Provider   string  `json:"provider"`
+			Model      string  `json:"model"`
+			SessionID  string  `json:"session_id"`
+			In         float64 `json:"in"`
+			Out        float64 `json:"out"`
+			CacheRead  float64 `json:"cache_read"`
+			CacheWrite float64 `json:"cache_write"`
+			LatencyMS  float64 `json:"latency_ms"`
+			CostUSD    float64 `json:"cost_usd"`
+		}
+		if err := json.Unmarshal([]byte(line), &r); err != nil {
+			continue // malformed line: same skip rule the old reader used
+		}
+		var cost any
+		if r.CostUSD > 0 {
+			cost = r.CostUSD
+		}
+		if _, err := stmt.Exec(r.TS, r.Provider, r.Model, r.SessionID,
+			int64(r.In), int64(r.Out), int64(r.CacheRead), int64(r.CacheWrite),
+			int64(r.LatencyMS), cost); err != nil {
+			tx.Rollback()
+			slog.Warn("usage backfill: insert failed", "error", err)
+			return
+		}
+		imported++
+	}
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO _meta (key, value) VALUES ('usage_backfilled', '1')`); err != nil {
+		tx.Rollback()
+		slog.Warn("usage backfill: marker failed", "error", err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		slog.Warn("usage backfill: commit failed", "error", err)
+		return
+	}
+	if err := os.Rename(path, path+".imported"); err != nil {
+		slog.Warn("usage backfill: rename failed (marker prevents re-import)", "path", path, "error", err)
+	}
+	slog.Info("usage history backfilled into state.db", "records", imported)
 }

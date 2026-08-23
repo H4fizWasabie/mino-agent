@@ -428,10 +428,10 @@ func handleMemoryPathAPI(w http.ResponseWriter, r *http.Request) {
 func handleMemoryAPI(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		var body struct {
-			Action  string `json:"action"`
-			ID      any    `json:"id"`
-			Path    string `json:"path"`
-			Content string `json:"content"`
+			Action   string `json:"action"`
+			ID       any    `json:"id"`
+			Path     string `json:"path"`
+			Content  string `json:"content"`
 			Playbook string `json:"playbook"`
 			Run      string `json:"run"`
 		}
@@ -1665,14 +1665,14 @@ func handleSettingsAPI(w http.ResponseWriter, r *http.Request) {
 	// write mino.env so systemd picks it up; merge instead of rewriting so
 	// unrelated keys (CLOUDFLARE_*, THREADS_*, MINO_OPENROUTER_KEY, ...) survive
 	updates := map[string]string{
-		"MINO_HOME":          home,
-		"MINO_API_KEY":       body.APIKey,
-		"MINO_BASE_URL":      body.BaseURL,
-		"MINO_MODEL":         body.Model,
-		"MINO_SMALL_MODEL":   body.SmallModel,
-		"MINO_TIMEZONE":      dashCore.Settings.Timezone,
-		"TELEGRAM_BOT_TOKEN": body.TelegramToken,
-		"TAVILY_API_KEY":     body.TavilyKey,
+		"MINO_HOME":             home,
+		"MINO_API_KEY":          body.APIKey,
+		"MINO_BASE_URL":         body.BaseURL,
+		"MINO_MODEL":            body.Model,
+		"MINO_SMALL_MODEL":      body.SmallModel,
+		"MINO_TIMEZONE":         dashCore.Settings.Timezone,
+		"TELEGRAM_BOT_TOKEN":    body.TelegramToken,
+		"TAVILY_API_KEY":        body.TavilyKey,
 		"CLOUDFLARE_API_TOKEN":  body.CfToken,
 		"CLOUDFLARE_ACCOUNT_ID": body.CfAccountID,
 	}
@@ -1925,20 +1925,44 @@ func artifactPathWithin(path, root string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }
 
-// --- Usage stats from usage.jsonl (Core-compatible) ---
+// --- Usage stats from state.db usage_log (Core-compatible; DATA-001 #344) ---
 
+// usageRecords returns every usage row as Core-format maps — same keys the
+// legacy usage.jsonl lines carried ("in", "out", "cache_read", ...) so all
+// cost/dashboard consumers keep working unchanged. Read-only connection:
+// WAL lets this run alongside the writer without blocking it.
 func usageRecords(home string) []map[string]any {
-	data, _ := os.ReadFile(home + "/usage.jsonl")
+	db, err := sql.Open("sqlite", filepath.Join(home, "state.db")+"?_journal_mode=WAL&mode=ro")
+	if err != nil {
+		return nil
+	}
+	defer db.Close()
+	rows, err := db.Query(`SELECT ts, provider, model, session_id,
+		in_tokens, out_tokens, cache_read, cache_write, latency_ms, cost_usd
+		FROM usage_log ORDER BY id`)
+	if err != nil {
+		return nil // table missing pre-migration or no DB yet: no usage
+	}
+	defer rows.Close()
 	var recs []map[string]any
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
+	for rows.Next() {
+		var ts, provider, model, sessionID string
+		var in, out, cacheRead, cacheWrite, latencyMS int64
+		var cost any
+		if err := rows.Scan(&ts, &provider, &model, &sessionID,
+			&in, &out, &cacheRead, &cacheWrite, &latencyMS, &cost); err != nil {
 			continue
 		}
-		var r map[string]any
-		if json.Unmarshal([]byte(line), &r) == nil {
-			recs = append(recs, r)
+		r := map[string]any{
+			"ts": ts, "provider": provider, "model": model, "session_id": sessionID,
+			"in": float64(in), "out": float64(out),
+			"cache_read": float64(cacheRead), "cache_write": float64(cacheWrite),
+			"latency_ms": float64(latencyMS),
 		}
+		if cost != nil {
+			r["cost_usd"] = cost
+		}
+		recs = append(recs, r)
 	}
 	return recs
 }
