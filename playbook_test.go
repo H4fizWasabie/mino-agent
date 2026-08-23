@@ -1042,8 +1042,146 @@ func TestQuarantinedOutputsSkippedFromArtifacts(t *testing.T) {
 	}
 }
 
-// Issue #44: run_playbook from inside a stage of the SAME playbook must be
-// rejected with a corrective error (no re-run / no recursion).
+// Issue #316: a manual run must survive a client disconnect — the run keeps
+// the caller's VALUES (session id, trace tags) but not its cancellation.
+func TestDetachCancelKeepsValuesSeversCancellation(t *testing.T) {
+	parent, cancel := context.WithCancel(context.WithValue(context.Background(), sessionIDKey{}, "tg:1"))
+	defer cancel()
+	d := detachCancel(parent)
+	if got := d.Value(sessionIDKey{}); got != "tg:1" {
+		t.Fatalf("detached ctx lost value: %v", got)
+	}
+	if d.Done() != nil {
+		t.Fatal("detached ctx Done() must be nil (never cancelled by parent)")
+	}
+	if d.Err() != nil {
+		t.Fatal("detached ctx Err() must be nil")
+	}
+	if _, ok := d.Deadline(); ok {
+		t.Fatal("detached ctx must have no deadline")
+	}
+	cancel()
+	if parent.Err() == nil {
+		t.Fatal("parent should be cancelled")
+	}
+	if d.Err() != nil {
+		t.Fatal("detached ctx must ignore parent cancellation")
+	}
+}
+
+func TestManualRunSurvivesClientDisconnect(t *testing.T) {
+	home := t.TempDir()
+	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect", "02-report"})
+	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
+
+	pb, err := loadPlaybookWorkspace(home, "brief")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The declared outputs the stages must produce for verification to pass.
+	run, err := loadOrCreatePlaybookRun(pb, registry, "x", "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage1, _ := workspaceStage(pb, 1)
+	stage2, _ := workspaceStage(pb, 2)
+	path1 := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
+	path2 := playbookRunOutputPath(pb, run, stage2, stage2.Outputs[0])
+
+	started := make(chan struct{})
+	oldLoop := runPlaybookStageLoop
+	defer func() { runPlaybookStageLoop = oldLoop }()
+	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
+		if started != nil {
+			close(started)
+			started = nil
+		}
+		if err := os.MkdirAll(filepath.Dir(path1), 0700); err != nil {
+			t.Error(err)
+		}
+		if err := os.WriteFile(path1, []byte("collected"), 0600); err != nil {
+			t.Error(err)
+		}
+		if err := os.MkdirAll(filepath.Dir(path2), 0700); err != nil {
+			t.Error(err)
+		}
+		if err := os.WriteFile(path2, []byte("report"), 0600); err != nil {
+			t.Error(err)
+		}
+		return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{
+			{Name: "write_file", Args: map[string]any{"path": path1}},
+			{Name: "write_file", Args: map[string]any{"path": path2}},
+		}}
+	}
+
+	// Simulate the caller (browser tab) disconnecting mid-run: cancel the
+	// parent ctx after the run has started; the run must complete anyway.
+	parent, cancel := context.WithCancel(context.WithValue(context.Background(), sessionIDKey{}, "tg:1"))
+	tool := makeRunPlaybookTool(core)
+	done := make(chan string, 1)
+	go func() { done <- tool.ContextFn(parent, map[string]any{"name": "brief"}) }()
+	<-started // run is in flight
+	cancel()  // client disconnects NOW
+	out := <-done
+	if !strings.Contains(out, "done") {
+		t.Fatalf("run output = %q", out)
+	}
+
+	// The outbox must hold a completion notice for the disconnected client.
+	dir := filepath.Join(home, "outbox")
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("no outbox delivery after disconnect (entries=%v err=%v)", entries, err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, entries[0].Name()))
+	if err != nil || !strings.Contains(string(data), "brief") {
+		t.Fatalf("outbox entry missing playbook name: %q err=%v", data, err)
+	}
+
+	// Run state persisted as complete, not interrupted/cancelled.
+	run2, err := latestPlaybookRun(pb)
+	if err != nil || run2.Status != "complete" {
+		t.Fatalf("run status = %v err=%v, want complete", run2, err)
+	}
+}
+
+func TestRunPlaybookToolNoOutboxWhenClientConnected(t *testing.T) {
+	home := t.TempDir()
+	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect"})
+	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
+	pb, err := loadPlaybookWorkspace(home, "brief")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := loadOrCreatePlaybookRun(pb, registry, "x", "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage1, _ := workspaceStage(pb, 1)
+	path1 := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
+	oldLoop := runPlaybookStageLoop
+	defer func() { runPlaybookStageLoop = oldLoop }()
+	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
+		os.MkdirAll(filepath.Dir(path1), 0700)
+		os.WriteFile(path1, []byte("collected"), 0600)
+		return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{{Name: "write_file", Args: map[string]any{"path": path1}}}}
+	}
+	tool := makeRunPlaybookTool(core)
+	out := tool.ContextFn(context.Background(), map[string]any{"name": "brief"})
+	if !strings.Contains(out, "done") {
+		t.Fatalf("run output = %q", out)
+	}
+	if entries, err := os.ReadDir(filepath.Join(home, "outbox")); err == nil && len(entries) > 0 {
+		t.Fatalf("connected client must not get an outbox notice, found %d entries", len(entries))
+	}
+}
+
 func TestRunPlaybookRejectsSamePlaybookRecursion(t *testing.T) {
 	core := &Core{}
 	tool := makeRunPlaybookTool(core)

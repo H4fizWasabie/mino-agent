@@ -305,9 +305,40 @@ func makeRunPlaybookTool(core *Core) *Tool {
 			if err != nil {
 				return fmt.Sprintf("Error: %v", err)
 			}
+			// #316: the run detached from the caller's context inside
+			// runWorkspacePlaybook, so it survives a client disconnect — but the
+			// loop's reply dies with the connection. Deliver the outcome where it
+			// cannot be lost (outbox → Telegram), only when the caller is gone.
+			if ctx.Err() != nil {
+				msg := output
+				if len(msg) > 600 {
+					msg = msg[:600] + " …"
+				}
+				queueOutbox(core.Settings.Home, "owner", fmt.Sprintf("▶️ Playbook *%s* finished (client disconnected mid-run):\n%s", name, msg))
+			}
 			return output
 		},
 	}
+}
+
+// detachedContext carries every parent VALUE (session id, user message,
+// trace tags, audit/snapshot callbacks) but severs the parent's
+// cancellation: a client disconnect must not kill an in-flight playbook
+// run (#316). Cancellation stays owned by the run registry (#310) —
+// cancel_run and the shutdown hook cancel via registerRun's CancelFunc,
+// never via the caller's context.
+type detachedContext struct{ context.Context }
+
+func (detachedContext) Done() <-chan struct{} { return nil }
+func (detachedContext) Err() error            { return nil }
+func (detachedContext) Deadline() (time.Time, bool) {
+	return time.Time{}, false
+}
+
+// detachCancel wraps parent so Value() resolves through it while
+// Done/Err/Deadline are inert (never cancelled).
+func detachCancel(parent context.Context) context.Context {
+	return detachedContext{parent}
 }
 
 // cleanPlaybookRequest strips the main loop's per-turn tail injection (routing
