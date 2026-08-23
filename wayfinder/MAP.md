@@ -271,3 +271,34 @@ cost-per-verified-story vs the pre-persona week.
 - Multi-agent execution / new runtimes (canonical loop stays the sole agent loop)
 - Per-stage personas (YAGNI — 12 of 15 playbooks are single-stage)
 - Rewriting the chat system prompt (chat profile stays as-is)
+
+---
+
+# Mino Data Residency (JSONL/MD → SQLite) — Wayfinder Map
+
+## Destination
+
+Every `~/.mino` store lives in the format its access pattern justifies. Append-only telemetry that code reads wholesale moves into `state.db`; stores that are files by standing decision stay files. Measurable: no reader in the core binary parses an unbounded file to answer a bounded query.
+
+## Evidence inventory (VPS /home/mino/.mino, 2026-08-22)
+
+| Store | Size | Readers / writers | Verdict |
+|---|---|---|---|
+| `state.db` | 44M | chat_log, tool_calls, audit_events, responsibilities, ops_journal, session_artifacts/notes | already the DB (§4) |
+| `usage.jsonl` | 3.5M, 18.6k lines, unbounded | provider_manager writes; dashboard + cost.go read the WHOLE file per stats render (`usageRecords`) | **migrate — DATA-001** |
+| `traces/*.jsonl` | 12M, 23 daily files, no pruning | loop writes; dashboard tail + post_mortem read by date | retention, not migration — DATA-002 |
+| `audit.jsonl` | ~5k lines | §8 immutable audit log; mirrored into `audit_events` | stays |
+| `memories/*.md` | 8.2M | §23 authoritative semantic graph facts | stays |
+| `results/` + playbook run dirs | 30M | §6/§20 filesystem is the durable record | stays |
+| `schedules.json` | tiny | SCH series source of truth, human-editable | stays |
+
+## Decisions so far
+
+- [DATA-001 — usage.jsonl → SQLite](tickets/data-001-usage-jsonl.md) (GitHub #344, resolved) — unbounded append, wholesale reads.
+- [DATA-002 — trace retention policy](tickets/data-002-trace-retention.md) (GitHub #345, resolved) — wire traces/ into the existing sweep; SQL adds nothing for by-date access.
+
+## Out of scope
+
+- memories/*.md → SQL (reverses §23 for zero access-pattern gain)
+- Playbook run state/results → SQL (reverses §6)
+- schedules.json, audit.jsonl, auth/config JSONs

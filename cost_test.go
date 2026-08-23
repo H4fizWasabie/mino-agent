@@ -15,15 +15,11 @@ import (
 // writeUsage appends one usage.jsonl record.
 func writeUsage(t *testing.T, home, model, session, ts string, in, cacheRead, out int) {
 	t.Helper()
-	rec := fmt.Sprintf(`{"ts":%q,"model":%q,"session_id":%q,"in":%d,"cache_read":%d,"out":%d}`+"\n", ts, model, session, in, cacheRead, out)
-	path := filepath.Join(home, "usage.jsonl")
-	os.MkdirAll(home, 0700)
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	if _, err := f.WriteString(rec); err != nil {
+	db := Connect(home)
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO usage_log
+		(ts, provider, model, session_id, in_tokens, out_tokens, cache_read, cache_write, latency_ms)
+		VALUES (?, 'openai', ?, ?, ?, ?, ?, 0, 0)`, ts, model, session, in, out, cacheRead); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -195,7 +191,7 @@ func TestPolicyProvidersFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "providers.json"), data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	m, err := NewProviderManager(home, &Settings{}, nil)
+	m, err := NewProviderManager(home, &Settings{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

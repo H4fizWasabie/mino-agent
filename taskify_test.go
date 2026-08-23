@@ -127,7 +127,7 @@ func TestTaskifyOfferOnlyUntilApproved(t *testing.T) {
 	t.Setenv("MINO_TEST_KEY", "k")
 	home := t.TempDir()
 	os.WriteFile(filepath.Join(home, "providers.json"), []byte(`{"providers":[{"name":"t","priority":1,"base_url":"`+srv.URL+`","api_key_env":"MINO_TEST_KEY","model":"test-model"}]}`), 0600)
-	pm, err := NewProviderManager(home, &Settings{}, nil)
+	pm, err := NewProviderManager(home, &Settings{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

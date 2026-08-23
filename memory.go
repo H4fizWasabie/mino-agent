@@ -1342,7 +1342,7 @@ func RebuildMemoryEdges(s *Settings) {
 	db := Connect(s.Home)
 	defer db.Close()
 	authStore := LoadAuthStore(s.Home)
-	client, err := NewProviderManager(s.Home, s, authStore)
+	client, err := NewProviderManager(s.Home, s, authStore, db)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "graph edge rebuild unavailable: %v\n", err)
 		return
@@ -1361,7 +1361,7 @@ func MaintainMemory(s *Settings) {
 	db := Connect(s.Home)
 	defer db.Close()
 	authStore := LoadAuthStore(s.Home)
-	client, err := NewProviderManager(s.Home, s, authStore)
+	client, err := NewProviderManager(s.Home, s, authStore, db)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "graph maintenance unavailable: %v\n", err)
 		return
@@ -1387,7 +1387,7 @@ func ConsolidateMemory(s *Settings) {
 	db := Connect(s.Home)
 	defer db.Close()
 	authStore := LoadAuthStore(s.Home)
-	client, err := NewProviderManager(s.Home, s, authStore)
+	client, err := NewProviderManager(s.Home, s, authStore, db)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "consolidation unavailable: %v\n", err)
 		return
@@ -1403,7 +1403,7 @@ func SynthesizeMemory(s *Settings) {
 	db := Connect(s.Home)
 	defer db.Close()
 	authStore := LoadAuthStore(s.Home)
-	client, err := NewProviderManager(s.Home, s, authStore)
+	client, err := NewProviderManager(s.Home, s, authStore, db)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "synthesis unavailable: %v\n", err)
 		return

@@ -6,10 +6,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -42,14 +38,23 @@ func TestUsageCostPrefersRealCost(t *testing.T) {
 
 func writeUsageRecords(t *testing.T, home string, records []map[string]any) {
 	t.Helper()
-	var b strings.Builder
+	db := Connect(home)
+	defer db.Close()
 	for _, r := range records {
-		data, _ := json.Marshal(r)
-		b.Write(data)
-		b.WriteString("\n")
-	}
-	if err := os.WriteFile(filepath.Join(home, "usage.jsonl"), []byte(b.String()), 0600); err != nil {
-		t.Fatal(err)
+		var cost any
+		if v, ok := r["cost_usd"]; ok {
+			cost = v
+		}
+		in, _ := r["in"].(float64)
+		out, _ := r["out"].(float64)
+		ts, _ := r["ts"].(string)
+		sid, _ := r["session_id"].(string)
+		model, _ := r["model"].(string)
+		if _, err := db.Exec(`INSERT INTO usage_log
+			(ts, provider, model, session_id, in_tokens, out_tokens, cache_read, cache_write, latency_ms, cost_usd)
+			VALUES (?, '', ?, ?, ?, ?, 0, 0, 0, ?)`, ts, model, sid, int64(in), int64(out), cost); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -60,7 +65,7 @@ func TestRunCostUSDWithRealCost(t *testing.T) {
 		{"ts": "2026-08-10T08:00:01Z", "session_id": "scheduled-tribal", "model": "tencent/hy3:tencent", "cost_usd": 0.0010},
 		{"ts": "2026-08-10T08:00:02Z", "session_id": "scheduled-tribal", "model": "deepseek/deepseek-v4-flash-0731:deepinfra", "cost_usd": 0.0025},
 		{"ts": "2026-08-10T07:59:59Z", "session_id": "scheduled-tribal", "model": "tencent/hy3:tencent", "cost_usd": 9.99}, // before cutoff
-		{"ts": "2026-08-10T08:00:03Z", "session_id": "other", "model": "tencent/hy3:tencent", "cost_usd": 9.99},           // other session
+		{"ts": "2026-08-10T08:00:03Z", "session_id": "other", "model": "tencent/hy3:tencent", "cost_usd": 9.99},            // other session
 	})
 	cost, found := runCostUSD(home, "scheduled-tribal", now)
 	if !found || cost != 0.0035 {
@@ -87,7 +92,7 @@ func TestMonthSpendUSDCountsUnpriced(t *testing.T) {
 	writeUsageRecords(t, home, []map[string]any{
 		{"ts": "2026-08-01T00:00:01Z", "model": "tencent/hy3:tencent", "cost_usd": 10.0},
 		{"ts": "2026-08-15T00:00:01Z", "model": "tencent/hy3:tencent", "cost_usd": 12.0},
-		{"ts": "2026-08-20T00:00:01Z", "model": "unknown/model", "in": float64(500)}, // unpriced
+		{"ts": "2026-08-20T00:00:01Z", "model": "unknown/model", "in": float64(500)},     // unpriced
 		{"ts": "2026-07-25T00:00:00Z", "model": "tencent/hy3:tencent", "cost_usd": 99.0}, // previous month (July, in MYT too)
 	})
 	total, unpriced := monthSpendUSD(home, loc, time.Date(2026, 8, 25, 0, 0, 0, 0, loc))
@@ -98,37 +103,32 @@ func TestMonthSpendUSDCountsUnpriced(t *testing.T) {
 
 func TestLogUsageRecordsRealCost(t *testing.T) {
 	home := t.TempDir()
-	path := filepath.Join(home, "usage.jsonl")
-	c := &Client{usageLogPath: path}
+	db := Connect(home)
+	defer db.Close()
+	c := &Client{usageDB: db}
 	resp := &LLMResponse{Usage: UsageInfo{InputTokens: 100, OutputTokens: 10, CostUSD: 0.0042}}
 	c.logUsage(context.Background(), "tencent/hy3:tencent", resp, time.Now())
 
-	data, err := os.ReadFile(path)
-	if err != nil {
+	var cost float64
+	if err := db.QueryRow(`SELECT cost_usd FROM usage_log WHERE model = ?`, "tencent/hy3:tencent").Scan(&cost); err != nil {
 		t.Fatal(err)
 	}
-	var record map[string]any
-	if err := json.Unmarshal(data, &record); err != nil {
-		t.Fatal(err)
-	}
-	if c, ok := record["cost_usd"].(float64); !ok || c != 0.0042 {
-		t.Fatalf("record missing cost_usd: %v", record)
+	if cost != 0.0042 {
+		t.Fatalf("cost_usd = %v, want 0.0042", cost)
 	}
 
-	// Zero cost stays out of the record (fallback shape preserved).
+	// Zero cost stays NULL (fallback shape preserved for consumers).
 	resp2 := &LLMResponse{Usage: UsageInfo{InputTokens: 5}}
 	c.logUsage(context.Background(), "m", resp2, time.Now())
-	lines := strings.Split(strings.TrimSpace(string(mustReadFile(t, path))), "\n")
-	if strings.Contains(lines[1], "cost_usd") {
-		t.Fatalf("zero-cost record should omit cost_usd: %s", lines[1])
-	}
-}
-
-func mustReadFile(t *testing.T, path string) []byte {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
+	var zeroCost any
+	if err := db.QueryRow(`SELECT cost_usd FROM usage_log WHERE model = ?`, "m").Scan(&zeroCost); err != nil {
 		t.Fatal(err)
 	}
-	return data
+	if zeroCost != nil {
+		t.Fatalf("zero-cost record should store NULL, got %v", zeroCost)
+	}
+
+	// Nil DB (client built without a manager) logs nothing and does not panic.
+	naked := &Client{}
+	naked.logUsage(context.Background(), "m", resp2, time.Now())
 }

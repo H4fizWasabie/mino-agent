@@ -1,3 +1,13 @@
+## [Unreleased]
+
+### Changed
+
+- **Usage history moved from usage.jsonl into SQLite (closes #344)**: every LLM call now lands as a row in `usage_log` (`ts, provider, model, session_id, in_tokens, out_tokens, cache_read, cache_write, latency_ms, cost_usd`) instead of an append to the unbounded `usage.jsonl`. The legacy file is backfilled once inside schema migration v8 (atomic transaction + `_meta` marker, crash-safe against mid-import boots) and renamed `.imported`; fresh installs skip straight past it. Readers (`usageRecords`) return the same Core-format maps as before, so dashboard token/cost endpoints and spend aggregation are unchanged externally — but they now answer bounded questions with indexed SQL instead of parsing the whole file per request. Because records already carry `session_id` + `latency_ms`, cost-per-session breakdowns fall out of the same table. Zero-cost records store NULL so the price-table fallback path stays exercisable. Covered by `TestUsageJSONLBackfillMigration` (import shape + malformed-line skip + rename-aside + idempotent re-boot), `TestUsageBackfillFreshInstallNoOp`, `TestUsageRecordsReadsSQLite`, and the rewritten `TestLogUsageRecordsRealCost`.
+
+### Fixed
+
+- **Trace files are pruned at last (closes #345)**: `traces/YYYY-MM-DD.jsonl` accumulated forever — 23 files / 12M on production — while both sibling stores had retention (`pruneSpills` for results/, 30-day cleanup for audit_events). The hourly sweep now also walks traces/: filename date is the truth (UTC daily files), mtime the fallback for unparseable names, cutoff 30 days matching the audit horizon, hard delete (reproducible debug output). Same benign-race contract as spill pruning. Covered by `TestPruneTracesDeletesOldKeepsRecent`.
+
 ## [v3.1.4] — taskify follow-ups: fence-lifted note, read-spiral nudge, cap checkpointing, write cap, auto-restart, CI gofmt gate (2026-08-22)
 
 ### Changed

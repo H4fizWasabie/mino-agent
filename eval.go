@@ -51,7 +51,7 @@ func RunEval(home string) int {
 	db := Connect(home)
 	mem := NewMemory(db, nil, s)
 	tools := BuildRegistry(db, home, s.Workspace, mem, s.Location())
-	client, err := NewProviderManager(home, s, LoadAuthStore(home))
+	client, err := NewProviderManager(home, s, LoadAuthStore(home), db)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "eval: provider init failed: %v\n", err)
 		return 1
@@ -240,7 +240,6 @@ write:
 	}
 	return os.WriteFile(casesPath, data, 0644)
 }
-
 
 func safeEvalName(s string) string {
 	// Session IDs leak into trace/session records; keep them filesystem- and

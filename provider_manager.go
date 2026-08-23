@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -43,7 +44,7 @@ type ProviderConfig struct {
 	Transport       string   `json:"transport,omitempty"`              // wire family: "openai" (default) | "anthropic" | "codex" — declared, never sniffed (PRV-001)
 	ProviderRouting []string `json:"provider_routing,omitempty"`       // openrouter: force specific providers
 	SmallRouting    []string `json:"small_provider_routing,omitempty"` // openrouter route for background calls
-	AllowFallbacks  bool     `json:"allow_fallbacks,omitempty"`       // openrouter: may fall back OUTSIDE the routing list (default false = privacy-safe: only the listed hosts)
+	AllowFallbacks  bool     `json:"allow_fallbacks,omitempty"`        // openrouter: may fall back OUTSIDE the routing list (default false = privacy-safe: only the listed hosts)
 }
 
 type providerFile struct {
@@ -69,28 +70,29 @@ type ProviderOption struct {
 // ProviderManager applies priority, retries, fallback, a shared circuit breaker,
 // and per-session stickiness around OpenAI-compatible clients.
 type ProviderManager struct {
-	providers []ProviderConfig
-	clients   map[string]*Client
-	state     map[string]*providerState
-	sticky    map[string]string
-	preferred map[string]providerPreference
+	db            *sql.DB // shared state.db handle, handed to clients for usage logging (#344)
+	providers     []ProviderConfig
+	clients       map[string]*Client
+	state         map[string]*providerState
+	sticky        map[string]string
+	preferred     map[string]providerPreference
 	providersHash string
 	// config-change push signal (#204): set when ReloadProviders sees the
 	// providers.json content change; consumed by the loop's next turn so the
 	// brain re-verifies model-stack memory facts instead of answering stale.
 	configChangedAt time.Time
-	authStore *AuthStore
-	mu        sync.Mutex
-	authMu    sync.Mutex
-	now       func() time.Time
+	authStore       *AuthStore
+	mu              sync.Mutex
+	authMu          sync.Mutex
+	now             func() time.Time
 }
 
-func NewProviderManager(home string, legacy *Settings, authStore *AuthStore) (*ProviderManager, error) {
+func NewProviderManager(home string, legacy *Settings, authStore *AuthStore, db *sql.DB) (*ProviderManager, error) {
 	configs, err := loadProviders(home, legacy)
 	if err != nil {
 		return nil, err
 	}
-	m := &ProviderManager{clients: map[string]*Client{}, state: map[string]*providerState{}, sticky: map[string]string{}, preferred: map[string]providerPreference{}, authStore: authStore, now: time.Now}
+	m := &ProviderManager{db: db, clients: map[string]*Client{}, state: map[string]*providerState{}, sticky: map[string]string{}, preferred: map[string]providerPreference{}, authStore: authStore, now: time.Now}
 	m.providersHash = fileHash(filepath.Join(home, "providers.json"))
 	for _, p := range configs {
 		key := ""
@@ -107,7 +109,7 @@ func NewProviderManager(home string, legacy *Settings, authStore *AuthStore) (*P
 			return nil, fmt.Errorf("provider config requires name, base_url, and model")
 		}
 		c := NewClient(key, p.BaseURL)
-		c.usageLogPath = filepath.Join(home, "usage.jsonl")
+		c.usageDB = m.db
 		c.transport = p.Transport
 		c.providerRouting = p.ProviderRouting
 		c.allowFallbacks = p.AllowFallbacks
@@ -565,7 +567,7 @@ func (m *ProviderManager) ReloadProviders(home string) error {
 		}
 		key, _ := m.resolveKey(p)
 		c := NewClient(key, p.BaseURL)
-		c.usageLogPath = filepath.Join(home, "usage.jsonl")
+		c.usageDB = m.db
 		c.transport = p.Transport
 		c.providerRouting = p.ProviderRouting
 		c.allowFallbacks = p.AllowFallbacks
