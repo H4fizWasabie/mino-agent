@@ -15,6 +15,8 @@
 #
 # Usage (from the tagged commit, clean tree):
 #   ./scripts/release.sh vX.Y.Z
+# Schema-bump releases declare the expected target version:
+#   EXPECTED_SCHEMA=8 ./scripts/release.sh vX.Y.Z
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -56,7 +58,7 @@ scp_retry() {
 }
 scp_retry "mino-linux-amd64" "$VPS:$CAND" || { echo "error: cannot reach $VPS — aborting" >&2; exit 1; }
 scp_retry "scripts/stage-smoke.sh" "$VPS:/tmp/stage-smoke.sh" || { echo "error: cannot stage stage-smoke.sh" >&2; exit 1; }
-if ! ssh "$VPS" "bash /tmp/stage-smoke.sh '$CAND' 7780"; then
+if ! ssh "$VPS" "EXPECTED_SCHEMA='${EXPECTED_SCHEMA:-}' bash /tmp/stage-smoke.sh '$CAND' 7780"; then
 	echo "error: stage-smoke FAILED — release aborted, nothing published." >&2
 	echo "       Fix, re-tag, and re-run. The live VPS was never touched." >&2
 	exit 1

@@ -70,13 +70,18 @@ if [ "$ready" != 1 ]; then
 fi
 echo "PASS: boot + /api/universe"
 
-# 4. schema: staged DB is still at the live version, no migration ran
+# 4. schema: staged DB is still at the live version, no migration ran —
+#    unless the run DECLARES a migration via EXPECTED_SCHEMA=<n> (schema-bump
+#    releases set this; an undeclared migration still fails the gate)
 LIVE_VER=$(sqlite3 "$LIVE_HOME/state.db" "SELECT value FROM _meta WHERE key='schema_version'" 2>/dev/null || echo "?")
 STAGE_VER=$(sqlite3 "$STAGE/state.db" "SELECT value FROM _meta WHERE key='schema_version'" 2>/dev/null || echo "?")
+EXPECTED_SCHEMA="${EXPECTED_SCHEMA:-$LIVE_VER}"
 if [ "$LIVE_VER" = "$STAGE_VER" ] && ! grep -q "schema migrated" /tmp/stage-smoke.log; then
 	echo "PASS: schema $STAGE_VER, no migration run"
+elif [ "$STAGE_VER" = "$EXPECTED_SCHEMA" ] && grep -q "schema migrated" /tmp/stage-smoke.log; then
+	echo "PASS: schema $LIVE_VER → $STAGE_VER (declared migration)"
 else
-	echo "FAIL: schema live=$LIVE_VER staged=$STAGE_VER or migration ran:"
+	echo "FAIL: schema live=$LIVE_VER staged=$STAGE_VER expected=$EXPECTED_SCHEMA or migration ran:"
 	grep -E "migrat|ERROR" /tmp/stage-smoke.log | head -5; FAIL=1
 fi
 
