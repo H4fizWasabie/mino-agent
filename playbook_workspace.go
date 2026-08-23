@@ -4,11 +4,11 @@ package main
 // A definition describes stages; each run owns its own stage outputs and state.
 
 import (
-	"log/slog"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,9 +27,9 @@ type PlaybookWorkspace struct {
 	// Agent is the config.md `agent:` binding — the roster persona this
 	// playbook's runs wear (PSN-001). Deterministic binding, never
 	// fuzzy-matched; resolved by validatePlaybookPersona.
-	Agent       string
-	Config      map[string]string
-	Stages      []WorkspaceStage
+	Agent  string
+	Config map[string]string
+	Stages []WorkspaceStage
 }
 
 type WorkspaceStage struct {
@@ -854,8 +854,11 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 
 	// #310: cancellable run context — the cancel_run tool and the shutdown
 	// hook both cancel here; the stage loop checks ctx.Done() at each boundary
-	// and marks the run interrupted cleanly.
-	runCtx, cancelRunCtx := context.WithCancel(ctx)
+	// and marks the run interrupted cleanly. The parent is detachCancel'd
+	// (#316): manual runs inherit the caller's VALUES (session, trace tags,
+	// audit/snapshot callbacks) but NOT the caller's cancellation — a client
+	// disconnect mid-run no longer kills the playbook; cancel_run does.
+	runCtx, cancelRunCtx := context.WithCancel(detachCancel(ctx))
 	defer cancelRunCtx()
 	deregister := registerRun(run.ID, cancelRunCtx)
 	defer deregister()
