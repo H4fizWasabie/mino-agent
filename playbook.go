@@ -340,8 +340,8 @@ func makeCancelRunTool() *Tool {
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"run_id":     map[string]any{"type": "string", "description": "The run id, e.g. 20260820T154236.682055440Z"},
-				"reason":     map[string]any{"type": "string", "description": "Optional cancellation reason, recorded on the run."},
+				"run_id": map[string]any{"type": "string", "description": "The run id, e.g. 20260820T154236.682055440Z"},
+				"reason": map[string]any{"type": "string", "description": "Optional cancellation reason, recorded on the run."},
 			},
 			"required": []string{"run_id"},
 		},
@@ -614,7 +614,7 @@ var playbookNamePattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 func reAnchorOutputPaths(process string, outputs []string) string {
 	for _, out := range outputs {
 		quoted := regexp.QuoteMeta(out)
-		process = regexp.MustCompile(`(?:\S*/)?` + quoted).ReplaceAllString(process, "output/"+out)
+		process = regexp.MustCompile(`(?:\S*/)?`+quoted).ReplaceAllString(process, "output/"+out)
 	}
 	return process
 }
@@ -881,15 +881,15 @@ func writePlaybookFile(path, content string) error {
 // PlaybookSchedule is one scheduled playbook entry in ~/.mino/schedules.json.
 type PlaybookSchedule struct {
 	Name        string   `json:"name"`
-	Days        []string `json:"days,omitempty"` // weekday names, lowercase; empty = daily (issue #205)
-	Time        string   `json:"time"`           // HH:MM local time
-	Timezone    string `json:"timezone"`                // IANA timezone
-	LastRun     string `json:"last_run"`                // RFC3339 of last execution, empty if never
-	LastError   string `json:"last_error,omitempty"`    // last fire failure, empty when healthy
-	MissedAt    string `json:"missed_at,omitempty"`     // when a due run was skipped without firing (downtime); cleared on next fire
-	FailStreak  int    `json:"fail_streak,omitempty"`   // consecutive owner-local failure days, 0 when healthy
-	LastFailDay string `json:"last_fail_day,omitempty"` // YYYY-MM-DD of the last counted failure day
-	AlertedDay  string `json:"alerted_day,omitempty"`   // YYYY-MM-DD of the last health alert (one per playbook per day)
+	Days        []string `json:"days,omitempty"`          // weekday names, lowercase; empty = daily (issue #205)
+	Time        string   `json:"time"`                    // HH:MM local time
+	Timezone    string   `json:"timezone"`                // IANA timezone
+	LastRun     string   `json:"last_run"`                // RFC3339 of last execution, empty if never
+	LastError   string   `json:"last_error,omitempty"`    // last fire failure, empty when healthy
+	MissedAt    string   `json:"missed_at,omitempty"`     // when a due run was skipped without firing (downtime); cleared on next fire
+	FailStreak  int      `json:"fail_streak,omitempty"`   // consecutive owner-local failure days, 0 when healthy
+	LastFailDay string   `json:"last_fail_day,omitempty"` // YYYY-MM-DD of the last counted failure day
+	AlertedDay  string   `json:"alerted_day,omitempty"`   // YYYY-MM-DD of the last health alert (one per playbook per day)
 }
 
 // schedulesMu serializes read-modify-write of schedules.json: the dispatch
@@ -1228,9 +1228,9 @@ type scheduledPlaybookRunner func(context.Context, *Core, string, string, string
 type scheduleAction int
 
 const (
-	scheduleSkip    scheduleAction = iota // not due, already covered by a run, or invalid
-	scheduleFire                          // fire now: on time, or same-day late catch-up
-	scheduleMissed                        // an occurrence passed without a run and catch-up is not allowed
+	scheduleSkip   scheduleAction = iota // not due, already covered by a run, or invalid
+	scheduleFire                         // fire now: on time, or same-day late catch-up
+	scheduleMissed                       // an occurrence passed without a run and catch-up is not allowed
 )
 
 // classifySchedule decides the action for one schedule at instant now.
@@ -1260,6 +1260,15 @@ func classifySchedule(s PlaybookSchedule, now time.Time, allowLate bool) schedul
 	lastOcc := todayOcc
 	if nowInLoc.Before(todayOcc) {
 		lastOcc = todayOcc.AddDate(0, 0, -1) // most recent occurrence is yesterday's
+	}
+	// A day-gated schedule's most recent occurrence is its previous MATCHING
+	// weekday, not necessarily yesterday (#348): booting Sunday morning before
+	// the window resolved lastOcc to Saturday, which nothing can ever cover,
+	// and stamped a false missed_at (plus a Telegram notice) 32 minutes before
+	// the real window. Walk back to the previous scheduled day, bounded by a
+	// week; days=[] schedules keep yesterday's semantics unchanged.
+	for len(s.Days) > 0 && !containsString(s.Days, strings.ToLower(lastOcc.Weekday().String())) {
+		lastOcc = lastOcc.AddDate(0, 0, -1) // terminates within 7 steps: days is non-empty
 	}
 	if s.LastRun != "" {
 		if last, err := time.Parse(time.RFC3339, s.LastRun); err == nil && !last.Before(lastOcc) {
