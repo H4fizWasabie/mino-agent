@@ -1,4 +1,4 @@
-## [Unreleased]
+## [v3.1.5] — data residency: usage history into SQLite, trace retention (2026-08-22)
 
 ### Changed
 
