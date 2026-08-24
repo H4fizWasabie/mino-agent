@@ -112,10 +112,14 @@ func NewCore() *Core {
 				time.Sleep(6 * time.Hour)
 			}
 		})
-		safeGo("graph-maintenance", func() { // graph maintenance — 6-hour, offset +45min from consolidation
+		safeGo("graph-maintenance", func() { // graph maintenance — daily, offset +45min from consolidation
+			// #351: was 6h — the full rebuild re-infers edges for ALL facts (~96
+			// small-model batches, ~$0.30/run) on a mostly-static graph; the 5-min
+			// JudgeChangedFacts pass already covers new/edited facts. Daily full
+			// pass keeps drift repair without the 4x/day redundant cost.
 			time.Sleep(45 * time.Minute)
 			for {
-				time.Sleep(6 * time.Hour)
+				time.Sleep(24 * time.Hour)
 				edges, comms, err := mem.MaintainGraph()
 				if err != nil {
 					slog.Warn("graph maintenance incomplete", "error", err)

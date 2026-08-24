@@ -1,3 +1,9 @@
+## [Unreleased]
+
+### Changed
+
+- **Graph rebuild cadence 6h → 24h (closes #351)**: the full edge rebuild re-infers edges for ALL facts (~96 small-model batches ≈ $0.30 per run) on a mostly-static graph. At 6h that was ~$1.20/day (~$36/mo) of redundant inference — measured at 44–51% of daily LLM spend from usage_log. Now daily; the 5-minute incremental `JudgeChangedFacts` pass still covers new/edited facts within minutes, and daily drift repair preserves the full pass guarantee. Expected: rebuild cost drops to ~$0.30/day. Consolidation cadence intentionally untouched (separate concern).
+
 ## [v3.1.6] — schedule false-miss fix, disconnect-proof playbook runs (2026-08-23)
 
 ### Fixed
