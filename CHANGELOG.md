@@ -1,4 +1,4 @@
-## [Unreleased]
+## [v3.1.7] — graph rebuild cadence 6h→24h (2026-08-24)
 
 ### Changed
 
