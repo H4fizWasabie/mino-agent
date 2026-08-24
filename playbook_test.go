@@ -1092,13 +1092,11 @@ func TestManualRunSurvivesClientDisconnect(t *testing.T) {
 	path2 := playbookRunOutputPath(pb, run, stage2, stage2.Outputs[0])
 
 	started := make(chan struct{})
+	var signalOnce sync.Once
 	oldLoop := runPlaybookStageLoop
 	defer func() { runPlaybookStageLoop = oldLoop }()
 	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
-		if started != nil {
-			close(started)
-			started = nil
-		}
+		signalOnce.Do(func() { close(started) })
 		if err := os.MkdirAll(filepath.Dir(path1), 0700); err != nil {
 			t.Error(err)
 		}
