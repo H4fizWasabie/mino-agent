@@ -1,4 +1,4 @@
-## [Unreleased]
+## [v3.1.8] — cost-watch three-price ranking and missing-cache guard (2026-08-25)
 
 ### Changed
 
