@@ -84,7 +84,6 @@ flux-1-schnell for this workload.** Every higher-quality claim costs 10-50x
 and cannot serve the daily pipeline; every free/budget fit fails the bar.
 klein-4b is the only comparable alternative (one env var away — the multipart
 support ships in the binary). The real quality unlock is off-tier: the
-OpenRouter Gemini tier-2 fallback (~$0.0015/image, already in the chain) or
 paid neurons.
 
 ## Change mechanics (tiny)

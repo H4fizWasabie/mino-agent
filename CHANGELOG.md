@@ -1,3 +1,9 @@
+## [Unreleased]
+
+### Changed
+
+- **Image generation no longer uses Gemini as a fallback (closes #363)**: the `generate_image` tool now keeps the free Cloudflare → Pollinations path and never sends image prompts through OpenRouter.
+
 ## [v3.1.10] — normalized cost-watch ranking (2026-08-25)
 
 ### Fixed
