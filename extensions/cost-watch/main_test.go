@@ -231,44 +231,28 @@ func TestPinOrderExcludesTrains(t *testing.T) {
 	}
 }
 
-func TestPinOrderUsesCacheMetricWhenConfigured(t *testing.T) {
+func TestPinOrderRanksAllThreePrices(t *testing.T) {
 	cfg := defaultConfig()
-	cfg.PinMetric = "cache"
 	cat := []catalogueEntry{
-		{Model: "m", Provider: "A", In: 0.40, Cache: 0.10, DataHandling: "zdr"}, // cheapest cache, pricier input
-		{Model: "m", Provider: "B", In: 0.05, Cache: 0.30, DataHandling: "zdr"}, // cheapest input, pricier cache
+		{Model: "m", Provider: "A", In: 0.01, Cache: 0.10, Out: 0.10, DataHandling: "zdr"},
+		{Model: "m", Provider: "B", In: 0.02, Cache: 0.02, Out: 0.02, DataHandling: "zdr"},
+		{Model: "m", Provider: "C", In: 0.10, Cache: 0.01, Out: 0.01, DataHandling: "zdr"},
 	}
 	order := pinOrder(cfg, cat)
-	if len(order) != 2 || order[0] != "A" {
-		t.Fatalf("cache-metric order = %v, want [A B] (A wins on cache despite higher input)", order)
+	if got, want := strings.Join(order, ","), "C,B,A"; got != want {
+		t.Fatalf("all-price order = %v, want [%s]", order, strings.ReplaceAll(want, ",", " "))
 	}
 }
 
-func TestPinOrderDefaultsToInputMetric(t *testing.T) {
-	cfg := defaultConfig() // no pin_metric -> input
+func TestPinOrderMissingCacheDoesNotWin(t *testing.T) {
+	cfg := defaultConfig()
 	cat := []catalogueEntry{
-		{Model: "m", Provider: "A", In: 0.40, Cache: 0.10, DataHandling: "zdr"},
-		{Model: "m", Provider: "B", In: 0.05, Cache: 0.30, DataHandling: "zdr"},
+		{Model: "m", Provider: "Mancer 2", In: 0.15, Cache: 0, Out: 0.45, DataHandling: "unknown"},
+		{Model: "m", Provider: "StreamLake", In: 0.088, Cache: 0.0028, Out: 0.064, DataHandling: "unknown"},
 	}
 	order := pinOrder(cfg, cat)
-	if len(order) != 2 || order[0] != "B" {
-		t.Fatalf("input-metric order = %v, want [B A] (B wins on input)", order)
-	}
-}
-
-func TestPinMetricPerModelOverride(t *testing.T) {
-	cfg := defaultConfig()
-	cfg.Models["m"] = modelConfig{URL: "https://x", Expected: 0.1, Threshold: 2, PinMetric: "cache"}
-	// stripped-slug match (config key may carry a :pin suffix)
-	cfg.Models["m:deepinfra"] = modelConfig{URL: "https://y", Expected: 0.1, Threshold: 2, PinMetric: "cache"}
-	if got := cfg.pinMetric("m"); got != "cache" {
-		t.Fatalf("pinMetric(m) = %q, want cache", got)
-	}
-	if got := cfg.pinMetric("m"); got != "cache" {
-		t.Fatalf("pinMetric(m) with pinned key = %q, want cache", got)
-	}
-	if got := cfg.pinMetric("other"); got != "input" {
-		t.Fatalf("pinMetric(other) = %q, want input", got)
+	if len(order) != 2 || order[0] != "StreamLake" {
+		t.Fatalf("missing-cache order = %v, want [StreamLake Mancer 2]", order)
 	}
 }
 
@@ -392,6 +376,28 @@ func TestFetchCatalogueParsesDiscount(t *testing.T) {
 	e := cat.Entries[0]
 	if !approx(e.In, 0.0798) || !approx(e.Discount, 0.43) {
 		t.Fatalf("price/discount = %+v", e)
+	}
+}
+
+func TestFetchCatalogueMissingCacheDoesNotWin(t *testing.T) {
+	old := providersPath
+	defer func() { providersPath = old }()
+	providersPath = filepath.Join(t.TempDir(), "providers.json")
+	os.WriteFile(providersPath, []byte(`{"providers":[{"model":"deepseek/deepseek-v4-flash-0731"}]}`), 0644)
+	orig := fetch
+	defer func() { fetch = orig }()
+	fetch = func(url string) (string, error) {
+		return `{"data":{"endpoints":[
+			{"name":"Mancer 2 | deepseek","pricing":{"prompt":"0.00000015","completion":"0.00000045"}},
+			{"name":"StreamLake | deepseek","pricing":{"prompt":"0.000000088","completion":"0.000000064","input_cache_read":"0.0000000028"}}
+		]}}`, nil
+	}
+	cat, err := fetchCatalogue(defaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if order := pinOrder(defaultConfig(), cat.Entries); len(order) == 0 || order[0] != "StreamLake" {
+		t.Fatalf("missing-cache catalogue order = %v, want StreamLake first", order)
 	}
 }
 
