@@ -1,4 +1,4 @@
-## [Unreleased]
+## [v3.1.10] — normalized cost-watch ranking (2026-08-25)
 
 ### Fixed
 
