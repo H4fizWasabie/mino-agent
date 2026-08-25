@@ -488,6 +488,12 @@ func rankCatalogueEntries(entries []catalogueEntry) []catalogueEntry {
 		if ranked[i].full && ranked[i].score != ranked[j].score {
 			return ranked[i].score < ranked[j].score
 		}
+		if ranked[i].entry.Cache != ranked[j].entry.Cache {
+			return ranked[i].entry.Cache < ranked[j].entry.Cache
+		}
+		if ranked[i].entry.Out != ranked[j].entry.Out {
+			return ranked[i].entry.Out < ranked[j].entry.Out
+		}
 		return ranked[i].entry.In < ranked[j].entry.In
 	})
 	out := make([]catalogueEntry, len(ranked))

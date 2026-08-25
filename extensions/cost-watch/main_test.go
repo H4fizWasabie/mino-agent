@@ -244,6 +244,19 @@ func TestPinOrderRanksAllThreePrices(t *testing.T) {
 	}
 }
 
+func TestPinOrderTieBreaksCacheThenOutput(t *testing.T) {
+	cfg := defaultConfig()
+	cat := []catalogueEntry{
+		{Model: "m", Provider: "A", In: 0.10, Cache: 0.01, Out: 0.10, DataHandling: "zdr"},
+		{Model: "m", Provider: "B", In: 0.01, Cache: 0.10, Out: 0.10, DataHandling: "zdr"},
+		{Model: "m", Provider: "C", In: 0.05, Cache: 0.05, Out: 0.01, DataHandling: "zdr"},
+	}
+	order := pinOrder(cfg, cat)
+	if got, want := strings.Join(order, ","), "C,A,B"; got != want {
+		t.Fatalf("tie-break order = %v, want [%s]", order, strings.ReplaceAll(want, ",", " "))
+	}
+}
+
 func TestPinOrderMissingCacheDoesNotWin(t *testing.T) {
 	cfg := defaultConfig()
 	cat := []catalogueEntry{
