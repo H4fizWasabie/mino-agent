@@ -1,4 +1,4 @@
-## [Unreleased]
+## [v3.1.9] — cost-watch cache/output tie-break (2026-08-25)
 
 ### Fixed
 
