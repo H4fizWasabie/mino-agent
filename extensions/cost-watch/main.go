@@ -452,33 +452,35 @@ func (cfg *config) eligibleForPin(provider string) bool {
 }
 
 // pinOrder returns the routing order for one model slug: eligible providers
-// rankCatalogueEntries ranks complete prices by the sum of their ordinal rank
-// across input, cache-read, and output. Incomplete entries trail complete ones
-// so an omitted cache-read field cannot become a false zero-price winner.
+// rankCatalogueEntries ranks complete prices by the sum of each price relative
+// to the cheapest real price in that dimension. Incomplete entries trail
+// complete ones so an omitted cache-read field cannot become a false winner.
 func rankCatalogueEntries(entries []catalogueEntry) []catalogueEntry {
 	type scored struct {
 		entry catalogueEntry
-		score int
+		score float64
 		full  bool
 	}
 	ranked := make([]scored, len(entries))
+	minIn, minCache, minOut := 0.0, 0.0, 0.0
 	for i, entry := range entries {
 		ranked[i] = scored{entry: entry, full: entry.In > 0 && entry.Cache > 0 && entry.Out > 0}
-	}
-	for _, field := range []func(catalogueEntry) float64{
-		func(e catalogueEntry) float64 { return e.In },
-		func(e catalogueEntry) float64 { return e.Cache },
-		func(e catalogueEntry) float64 { return e.Out },
-	} {
-		order := make([]int, 0, len(ranked))
-		for i, entry := range ranked {
-			if entry.full {
-				order = append(order, i)
-			}
+		if !ranked[i].full {
+			continue
 		}
-		sort.SliceStable(order, func(i, j int) bool { return field(ranked[order[i]].entry) < field(ranked[order[j]].entry) })
-		for rank, index := range order {
-			ranked[index].score += rank + 1
+		if minIn == 0 || entry.In < minIn {
+			minIn = entry.In
+		}
+		if minCache == 0 || entry.Cache < minCache {
+			minCache = entry.Cache
+		}
+		if minOut == 0 || entry.Out < minOut {
+			minOut = entry.Out
+		}
+	}
+	for i := range ranked {
+		if ranked[i].full {
+			ranked[i].score = ranked[i].entry.In/minIn + ranked[i].entry.Cache/minCache + ranked[i].entry.Out/minOut
 		}
 	}
 	sort.SliceStable(ranked, func(i, j int) bool {

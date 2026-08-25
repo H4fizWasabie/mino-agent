@@ -1,3 +1,9 @@
+## [Unreleased]
+
+### Fixed
+
+- **Cost-watch normalizes all three prices before ranking (closes #361)**: input, cache-read, and output are each scored relative to that dimension's cheapest real value, so a provider with the best cache/output combination is not buried by raw ordinal position.
+
 ## [v3.1.9] — cost-watch cache/output tie-break (2026-08-25)
 
 ### Fixed

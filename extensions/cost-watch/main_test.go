@@ -239,7 +239,7 @@ func TestPinOrderRanksAllThreePrices(t *testing.T) {
 		{Model: "m", Provider: "C", In: 0.10, Cache: 0.01, Out: 0.01, DataHandling: "zdr"},
 	}
 	order := pinOrder(cfg, cat)
-	if got, want := strings.Join(order, ","), "C,B,A"; got != want {
+	if got, want := strings.Join(order, ","), "B,C,A"; got != want {
 		t.Fatalf("all-price order = %v, want [%s]", order, strings.ReplaceAll(want, ",", " "))
 	}
 }
@@ -266,6 +266,20 @@ func TestPinOrderMissingCacheDoesNotWin(t *testing.T) {
 	order := pinOrder(cfg, cat)
 	if len(order) != 2 || order[0] != "StreamLake" {
 		t.Fatalf("missing-cache order = %v, want [StreamLake Mancer 2]", order)
+	}
+}
+
+func TestPinOrderCurrentDeepSeekPricesPreferStreamLake(t *testing.T) {
+	cfg := defaultConfig()
+	cat := []catalogueEntry{
+		{Model: "m", Provider: "OpenInference", In: 0.035, Cache: 0.01, Out: 0.12, DataHandling: "unknown"},
+		{Model: "m", Provider: "Relace", In: 0.04, Cache: 0.008, Out: 0.08, DataHandling: "unknown"},
+		{Model: "m", Provider: "StreamLake", In: 0.088, Cache: 0.0028, Out: 0.064, DataHandling: "unknown"},
+		{Model: "m", Provider: "Sail Research", In: 0.065, Cache: 0.02, Out: 0.18, DataHandling: "unknown"},
+	}
+	order := pinOrder(cfg, cat)
+	if len(order) == 0 || order[0] != "StreamLake" {
+		t.Fatalf("current DeepSeek order = %v, want StreamLake first", order)
 	}
 }
 
