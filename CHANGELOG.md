@@ -1,3 +1,9 @@
+## [Unreleased]
+
+### Fixed
+
+- **Cost-watch all-price tie-break prefers cache-read and output (closes #359)**: equal combined price ranks now resolve by cache-read, then output, then input, keeping cache-heavy routing on the cheaper cache/output host.
+
 ## [v3.1.8] — cost-watch three-price ranking and missing-cache guard (2026-08-25)
 
 ### Changed
