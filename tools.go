@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -1578,18 +1579,55 @@ func makeSearchTool(mem *Memory) *Tool {
 }
 
 func webSearch(query string) string {
-	key := os.Getenv("TAVILY_API_KEY")
-	if key == "" {
+	keys := tavilyKeys()
+	if len(keys) == 0 {
 		// ponytail: also check mino.env so agent can add key without restart
-		key = readEnvFile("TAVILY_API_KEY")
+		keys = splitTavilyKeys(readEnvFile("TAVILY_API_KEYS"))
+		if len(keys) == 0 {
+			keys = splitTavilyKeys(readEnvFile("TAVILY_API_KEY"))
+		}
 	}
-	if key != "" {
-		return tavilySearch(query, key)
+	if len(keys) > 0 {
+		start := int(tavilyKeyIndex.Add(1)-1) % len(keys)
+		last := ""
+		for i := range keys {
+			result, status := tavilySearchAttempt(query, keys[(start+i)%len(keys)])
+			last = result
+			if status != 401 && status != 403 && status != 429 {
+				return result
+			}
+		}
+		return last
 	}
 	return "Error: web search requires a Tavily API key. Get one at https://tavily.com, then set TAVILY_API_KEY in your environment or dashboard settings."
 }
 
+func tavilyKeys() []string {
+	if keys := splitTavilyKeys(os.Getenv("TAVILY_API_KEYS")); len(keys) > 0 {
+		return keys
+	}
+	return splitTavilyKeys(os.Getenv("TAVILY_API_KEY"))
+}
+
+func splitTavilyKeys(value string) []string {
+	var keys []string
+	for _, key := range strings.Split(value, ",") {
+		if key = strings.TrimSpace(key); key != "" {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+var tavilyKeyIndex atomic.Uint64
+var tavilyBaseURL = "https://api.tavily.com"
+
 func tavilySearch(query, key string) string {
+	result, _ := tavilySearchAttempt(query, key)
+	return result
+}
+
+func tavilySearchAttempt(query, key string) (string, int) {
 	payload, _ := json.Marshal(map[string]any{
 		"query":               query,
 		"search_depth":        "basic",
@@ -1597,20 +1635,20 @@ func tavilySearch(query, key string) string {
 		"include_answer":      false,
 		"include_raw_content": false,
 	})
-	req, err := http.NewRequest("POST", "https://api.tavily.com/search", bytes.NewReader(payload))
+	req, err := http.NewRequest("POST", tavilyBaseURL+"/search", bytes.NewReader(payload))
 	if err != nil {
-		return fmt.Sprintf("Tavily request error: %v", err)
+		return fmt.Sprintf("Tavily request error: %v", err), 0
 	}
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return fmt.Sprintf("Tavily API error: %v", err)
+		return fmt.Sprintf("Tavily API error: %v", err), 0
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode >= 400 {
-		return fmt.Sprintf("Tavily HTTP %d: %s", resp.StatusCode, string(body[:min(500, len(body))]))
+		return fmt.Sprintf("Tavily HTTP %d: %s", resp.StatusCode, string(body[:min(500, len(body))])), resp.StatusCode
 	}
 	var result struct {
 		Results []struct {
@@ -1620,17 +1658,17 @@ func tavilySearch(query, key string) string {
 		} `json:"results"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return fmt.Sprintf("Tavily parse error: %v", err)
+		return fmt.Sprintf("Tavily parse error: %v", err), resp.StatusCode
 	}
 	if len(result.Results) == 0 {
-		return fmt.Sprintf("No results found for: %s", query)
+		return fmt.Sprintf("No results found for: %s", query), resp.StatusCode
 	}
 	var out strings.Builder
 	out.WriteString(fmt.Sprintf("Search results for: %s\n\n", query))
 	for i, r := range result.Results {
 		out.WriteString(fmt.Sprintf("### %d. %s\nURL: %s\n%s\n\n", i+1, r.Title, r.URL, r.Content))
 	}
-	return out.String()
+	return out.String(), resp.StatusCode
 }
 
 func makeFetchURLTool() *Tool {

@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Fixed
+
+- **Tavily search can rotate across multiple API keys (closes #365)**: `TAVILY_API_KEYS` now supports comma-separated keys with round-robin selection and fallback on authentication or quota responses, while the existing `TAVILY_API_KEY` setting remains compatible.
+
 ### Changed
 
 - **Image generation no longer uses Gemini as a fallback (closes #363)**: the `generate_image` tool now keeps the free Cloudflare → Pollinations path and never sends image prompts through OpenRouter.
