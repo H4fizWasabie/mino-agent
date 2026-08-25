@@ -1,3 +1,9 @@
+## [Unreleased]
+
+### Changed
+
+- **README positioning and accuracy (closes #355)**: lead with Mino's durable memory, real tools, verified playbooks, and owner control; update the release badge and stale storage, cadence, and schema references.
+
 ## [v3.1.7] — graph rebuild cadence 6h→24h (2026-08-24)
 
 ### Changed

@@ -1,20 +1,30 @@
-# Mino — personal AI agent
+# Mino — your own AI agent
 
-One binary. One SQLite file. Your own AI assistant.
+Mino remembers what matters, uses tools to get work done, and turns repeatable work into verified workflows that run on schedule.
 
-**Liking Mino? [Star it on GitHub ⭐](https://github.com/H4fizWasabie/mino-agent/stargazers) — it takes one click and keeps this project alive.**
+It is a single Go binary with a local SQLite state file. Conversations, memory, playbooks, schedules, costs, and the audit trail stay under your control.
+
+Mino is built for more than chat:
+
+- remember decisions and facts across conversations
+- give the agent real tools with explicit boundaries
+- teach a task once and run it reliably every day
+- receive completed work through the dashboard or Telegram
+- use cloud, OAuth, OpenRouter, or local models
 
 [![GitHub stars](https://img.shields.io/github/stars/H4fizWasabie/mino-agent?style=social)](https://github.com/H4fizWasabie/mino-agent/stargazers)
 [![DeepWiki](https://img.shields.io/badge/DeepWiki-Architecture%20Docs-blue)](https://deepwiki.com/H4fizWasabie/mino-agent)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/H4fizWasabie/mino-agent)
-![Version](https://img.shields.io/badge/version-v2.9.0-blue)
+![Version](https://img.shields.io/github/v/release/H4fizWasabie/mino-agent?display_name=tag)
 ![License](https://img.shields.io/badge/license-MIT-green)
+
+**Liking Mino? [Star it on GitHub ⭐](https://github.com/H4fizWasabie/mino-agent/stargazers) — it takes one click and helps others find it.**
 
 - **Dashboard** — chat, memory, tools, database, ops
 - **Telegram** — same agent, any device
 - **Playbooks** — autonomous repeatable workflows: teach once, compile from evidence, schedule daily, verified outputs, Telegram reports
 - **Coding tools** — read, write, edit, grep, glob, git, graphify, codegraph, bash
-- **Memory** — Markdown-authoritative graph memory (facts as frontmatter `.md` files) with self-maintenance (edge judgment, community detection, 6-hourly maintenance), episodic/semantic split (episodes expire to archive after 30 days; semantic facts are protected), config-whitelisted semantic distillation, FTS5 retrieval, auto-consolidation, one-time reminders
+- **Memory** — Markdown-authoritative graph memory (facts as frontmatter `.md` files) with incremental maintenance within minutes and full daily rebuilds, episodic/semantic split (episodes expire to archive after 30 days; semantic facts are protected), config-whitelisted semantic distillation, FTS5 retrieval, auto-consolidation, one-time reminders
 - **Multi-provider** — priority, fallback, circuit breaking, and OpenRouter routing (model `:provider` pins + privacy-safe `provider_routing`/`allow_fallbacks`)
 - **OAuth login** — Claude, Codex (ChatGPT), GitHub Copilot, xAI/Grok
 - **Web search** — Tavily API (free tier available)
@@ -72,11 +82,11 @@ mino
 |---------|------|
 | `mino` | Launch dashboard (default) |
 | `mino cli` | Terminal chat |
-| `mino remember "query"` | Print graph-memory recall (same output as the in-loop `remember` tool, no LLM call) — CTX-022 A |
+| `mino remember "query"` | Print graph-memory recall (same output as the in-loop `remember` tool, no LLM call) |
 | `mino memory path <from> <to>` | Shortest path between two memory facts |
 | `mino version` | Show version |
 | `mino update` | Self-update from GitHub releases |
-| `mino setup-privileges` | Write the sudoers command whitelist (RUN-003) — run as root |
+| `mino setup-privileges` | Write the sudoers command whitelist — run as root |
 
 ## Configuration
 
@@ -252,7 +262,7 @@ session.go           — SOUL.md, system prompt, context assembly
 memory.go            — consolidation bridge and operational state
 graph_memory.go      — Markdown-authoritative graph memory: facts, edges, judgment, communities, migration
 nerves.go            — loop snapshots, interrupts, mid-flight signals
-cost.go              — run/month spend from usage.jsonl, review triggers
+cost.go              — run/month spend from SQLite usage history, review triggers
 tools.go             — tool registry (file, bash, calendar, notes, search, image) + schema caps
 coding_tools.go      — read, write, edit, grep, glob, git, graphify, codegraph
 provider.go          — OpenAI + Anthropic + Codex clients, SSE streaming
@@ -271,7 +281,7 @@ post_mortem.go       — failure-evidence extraction for failed runs (CTX-017)
 audit_playbook.go    — design-time contract risk-flags (CTX-018)
 adapters.go          — working memory and patterns
 reminder.go          — persistent one-time reminders with Telegram delivery
-db.go                — SQLite schema and migrations (FTS5, schema v7+)
+db.go                — SQLite schema and migrations (FTS5, schema v8+)
 config.go            — environment variable → Settings
 update.go            — self-update from GitHub releases (the only production deploy path; see docs/emergency-deploy.md for the manual lane)
 deploy.sh            — VPS bootstrap only (user, oauth, units, DB backup); never pushes binaries
@@ -342,7 +352,7 @@ Drop JSON configs in `~/.mino/mcp.d/`:
 
 Tools are prefixed as `MCP_<server>_<tool>`.
 
-### mino-memory — expose the graph to any agent (CTX-022 A)
+### mino-memory — expose the graph to any agent
 
 Build from `extensions/mino-memory` and register:
 
