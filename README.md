@@ -103,7 +103,8 @@ mino
 | `MINO_MAX_TOKENS` | `16384` | Max output tokens per call |
 | `MINO_CONTEXT_CHARS` | `100000` | Context window budget |
 | `TELEGRAM_BOT_TOKEN` | — | Optional Telegram bot token |
-| `TAVILY_API_KEY` | — | Web search (free key at tavily.com) |
+| `TAVILY_API_KEY` | — | Web search (single free key at tavily.com) |
+| `TAVILY_API_KEYS` | — | Optional comma-separated Tavily keys; rotates on quota/auth errors |
 | `MINO_OPENROUTER_KEY` | — | OpenRouter API key |
 
 See `.env.example` for a copy-paste template.

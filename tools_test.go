@@ -719,6 +719,36 @@ func TestSearchToolProactiveProvenanceGate(t *testing.T) {
 	}
 }
 
+func TestWebSearchRotatesTavilyKeysOnQuotaError(t *testing.T) {
+	var auth []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = append(auth, r.Header.Get("Authorization"))
+		if r.Header.Get("Authorization") == "Bearer first" {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		_, _ = w.Write([]byte(`{"results":[{"title":"ok","url":"https://example.com","content":"result"}]}`))
+	}))
+	defer srv.Close()
+	oldClient, oldBase := httpClient, tavilyBaseURL
+	defer func() { httpClient, tavilyBaseURL = oldClient, oldBase }()
+	httpClient, tavilyBaseURL = srv.Client(), srv.URL
+	t.Setenv("TAVILY_API_KEYS", " first, second ")
+	t.Setenv("TAVILY_API_KEY", "")
+	tavilyKeyIndex.Store(0)
+
+	out := webSearch("mino")
+	if !strings.Contains(out, "### 1. ok") {
+		t.Fatalf("search output = %s", out)
+	}
+	if out = webSearch("mino again"); !strings.Contains(out, "### 1. ok") {
+		t.Fatalf("second search output = %s", out)
+	}
+	if !reflect.DeepEqual(auth, []string{"Bearer first", "Bearer second", "Bearer second"}) {
+		t.Fatalf("authorization sequence = %v", auth)
+	}
+}
+
 // F1 regression (RUN-001 review, PR #224): syncToolCatalog must not iterate
 // the tools map unlocked — concurrent registration (supervisor runLoop
 // goroutines) racing the FTS catalog rebuild. Fails under -race without the
