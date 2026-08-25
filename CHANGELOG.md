@@ -2,6 +2,8 @@
 
 ### Changed
 
+- **Cost-watch ranks all three provider prices and rejects missing cache-read values (closes #357)**: routing now combines input, cache-read, and output price ranks; an omitted `input_cache_read` field no longer parses as a zero-price winner. Legacy `pin_metric` config remains readable but no longer controls routing.
+
 - **README positioning and accuracy (closes #355)**: lead with Mino's durable memory, real tools, verified playbooks, and owner control; update the release badge and stale storage, cadence, and schema references.
 
 ## [v3.1.7] — graph rebuild cadence 6h→24h (2026-08-24)

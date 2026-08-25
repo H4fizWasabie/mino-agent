@@ -2,8 +2,8 @@
 //
 // Scrapes OpenRouter per-provider pricing, exposes the mino extension protocol
 // (docs/decisions.md §8), runs an hourly autonomous check that re-pins the
-// brain's routing to the cheapest eligible host (curated `trains` providers
-// are hard-excluded; promos win by being cheap) and signals mino to hot-reload
+// brain's routing to the best-ranked eligible hosts across input, cache-read,
+// and output prices (curated `trains` providers are hard-excluded) and signals mino to hot-reload
 // via SIGHUP — silent, no owner paging. The promo-expiry pager stays for the
 // case pinning cannot fix: every eligible host above threshold.
 //
@@ -49,8 +49,7 @@ type modelConfig struct {
 	URL       string  `json:"url"`
 	Expected  float64 `json:"expected"`
 	Threshold float64 `json:"threshold"`
-	// PinMetric is the price field used for pin/report comparisons:
-	// "input" (default) or "cache" (input_cache_read). When empty, input.
+	// PinMetric is retained for config compatibility; ranking uses all prices.
 	PinMetric string `json:"pin_metric,omitempty"`
 }
 
@@ -58,7 +57,7 @@ type config struct {
 	Listen              string                 `json:"listen"`
 	Port                int                    `json:"port"`
 	Models              map[string]modelConfig `json:"models"`
-	PinMetric           string                 `json:"pin_metric,omitempty"` // global fallback: "cache" or "input"
+	PinMetric           string                 `json:"pin_metric,omitempty"` // legacy compatibility; ranking uses all prices
 	Telegram            string                 `json:"telegram_chat_id"`
 	CatalogueRefreshMin int                    `json:"catalogue_refresh_minutes"` // 0 = default 60
 	DataHandling        map[string]string      `json:"data_handling"`             // provider -> zdr|trains|unknown
@@ -236,28 +235,29 @@ func checkModels(cfg *config) (map[string]map[string]any, map[string]string) {
 			continue
 		}
 		best := ""
-		metric := cfg.pinMetric(name)
-		price := func(p string) float64 {
-			if metric == "cache" {
-				return provs[p].Cache
-			}
-			return provs[p].Input
+		entries := make([]catalogueEntry, 0, len(provs))
+		for p, price := range provs {
+			entries = append(entries, catalogueEntry{Provider: p, In: price.Input, Cache: price.Cache, Out: price.Output, DataHandling: cfg.DataHandling[p]})
 		}
-		for p := range provs {
-			if best == "" || price(p) < price(best) {
-				best = p
-			}
+		ranked := rankCatalogueEntries(entries)
+		if len(ranked) > 0 {
+			best = ranked[0].Provider
+		}
+		if best == "" {
+			flags[name] = "no complete pricing parsed"
+			prices[name] = map[string]any{"providers": len(provs)}
+			continue
 		}
 		b := provs[best]
 		prices[name] = map[string]any{
 			"best_provider": best, "best_input": b.Input,
 			"best_output": b.Output, "best_cache": b.Cache,
-			"pin_metric": metric,
+			"pin_metric": "all",
 			"discount":   b.Discount, "providers": len(provs),
 		}
 		limit := m.Expected * m.Threshold
-		if price(best) > limit {
-			flags[name] = fmt.Sprintf("PRICE SPIKE: best $%.4f/M (%s) > expected $%.4f × %.1f (promo likely expired)", price(best), metric, m.Expected, m.Threshold)
+		if b.Input > limit {
+			flags[name] = fmt.Sprintf("PRICE SPIKE: best $%.4f/M input > expected $%.4f × %.1f (promo likely expired)", b.Input, m.Expected, m.Threshold)
 		} else {
 			flags[name] = "ok"
 		}
@@ -440,7 +440,7 @@ func configuredOpenRouterModels() ([]string, error) {
 // refresh ranks eligible hosts (curated `trains` providers are hard-excluded;
 // everything else — zdr, cache_only, unknown — is eligible) and rewrites
 // provider_routing order. Promos manifest as low input prices, so price
-// sorting rides promos without a separate discount filter. Silent and
+// ranking rides promos without a separate discount filter. Silent and
 // idempotent: no owner paging, no write when the order is unchanged.
 
 const maxPins = 5 // routing-list cap; the tail beyond this never gets traffic
@@ -452,25 +452,52 @@ func (cfg *config) eligibleForPin(provider string) bool {
 }
 
 // pinOrder returns the routing order for one model slug: eligible providers
-// pinMetric resolves the effective pin/report metric for a model slug:
-// per-model PinMetric (matching may carry a :provider suffix, so compare on
-// the stripped slug), else the global PinMetric, else "input".
-func (cfg *config) pinMetric(slug string) string {
-	base := stripProviderPin(slug)
-	for k, m := range cfg.Models {
-		if stripProviderPin(k) == base && m.PinMetric == "cache" {
-			return "cache"
+// rankCatalogueEntries ranks complete prices by the sum of their ordinal rank
+// across input, cache-read, and output. Incomplete entries trail complete ones
+// so an omitted cache-read field cannot become a false zero-price winner.
+func rankCatalogueEntries(entries []catalogueEntry) []catalogueEntry {
+	type scored struct {
+		entry catalogueEntry
+		score int
+		full  bool
+	}
+	ranked := make([]scored, len(entries))
+	for i, entry := range entries {
+		ranked[i] = scored{entry: entry, full: entry.In > 0 && entry.Cache > 0 && entry.Out > 0}
+	}
+	for _, field := range []func(catalogueEntry) float64{
+		func(e catalogueEntry) float64 { return e.In },
+		func(e catalogueEntry) float64 { return e.Cache },
+		func(e catalogueEntry) float64 { return e.Out },
+	} {
+		order := make([]int, 0, len(ranked))
+		for i, entry := range ranked {
+			if entry.full {
+				order = append(order, i)
+			}
+		}
+		sort.SliceStable(order, func(i, j int) bool { return field(ranked[order[i]].entry) < field(ranked[order[j]].entry) })
+		for rank, index := range order {
+			ranked[index].score += rank + 1
 		}
 	}
-	if cfg.PinMetric == "cache" {
-		return "cache"
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].full != ranked[j].full {
+			return ranked[i].full
+		}
+		if ranked[i].full && ranked[i].score != ranked[j].score {
+			return ranked[i].score < ranked[j].score
+		}
+		return ranked[i].entry.In < ranked[j].entry.In
+	})
+	out := make([]catalogueEntry, len(ranked))
+	for i, entry := range ranked {
+		out[i] = entry.entry
 	}
-	return "input"
+	return out
 }
 
-// pinOrder returns the routing order for one model slug: eligible providers
-// sorted by price (input or cache-read, per pinMetric; cheapest first),
-// capped at maxPins.
+// pinOrder returns the routing order for one model slug, capped at maxPins.
 func pinOrder(cfg *config, entries []catalogueEntry) []string {
 	var eligible []catalogueEntry
 	for _, e := range entries {
@@ -478,17 +505,7 @@ func pinOrder(cfg *config, entries []catalogueEntry) []string {
 			eligible = append(eligible, e)
 		}
 	}
-	metric := "input"
-	if len(eligible) > 0 {
-		metric = cfg.pinMetric(eligible[0].Model)
-	}
-	less := func(i, j int) bool {
-		if metric == "cache" {
-			return eligible[i].Cache < eligible[j].Cache
-		}
-		return eligible[i].In < eligible[j].In
-	}
-	sort.SliceStable(eligible, less)
+	eligible = rankCatalogueEntries(eligible)
 	if len(eligible) > maxPins {
 		eligible = eligible[:maxPins]
 	}
@@ -593,7 +610,7 @@ var sendHUP = func() error {
 }
 
 // refreshAndPin is the hourly loop body and the cost_watch_refresh tool:
-// fetch fresh prices, persist the catalogue, chase the cheapest eligible pin,
+// fetch fresh prices, persist the catalogue, chase the best-ranked eligible pin,
 // and hot-reload mino when the order changed.
 func refreshAndPin(cfg *config) string {
 	cat, err := fetchCatalogue(cfg)
@@ -709,7 +726,7 @@ func executeTool(cfg *config, tool string, args map[string]any) (string, error) 
 		return statusText(cfg) + "\n" + fmt.Sprintf("%v", flags), nil
 	case "cost_watch_refresh":
 		// CTX-020: on-demand catalogue refresh (also runs periodically);
-		// now also chases the cheapest eligible pin.
+		// now also chases the best-ranked eligible pin.
 		return refreshAndPin(cfg), nil
 	default:
 		return "", fmt.Errorf("unknown tool %s", tool)
