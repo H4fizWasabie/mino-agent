@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Fixed
+
+- **Oversized Telegram outbox messages are chunked (closes #375)**: long queued reports now stay within Telegram's message limit instead of being rejected and retried indefinitely.
+
 ## [v3.1.14] — Taskify approval guard (2026-08-27)
 
 ### Fixed
