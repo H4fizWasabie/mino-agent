@@ -548,6 +548,10 @@ func RunLoopContext(
 				// tools return this error instead of executing — the owner lock
 				// never rests on prompt compliance alone.
 				raw = block
+			} else if block := taskifyApprovalToolGuard(ctx, tc.Name); block != "" {
+				// #371 RUN-006e: after the owner approves the initial offer, the
+				// model must scaffold the task before executing or running it.
+				raw = block
 			} else {
 				raw = tools.ExecuteContext(ctx, tc.Name, args)
 			}

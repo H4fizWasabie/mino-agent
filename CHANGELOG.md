@@ -4,6 +4,8 @@
 
 - **ai-news-daily judgment reserves level-2 headings for stories (closes #369)**: the judgment contract now requires metadata such as the exclusion check to use a lower-level heading, so the mechanical fetch stage does not misclassify it as an unverified story.
 
+- **Initial Taskify approval now requires scaffolding first (closes #371)**: after a complex-task offer, the owner's approval turn is mechanically kept on the Taskify handoff path. The offer is not re-injected, grounding tools and `taskify` remain available, but direct work and playbook execution tools return a guard until the approved task has been scaffolded. This prevents approved chat tasks from bypassing the existing resumable plan → decompose → act → observe → repeat state machine.
+
 - **ai-news-daily fetch accepts Markdown-formatted source labels (closes #367)**: the mechanical fetch stage now accepts both the canonical `Source: URL` label and harmless Markdown emphasis such as `**Source:** URL`, while retaining strict HTTP(S) URL validation. The judgment contract continues to require the plain canonical form. This prevents valid selected stories from being misclassified as missing URLs at the stage boundary.
 
 - **Tavily search can rotate across multiple API keys (closes #365)**: `TAVILY_API_KEYS` now supports comma-separated keys with round-robin selection and fallback on authentication or quota responses, while the existing `TAVILY_API_KEY` setting remains compatible.

@@ -380,6 +380,8 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 		if gateRouting != "" {
 			tail = gateRouting + "\n\n" + tail
 		}
+		lastTurnFenced := conversation.Session.OfferFencedLastTurn()
+		initialTaskApproval := gateRouting == "" && lastTurnFenced && taskGateApprovalRe.MatchString(userMessage)
 		// #237 task-intent detection: the offer is a DISCUSSION OPENER — no
 		// scaffold, no work, until the owner approves (owner lock 2026-08-16).
 		// Suppressed on the turn that just approved the gate: the approval is
@@ -387,17 +389,17 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 		// also FENCED — work tools are blocked for this turn (taskifyOfferKey)
 		// and the fence is visible in traces (taskify_offer marker).
 		var offerTurnLocal bool
-		tail, offerTurnLocal = applyTaskifyOffer(tail, userMessage, gateRouting != "")
+		tail, offerTurnLocal = applyTaskifyOfferTurn(tail, userMessage, gateRouting != "", initialTaskApproval)
 		offerTurn = offerTurnLocal
 		// #335 (finding 2): the fence is per-turn, but the RUN-006d errors it
 		// left in history made later turns believe work stays blocked. The
 		// first UNFENCED turn after a fenced one carries the fence-lifted
 		// note; the session flag records this turn's state for the next one.
-		lastTurnFenced := conversation.Session.OfferFencedLastTurn()
 		fenceLiftedNote = !offerTurnLocal && lastTurnFenced
 		tail = applyFenceLiftedNote(tail, offerTurnLocal, lastTurnFenced)
 		conversation.Session.SetOfferFenced(offerTurnLocal)
 		ctx = context.WithValue(ctx, taskifyOfferKey{}, offerTurn)
+		ctx = context.WithValue(ctx, taskifyApprovalKey{}, initialTaskApproval)
 		messages[len(messages)-1].Content += "\n\n" + tail
 	}
 	msgLen := 0

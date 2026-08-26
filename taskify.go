@@ -53,6 +53,10 @@ import (
 // (set by RespondForContext; read by the loop's tool executor).
 type taskifyOfferKey struct{}
 
+// taskifyApprovalKey marks the first turn after an offer when the owner has
+// approved it. The approval turn must enter Taskify before any work starts.
+type taskifyApprovalKey struct{}
+
 // taskifyWorkTools are the tools capable of doing real work or scaffolding —
 // exactly what an offer turn must not start (owner lock 2026-08-16). Read,
 // search, fetch, note-taking, and owner communication stay available so the
@@ -76,11 +80,26 @@ func taskifyOfferToolGuard(ctx context.Context, name string) string {
 	return "Error: [RUN-006d] this is a task-intent OFFER turn — work tools are fenced. Discuss the approach only, then stop and wait for my explicit approval. The taskify tool unlocks after I approve."
 }
 
+// taskifyApprovalToolGuard keeps the initial approval turn on the Taskify
+// handoff path. Grounding tools and taskify itself remain available; direct
+// work or playbook execution must wait until the scaffold exists.
+func taskifyApprovalToolGuard(ctx context.Context, name string) string {
+	on, _ := ctx.Value(taskifyApprovalKey{}).(bool)
+	if !on || name == "taskify" || !taskifyWorkTools[name] {
+		return ""
+	}
+	return "Error: [RUN-006e] this approval turn must scaffold the approved task with taskify first. Do not execute work or run a playbook directly; call taskify now."
+}
+
 // applyTaskifyOffer injects the offer into the per-turn tail and reports
 // whether this turn is a fenced offer turn. Suppressed on the turn that just
 // approved a task gate: the approval is the start signal, not another offer.
 func applyTaskifyOffer(tail, userMessage string, gateRouted bool) (string, bool) {
-	if gateRouted {
+	return applyTaskifyOfferTurn(tail, userMessage, gateRouted, false)
+}
+
+func applyTaskifyOfferTurn(tail, userMessage string, gateRouted, approvalTurn bool) (string, bool) {
+	if gateRouted || approvalTurn {
 		return tail, false
 	}
 	offer := taskIntentOffer(userMessage)
@@ -313,7 +332,7 @@ func gatePauseReply(pb *PlaybookWorkspace, run *PlaybookRun, gate WorkspaceStage
 // task as a playbook with the harness-guaranteed five-state loop.
 func makeTaskifyTool(core *Core) *Tool {
 	return &Tool{
-		Name: "taskify",
+		Name:        "taskify",
 		Description: "Turn the owner's approved chat request into a structured task: a playbook with the harness-guaranteed plan → decompose → act → observe → repeat loop (stages 00-plan, 01-decompose, 02-act, 03-observe, 04-repeat; an over-scoped act stage splits into 02-act-b via the checkpoint offer). Call ONLY after the owner approved the offer. The scaffold writes understanding first (00-plan), proposes the stage split for the owner's approval (01-decompose — nothing executes before the owner approves, and the run pauses there), then executes (02-act, bounded with checkpoint splits), verifies (03-observe), and repeats on gaps (04-repeat).",
 		Schema: map[string]any{
 			"type": "object",
@@ -378,13 +397,13 @@ func splitOfferText(pb *PlaybookWorkspace, run *PlaybookRun, stage WorkspaceStag
 // completed 04-repeat run proposed for its gaps).
 func makeSplitStageTool(core *Core) *Tool {
 	return &Tool{
-		Name: "split_stage",
+		Name:        "split_stage",
 		Description: "Accept or decline the checkpoint-split offer for a taskified playbook run (the harness offers it when a stage consumes its iteration budget without producing its declared outputs; 04-repeat also proposes it for gaps). Accept: the stage's partial state is kept as the checkpoint and a continuation stage (02-...-b) is created with the contract you supply — the run resumes mid-task from the checkpoint, never from zero. Decline: the stage fails at its budget and the run fails.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"playbook":  map[string]any{"type": "string", "description": "The playbook name"},
-				"action":    map[string]any{"type": "string", "enum": []string{"accept", "decline"}},
+				"playbook": map[string]any{"type": "string", "description": "The playbook name"},
+				"action":   map[string]any{"type": "string", "enum": []string{"accept", "decline"}},
 				"name":     map[string]any{"type": "string", "description": "The continuation stage name (default: act-b, rendered 02-act-b)"},
 				"contract": map[string]any{"type": "string", "description": "The continuation stage CONTEXT.md content; required for accept. Declare the partial state paths as inputs (output/... within the split stage's dir) and name the outputs the continuation produces. Must be bounded."},
 			},
