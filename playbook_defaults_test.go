@@ -65,6 +65,22 @@ func TestSeedDefaultPlaybooksIdempotent(t *testing.T) {
 	}
 }
 
+func TestAINewsJudgmentContractReservesStoryHeadings(t *testing.T) {
+	data, err := os.ReadFile("playbook_defaults/ai-news-daily/stages/01-judgment/CONTEXT.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract := string(data)
+	for _, required := range []string{
+		"only selected stories may use level-2 (`##`) headings",
+		"`### Exclusion check`",
+	} {
+		if !strings.Contains(contract, required) {
+			t.Fatalf("judgment contract missing %q", required)
+		}
+	}
+}
+
 // TestSeedDefaultPlaybooksRefusesToOverwritePlaybookDir guards the other side
 // of idempotency: a playbook directory created by the owner before seeding is
 // left intact (files are seeded only when absent).
@@ -150,7 +166,7 @@ func TestSeededDefaultsPersonaResolves(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"ai-news-daily":   "trend-researcher",
+		"ai-news-daily":    "trend-researcher",
 		"morning-briefing": "chief-of-staff",
 		"weekly-cost":      "reality-checker",
 		"weekly-audit":     "reality-checker",
