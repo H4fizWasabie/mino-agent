@@ -580,6 +580,26 @@ func TestTaskifyOfferTurnFencesWorkTools(t *testing.T) {
 	}
 }
 
+func TestTaskifyApprovalTurnRequiresScaffold(t *testing.T) {
+	ctx := context.WithValue(context.Background(), taskifyApprovalKey{}, true)
+	for _, name := range []string{"bash", "write_file", "edit_file", "sync_file", "run_playbook", "manage_playbook"} {
+		if msg := taskifyApprovalToolGuard(ctx, name); msg == "" {
+			t.Fatalf("work tool %q must wait for taskify on the approval turn", name)
+		}
+	}
+	if msg := taskifyApprovalToolGuard(ctx, "taskify"); msg != "" {
+		t.Fatalf("taskify must remain available on the approval turn: %q", msg)
+	}
+	for _, name := range []string{"read_file", "search_web", "remember", "send_message"} {
+		if msg := taskifyApprovalToolGuard(ctx, name); msg != "" {
+			t.Fatalf("grounding or owner communication tool %q must remain available: %q", name, msg)
+		}
+	}
+	if msg := taskifyApprovalToolGuard(context.Background(), "bash"); msg != "" {
+		t.Fatalf("normal turns must not carry the approval guard: %q", msg)
+	}
+}
+
 func TestApplyTaskifyOffer(t *testing.T) {
 	msg := "Coding task: redesign my portfolio"
 	tail, fenced := applyTaskifyOffer("CLOCK", msg, false)
@@ -598,6 +618,12 @@ func TestApplyTaskifyOffer(t *testing.T) {
 	_, fenced3 := applyTaskifyOffer("CLOCK", msg, true)
 	if fenced3 {
 		t.Fatal("gate-approval turn must not be re-offered or fenced")
+	}
+	// initial owner approval after an offer: suppress the offer, but let the
+	// approval-turn guard require the taskify scaffold.
+	tail4, fenced4 := applyTaskifyOfferTurn("CLOCK", "yes, go ahead with the redesign", false, true)
+	if fenced4 || strings.Contains(tail4, taskifyOfferText) {
+		t.Fatal("initial approval must not re-offer or fence")
 	}
 }
 
