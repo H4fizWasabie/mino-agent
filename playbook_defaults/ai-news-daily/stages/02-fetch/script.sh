@@ -39,7 +39,10 @@ parse_topics() {
       url = ""
       next
     }
-    /^Source: / && title != "" { url = substr($0, 9); sub(/[ \t\r]+$/, "", url) }
+    match($0, /^Source:[ \t]+|^\*\*Source:\*\*[ \t]+/) && title != "" {
+      url = substr($0, RSTART + RLENGTH)
+      sub(/[ \t\r]+$/, "", url)
+    }
     END { if (title != "") print title "\t" url }
   ' "$TOPICS"
 }
