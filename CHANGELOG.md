@@ -2,6 +2,8 @@
 
 ### Fixed
 
+- **ai-news-daily fetch accepts Markdown-formatted source labels (closes #367)**: the mechanical fetch stage now accepts both the canonical `Source: URL` label and harmless Markdown emphasis such as `**Source:** URL`, while retaining strict HTTP(S) URL validation. The judgment contract continues to require the plain canonical form. This prevents valid selected stories from being misclassified as missing URLs at the stage boundary.
+
 - **Tavily search can rotate across multiple API keys (closes #365)**: `TAVILY_API_KEYS` now supports comma-separated keys with round-robin selection and fallback on authentication or quota responses, while the existing `TAVILY_API_KEY` setting remains compatible.
 
 ### Changed

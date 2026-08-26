@@ -5,10 +5,57 @@ import (
 	"database/sql"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestAINewsFetchAcceptsMarkdownSourceLabel(t *testing.T) {
+	home := t.TempDir()
+	stage := filepath.Join(home, "stages", "02-fetch")
+	if err := os.MkdirAll(filepath.Join(home, "stages", "01-judgment", "output"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(stage, 0700); err != nil {
+		t.Fatal(err)
+	}
+	script, err := os.ReadFile("playbook_defaults/ai-news-daily/stages/02-fetch/script.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stage, "script.sh"), script, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "stages", "01-judgment", "output", "topics.md"), []byte("## Story\n**Source:** https://example.com/story\nKey claim: verified\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(home, "bin")
+	if err := os.Mkdir(bin, 0700); err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join(home, "story.html")
+	if err := os.WriteFile(fixture, []byte("<title>Story</title><p>A verified article paragraph with enough text.</p>"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	curl := "#!/bin/bash\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"-o\" ]; then shift; cp \"$FIXTURE\" \"$1\"; fi\n  shift\ndone\n"
+	if err := os.WriteFile(filepath.Join(bin, "curl"), []byte(curl), 0700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "./script.sh")
+	cmd.Dir = stage
+	cmd.Env = append(os.Environ(), "FIXTURE="+fixture, "PATH="+bin+":"+os.Getenv("PATH"))
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("fetch script failed: %v\n%s", err, output)
+	}
+	facts, err := os.ReadFile(filepath.Join(stage, "output", "facts.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(facts), "Status: fetched") {
+		t.Fatalf("facts = %q", facts)
+	}
+}
 
 // playbook_script_test.go — script-backed playbook stages (issue #304,
 // PA-007): the harness executes script.sh directly, zero inference; a

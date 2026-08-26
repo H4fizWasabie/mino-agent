@@ -10,7 +10,7 @@
 
 This stage is a committed bash script (`script.sh`) that the harness executes directly — no model call, no inference, no notifications. The script:
 
-1. Reads each `## <Title>` / `Source: <URL>` block from topics.md.
+1. Reads each `## <Title>` / `Source: <URL>` block from topics.md (also accepting harmless Markdown emphasis around the label).
 2. Fetches each URL over HTTPS (curl, bounded timeouts, one retry), verifying the story exists.
 3. Extracts the headline and the article's lead paragraphs as factual sentences.
 4. Writes `output/facts.md` — one story per `## <Title>` block with `Source:`, `Status: fetched`, and `Facts:` bullets. A story that fails to fetch is recorded with `Status: fetch failed` and the reason — never silently dropped.
