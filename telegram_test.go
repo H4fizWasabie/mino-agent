@@ -94,6 +94,39 @@ func TestDeliverOutboxOnceSendsAndRemoves(t *testing.T) {
 	}
 }
 
+func TestDeliverOutboxChunksOversizedMessage(t *testing.T) {
+	home := t.TempDir()
+	outbox := filepath.Join(home, "outbox")
+	os.MkdirAll(outbox, 0700)
+	os.WriteFile(filepath.Join(outbox, "msg_Owner.txt"), []byte(strings.Repeat("x", telegramTextChunkLimit*2+1)), 0600)
+
+	var chunks []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var p map[string]any
+		json.NewDecoder(r.Body).Decode(&p)
+		chunks = append(chunks, p["text"].(string))
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+	telegramAPIBase = srv.URL
+	defer func() { telegramAPIBase = "https://api.telegram.org" }()
+
+	if n := deliverOutboxOnce(&Settings{Home: home, Telegram: "tok", TelegramChatID: 12345}); n != 1 {
+		t.Fatalf("delivered = %d, want 1 file", n)
+	}
+	if len(chunks) != 3 {
+		t.Fatalf("chunks = %d, want 3", len(chunks))
+	}
+	for i, chunk := range chunks {
+		if got := len([]rune(chunk)); got > telegramTextChunkLimit {
+			t.Fatalf("chunk %d has %d runes, want <= %d", i, got, telegramTextChunkLimit)
+		}
+	}
+	if rest, _ := os.ReadDir(outbox); len(rest) != 0 {
+		t.Fatalf("outbox not drained: %v", rest)
+	}
+}
+
 // CTX-009: send_document queues a file pointer, never the token; the
 // dispatcher posts it as multipart to /sendDocument and drains on success.
 func TestSendDocumentOutboxDeliversAndDrains(t *testing.T) {

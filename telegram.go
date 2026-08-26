@@ -104,7 +104,7 @@ func deliverOutboxOnce(s *Settings) int {
 			}
 			continue
 		}
-		if sendTelegramText(s.Telegram, s.TelegramChatID, string(data), true) {
+		if sendTelegramTextChunks(s.Telegram, s.TelegramChatID, string(data)) {
 			if err := os.Remove(path); err != nil {
 				// Delivered but cleanup failed: count it and log loud — retrying
 				// would duplicate the message, and silence would hide the stale file.
@@ -117,6 +117,41 @@ func deliverOutboxOnce(s *Settings) int {
 		}
 	}
 	return delivered
+}
+
+const telegramTextChunkLimit = 4000
+
+// sendTelegramTextChunks keeps raw outbox drafts below Telegram's 4096
+// character limit. The draft is removed only after every chunk is accepted.
+func sendTelegramTextChunks(token string, chatID int64, text string) bool {
+	for _, chunk := range splitTelegramText(text, telegramTextChunkLimit) {
+		if !sendTelegramText(token, chatID, chunk, true) {
+			return false
+		}
+	}
+	return true
+}
+
+func splitTelegramText(text string, limit int) []string {
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return []string{text}
+	}
+	var chunks []string
+	for start := 0; start < len(runes); {
+		end := start + limit
+		if end > len(runes) {
+			end = len(runes)
+		}
+		if end < len(runes) {
+			if i := strings.LastIndex(string(runes[start:end]), "\n"); i > 0 {
+				end = start + len([]rune(string(runes[start:end])[:i+1]))
+			}
+		}
+		chunks = append(chunks, string(runes[start:end]))
+		start = end
+	}
+	return chunks
 }
 
 // sendTelegramText posts a message to the bot API. First try with Markdown
