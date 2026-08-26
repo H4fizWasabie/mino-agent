@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [v3.1.14] — Taskify approval guard (2026-08-27)
+
 ### Fixed
 
 - **ai-news-daily judgment reserves level-2 headings for stories (closes #369)**: the judgment contract now requires metadata such as the exclusion check to use a lower-level heading, so the mechanical fetch stage does not misclassify it as an unverified story.
