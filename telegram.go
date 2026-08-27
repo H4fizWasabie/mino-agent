@@ -39,11 +39,26 @@ func runOutboxDispatcher(core *Core) {
 // path — unique per write (UnixNano suffix, like doc_*), so concurrent
 // writers can never interleave with the dispatcher's read.
 func queueOutbox(home, to, msg string) string {
-	outboxDir := filepath.Join(home, "outbox")
-	os.MkdirAll(outboxDir, 0700)
-	path := filepath.Join(outboxDir, fmt.Sprintf("msg_%s_%d.txt", to, time.Now().UnixNano()))
-	os.WriteFile(path, []byte(msg), 0644)
+	path, _ := queueOutboxWithReceipt(home, to, msg, "")
 	return path
+}
+
+func queueOutboxWithReceipt(home, to, msg, receipt string) (string, error) {
+	outboxDir := filepath.Join(home, "outbox")
+	if err := os.MkdirAll(outboxDir, 0700); err != nil {
+		return "", err
+	}
+	path := filepath.Join(outboxDir, fmt.Sprintf("msg_%s_%d.txt", to, time.Now().UnixNano()))
+	if err := os.WriteFile(path, []byte(msg), 0644); err != nil {
+		return "", err
+	}
+	if receipt != "" {
+		if err := os.WriteFile(path+".receipt", []byte(receipt), 0600); err != nil {
+			os.Remove(path)
+			return "", err
+		}
+	}
+	return path, nil
 }
 
 // queueDocument validates a local file and drafts it to the outbox as a
@@ -75,7 +90,7 @@ func deliverOutboxOnce(s *Settings) int {
 	}
 	delivered := 0
 	for _, e := range entries {
-		if e.IsDir() {
+		if e.IsDir() || strings.HasSuffix(e.Name(), ".receipt") {
 			continue
 		}
 		path := filepath.Join(s.Home, "outbox", e.Name())
@@ -111,6 +126,13 @@ func deliverOutboxOnce(s *Settings) int {
 				slog.Error("outbox delivered but cleanup failed", "file", e.Name(), "error", err)
 			}
 			delivered++
+			if receipt, err := os.ReadFile(path + ".receipt"); err == nil {
+				if err := os.WriteFile(string(receipt), []byte("delivered"), 0600); err != nil {
+					slog.Error("outbox receipt update failed", "file", e.Name(), "error", err)
+				} else if err := os.Remove(path + ".receipt"); err != nil {
+					slog.Error("outbox receipt cleanup failed", "file", e.Name(), "error", err)
+				}
+			}
 			logTrace(s.Home, "outbox_delivered", map[string]any{"file": e.Name()})
 		} else {
 			slog.Error("outbox telegram rejected", "file", e.Name())
