@@ -1501,7 +1501,7 @@ func makeNotesTool(db *sql.DB, mem *Memory) *Tool {
 func makeMessagesTool(home string) *Tool {
 	return &Tool{
 		Name:        "send_message",
-		Description: "Send a message to the owner's Telegram. The message is queued in the outbox and delivered by the outbox dispatcher within seconds.",
+		Description: "Send a message to the owner's Telegram. The message is queued in the outbox and delivered by the outbox dispatcher within seconds. Playbook stages may send only once.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -1511,17 +1511,55 @@ func makeMessagesTool(home string) *Tool {
 			"required": []string{"to", "message"},
 		},
 		Fn: func(args map[string]any) string {
-			to, _ := args["to"].(string)
-			msg, _ := args["message"].(string)
-			// The model sometimes emits JSON-escaped newlines (literal \n) in the
-			// message text — observed 2026-08-14: the FB playbook's Telegram report
-			// arrived with literal "\n\n" between paragraphs. Normalize at the
-			// tool boundary so every channel gets real line breaks.
-			msg = strings.ReplaceAll(msg, `\n`, "\n")
-			path := queueOutbox(home, to, msg)
-			return fmt.Sprintf("Message to %s drafted at %s", to, path)
+			return queueMessage(home, args)
+		},
+		ContextFn: func(ctx context.Context, args map[string]any) string {
+			tags := traceTagsFromCtx(ctx)
+			if tags["playbook"] != "" && tags["run"] != "" && tags["stage"] != "" {
+				// #378: the dispatcher removes successful drafts, so a model's
+				// later read-back can look like a failed send. Keep the receipt in
+				// the run directory and reject duplicate calls for this stage.
+				marker := filepath.Join(home, "playbooks", tags["playbook"], "runs", tags["run"], ".send-message-"+tags["stage"]+".done")
+				f, err := os.OpenFile(marker, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+				if err == nil {
+					if _, err := f.WriteString("pending"); err != nil {
+						f.Close()
+						os.Remove(marker)
+						return fmt.Sprintf("Error creating send receipt: %v", err)
+					}
+					if err := f.Close(); err != nil {
+						os.Remove(marker)
+						return fmt.Sprintf("Error creating send receipt: %v", err)
+					}
+				} else if os.IsExist(err) {
+					return "Message already queued or sent for this playbook stage; do not retry."
+				} else {
+					return fmt.Sprintf("Error creating send receipt: %v", err)
+				}
+				to, _ := args["to"].(string)
+				msg, _ := args["message"].(string)
+				msg = strings.ReplaceAll(msg, `\n`, "\n")
+				if _, err := queueOutboxWithReceipt(home, to, msg, marker); err != nil {
+					os.Remove(marker)
+					return fmt.Sprintf("Error queueing message: %v", err)
+				}
+				return fmt.Sprintf("Message to %s drafted; delivery will retry until Telegram accepts it", to)
+			}
+			return queueMessage(home, args)
 		},
 	}
+}
+
+func queueMessage(home string, args map[string]any) string {
+	to, _ := args["to"].(string)
+	msg, _ := args["message"].(string)
+	// The model sometimes emits JSON-escaped newlines (literal \n) in the
+	// message text — observed 2026-08-14: the FB playbook's Telegram report
+	// arrived with literal "\n\n" between paragraphs. Normalize at the
+	// tool boundary so every channel gets real line breaks.
+	msg = strings.ReplaceAll(msg, `\n`, "\n")
+	path := queueOutbox(home, to, msg)
+	return fmt.Sprintf("Message to %s drafted at %s", to, path)
 }
 
 func makeSendDocumentTool(home string) *Tool {

@@ -630,6 +630,86 @@ func TestSendMessageNormalizesLiteralNewlines(t *testing.T) {
 	}
 }
 
+func TestSendMessagePlaybookStageQueuesOnce(t *testing.T) {
+	home := t.TempDir()
+	runDir := filepath.Join(home, "playbooks", "morning-briefing", "runs", "run-1")
+	if err := os.MkdirAll(runDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.WithValue(context.Background(), traceTagKey{}, map[string]string{
+		"playbook": "morning-briefing", "run": "run-1", "stage": "01-brief",
+	})
+	tool := makeMessagesTool(home)
+	args := map[string]any{"to": "owner", "message": "same report"}
+	call := func() string {
+		if tool.ContextFn != nil {
+			return tool.ContextFn(ctx, args)
+		}
+		return tool.Fn(args)
+	}
+	if got := call(); !strings.Contains(got, "drafted") {
+		t.Fatalf("first send = %q, want drafted", got)
+	}
+	if got := call(); !strings.Contains(got, "already queued or sent") {
+		t.Fatalf("second send = %q, want duplicate guard", got)
+	}
+	entries, err := os.ReadDir(filepath.Join(home, "outbox"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	messageFiles := 0
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".receipt") {
+			messageFiles++
+		}
+	}
+	if messageFiles != 1 {
+		t.Fatalf("outbox message files = %d, want 1", messageFiles)
+	}
+}
+
+func TestSendMessageReceiptTracksOutboxDelivery(t *testing.T) {
+	home := t.TempDir()
+	runDir := filepath.Join(home, "playbooks", "morning-briefing", "runs", "run-1")
+	if err := os.MkdirAll(runDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.WithValue(context.Background(), traceTagKey{}, map[string]string{
+		"playbook": "morning-briefing", "run": "run-1", "stage": "01-brief",
+	})
+	tool := makeMessagesTool(home)
+	args := map[string]any{"to": "owner", "message": "same report"}
+	if got := tool.ContextFn(ctx, args); !strings.Contains(got, "drafted") {
+		t.Fatalf("send = %q, want drafted", got)
+	}
+	ok := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ok {
+			w.Write([]byte(`{"ok":true}`))
+			return
+		}
+		w.Write([]byte(`{"ok":false}`))
+	}))
+	defer srv.Close()
+	telegramAPIBase = srv.URL
+	defer func() { telegramAPIBase = "https://api.telegram.org" }()
+
+	if n := deliverOutboxOnce(&Settings{Home: home, Telegram: "tok", TelegramChatID: 12345}); n != 0 {
+		t.Fatalf("failed delivery count = %d, want 0", n)
+	}
+	if got := tool.ContextFn(ctx, args); !strings.Contains(got, "already queued or sent") {
+		t.Fatalf("retry while pending = %q, want guard", got)
+	}
+	ok = true
+	if n := deliverOutboxOnce(&Settings{Home: home, Telegram: "tok", TelegramChatID: 12345}); n != 1 {
+		t.Fatalf("successful delivery count = %d, want 1", n)
+	}
+	receipt, err := os.ReadFile(filepath.Join(runDir, ".send-message-01-brief.done"))
+	if err != nil || string(receipt) != "delivered" {
+		t.Fatalf("receipt = %q, err=%v, want delivered", receipt, err)
+	}
+}
+
 // The entity-escape fallback class (2026-08-14): the plain-text fallback left
 // &amp; &lt; &#8217; raw; unescape after tag stripping.
 func TestFetchURLFallbackUnescapesEntities(t *testing.T) {
