@@ -12,6 +12,10 @@
 
 ### Changed
 
+- **Cost Watch cache-first routing (#399)**: ranks complete provider prices
+  lexicographically by cache-read, input, and output cost, then uptime and
+  latency.
+
 - **Cost Watch unknown latency (#397)**: preserves missing OpenRouter latency
   telemetry as unknown, so it cannot outrank a measured latency.
 

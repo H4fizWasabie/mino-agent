@@ -468,43 +468,30 @@ func (cfg *config) eligibleForPin(provider string) bool {
 }
 
 // pinOrder returns the routing order for one model slug: eligible providers
-// rank by the all-price score first, then uptime, then latency. Incomplete
-// prices trail complete ones so an omitted cache-read field cannot become a
-// false winner.
+// rank by cache-read price, input price, output price, uptime, then latency.
+// Incomplete prices trail complete ones so an omitted cache-read field cannot
+// become a false winner.
 func rankCatalogueEntries(entries []catalogueEntry) []catalogueEntry {
 	type scored struct {
 		entry catalogueEntry
-		score float64
 		full  bool
 	}
 	ranked := make([]scored, len(entries))
-	minIn, minCache, minOut := 0.0, 0.0, 0.0
 	for i, entry := range entries {
 		ranked[i] = scored{entry: entry, full: entry.In > 0 && entry.Cache > 0 && entry.Out > 0}
-		if !ranked[i].full {
-			continue
-		}
-		if minIn == 0 || entry.In < minIn {
-			minIn = entry.In
-		}
-		if minCache == 0 || entry.Cache < minCache {
-			minCache = entry.Cache
-		}
-		if minOut == 0 || entry.Out < minOut {
-			minOut = entry.Out
-		}
-	}
-	for i := range ranked {
-		if ranked[i].full {
-			ranked[i].score = ranked[i].entry.In/minIn + ranked[i].entry.Cache/minCache + ranked[i].entry.Out/minOut
-		}
 	}
 	sort.SliceStable(ranked, func(i, j int) bool {
 		if ranked[i].full != ranked[j].full {
 			return ranked[i].full
 		}
-		if ranked[i].full && ranked[i].score != ranked[j].score {
-			return ranked[i].score < ranked[j].score
+		if ranked[i].entry.Cache != ranked[j].entry.Cache {
+			return ranked[i].entry.Cache < ranked[j].entry.Cache
+		}
+		if ranked[i].entry.In != ranked[j].entry.In {
+			return ranked[i].entry.In < ranked[j].entry.In
+		}
+		if ranked[i].entry.Out != ranked[j].entry.Out {
+			return ranked[i].entry.Out < ranked[j].entry.Out
 		}
 		if ranked[i].entry.Uptime != ranked[j].entry.Uptime {
 			return ranked[i].entry.Uptime > ranked[j].entry.Uptime
