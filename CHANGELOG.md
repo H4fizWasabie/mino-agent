@@ -12,6 +12,11 @@
 
 ### Changed
 
+- **Workspace-local playbook personas (#386)**: playbook runs now resolve a
+  bound persona from the active workspace's `persona/` directory first, while
+  retaining the shared roster only as a migration fallback for legacy
+  playbooks. Mino's own rails remain authoritative and persona files cannot
+  declare tools.
 - **Playbook tool guidance (#383)**: stage tool lists now describe declared
   capabilities instead of pretending to be runtime allowlists; the harness
   remains authoritative for access, risk, retry, and audit decisions.
