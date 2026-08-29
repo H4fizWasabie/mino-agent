@@ -12,6 +12,14 @@
 
 ### Changed
 
+- **Playbook IDE dashboard (#393)**: made Work the filesystem-first playbook
+  workspace with a persistent explorer, full-height conversation, bottom-pinned
+  composer, artifact preview, and a live five-layer routing inventory sourced
+  from each playbook's actual files. Existing `tools/link-check.sh` health
+  checks are surfaced; missing `AGENTS.md` is reported honestly.
+- **Global runtime map**: added `MINO_HOME/MAP.md` as Mino's shared filesystem
+  orientation layer for normal chat and playbook runs, and exposed it in Work.
+
 - **Taskify removed (PB-006)**: removed the obsolete chat-task scaffold,
   task-intent offer, approval gate, and taskify-only checkpoint path. Mino now
   enters ordinary playbooks directly.

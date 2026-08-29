@@ -73,7 +73,7 @@ components:
 
 ## Overview
 
-**Creative North Star: "The world is the interface"**
+**Creative North Star: "The world is the interface; the work is the workspace"**
 
 Mino should feel like a calm living map, not a stack of dashboard cards. The
 owner arrives to see the whole universe, locate a meaningful entity or path,
@@ -90,6 +90,12 @@ The system is deliberately restrained, but not passive. Semantic status color
 appears where it changes the owner's decision; contextual Ask actions and
 evidence disclosures provide depth only when requested. Runtime machinery stays
 available under System without competing with the owner story.
+
+Work is the operational exception: playbooks are the primary surface there.
+The Work lens uses an IDE-style shell with the playbook filesystem on the left,
+the conversation workbench in the center, and the selected routed artifact on
+the right. The composer remains anchored to the bottom of the conversation so
+the current playbook can always be inspected and directed.
 
 **Key Characteristics:**
 

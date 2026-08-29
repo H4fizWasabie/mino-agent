@@ -9,29 +9,32 @@ Every message still enters the canonical runtime. Mino may choose a relevant pla
 ## Definition layout
 
 ```text
-~/.mino/playbooks/<name>/
-├── AGENTS.md                  # workspace map, rules, and routing boundaries
-├── CONTEXT.md                 # workspace purpose and routing
-├── config.md                  # description, status, and shared values
-├── stages/
-│   ├── 01-collect/
-│   │   ├── CONTEXT.md         # stage contract
-│   │   └── references/        # stable stage rules
-│   └── 02-report/
-│       ├── CONTEXT.md
-│       └── references/
-└── runs/
-    └── <run-id>/
-        ├── state.json         # durable stage status and evidence
-        └── stages/
-            └── 01-collect/output/
+~/.mino/
+├── MAP.md                         # Mino's global runtime orientation
+└── playbooks/<name>/
+    ├── AGENTS.md                  # optional workspace map and boundaries
+    ├── CONTEXT.md                 # workspace purpose and routing
+    ├── config.md                  # description, status, and shared values
+    ├── stages/
+    │   ├── 01-collect/
+    │   │   ├── CONTEXT.md         # stage contract
+    │   │   └── references/        # stable stage rules
+    │   └── 02-report/
+    │       ├── CONTEXT.md
+    │       └── references/
+    └── runs/
+        └── <run-id>/
+            ├── state.json         # durable stage status and evidence
+            └── stages/
+                └── 01-collect/output/
 ```
 
 Definitions are editable by Mino. A run is separate from its definition, so a new run cannot overwrite prior evidence and a failed run can resume without redoing completed work.
 
-`AGENTS.md` is the workspace Layer 0 entry map. `CONTEXT.md` is the Layer 1
-workflow route. The runner loads both before narrowing into a numbered stage;
-legacy definitions without `AGENTS.md` remain compatible during migration.
+`MAP.md` is Mino's global runtime map and is loaded for normal chat and
+playbook runs. Within a playbook, `CONTEXT.md` is the root workflow route.
+`AGENTS.md` is an optional workspace-local map override; live legacy
+definitions without it remain compatible.
 
 ## Stage contract
 

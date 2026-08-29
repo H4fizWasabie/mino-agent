@@ -5,8 +5,9 @@ Status: agreed product direction and implementation contract.
 ## Purpose
 
 The dashboard should present Mino as a responsible, auditable personal
-operator. It should lead with changes in responsibility and outcome while
-keeping runtime machinery available for inspection.
+operator. Its primary work surface is the filesystem workspace where Mino
+executes and adapts playbooks; responsibility, memory, and runtime machinery
+remain available as adjacent lenses.
 
 The selected visual direction is **Living Field**. The complete universe map is
 the primary surface and the rest of the interface is arranged around it. The
@@ -35,10 +36,11 @@ Desktop uses an edge-to-edge map with a small floating lens spine:
 **Mino**, **Universe**, **Now**, **Work**, **Memory**, **Routines**, **System**,
 and a truthful runtime-health indicator.
 
-The field canvas owns the available viewport. Lenses, search, health, the
-contextual inspector, and the timeline are overlays that recede when the owner
-is reading the geography. There is no editorial page header, metric-card hero,
-or diagnostic shell around the map.
+The Work lens uses an IDE-style frame: a persistent playbook explorer on the
+left, a full-height conversation workbench in the center, and a selected
+artifact preview on the right. The composer is docked to the bottom of the
+conversation column. Universe remains an edge-to-edge map when selected, while
+Now, Memory, Schedules, and System retain their own focused surfaces.
 
 System uses local tabs for Overview, Runtime, Tools, Database, Files, and
 Settings. Memory uses local tabs for Search, Knowledge, Episodes, and Graph.
@@ -190,7 +192,7 @@ an unstructured global search.
 
 ## Work owns responsibility in time
 
-Work is the canonical portfolio of Responsibility expressed as horizontal
+Work is the canonical portfolio of playbook workspaces and Responsibility expressed as horizontal
 threads. Past records the latest meaningful event, Now names current truth, and
 Next shows the recorded next action, owner, schedule, or deadline.
 
