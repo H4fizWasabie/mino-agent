@@ -6,6 +6,12 @@
   frontier for making playbook workspaces self-navigating and failure-aware,
   while preserving Mino's single-agent loop and explicit authority boundaries.
 
+### Changed
+
+- **PB-001 autonomy boundary (#380)**: clarified that Mino adopts ICM's
+  filesystem routing model without inheriting mandatory human checkpoints;
+  playbooks remain autonomous within Mino's authority policy.
+
 ### Fixed
 
 - **Playbook Telegram reports are sent once (closes #378)**: repeated model verification after an outbox draft was delivered could queue the same scheduled report multiple times. Stage-scoped receipts now distinguish pending delivery from confirmed delivery while preserving outbox retries.

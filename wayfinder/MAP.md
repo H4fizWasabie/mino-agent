@@ -242,6 +242,8 @@ Make each playbook a navigable filesystem workspace that one Mino agent can
 enter, understand, execute, recover, and maintain. The public vocabulary stays
 "playbook"; the workspace supplies routing, selective context, stage contracts,
 personas, references, tools, artifacts, run state, and verification evidence.
+Unlike the source ICM framework, Mino playbooks are autonomous and do not
+require human checkpoints between ordinary stages.
 
 ## Frontier
 
@@ -252,6 +254,7 @@ personas, references, tools, artifacts, run state, and verification evidence.
 - An agent for every task, stage, persona, or workspace.
 - A second workflow engine or agent loop.
 - Blind retries after uncertain external mutations.
+- Mandatory human checkpoints between ordinary stages.
 
 ---
 

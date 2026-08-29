@@ -32,6 +32,18 @@ failure to the owner.
 - Owner approval remains a policy boundary for consequential actions, not a
   mandatory stage mechanism.
 
+## Decision -- 2026-08-29
+
+Mino playbooks adopt the filesystem and context-routing architecture of ICM,
+but do not adopt ICM's mandatory human-in-the-loop execution model. A Mino
+playbook is an autonomous workflow: Mino decides whether to continue, revise,
+reroute, repair, retry, or stop at each stage boundary.
+
+Human checkpoints become internal agent decision points. No separate persisted
+HITL checkpoint is required in the playbook model. Owner approval remains a
+separate Mino authority policy for consequential actions; it is not a required
+step between ordinary stages.
+
 ## Failure recovery boundary
 
 | Failure | Default response |
