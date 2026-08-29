@@ -3,6 +3,7 @@ package main
 // Dashboard — HTTP server serving static files + API endpoints.
 
 import (
+	"compress/gzip"
 	"context"
 	"database/sql"
 	"embed"
@@ -96,7 +97,107 @@ func RunDashboard(w *Core) {
 // discarding it (issue #188) — testable, and the caller decides how loud
 // the failure is.
 func serveDashboard(addr string) error {
-	return http.ListenAndServe(addr, nil)
+	return http.ListenAndServe(addr, gzipDashboard(http.DefaultServeMux))
+}
+
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	gzipWriter  *gzip.Writer
+	wroteHeader bool
+	jsonRoute   bool
+}
+
+func gzipDashboard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead || !dashboardJSONRoute(r) || !dashboardAcceptsGzip(r.Header.Get("Accept-Encoding")) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		wrapped := &gzipResponseWriter{ResponseWriter: w, jsonRoute: true}
+		next.ServeHTTP(wrapped, r)
+		if wrapped.gzipWriter != nil {
+			if err := wrapped.gzipWriter.Close(); err != nil {
+				slog.Warn("dashboard gzip close failed", "error", err)
+			}
+		}
+	})
+}
+
+func dashboardAcceptsGzip(header string) bool {
+	wildcard := false
+	wildcardQuality := 0.0
+	for _, item := range strings.Split(header, ",") {
+		parts := strings.Split(item, ";")
+		encoding := strings.TrimSpace(parts[0])
+		quality := 1.0
+		for _, parameter := range parts[1:] {
+			key, value, ok := strings.Cut(strings.TrimSpace(parameter), "=")
+			if ok && strings.EqualFold(strings.TrimSpace(key), "q") {
+				parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+				if err == nil {
+					quality = parsed
+				}
+			}
+		}
+		switch {
+		case strings.EqualFold(encoding, "gzip"):
+			return quality > 0
+		case encoding == "*":
+			wildcard, wildcardQuality = true, quality
+		}
+	}
+	return wildcard && wildcardQuality > 0
+}
+
+func dashboardJSONRoute(r *http.Request) bool {
+	return strings.HasPrefix(r.URL.Path, "/api/")
+}
+
+func (w *gzipResponseWriter) WriteHeader(status int) {
+	if w.wroteHeader {
+		return
+	}
+	w.wroteHeader = true
+	header := w.Header()
+	contentType := strings.ToLower(header.Get("Content-Type"))
+	if contentType == "" && w.jsonRoute {
+		header.Set("Content-Type", "application/json; charset=utf-8")
+		contentType = strings.ToLower(header.Get("Content-Type"))
+	}
+	if status == http.StatusNoContent || status == http.StatusNotModified ||
+		strings.HasPrefix(contentType, "text/event-stream") || header.Get("Content-Encoding") != "" {
+		w.ResponseWriter.WriteHeader(status)
+		return
+	}
+	header.Del("Content-Length")
+	header.Set("Content-Encoding", "gzip")
+	header.Add("Vary", "Accept-Encoding")
+	w.gzipWriter = gzip.NewWriter(w.ResponseWriter)
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *gzipResponseWriter) Write(p []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	if w.gzipWriter == nil {
+		return w.ResponseWriter.Write(p)
+	}
+	return w.gzipWriter.Write(p)
+}
+
+func (w *gzipResponseWriter) Flush() {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	if w.gzipWriter != nil {
+		if err := w.gzipWriter.Flush(); err != nil {
+			slog.Warn("dashboard gzip flush failed", "error", err)
+		}
+	}
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }
 
 func registerDashboardRoutes(mux *http.ServeMux, memDir string) {
