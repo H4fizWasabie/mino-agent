@@ -72,7 +72,7 @@ base.
 Mino playbooks adopt ICM's five-layer loading protocol as their context
 contract:
 
-1. Playbook `CLAUDE.md` supplies the workspace map and navigation rules.
+1. Playbook `AGENTS.md` supplies the workspace map and navigation rules.
 2. Root `CONTEXT.md` orients the run and routes the request to a stage.
 3. Stage `CONTEXT.md` supplies the current stage contract and process.
 4. References are loaded selectively according to that stage contract.
