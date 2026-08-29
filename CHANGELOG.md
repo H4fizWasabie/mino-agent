@@ -44,6 +44,8 @@
   `AGENTS.md` and `CONTEXT.md` as distinct workspace entry layers and includes
   bounded copies in the stable playbook profile; definitions without
   `AGENTS.md` remain compatible during migration.
+- **PB-001 CI formatting**: applied `gofmt` to the touched test file so the
+  repository's changed-file formatting gate passes.
 
 ### Fixed
 
