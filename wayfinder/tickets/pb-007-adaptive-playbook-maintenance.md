@@ -1,6 +1,6 @@
 # Playbooks -- allow adaptive workspace maintenance
 
-Status: **IMPLEMENTED** (child of PB-001)
+Status: **IMPLEMENTED** (child of PB-001, GitHub issue #391)
 
 ## Destination
 

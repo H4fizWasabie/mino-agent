@@ -1,6 +1,6 @@
 # Playbooks -- remove taskify
 
-Status: **IMPLEMENTED** (child of PB-001)
+Status: **IMPLEMENTED** (child of PB-001, GitHub issue #392)
 
 ## Destination
 
