@@ -122,6 +122,19 @@ memory-distillation metadata remain separate runtime state. The social-media
 workspace is deferred as a migration reference until its remaining decisions
 are confirmed.
 
+## Decision -- heavy playbook evidence boundary -- 2026-08-29
+
+Heavy playbooks must perform mechanical evidence selection before any LLM
+judgement. The selector defines the time range, production/test boundary,
+sample size, and evidence budget, then presents the LLM with a bounded packet
+and pointers to the full artifacts. The LLM must not scan an entire historical
+workspace merely because the files are available.
+
+Weekly audits retain their bounded sampling and iteration limits. Post-mortems
+remain scoped to one failed run and use harness-extracted failure evidence.
+Both reports continue through normal artifact retention, audit, and memory
+distillation rules.
+
 ## Failure recovery boundary
 
 | Failure | Default response |
@@ -171,4 +184,6 @@ are confirmed.
 - [ ] Existing playbooks are assessed before implementation tickets are split.
 - [ ] Workspace-authored files and Mino-managed runtime state have separate
       ownership and storage boundaries.
+- [ ] Heavy playbooks mechanically scope and bound evidence before LLM
+      judgement, while preserving pointers to full artifacts.
 - [ ] Narrow child tickets are opened only after the model is agreed.

@@ -33,6 +33,9 @@
   Ascencio marketing workspace is the canonical reference, while Mino keeps
   execution state, telemetry, retries, and memory-distillation metadata
   separately; the unfinished social workspace is deferred.
+- **PB-001 heavy-playbook evidence boundary (#380)**: confirmed that heavy
+  playbooks mechanically scope and bound evidence before LLM judgement, while
+  retaining pointers to full artifacts and existing audit/distillation rules.
 
 ### Fixed
 

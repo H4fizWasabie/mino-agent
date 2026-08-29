@@ -275,6 +275,11 @@ stage contracts, and handoffs remain truth; Mino keeps run state, audits,
 traces, retries, and memory-distillation metadata separately. Social media is
 deferred until its decisions are confirmed.
 
+Confirmed direction: heavy playbooks mechanically select and bound evidence
+before LLM judgement. Weekly audit sampling and post-mortem single-run scope
+remain; full artifacts stay available by pointer and follow normal retention
+and distillation.
+
 ## Frontier
 
 - [PB-001 — Playbooks as navigable workspaces](tickets/pb-001-navigable-workspaces.md) (**open**, GitHub #380) — define the workspace model, failure-recovery boundaries, and the narrow implementation tickets that follow.
