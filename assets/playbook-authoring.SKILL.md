@@ -16,7 +16,7 @@ Use this skill when the owner asks to create, improve, validate, or finish a rep
 
 ## Authoring principles (post-restructure, ARCH-001)
 
-- **1 folder = 1 agent.** A playbook is self-contained: its own `persona/<agent>.md` (per PA-002/#297), its own stage contracts, its own guidance. The folder is the product; the model is just the brain that runs it. Do not split a playbook across folders or rely on global context to carry its behavior.
+- **1 folder = 1 agent.** A playbook is self-contained: its own `persona.md` (per PA-002/#297), its own stage contracts, its own guidance. The folder is the product; the model is just the brain that runs it. Do not split a playbook across folders or rely on global context to carry its behavior.
 - **The LLM's only product per stage = the declared output file(s).** The model never manages the run, never calls meta-tools (`manage_playbook`, `run_playbook`, `approve`, `schedule_playbook`), never orchestrates the framework. The framework (stage whitelist, run state, verification) is harness-owned.
 - **Configure the factory, not the model (#317).** Production failures (30-min discovery loops, 50-iteration cap deaths) were contract defects, not harness defects. Every stage `CONTEXT.md` must self-bound: concrete process steps, an explicit exit rule ("empty day is valid — write the skip log and end"), and an audit table with unambiguous pass conditions. Bound exploration by decision quality / exit conditions, NOT hard call caps.
 - **Working-and-tested beats restructured.** A single-stage playbook with a tight contract is a finished agent. Stage count follows the work, not a migration target. The 12 pure-LLM playbooks on the VPS (threads-tribal-battle, facebook-daily-ai-post, etc.) are correct as-is; only split when a separable mechanical or reviewable middle exists.
@@ -36,8 +36,7 @@ Create one folder under `~/.mino/playbooks/` using a short hyphenated identifier
 <name>/
   CONTEXT.md
   config.md
-  persona/
-    <agent>.md               # per PA-002: stance/mission/lens/voice, "operating as", never "you are"
+  persona.md                 # per PA-002: stance/mission/lens/voice, "operating as", never "you are"
   stages/
     01-<stage>/
       CONTEXT.md
