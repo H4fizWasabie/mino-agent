@@ -59,7 +59,8 @@ Behavioral guidelines that bias toward caution over speed. For trivial tasks, us
 ## Release gating
 
 - **Releases are manual and deliberate — never automatic.** Committing/pushing code does NOT ship it. A release is: tag `vX.Y.Z` → `./build-release.sh vX.Y.Z` → `gh release create` + upload assets. The VPS self-update only moves when a release exists.
-- **`./scripts/release.sh vX.Y.Z` is the release lane** (from the tagged commit, clean tree): build → `stage-smoke.sh` gate on the VPS against a copy of live state → publish. The gate is hard: a smoke FAIL aborts the release before anything is published. GitHub Actions is deliberately NOT wired in — CI gets no SSH access to the VPS (supply-chain surface); the lane stays manual and local.
+- **`./scripts/release.sh vX.Y.Z` is the release lane** (from the tagged commit, clean tree): build → `stage-smoke.sh` gate on the VPS against a copy of live state → publish. The gate is hard: a smoke FAIL aborts the release before anything is published. GitHub Actions is deliberately NOT wired in — CI gets no SSH access to the VPS (supply-chain surface); the lane stays agent-executed and manual at its approval boundaries.
+- **Approval gates are explicit and local to the action.** An agent may prepare and execute normal repository work, but must ask for approval immediately before merging a PR, initiating the release lane (which tags, builds, stages, and publishes), deploying to production, resuming a scheduler, or making another consequential live mutation. Approval for one boundary does not authorize later boundaries.
 - **The `[Unreleased]` CHANGELOG section is the release queue.** Release when it is significant enough:
   - 🔴 **Urgent** — a bug actively breaking something (e.g. schedules dying) → release immediately, alone.
   - 🟡 **Batched** — 3+ accumulated fixes, or any feature, or a week has passed → cut a release.
@@ -94,8 +95,10 @@ Behavioral guidelines that bias toward caution over speed. For trivial tasks, us
 - **Extensions are separate processes** (HTTP, not embedded). Systemd manages lifecycle.
 - **Playbooks are optional state machines.** Matching suggests; Mino decides
   whether to call `run_playbook`.
-- **Human checkpoints stay in the procedure.** Use `Stop here. Ask the owner.` in a
-  stage instead of adding an approval tool or approval state machine.
+- **Playbook autonomy is separate from engineering approvals.** Playbooks remain
+  autonomous contracts at runtime. Coding agents use explicit conversational
+  approval gates for consequential repository and production actions; do not
+  turn those gates into a second Mino playbook state machine.
 - **Keep the loop canonical and mechanical.** Call the model, execute requested
   tools, return observations, and repeat. Bounded snapshot, interrupt, and loop
   detection hooks may observe or correct runtime behavior, but they must not

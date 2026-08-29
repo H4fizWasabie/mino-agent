@@ -12,6 +12,10 @@
 
 ### Changed
 
+- **Agent execution approval gates (#382)**: coding agents may now execute the
+  merge, release, and deployment workflow after explicit approval immediately
+  before each consequential boundary; issue-first, staging, checksum, and
+  audit safeguards remain unchanged. Mino playbook autonomy is unaffected.
 - **PB-001 autonomy boundary (#380)**: clarified that Mino adopts ICM's
   filesystem routing model without inheriting mandatory human checkpoints;
   playbooks remain autonomous within Mino's authority policy.

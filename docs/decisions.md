@@ -98,9 +98,11 @@ Mino uses lightweight mechanical recovery around an LLM-controlled tool loop:
 4. **Immutable audit log.** Tool calls and outputs are appended to a separate
    restricted log.
 
-There is no `request_approval` or `resolve_approval` protocol. A playbook is an
-agreed autonomous contract: Mino proceeds without approval and stops only when
-it cannot fulfill or verify the contract truthfully.
+There is no `request_approval` or `resolve_approval` protocol for playbook
+execution. A playbook is an agreed autonomous contract: Mino proceeds without
+approval and stops only when it cannot fulfill or verify the contract
+truthfully. This does not remove conversational approval gates from coding
+agents performing consequential repository or production actions.
 
 **Why:** Recovery and evidence remain mechanical, while human decisions stay in
 the conversation and procedure instead of creating a second approval state
@@ -331,18 +333,20 @@ path with built-in verification — so it becomes the only path. The failure cla
 was always "a human ran a build from an unverified local tree"; removing the
 local-tree path removes the class.
 
-**Who may deploy:** Splits by act. Cutting a release (tag + publish) is owner-only
-— GitHub carries who/what/when. `mino update` on the VPS is any agent: post-SHA-
-verification the updater can only install a released, checksum-verified binary;
-the updater itself writes the who/what/when line to
+**Who may deploy:** An agent may perform the release and deployment workflow only
+after explicit approval immediately before each consequential boundary. Initiating
+the release lane (tag + build + stage-smoke + publish) and running `mino update`
+are separate approvals; GitHub and the updater carry who/what/when evidence.
+Post-SHA-verification the updater can only install a released, checksum-verified
+binary; the updater itself writes the who/what/when line to
 `/home/mino/.mino/deployments.log` (code-generated, cannot rot).
 
 **Builds:** Only from tags. build-release.sh refuses to build unless HEAD is an
 exact tag match on a clean tree, so a version label can never precede its tag.
 
 **Revisit when:** An extension grows a self-updater of its own, or the release
-pipeline automates (CI) — the owner-only release gate and the verification
-chain must survive any automation.
+pipeline automates (CI) — the explicit approval gates and verification chain
+must survive any automation.
 
 ## 25. Prompt-assembly test surface (REL-04)
 
