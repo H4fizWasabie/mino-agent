@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Added
+
+- **Playbooks as navigable workspaces (#380)**: opened the Wayfinder design
+  frontier for making playbook workspaces self-navigating and failure-aware,
+  while preserving Mino's single-agent loop and explicit authority boundaries.
+
 ### Fixed
 
 - **Playbook Telegram reports are sent once (closes #378)**: repeated model verification after an outbox draft was delivered could queue the same scheduled report multiple times. Stage-scoped receipts now distinguish pending delivery from confirmed delivery while preserving outbox retries.

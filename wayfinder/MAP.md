@@ -234,6 +234,27 @@ A stuck or failing Mino pages the owner within minutes, not hours; a crash leave
 
 ---
 
+# Mino Playbooks — Navigable Workspaces
+
+## Destination
+
+Make each playbook a navigable filesystem workspace that one Mino agent can
+enter, understand, execute, recover, and maintain. The public vocabulary stays
+"playbook"; the workspace supplies routing, selective context, stage contracts,
+personas, references, tools, artifacts, run state, and verification evidence.
+
+## Frontier
+
+- [PB-001 — Playbooks as navigable workspaces](tickets/pb-001-navigable-workspaces.md) (**open**, GitHub #380) — define the workspace model, failure-recovery boundaries, and the narrow implementation tickets that follow.
+
+## Out of scope
+
+- An agent for every task, stage, persona, or workspace.
+- A second workflow engine or agent loop.
+- Blind retries after uncertain external mutations.
+
+---
+
 # Mino Playbook Personas — Wayfinder Map
 
 ## Destination
