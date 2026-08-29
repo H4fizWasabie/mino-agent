@@ -98,6 +98,102 @@ func TestValidatePlaybookPersona(t *testing.T) {
 	}
 }
 
+func TestPlaybookPersonaResolution(t *testing.T) {
+	cases := []struct {
+		name          string
+		workspaceName string
+		workspaceBody string
+		sharedName    string
+		sharedBody    string
+		want          string
+	}{
+		{"workspace persona wins", "instagram-curator", "workspace persona", "instagram-curator", "shared persona", "workspace persona"},
+		{"shared roster is the fallback", "", "", "trend-researcher", "legacy persona", "legacy persona"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			shared := filepath.Join(home, "agents")
+			playbook := filepath.Join(home, "playbooks", "news")
+			if err := os.MkdirAll(shared, 0700); err != nil {
+				t.Fatal(err)
+			}
+			write := func(path, name, body string) {
+				t.Helper()
+				content := "---\nname: " + name + "\n---\n\n" + body
+				if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.workspaceName != "" {
+				personaDir := filepath.Join(playbook, "persona")
+				if err := os.MkdirAll(personaDir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				write(filepath.Join(personaDir, tc.workspaceName+".md"), tc.workspaceName, tc.workspaceBody)
+			}
+			write(filepath.Join(shared, tc.sharedName+".md"), tc.sharedName, tc.sharedBody)
+
+			pb := &PlaybookWorkspace{Name: "news", Dir: playbook, Agent: tc.sharedName}
+			if tc.workspaceName != "" {
+				pb.Name = "instagram"
+				pb.Agent = tc.workspaceName
+			}
+			got, err := loadPlaybookPersona(home, pb)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Body != tc.want {
+				t.Fatalf("persona body = %q, want %q", got.Body, tc.want)
+			}
+		})
+	}
+}
+
+func TestWorkspacePersonaValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{"malformed frontmatter", "not a persona", "no frontmatter"},
+		{"binding mismatch", "---\nname: other\n---\n\nbody", "must match the binding"},
+		{"tools are stage-owned", "---\nname: curator\ntools:\n  - write_file\n---\n\nbody", "must not declare tools"},
+		{"body cap applies", "---\nname: curator\n---\n\n" + strings.Repeat("x", maxPersonaBodyBytes+1), "over the 2048-byte cap"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			playbook := filepath.Join(home, "playbooks", "curation")
+			personaDir := filepath.Join(playbook, "persona")
+			if err := os.MkdirAll(personaDir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(personaDir, "curator.md"), []byte(tc.content), 0600); err != nil {
+				t.Fatal(err)
+			}
+			err := validatePlaybookPersona(home, &PlaybookWorkspace{Name: "curation", Dir: playbook, Agent: "curator", agentsPresent: true})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("validatePlaybookPersona error = %v, want containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestMigratedWorkspaceRequiresLocalPersona(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "agents"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "agents", "curator.md"), []byte("---\nname: curator\n---\n\nshared persona\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	err := validatePlaybookPersona(home, &PlaybookWorkspace{Name: "curation", Dir: filepath.Join(home, "playbooks", "curation"), Agent: "curator", agentsPresent: true})
+	if err == nil || !strings.Contains(err.Error(), "workspace persona/curator.md is required") {
+		t.Fatalf("validatePlaybookPersona error = %v, want missing workspace persona", err)
+	}
+}
+
 func TestManagedPlaybookRefusesUnknownAgent(t *testing.T) {
 	// PSN-001 acceptance: the config.md agent: reference is validated at edit
 	// time — a missing persona refuses the playbook like a missing tool.

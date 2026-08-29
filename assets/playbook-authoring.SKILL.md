@@ -47,7 +47,7 @@ Create one folder under `~/.mino/playbooks/` using a short hyphenated identifier
   runs/                       # created by Mino; never hand-edit state.json
 ```
 
-`config.md` should contain a concise `description`, plus `status: active` and `agent: <persona>` (the persona roster name). Add `schedule` and `notify` only when the owner explicitly wants scheduled delivery.
+`config.md` should contain a concise `description`, plus `status: active` and `agent: <persona>` (the filename stem under this workspace's `persona/` directory). Add `schedule` and `notify` only when the owner explicitly wants scheduled delivery.
 
 **Stage numbering is strict and sequential**: `01-`, `02-`, `03-` — one number per stage, no duplicates. The runner tolerates duplicate numbers (observed on morning-briefing and weekly-cost during the restructure) but new playbooks must not repeat them; the folder name order is the execution order.
 

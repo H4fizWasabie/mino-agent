@@ -91,10 +91,10 @@ rules, routing, source-of-truth boundaries, and load exclusions. Stage folders
 use `CONTEXT.md` for stage contracts; they do not need their own `AGENTS.md`.
 
 Persona remains a separate workspace layer. Each workspace must provide its
-voice and role context through its persona files, while Mino's existing
-persona binding and validation remain the runtime mechanism for selecting and
-injecting the run persona. The map routes to persona context; it does not
-become the persona.
+voice and role context through its persona files, while Mino's persona binding
+and validation select and inject the workspace-owned run persona. The shared
+roster remains only as an explicit migration fallback for legacy playbooks.
+The map routes to persona context; it does not become the persona.
 
 ## Decision -- mechanical and LLM judgement -- 2026-08-29
 

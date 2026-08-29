@@ -19,7 +19,8 @@ unrelated workspace content.
 - Load root `CONTEXT.md` as Layer 1 routing context.
 - Preserve numbered stage discovery and existing script/LLM stage paths.
 - Keep workspace definitions separate from Mino runtime state.
-- Preserve Mino persona binding and inject workspace persona context selectively.
+- Resolve the bound persona from the workspace and inject it selectively while
+  preserving Mino's authoritative rails and identity boundary.
 
 ## Acceptance criteria
 

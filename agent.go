@@ -4,8 +4,8 @@ package main
 // "hat" the same brain wears for a playbook run: ~0.9–1.1KB of stance,
 // mission, lens, and deliverable voice, bound deterministically from the
 // playbook's config.md (`agent: <name>`) — never fuzzy-matched like skills.
-// The roster lives in ~/.mino/agents/<name>.md, deliberately separate from
-// skills/: no triggers, no usage tracking, deterministic binding only.
+// Workspace personas are authoritative; the shared roster is a migration
+// fallback for legacy playbooks and stays separate from skills.
 
 import (
 	"fmt"
@@ -23,7 +23,7 @@ import (
 // system prompt of every run wearing the hat.
 const maxPersonaBodyBytes = 2048
 
-// Agent is one roster persona. Description is dashboard display only —
+// Agent is one playbook persona. Description is dashboard display only —
 // binding is deterministic, so a missing description never blocks a run.
 type Agent struct {
 	Name        string `yaml:"name" json:"name"`
@@ -58,14 +58,14 @@ func parsePersonaFile(path string) (*Agent, error) {
 	return &a, nil
 }
 
-// loadAgentPersona resolves a config.md `agent:` binding to its roster file.
+// loadPersonaFile resolves a config.md `agent:` binding to one persona file.
 // The frontmatter name must match the binding exactly (case/space mismatch
 // would otherwise be a silent miss).
-func loadAgentPersona(home, name string) (*Agent, error) {
+func loadPersonaFile(path, name string) (*Agent, error) {
 	if !validPlaybookName(name) {
 		return nil, fmt.Errorf("invalid persona name %q (use lowercase letters, digits, and single hyphens)", name)
 	}
-	agent, err := parsePersonaFile(filepath.Join(home, "agents", name+".md"))
+	agent, err := parsePersonaFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("persona %q unavailable: %v", name, err)
 	}
@@ -75,6 +75,35 @@ func loadAgentPersona(home, name string) (*Agent, error) {
 	return agent, nil
 }
 
+// loadAgentPersona resolves a legacy config.md binding to the shared roster.
+func loadAgentPersona(home, name string) (*Agent, error) {
+	return loadPersonaFile(filepath.Join(home, "agents", name+".md"), name)
+}
+
+// loadPlaybookPersona resolves workspace-owned personas first. Only a legacy
+// playbook without AGENTS.md may fall back to the shared roster; migrated
+// workspaces must declare their persona beside their routing files.
+func loadPlaybookPersona(home string, pb *PlaybookWorkspace) (*Agent, error) {
+	if pb == nil || pb.Agent == "" {
+		return nil, nil
+	}
+	if !validPlaybookName(pb.Agent) {
+		return nil, fmt.Errorf("invalid persona name %q (use lowercase letters, digits, and single hyphens)", pb.Agent)
+	}
+	if pb.Dir != "" {
+		path := filepath.Join(pb.Dir, "persona", pb.Agent+".md")
+		if _, err := os.Stat(path); err == nil {
+			return loadPersonaFile(path, pb.Agent)
+		} else if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("persona %q unavailable: %v", pb.Agent, err)
+		}
+		if pb.agentsPresent {
+			return nil, fmt.Errorf("persona %q unavailable: workspace persona/%s.md is required", pb.Agent, pb.Agent)
+		}
+	}
+	return loadAgentPersona(home, pb.Agent)
+}
+
 // validatePlaybookPersona resolves a playbook's `agent:` reference against
 // the roster, mirroring validateWorkspaceStageTools's unknown-tool rejection:
 // a missing persona refuses the playbook at edit time and pre-run.
@@ -82,7 +111,7 @@ func validatePlaybookPersona(home string, pb *PlaybookWorkspace) error {
 	if pb.Agent == "" {
 		return nil
 	}
-	agent, err := loadAgentPersona(home, pb.Agent)
+	agent, err := loadPlaybookPersona(home, pb)
 	if err != nil {
 		return fmt.Errorf("playbook %s: %v", pb.Name, err)
 	}
