@@ -23,4 +23,3 @@ filesystem-based stage handoffs.
 - [ ] A resumed run uses its own prior outputs and state.
 - [ ] Historical outputs are not loaded merely because they exist.
 - [ ] Existing output attribution and memory-distillation behavior is preserved.
-

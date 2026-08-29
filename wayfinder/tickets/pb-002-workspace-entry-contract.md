@@ -30,4 +30,3 @@ unrelated workspace content.
 - [ ] Stage prompts receive only the current contract and declared inputs.
 - [ ] Existing playbook tests and the marketing fixture's routing check remain
       green.
-

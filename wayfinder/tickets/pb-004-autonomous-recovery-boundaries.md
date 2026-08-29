@@ -26,4 +26,3 @@ evidence, without blind retries or silent contract mutation.
 - [ ] Contract changes are explicit and apply to future runs unless the owner
       authorizes repair of the active contract.
 - [ ] Exhausted recovery ends with a truthful failure report and resumable run.
-

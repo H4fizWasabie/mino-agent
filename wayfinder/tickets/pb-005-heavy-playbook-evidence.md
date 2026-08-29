@@ -21,4 +21,3 @@ packets instead of letting an LLM scan an entire historical workspace.
 - [ ] The LLM receives a bounded packet with source/run attribution.
 - [ ] Full historical artifacts are never implicitly injected into context.
 - [ ] Weekly audit and post-mortem behavior remains bounded and resumable.
-
