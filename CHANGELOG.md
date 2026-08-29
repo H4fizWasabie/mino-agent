@@ -11,6 +11,9 @@
 - **PB-001 autonomy boundary (#380)**: clarified that Mino adopts ICM's
   filesystem routing model without inheriting mandatory human checkpoints;
   playbooks remain autonomous within Mino's authority policy.
+- **PB-001 tool exposure boundary (#380)**: confirmed that stage tool lists
+  should guide capability selection rather than rigidly fence recovery, while
+  runtime policy remains authoritative for access, risk, retry, and audit.
 
 ### Fixed
 

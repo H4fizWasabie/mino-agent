@@ -245,6 +245,10 @@ personas, references, tools, artifacts, run state, and verification evidence.
 Unlike the source ICM framework, Mino playbooks are autonomous and do not
 require human checkpoints between ordinary stages.
 
+Confirmed direction: stage tool declarations become capability guidance rather
+than rigid allowlists; runtime policy remains authoritative for tool access,
+risk, retry, audit, and approval.
+
 ## Frontier
 
 - [PB-001 — Playbooks as navigable workspaces](tickets/pb-001-navigable-workspaces.md) (**open**, GitHub #380) — define the workspace model, failure-recovery boundaries, and the narrow implementation tickets that follow.
@@ -255,6 +259,7 @@ require human checkpoints between ordinary stages.
 - A second workflow engine or agent loop.
 - Blind retries after uncertain external mutations.
 - Mandatory human checkpoints between ordinary stages.
+- Relying on stage tool lists as the primary safety boundary.
 
 ---
 

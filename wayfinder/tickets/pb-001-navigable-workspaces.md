@@ -44,6 +44,16 @@ HITL checkpoint is required in the playbook model. Owner approval remains a
 separate Mino authority policy for consequential actions; it is not a required
 step between ordinary stages.
 
+## Decision -- tool exposure -- 2026-08-29
+
+Stage tool lists will not remain rigid allowlists. A workspace stage may declare
+capabilities or useful tool guidance, but Mino may select another available tool
+when the route or recovery evidence requires it.
+
+Mino's runtime remains authoritative for actual tool availability, side-effect
+risk, retry safety, audit records, and owner approval. Removing the stage
+whitelist is not permission to expose or retry every tool blindly.
+
 ## Failure recovery boundary
 
 | Failure | Default response |
@@ -77,6 +87,8 @@ step between ordinary stages.
 - [ ] The playbook-as-workspace model is documented in Mino terminology.
 - [ ] Mino can identify the active playbook, run, stage, inputs, outputs, and
       failure reason from durable state.
+- [ ] Stage tool guidance is separated from runtime tool authority and retry
+      safety.
 - [ ] Safe repair, adaptation, retry, and escalation boundaries are explicit.
 - [ ] Existing playbooks are assessed before implementation tickets are split.
 - [ ] Narrow child tickets are opened only after the model is agreed.
