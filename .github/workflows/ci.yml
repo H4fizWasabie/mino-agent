@@ -29,7 +29,7 @@ jobs:
           else
             BASE="HEAD~1"
           fi
-          files=$(git diff --name-only "$BASE" HEAD -- '*.go')
+          files=$(git diff --name-only --diff-filter=ACMRT "$BASE" HEAD -- '*.go')
           if [ -z "$files" ]; then
             echo "no .go files changed — gate skipped"
             exit 0

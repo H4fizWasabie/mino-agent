@@ -71,6 +71,10 @@
 
 ### Fixed
 
+- **Changed-file formatting gate ignores deleted Go files**: the CI gofmt check
+  now excludes deleted paths so code removals pass the same formatting gate as
+  additions and edits.
+
 - **Dashboard snapshot responses are compressed (#385)**: remote dashboards no
   longer transfer multi-megabyte JSON snapshots uncompressed on every refresh;
   gzip-capable clients receive compressed responses while SSE streams remain
