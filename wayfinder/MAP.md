@@ -287,6 +287,8 @@ and distillation.
 - [PB-003 — Workspace run artifacts](tickets/pb-003-workspace-run-artifacts.md) — isolate repeated-run handoffs from runtime metadata.
 - [PB-004 — Autonomous recovery boundaries](tickets/pb-004-autonomous-recovery-boundaries.md) — define safe repair, retry, adaptation, and stop behavior.
 - [PB-005 — Heavy-playbook evidence](tickets/pb-005-heavy-playbook-evidence.md) — mechanically bound evidence before LLM judgement.
+- [PB-006 — Remove taskify](tickets/pb-006-remove-taskify.md) — remove the obsolete chat-task scaffold and its taskify-only approval path.
+- [PB-007 — Adaptive playbook maintenance](tickets/pb-007-adaptive-playbook-maintenance.md) — let Mino repair and adapt playbook source through the validated management boundary.
 
 ## Out of scope
 
