@@ -74,6 +74,8 @@ type catalogueEntry struct {
 	Out          float64 `json:"out"`
 	Cache        float64 `json:"cache"`
 	Discount     float64 `json:"discount"`
+	Uptime       float64 `json:"uptime"`
+	Latency      float64 `json:"latency"`
 	DataHandling string  `json:"data_handling"`
 }
 
@@ -369,6 +371,8 @@ func fetchCatalogue(cfg *config) (catalogue, error) {
 						InputCacheRead string  `json:"input_cache_read"`
 						Discount       float64 `json:"discount"`
 					} `json:"pricing"`
+					Uptime  float64 `json:"uptime_last_30m"`
+					Latency float64 `json:"latency_last_30m"`
 				} `json:"endpoints"`
 			} `json:"data"`
 		}
@@ -394,6 +398,8 @@ func fetchCatalogue(cfg *config) (catalogue, error) {
 				Out:          out * 1e6,
 				Cache:        cache * 1e6,
 				Discount:     ep.Pricing.Discount,
+				Uptime:       ep.Uptime,
+				Latency:      ep.Latency,
 				DataHandling: flag,
 			})
 		}
@@ -411,7 +417,8 @@ func configuredOpenRouterModels() ([]string, error) {
 	}
 	var f struct {
 		Providers []struct {
-			Model string `json:"model"`
+			Model      string `json:"model"`
+			SmallModel string `json:"small_model"`
 		} `json:"providers"`
 	}
 	if json.Unmarshal(data, &f) != nil {
@@ -420,8 +427,11 @@ func configuredOpenRouterModels() ([]string, error) {
 	var out []string
 	seen := map[string]bool{}
 	for _, p := range f.Providers {
-		if p.Model != "" && strings.Contains(p.Model, "/") {
-			slug := stripProviderPin(p.Model)
+		for _, model := range []string{p.Model, p.SmallModel} {
+			if model == "" || !strings.Contains(model, "/") {
+				continue
+			}
+			slug := stripProviderPin(model)
 			if !seen[slug] {
 				seen[slug] = true
 				out = append(out, slug)
@@ -452,9 +462,9 @@ func (cfg *config) eligibleForPin(provider string) bool {
 }
 
 // pinOrder returns the routing order for one model slug: eligible providers
-// rankCatalogueEntries ranks complete prices by the sum of each price relative
-// to the cheapest real price in that dimension. Incomplete entries trail
-// complete ones so an omitted cache-read field cannot become a false winner.
+// rank by the all-price score first, then uptime, then latency. Incomplete
+// prices trail complete ones so an omitted cache-read field cannot become a
+// false winner.
 func rankCatalogueEntries(entries []catalogueEntry) []catalogueEntry {
 	type scored struct {
 		entry catalogueEntry
@@ -489,6 +499,12 @@ func rankCatalogueEntries(entries []catalogueEntry) []catalogueEntry {
 		}
 		if ranked[i].full && ranked[i].score != ranked[j].score {
 			return ranked[i].score < ranked[j].score
+		}
+		if ranked[i].entry.Uptime != ranked[j].entry.Uptime {
+			return ranked[i].entry.Uptime > ranked[j].entry.Uptime
+		}
+		if ranked[i].entry.Latency != ranked[j].entry.Latency {
+			return ranked[i].entry.Latency < ranked[j].entry.Latency
 		}
 		if ranked[i].entry.Cache != ranked[j].entry.Cache {
 			return ranked[i].entry.Cache < ranked[j].entry.Cache

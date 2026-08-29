@@ -161,7 +161,7 @@ func TestConfiguredOpenRouterModels(t *testing.T) {
 	defer func() { providersPath = old }()
 	providersPath = filepath.Join(t.TempDir(), "providers.json")
 	os.WriteFile(providersPath, []byte(`{"providers":[
-		{"model":"deepseek/deepseek-v4-flash-0731"},
+		{"model":"z-ai/glm-5.3-flash","small_model":"deepseek/deepseek-v4-flash-0731"},
 		{"model":"qwen/qwen3.7-flash"},
 		{"model":"direct-api-model"}
 	]}`), 0644)
@@ -169,8 +169,8 @@ func TestConfiguredOpenRouterModels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(models) != 2 || models[0] != "deepseek/deepseek-v4-flash-0731" || models[1] != "qwen/qwen3.7-flash" {
-		t.Fatalf("got %v, want only the two openrouter slugs", models)
+	if len(models) != 3 || models[0] != "z-ai/glm-5.3-flash" || models[1] != "deepseek/deepseek-v4-flash-0731" || models[2] != "qwen/qwen3.7-flash" {
+		t.Fatalf("got %v, want both configured OpenRouter model roles without duplicates", models)
 	}
 }
 
@@ -254,6 +254,19 @@ func TestPinOrderTieBreaksCacheThenOutput(t *testing.T) {
 	order := pinOrder(cfg, cat)
 	if got, want := strings.Join(order, ","), "C,A,B"; got != want {
 		t.Fatalf("tie-break order = %v, want [%s]", order, strings.ReplaceAll(want, ",", " "))
+	}
+}
+
+func TestPinOrderUsesUptimeThenLatencyAfterPrice(t *testing.T) {
+	cfg := defaultConfig()
+	cat := []catalogueEntry{
+		{Model: "m", Provider: "slow", In: 0.10, Cache: 0.10, Out: 0.10, Uptime: 98, Latency: 1, DataHandling: "zdr"},
+		{Model: "m", Provider: "healthy", In: 0.10, Cache: 0.10, Out: 0.10, Uptime: 99, Latency: 5, DataHandling: "zdr"},
+		{Model: "m", Provider: "fast", In: 0.10, Cache: 0.10, Out: 0.10, Uptime: 99, Latency: 2, DataHandling: "zdr"},
+		{Model: "m", Provider: "cheap", In: 0.01, Cache: 0.01, Out: 0.01, Uptime: 80, Latency: 10, DataHandling: "zdr"},
+	}
+	if got, want := strings.Join(pinOrder(cfg, cat), ","), "cheap,fast,healthy,slow"; got != want {
+		t.Fatalf("cost/uptime/latency order = %v, want [%s]", got, strings.ReplaceAll(want, ",", " "))
 	}
 }
 
@@ -391,7 +404,7 @@ func TestFetchCatalogueParsesDiscount(t *testing.T) {
 	orig := fetch
 	defer func() { fetch = orig }()
 	fetch = func(url string) (string, error) {
-		return `{"data":{"endpoints":[{"name":"Baidu | deepseek","pricing":{"prompt":"0.0000000798","completion":"0.0000001596","input_cache_read":"0.00000001596","discount":0.43}}]}}`, nil
+		return `{"data":{"endpoints":[{"name":"Baidu | deepseek","pricing":{"prompt":"0.0000000798","completion":"0.0000001596","input_cache_read":"0.00000001596","discount":0.43},"uptime_last_30m":99.5,"latency_last_30m":1.25}]}}`, nil
 	}
 	cat, err := fetchCatalogue(defaultConfig())
 	if err != nil {
@@ -401,7 +414,7 @@ func TestFetchCatalogueParsesDiscount(t *testing.T) {
 		t.Fatalf("entries = %+v", cat.Entries)
 	}
 	e := cat.Entries[0]
-	if !approx(e.In, 0.0798) || !approx(e.Discount, 0.43) {
+	if !approx(e.In, 0.0798) || !approx(e.Discount, 0.43) || !approx(e.Uptime, 99.5) || !approx(e.Latency, 1.25) {
 		t.Fatalf("price/discount = %+v", e)
 	}
 }
