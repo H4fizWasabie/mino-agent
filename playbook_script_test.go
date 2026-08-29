@@ -207,8 +207,8 @@ func TestScriptStageRunsWithZeroLLMCalls(t *testing.T) {
 	if guard := playbookWriteGuard(home, st.Outputs[0], tags); guard != "" {
 		t.Fatalf("run-zone write rejected by guard: %s", guard)
 	}
-	if guard := playbookWriteGuard(home, filepath.Join(home, "playbooks", "mech", "CONTEXT.md"), tags); guard == "" {
-		t.Fatal("playbook definition write not refused by guard")
+	if guard := playbookWriteGuard(home, filepath.Join(home, "playbooks", "mech", "CONTEXT.md"), tags); guard != "" {
+		t.Fatalf("playbook definition write refused by guard: %s", guard)
 	}
 	// OBS-002: the execution is on the audit record.
 	if types := auditEventTypes(t, core); types["script_stage"] != 1 {

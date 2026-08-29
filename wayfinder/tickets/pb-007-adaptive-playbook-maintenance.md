@@ -1,6 +1,6 @@
 # Playbooks -- allow adaptive workspace maintenance
 
-Status: **OPEN** (child of PB-001)
+Status: **IMPLEMENTED** (child of PB-001)
 
 ## Destination
 
@@ -41,16 +41,16 @@ authority.
 
 ## Acceptance criteria
 
-- [ ] Mino can update and validate a playbook in response to a diagnosed
+- [x] Mino can update and validate a playbook in response to a diagnosed
       contract, routing, input, or output failure without taskify.
-- [ ] A task-intent offer or coding-agent approval path cannot block ordinary
+- [x] A task-intent offer or coding-agent approval path cannot block ordinary
       playbook maintenance.
-- [ ] Existing run artifacts and state remain intact after a definition repair.
-- [ ] The runtime distinguishes a future-run source change from an explicit
+- [x] Existing run artifacts and state remain intact after a definition repair.
+- [x] The runtime distinguishes a future-run source change from an explicit
       active-run contract repair.
-- [ ] Unsafe retries and consequential external mutations still require their
+- [x] Unsafe retries and consequential external mutations still require their
       existing verification or owner-approval boundary.
-- [ ] Regression tests cover successful adaptation, invalid updates, active
+- [x] Regression tests cover successful adaptation, invalid updates, active
       run protection, and truthful failure/escalation.
 
 ## Out of scope

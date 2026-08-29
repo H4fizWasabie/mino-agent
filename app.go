@@ -204,8 +204,6 @@ func NewCore() *Core {
 	tools.Register(behaves(makeRequestApprovalTool(w.approvals), BehaviorMutate))
 	tools.Register(behaves(makeRunPlaybookTool(w), BehaviorMutate))
 	tools.Register(behaves(makeCancelRunTool(), BehaviorMutate))
-	tools.Register(behaves(makeTaskifyTool(w), BehaviorMutate))
-	tools.Register(behaves(makeSplitStageTool(w), BehaviorMutate))
 	tools.Register(behaves(makeCapturePlaybookTool(w), BehaviorMutate))
 	tools.Register(behaves(makeSchedulePlaybookTool(s.Home, s.Timezone), BehaviorMutate))
 	tools.Register(behaves(makeListSchedulesTool(s.Home), BehaviorObserve))
@@ -358,13 +356,6 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 		w.auditLog(sessionID, eventType, message, iteration)
 	})
 	system, routing := conversation.Session.BuildContext(userMessage, source)
-	offerTurn := false       // #329: true when this turn is a fenced taskify offer turn
-	fenceLiftedNote := false // #335: true when this turn carries the fence-lifted note
-	// #237: the owner's approval of a paused task gate is a harness decision
-	// (the model can never approve its own run — approval.go's RUN-006
-	// discipline). Detect the approval BEFORE the loop, mark the run approved
-	// in its state.json, and route the turn to resume it via run_playbook.
-	gateRouting := approvePendingTaskGate(w.Settings.Home, sessionID, userMessage)
 	// Cache stability: keep the system prompt byte-stable across calls so the
 	// provider prefix cache stays warm. The clock AND the per-turn routing
 	// block (matched skills + playbook routing) are appended to the fresh user
@@ -377,29 +368,6 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 		if routing != "" {
 			tail = routing + "\n\n" + tail
 		}
-		if gateRouting != "" {
-			tail = gateRouting + "\n\n" + tail
-		}
-		lastTurnFenced := conversation.Session.OfferFencedLastTurn()
-		initialTaskApproval := gateRouting == "" && lastTurnFenced && taskGateApprovalRe.MatchString(userMessage)
-		// #237 task-intent detection: the offer is a DISCUSSION OPENER — no
-		// scaffold, no work, until the owner approves (owner lock 2026-08-16).
-		// Suppressed on the turn that just approved the gate: the approval is
-		// the start signal, not another discussion. #329: the offer turn is
-		// also FENCED — work tools are blocked for this turn (taskifyOfferKey)
-		// and the fence is visible in traces (taskify_offer marker).
-		var offerTurnLocal bool
-		tail, offerTurnLocal = applyTaskifyOfferTurn(tail, userMessage, gateRouting != "", initialTaskApproval)
-		offerTurn = offerTurnLocal
-		// #335 (finding 2): the fence is per-turn, but the RUN-006d errors it
-		// left in history made later turns believe work stays blocked. The
-		// first UNFENCED turn after a fenced one carries the fence-lifted
-		// note; the session flag records this turn's state for the next one.
-		fenceLiftedNote = !offerTurnLocal && lastTurnFenced
-		tail = applyFenceLiftedNote(tail, offerTurnLocal, lastTurnFenced)
-		conversation.Session.SetOfferFenced(offerTurnLocal)
-		ctx = context.WithValue(ctx, taskifyOfferKey{}, offerTurn)
-		ctx = context.WithValue(ctx, taskifyApprovalKey{}, initialTaskApproval)
 		messages[len(messages)-1].Content += "\n\n" + tail
 	}
 	msgLen := 0
@@ -420,7 +388,7 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 			msgLen += len(block) + 2
 		}
 	}
-	logTrace(w.Settings.Home, "turn_start", map[string]any{"user_message": userMessage, "system_chars": len(system), "msg_count": len(messages), "msg_chars": msgLen, "taskify_offer": offerTurn, "fence_lifted_note": fenceLiftedNote})
+	logTrace(w.Settings.Home, "turn_start", map[string]any{"user_message": userMessage, "system_chars": len(system), "msg_count": len(messages), "msg_chars": msgLen})
 	if len(images) > 0 {
 		messages[len(messages)-1].Images = images
 	}

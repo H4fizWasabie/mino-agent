@@ -81,9 +81,6 @@ type PlaybookRun struct {
 	CreatedAt time.Time          `json:"created_at"`
 	UpdatedAt time.Time          `json:"updated_at"`
 	Stages    []PlaybookRunStage `json:"stages"`
-	// #237: the owner's approval of the run's gate — set by the harness
-	// (approvePendingTaskGate); the model can never approve its own run.
-	GateApproved bool `json:"gate_approved,omitempty"`
 	// #310: content hash of the stage contracts at run start. A resume whose
 	// on-disk contracts differ fails loudly instead of continuing with stale
 	// in-memory logic (the 2026-08-20 franken-run class).
@@ -188,9 +185,7 @@ func loadPlaybookWorkspace(home, name string) (*PlaybookWorkspace, error) {
 		if pb.Stages[i].Number != pb.Stages[j].Number {
 			return pb.Stages[i].Number < pb.Stages[j].Number
 		}
-		// Stable tiebreak on name: checkpoint splits add a second stage with
-		// the act stage's number (02-act then 02-act-b) — execution order and
-		// previousStage resolution depend on the act stage coming first.
+		// Stable tiebreak on name keeps execution order deterministic.
 		return pb.Stages[i].Name < pb.Stages[j].Name
 	})
 	for i := range pb.Stages {
@@ -399,22 +394,20 @@ func latestResumablePlaybookRun(pb *PlaybookWorkspace, registry *Registry) (*Pla
 		if json.Unmarshal(data, &run) != nil {
 			continue
 		}
-		if run.Status != "running" && run.Status != "failed" && run.Status != "awaiting_approval" && run.Status != "awaiting_split" {
+		if run.Status != "running" && run.Status != "failed" {
 			continue
 		}
 		// Resume safety: a stage that already ran (status failed or running) with
 		// non-retry-safe tools may have executed external side effects — never
 		// resume it (the VPS duplicate-Threads-post incident). A stage that never
-		// started (pending) executed nothing, so gate pauses (#237) and
-		// checkpoint splits (#237) resume freely; an awaiting_split run resumes
-		// only to the model's explicit accept/decline decision point.
+		// started (pending) executed nothing and can resume freely.
 		next := nextPlaybookStage(&run)
 		if next != nil {
 			stage, ok := workspaceStageFor(pb, next.Number, next.Name)
 			if !ok {
 				continue
 			}
-			if (next.Status == "failed" || next.Status == "running") && !stageRetrySafe(registry, stage) && run.Status != "awaiting_split" {
+			if (next.Status == "failed" || next.Status == "running") && !stageRetrySafe(registry, stage) {
 				continue
 			}
 		}
@@ -558,13 +551,9 @@ func stageSelfCertified(stage WorkspaceStage) bool {
 	return false
 }
 
-// playbookWriteGuard enforces the contract read-only rule: the playbook tree
-// (definitions AND runs) is writable only from inside the stage execution of
-// that playbook, and only within its own run directory. The main loop can never
-// write into playbooks/ — that kills the pre-seed vector (main loop writes
-// outputs, then run_playbook rubber-stamps them). A stage can write its run's
-// outputs but cannot amend the contract (CONTEXT.md, stages/, config.md) or
-// another run's directory mid-execution.
+// playbookWriteGuard keeps run artifacts attributed to their executing run.
+// Playbook definitions are intentionally editable by Mino: they are the ICM
+// workspace source that the agent maintains when evidence calls for repair.
 // Returns an error message, or "" when the write is allowed.
 func playbookWriteGuard(home, path string, ctx context.Context) string {
 	clean := filepath.Clean(path)
@@ -591,8 +580,13 @@ func playbookWriteGuard(home, path string, ctx context.Context) string {
 		return ""
 	}
 	tags := traceTagsFromCtx(ctx)
+	relative := strings.TrimPrefix(clean, root+string(filepath.Separator))
+	parts := strings.SplitN(relative, string(filepath.Separator), 3)
+	if len(parts) < 2 || parts[1] != "runs" {
+		return ""
+	}
 	if tags["playbook"] == "" {
-		return fmt.Sprintf("playbook tree is read-only outside stage execution: %s (use manage_playbook to edit playbooks)", path)
+		return fmt.Sprintf("playbook run artifacts are writable only during stage execution: %s", path)
 	}
 	runDir := filepath.Join(root, tags["playbook"], "runs", tags["run"])
 	if !strings.HasPrefix(clean, runDir+string(filepath.Separator)) {
@@ -831,12 +825,6 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 		return nil, fmt.Errorf("playbook %s: %w", name, err)
 	}
 	baseMessages := conversation.Session.PlaybookContext(system)
-	if taskifiedPlaybook(pb) {
-		// #237 context rule (owner lock 4): a taskified stage's context is its
-		// contract + prior stages' declared outputs — never the raw session
-		// history (the context tax the ticket exists to kill).
-		baseMessages = conversation.Session.TaskPlaybookContext(system)
-	}
 	// Label the run self-certified when any stage's Audit declares `self` — the
 	// audit trail then marks that no machine verified those outputs.
 	for _, stage := range pb.Stages {
@@ -848,20 +836,23 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 
 	// #310: bind the stage contracts at run start. A resume whose on-disk
 	// contracts differ from this hash fails loudly instead of continuing with
-	// stale in-memory logic (the 2026-08-20 franken-run class). Skipped for
-	// taskified playbooks (approval_gate set): those are a different execution
-	// model where the harness itself owns mid-run contract changes via
-	// split_stage (act-b continuations legitimately extend the run record).
-	if !taskifiedPlaybook(pb) {
-		if run.ContractHash == "" {
-			run.ContractHash = stageContractHash(pb, run)
-		} else if run.ContractHash != stageContractHash(pb, run) {
-			// Resume with changed contracts: fail loud, never resume stale logic.
-			run.Status = "failed"
-			run.InterruptReason = "contract changed mid-run — manual review"
-			_ = savePlaybookRun(pb, run)
-			return nil, fmt.Errorf("playbook %s run %s: contract changed since run start — refusing to resume (manual review required)", name, run.ID)
+	// stale in-memory logic (the 2026-08-20 franken-run class).
+	if run.ContractHash == "" {
+		run.ContractHash = stageContractHash(pb, run)
+	} else if run.ContractHash != stageContractHash(pb, run) {
+		// A repaired workspace supersedes a failed run. Preserve its evidence,
+		// then start cleanly with the current source instead of retrying stale
+		// stage state forever.
+		run.Status = "superseded"
+		run.InterruptReason = "playbook definition changed; starting a fresh run with the repaired workspace"
+		if err := savePlaybookRun(pb, run); err != nil {
+			return nil, err
 		}
+		run, err = loadOrCreatePlaybookRun(pb, core.Tools, request, sessionID, time.Now())
+		if err != nil {
+			return nil, err
+		}
+		run.ContractHash = stageContractHash(pb, run)
 	}
 
 	// #310: cancellable run context — the cancel_run tool and the shutdown
@@ -986,19 +977,6 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 			core.auditLog(sessionID, "script_stage", fmt.Sprintf("%s stage %02d-%s: script exit %d, run %s", pb.Name, stage.Number, stage.Name, code, run.ID), 0)
 			continue
 		}
-		// #237 approval gate (taskified runs): the stage right after the
-		// config's gate stage runs only after the owner approved the gate
-		// stage's proposal. Checked on every entry — a fresh run and a resume
-		// both pause here until the harness records the owner's approval.
-		if prev, ok := previousStage(pb, stage); ok && isApprovalGateStage(pb, prev) && !run.GateApproved {
-			run.Status = "awaiting_approval"
-			if err := savePlaybookRun(pb, run); err != nil {
-				return nil, err
-			}
-			result.Status = "awaiting_approval"
-			result.Reply = gatePauseReply(pb, run, prev)
-			return result, nil
-		}
 		stageTools := core.Tools
 		if len(stage.Tools) > 0 {
 			stageTools = core.Tools.Only(stage.Tools...)
@@ -1085,18 +1063,6 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 						"outcome":  of.Outcome,
 						"tool":     of.Tool,
 					})
-				}
-				// #237 checkpoint split (#236 absorption): a taskified stage that
-				// burns its budget without producing its declared outputs gets a
-				// split offer instead of a hard fail — the partial state on disk
-				// IS the checkpoint; split_stage accept creates the continuation
-				// stage (02-...-b) and the run resumes mid-task, never from zero.
-				if stageResult.Status == "iteration_limit" && stageResult.Iterations >= splitOfferAtIterations && taskifiedPlaybook(pb) {
-					run.Status = "awaiting_split"
-					_ = savePlaybookRun(pb, run)
-					result.Status = "awaiting_split"
-					result.Reply = splitOfferText(pb, run, stage, stageResult.Iterations)
-					return result, nil
 				}
 				run.Status = "failed"
 				_ = savePlaybookRun(pb, run)

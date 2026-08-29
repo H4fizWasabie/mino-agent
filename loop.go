@@ -543,15 +543,6 @@ func RunLoopContext(
 			var raw string
 			if rawArgs, bad := args["__raw_arguments__"]; bad {
 				raw = fmt.Sprintf("Error: tool call arguments did not parse as JSON. Raw arguments: %v. Re-emit this call with valid JSON arguments.", rawArgs)
-			} else if block := taskifyOfferToolGuard(ctx, tc.Name); block != "" {
-				// #329 RUN-006d: on a fenced taskify offer turn, work-capable
-				// tools return this error instead of executing — the owner lock
-				// never rests on prompt compliance alone.
-				raw = block
-			} else if block := taskifyApprovalToolGuard(ctx, tc.Name); block != "" {
-				// #371 RUN-006e: after the owner approves the initial offer, the
-				// model must scaffold the task before executing or running it.
-				raw = block
 			} else {
 				raw = tools.ExecuteContext(ctx, tc.Name, args)
 			}

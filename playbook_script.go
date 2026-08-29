@@ -174,10 +174,8 @@ func existingStageOutputs(pb *PlaybookWorkspace, run *PlaybookRun, stage *Worksp
 
 // stageContractHash returns a content hash of the stage contracts the run
 // references (names, scripts, tools, outputs) — the run-start binding that
-// makes franken-resume impossible (#310). Computed over the stages present in
-// the run record: a taskify checkpoint split ADDS a stage mid-run by design
-// (act-b), which must not trip the check; a run referencing 1-news-report
-// while disk now has 1-judgment must fail loud.
+// makes franken-resume impossible (#310). A run referencing 1-news-report
+// while disk now has 1-judgment must fail loudly.
 func stageContractHash(pb *PlaybookWorkspace, run *PlaybookRun) string {
 	h := sha256.New()
 	for _, rs := range run.Stages {

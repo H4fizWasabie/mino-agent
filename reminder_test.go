@@ -169,7 +169,7 @@ func TestSchemasForContextUserWordsSurviveSystemPromptWordBudget(t *testing.T) {
 	// Filler tools whose descriptions repeat the system prompt vocabulary —
 	// they match dozens of query terms and crowd the top-16 bm25 rank, the
 	// live shape (72-tool catalog vs 23 here).
-	fillers := []string{"schedule_playbook", "manage_playbook", "audit_playbook", "fetch_url", "list_schedules", "cancel_schedule", "edit_file", "threads_post", "graphify_query", "graphify_path", "graphify_explain", "codegraph_query", "system_check", "send_message", "view_image", "list_files", "grep_files", "git_status", "git_diff", "capture_playbook", "split_stage", "taskify", "query_audit", "request_approval", "write_unit", "install_package", "screenshot"}
+	fillers := []string{"schedule_playbook", "manage_playbook", "audit_playbook", "fetch_url", "list_schedules", "cancel_schedule", "edit_file", "threads_post", "graphify_query", "graphify_path", "graphify_explain", "codegraph_query", "system_check", "send_message", "view_image", "list_files", "grep_files", "git_status", "git_diff", "capture_playbook", "query_audit", "request_approval", "write_unit", "install_package", "screenshot"}
 	for i, name := range fillers {
 		r.Register(&Tool{Name: name, Description: fmt.Sprintf("playbook schedule stage contract state file workspace skill install update journal audit approval privilege sudoers config reload provider model graph query path explain code read write edit grep glob status diff render capture page url server dashboard api universe endpoint auth token clock timezone iteration loop guard gate bounded cap budget verify discipline snapshot #%d", i), Schema: map[string]any{"type": "object"}})
 	}

@@ -594,7 +594,7 @@ func makeListPlaybooksTool(home string) *Tool {
 func makeManagePlaybookTool(core *Core) *Tool {
 	return &Tool{
 		Name:        "manage_playbook",
-		Description: "Create, inspect, validate, update, or permanently delete a playbook definition. Create requires a root CONTEXT.md and numbered stage contracts. Updates and deletion are refused while a run can resume; deletion is also refused while scheduled.",
+		Description: "Create, inspect, validate, update, or permanently delete a playbook definition. Create requires a root CONTEXT.md and numbered stage contracts. Updates are validated and supersede failed runs; active runs and scheduled deletion remain protected.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -792,8 +792,8 @@ func updateManagedPlaybook(core *Core, name string, args map[string]any) string 
 	}
 	if run, err := latestResumablePlaybookRun(pb, core.Tools); err != nil {
 		return fmt.Sprintf("Error: %v", err)
-	} else if run != nil {
-		return fmt.Sprintf("Error: playbook %s has resumable run %s; finish it before changing its contract", name, run.ID)
+	} else if run != nil && run.Status == "running" {
+		return fmt.Sprintf("Error: playbook %s has active run %s; wait for its stage boundary before changing its contract", name, run.ID)
 	}
 	changes := managedPlaybookChanges(pb, args)
 	if len(changes) == 0 {
@@ -808,6 +808,13 @@ func updateManagedPlaybook(core *Core, name string, args map[string]any) string 
 	if err := validateManagedPlaybook(core, name); err != nil {
 		restoreManagedPlaybookChanges(changes)
 		return fmt.Sprintf("Error: update rejected: %v", err)
+	}
+	if run, err := latestResumablePlaybookRun(pb, core.Tools); err == nil && run != nil {
+		run.Status = "superseded"
+		run.InterruptReason = "playbook definition changed; start a new run with the repaired workspace"
+		if err := savePlaybookRun(pb, run); err != nil {
+			return fmt.Sprintf("Error: updated playbook but could not retire run %s: %v", run.ID, err)
+		}
 	}
 	return fmt.Sprintf("Updated and validated playbook %s.", name)
 }

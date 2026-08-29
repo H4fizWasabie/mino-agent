@@ -1,6 +1,6 @@
 # Playbooks -- remove taskify
 
-Status: **OPEN** (child of PB-001)
+Status: **IMPLEMENTED** (child of PB-001)
 
 ## Destination
 
@@ -30,14 +30,14 @@ to autonomous scheduled playbook execution.
 
 ## Acceptance criteria
 
-- [ ] Mino no longer exposes or calls `taskify` for new work.
-- [ ] A normal task-intent message does not create a taskify offer or approval
+- [x] Mino no longer exposes or calls `taskify` for new work.
+- [x] A normal task-intent message does not create a taskify offer or approval
       gate.
-- [ ] Existing scheduled and manually invoked playbooks continue to run and
+- [x] Existing scheduled and manually invoked playbooks continue to run and
       resume through the ordinary playbook engine.
-- [ ] No taskify-owned approval marker or scaffold is created in a playbook.
-- [ ] Taskify-specific tests/docs are removed or rewritten to the ICM model.
-- [ ] The full test suite passes and the deployed behavior is verified before
+- [x] No taskify-owned approval marker or scaffold is created in a playbook.
+- [x] Taskify-specific tests/docs are removed or rewritten to the ICM model.
+- [x] The full test suite passes and the deployed behavior is verified before
       release.
 
 ## Out of scope
