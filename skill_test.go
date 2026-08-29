@@ -71,10 +71,13 @@ func TestCodingSkillUsesWorkspaceAndChunkedWrites(t *testing.T) {
 	if strings.Contains(codingSkill, "/home/mino/") {
 		t.Fatal("coding skill hardcodes the VPS workspace")
 	}
+	if strings.Contains(codingSkill, "AGENTS.md or CLAUDE.md") {
+		t.Fatal("coding skill still directs agents to CLAUDE.md")
+	}
 }
 
 func TestPlaybookAuthoringSkillIsEmbedded(t *testing.T) {
-	for _, want := range []string{"name: playbook-authoring", "create playbook", "## Structure", "manage_playbook", "Telegram"} {
+	for _, want := range []string{"name: playbook-authoring", "create playbook", "## Structure", "manage_playbook", "Telegram", "## ICM compliance", "tools/link-check.sh", "Stage recovery", "Final evidence"} {
 		if !strings.Contains(playbookAuthoringSkill, want) {
 			t.Errorf("playbook authoring skill missing %q", want)
 		}

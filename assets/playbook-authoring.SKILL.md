@@ -42,9 +42,10 @@ Create one folder under `~/.mino/playbooks/` using a short hyphenated identifier
     01-<stage>/
       CONTEXT.md
       references/
-    02-<stage>/
+  02-<stage>/
       CONTEXT.md
       references/
+  tools/link-check.sh        # routing health check; copy from an existing ICM-compliant playbook
   runs/                       # created by Mino; never hand-edit state.json
 ```
 
@@ -61,6 +62,18 @@ Each numbered stage folder must contain `CONTEXT.md` with:
 - `## Outputs` — a table of output paths under `output/`
 
 Keep stages small and independently verifiable. Pass useful output to the next stage through files, not hidden assumptions. A later stage refers to an earlier output as `../01-stage/output/file.md` in its Inputs table. Mino creates a separate run directory for every execution, resumes the first incomplete stage, and never needs approval to continue an agreed playbook.
+
+## ICM compliance — mandatory for every playbook
+
+Before calling a playbook complete, verify all five layers:
+
+1. **Root navigation:** `CONTEXT.md` contains the purpose, Folder Map, a Routing table with `Go To` and `Do NOT Load`, the failure protocol, run-data write guard, and stage handoffs.
+2. **Workspace persona:** `persona/<agent>.md` is the single workspace-local persona bound by `config.md`; do not fork persona prose into stage contracts.
+3. **Routing health:** `tools/link-check.sh` is copied from any existing ICM-compliant playbook's `tools/` folder and passes its documented link and orphan checks.
+4. **Stage recovery:** every stage `CONTEXT.md` names its real failure points, in-contract exits, and declared outputs; an empty valid result is written as an explicit success artifact.
+5. **Final evidence:** run `tools/link-check.sh`, then live-test with `run_playbook` and verify `state.json` records complete stages with real outputs.
+
+When retrofitting an existing playbook, apply these five layers without changing working stage behavior contracts. Diagnose failures, adapt the contract in place, and escalate only with the run evidence.
 
 ## Stage kinds — a menu, not a ladder
 
@@ -79,7 +92,8 @@ A single-stage playbook with a tight contract is a finished agent. Stage count f
 2. Inspect existing playbooks and reuse their conventions where appropriate.
 3. Create the definition with `manage_playbook` using its `create` action and full stage contracts.
 4. Use its `validate` action after every definition update; use `inspect` to see the latest run state.
-5. Run the playbook when the owner asks for a live test; otherwise report the created path and what remains to test.
+5. Run the ICM compliance checklist above, including the portable `tools/link-check.sh` check.
+6. Run the playbook when the owner asks for a live test; otherwise report the created path and what remains to test.
 
 ### Compile-after-success (capture_playbook)
 

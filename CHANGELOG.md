@@ -12,6 +12,11 @@
 
 ### Changed
 
+- **ICM authoring skill reconciliation (#400)**: ported the mandatory
+  five-layer playbook checklist onto current master, preserved the workspace
+  persona contract, made link-check guidance portable, and removed the stale
+  CLAUDE.md-first coding-skill instruction.
+
 - **Cost Watch cache-first routing (#399)**: ranks complete provider prices
   lexicographically by cache-read, input, and output cost, then uptime and
   latency.

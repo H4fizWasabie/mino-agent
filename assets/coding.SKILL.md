@@ -41,7 +41,7 @@ You are in coding mode. When this skill is active, the assistant-mode STOP rule 
 
 Goal: know the codebase before touching it.
 
-1. **Read project rules FIRST**: your first tool call MUST be read_file on AGENTS.md or CLAUDE.md if present. These contain critical project instructions.
+1. **Read project rules FIRST**: your first tool call MUST be read_file on AGENTS.md if present. These contain critical project instructions.
 2. **Check graphify**: if graphify-out/ exists, graphify_query first — saves tokens.
 3. **Find relevant code**: codegraph_query for symbols, grep for patterns, glob for files.
 4. **Read before edit**: always read_file the target before edit_file. read_file returns up to 16000 bytes per call — use offset for large files.
