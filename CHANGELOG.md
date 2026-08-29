@@ -12,6 +12,9 @@
 
 ### Changed
 
+- **Cost Watch unknown latency (#397)**: preserves missing OpenRouter latency
+  telemetry as unknown, so it cannot outrank a measured latency.
+
 - **Cost Watch provider routing (#395)**: catalogues both configured model
   roles, records OpenRouter uptime and latency, and ranks eligible providers
   by price first, then uptime and latency before pinning each role.
