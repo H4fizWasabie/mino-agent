@@ -5,6 +5,10 @@
 - **Playbooks as navigable workspaces (#380)**: opened the Wayfinder design
   frontier for making playbook workspaces self-navigating and failure-aware,
   while preserving Mino's single-agent loop and explicit authority boundaries.
+- **PB-001 implementation tickets**: opened local child tickets PB-002 through
+  PB-005 for workspace entry, run artifacts, autonomous recovery, and bounded
+  heavy-playbook evidence. The completed Ascencio marketing workspace is the
+  reference fixture; social media remains deferred.
 
 ### Changed
 

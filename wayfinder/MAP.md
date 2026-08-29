@@ -283,6 +283,10 @@ and distillation.
 ## Frontier
 
 - [PB-001 — Playbooks as navigable workspaces](tickets/pb-001-navigable-workspaces.md) (**open**, GitHub #380) — define the workspace model, failure-recovery boundaries, and the narrow implementation tickets that follow.
+- [PB-002 — Workspace entry contract](tickets/pb-002-workspace-entry-contract.md) — load `AGENTS.md`/`CONTEXT.md` and route selectively.
+- [PB-003 — Workspace run artifacts](tickets/pb-003-workspace-run-artifacts.md) — isolate repeated-run handoffs from runtime metadata.
+- [PB-004 — Autonomous recovery boundaries](tickets/pb-004-autonomous-recovery-boundaries.md) — define safe repair, retry, adaptation, and stop behavior.
+- [PB-005 — Heavy-playbook evidence](tickets/pb-005-heavy-playbook-evidence.md) — mechanically bound evidence before LLM judgement.
 
 ## Out of scope
 
