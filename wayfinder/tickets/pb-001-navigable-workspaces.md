@@ -67,6 +67,22 @@ and distilled into episodic or semantic memory. Mino must not inject every
 artifact into every later prompt or promote every artifact into the knowledge
 base.
 
+## Decision -- five-layer loading protocol -- 2026-08-29
+
+Mino playbooks adopt ICM's five-layer loading protocol as their context
+contract:
+
+1. Playbook `CLAUDE.md` supplies the workspace map and navigation rules.
+2. Root `CONTEXT.md` orients the run and routes the request to a stage.
+3. Stage `CONTEXT.md` supplies the current stage contract and process.
+4. References are loaded selectively according to that stage contract.
+5. Working outputs are loaded selectively as stage inputs and handoffs.
+
+Mino-specific run state, output filtering, audit evidence, memory distillation,
+and autonomous recovery wrap this protocol without replacing its layered
+loading rules. Orientation is therefore a routing operation, not a large
+repeated summary injected into every stage.
+
 ## Failure recovery boundary
 
 | Failure | Default response |
@@ -102,6 +118,8 @@ base.
       failure reason from durable state.
 - [ ] A run's initial context establishes workspace orientation before stage
       execution narrows context.
+- [ ] The runtime maps the five ICM layers to playbook files and selective
+      stage loading without duplicating the workspace into every prompt.
 - [ ] Stage outputs are stored and attributed before filtering or distillation;
       retention policy remains separate from workspace navigation.
 - [ ] Stage tool guidance is separated from runtime tool authority and retry

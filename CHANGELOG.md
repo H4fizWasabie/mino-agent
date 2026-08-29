@@ -18,6 +18,10 @@
   with workspace orientation before narrowing to a stage, while outputs remain
   subject to Mino's existing artifact, audit, handoff, and selective memory
   distillation policy.
+- **PB-001 five-layer loading protocol (#380)**: confirmed that playbooks use
+  ICM's workspace map, root routing, stage contract, selective references, and
+  selective working artifacts as the context contract; Mino-specific runtime
+  state and recovery wrap that protocol.
 
 ### Fixed
 
