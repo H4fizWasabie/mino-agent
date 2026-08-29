@@ -1,7 +1,56 @@
 ## [Unreleased]
 
+### Added
+
+- **Playbooks as navigable workspaces (#380)**: opened the Wayfinder design
+  frontier for making playbook workspaces self-navigating and failure-aware,
+  while preserving Mino's single-agent loop and explicit authority boundaries.
+- **PB-001 implementation tickets**: opened local child tickets PB-002 through
+  PB-005 for workspace entry, run artifacts, autonomous recovery, and bounded
+  heavy-playbook evidence. The completed Ascencio marketing workspace is the
+  reference fixture; social media remains deferred.
+
+### Changed
+
+- **PB-001 autonomy boundary (#380)**: clarified that Mino adopts ICM's
+  filesystem routing model without inheriting mandatory human checkpoints;
+  playbooks remain autonomous within Mino's authority policy.
+- **PB-001 tool exposure boundary (#380)**: confirmed that stage tool lists
+  should guide capability selection rather than rigidly fence recovery, while
+  runtime policy remains authoritative for access, risk, retry, and audit.
+- **PB-001 orientation and output lifecycle (#380)**: confirmed that runs begin
+  with workspace orientation before narrowing to a stage, while outputs remain
+  subject to Mino's existing artifact, audit, handoff, and selective memory
+  distillation policy.
+- **PB-001 five-layer loading protocol (#380)**: confirmed that playbooks use
+  ICM's workspace map, root routing, stage contract, selective references, and
+  selective working artifacts as the context contract; Mino-specific runtime
+  state and recovery wrap that protocol.
+- **PB-001 workspace map and persona boundary (#380)**: confirmed that each
+  playbook workspace uses root `AGENTS.md` for navigation and policy, while
+  persona files remain a separate voice/role layer selected through Mino's
+  existing persona binding.
+- **PB-001 mechanical and LLM judgement boundary (#380)**: confirmed that
+  navigable playbooks retain deterministic script stages, LLM judgement stages,
+  and mechanical output verification as distinct paths.
+- **PB-001 workspace truth boundary (#380)**: confirmed that the completed
+  Ascencio marketing workspace is the canonical reference, while Mino keeps
+  execution state, telemetry, retries, and memory-distillation metadata
+  separately; the unfinished social workspace is deferred.
+- **PB-001 heavy-playbook evidence boundary (#380)**: confirmed that heavy
+  playbooks mechanically scope and bound evidence before LLM judgement, while
+  retaining pointers to full artifacts and existing audit/distillation rules.
+- **PB-002 workspace entry slice**: playbook loading now retains root
+  `AGENTS.md` and `CONTEXT.md` as distinct workspace entry layers and includes
+  bounded copies in the stable playbook profile; definitions without
+  `AGENTS.md` remain compatible during migration.
+- **PB-001 CI formatting**: applied `gofmt` to the touched test file so the
+  repository's changed-file formatting gate passes.
+
 ### Fixed
 
+- **PB-001 review formatting**: removed trailing blank lines from the local
+  child-ticket documents so the branch passes `git diff --check`.
 - **Playbook Telegram reports are sent once (closes #378)**: repeated model verification after an outbox draft was delivered could queue the same scheduled report multiple times. Stage-scoped receipts now distinguish pending delivery from confirmed delivery while preserving outbox retries.
 
 ## [v3.1.15] — Telegram outbox reliability (2026-08-27)

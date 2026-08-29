@@ -234,6 +234,70 @@ A stuck or failing Mino pages the owner within minutes, not hours; a crash leave
 
 ---
 
+# Mino Playbooks — Navigable Workspaces
+
+## Destination
+
+Make each playbook a navigable filesystem workspace that one Mino agent can
+enter, understand, execute, recover, and maintain. The public vocabulary stays
+"playbook"; the workspace supplies routing, selective context, stage contracts,
+personas, references, tools, artifacts, run state, and verification evidence.
+Unlike the source ICM framework, Mino playbooks are autonomous and do not
+require human checkpoints between ordinary stages.
+
+Confirmed direction: stage tool declarations become capability guidance rather
+than rigid allowlists; runtime policy remains authoritative for tool access,
+risk, retry, audit, and approval.
+
+Confirmed direction: every run starts with workspace orientation, then narrows
+to stage execution. Outputs remain durable run artifacts and pass through
+Mino's existing handoff, audit, and selective memory-distillation paths; the
+workspace does not bypass output filtering or promote every artifact to memory.
+
+Confirmed direction: Mino adopts ICM's five-layer loading protocol as the
+playbook context contract—workspace map, root routing, stage contract,
+selective references, and selective working artifacts—while Mino runtime owns
+run state, filtering, audit, memory distillation, and autonomous recovery.
+
+Confirmed direction: Layer 0 is a root `AGENTS.md` per workspace, containing
+the map, triggers, hard rules, routing, source-of-truth boundaries, and load
+exclusions. Persona remains a distinct workspace voice/role layer and uses
+Mino's existing binding and validation path.
+
+Confirmed direction: navigable playbooks retain both mechanical `script.sh`
+stages and LLM judgement stages. Mechanical output/success verification stays
+authoritative; LLM audits may assess quality but self-declared audits remain
+self-certified.
+
+Confirmed direction: the completed Ascencio marketing workspace is the
+canonical reference. Its user-authored map, routing, persona, references,
+stage contracts, and handoffs remain truth; Mino keeps run state, audits,
+traces, retries, and memory-distillation metadata separately. Social media is
+deferred until its decisions are confirmed.
+
+Confirmed direction: heavy playbooks mechanically select and bound evidence
+before LLM judgement. Weekly audit sampling and post-mortem single-run scope
+remain; full artifacts stay available by pointer and follow normal retention
+and distillation.
+
+## Frontier
+
+- [PB-001 — Playbooks as navigable workspaces](tickets/pb-001-navigable-workspaces.md) (**open**, GitHub #380) — define the workspace model, failure-recovery boundaries, and the narrow implementation tickets that follow.
+- [PB-002 — Workspace entry contract](tickets/pb-002-workspace-entry-contract.md) — load `AGENTS.md`/`CONTEXT.md` and route selectively.
+- [PB-003 — Workspace run artifacts](tickets/pb-003-workspace-run-artifacts.md) — isolate repeated-run handoffs from runtime metadata.
+- [PB-004 — Autonomous recovery boundaries](tickets/pb-004-autonomous-recovery-boundaries.md) — define safe repair, retry, adaptation, and stop behavior.
+- [PB-005 — Heavy-playbook evidence](tickets/pb-005-heavy-playbook-evidence.md) — mechanically bound evidence before LLM judgement.
+
+## Out of scope
+
+- An agent for every task, stage, persona, or workspace.
+- A second workflow engine or agent loop.
+- Blind retries after uncertain external mutations.
+- Mandatory human checkpoints between ordinary stages.
+- Relying on stage tool lists as the primary safety boundary.
+
+---
+
 # Mino Playbook Personas — Wayfinder Map
 
 ## Destination

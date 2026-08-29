@@ -22,6 +22,11 @@ type PlaybookWorkspace struct {
 	Name        string
 	Dir         string
 	Description string
+	// Agents is the workspace Layer 0 map and policy document. It is optional
+	// during migration; migrated workspaces must provide AGENTS.md.
+	Agents string
+	// RootContext is the workspace Layer 1 routing document.
+	RootContext string
 	Schedule    string
 	Status      string
 	// Agent is the config.md `agent:` binding — the roster persona this
@@ -151,7 +156,12 @@ func loadPlaybookWorkspace(home, name string) (*PlaybookWorkspace, error) {
 	if err != nil {
 		return nil, fmt.Errorf("playbook %s requires CONTEXT.md", name)
 	}
-	pb := &PlaybookWorkspace{Name: name, Dir: dir, Description: firstHeading(string(root)), Status: "active", Config: map[string]string{}}
+	pb := &PlaybookWorkspace{Name: name, Dir: dir, Description: firstHeading(string(root)), RootContext: string(root), Status: "active", Config: map[string]string{}}
+	if agents, readErr := os.ReadFile(filepath.Join(dir, "AGENTS.md")); readErr == nil {
+		pb.Agents = string(agents)
+	} else if !os.IsNotExist(readErr) {
+		return nil, fmt.Errorf("playbook %s: read AGENTS.md: %w", name, readErr)
+	}
 	if data, err := os.ReadFile(filepath.Join(dir, "config.md")); err == nil {
 		parseWorkspaceConfig(data, pb)
 	}

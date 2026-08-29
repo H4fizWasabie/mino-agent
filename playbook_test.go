@@ -487,6 +487,32 @@ func TestWorkspaceRejectsMissingContract(t *testing.T) {
 	}
 }
 
+func TestLoadPlaybookWorkspaceReadsEntryLayers(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, "playbooks", "entry")
+	stage := filepath.Join(root, "stages", "01-run")
+	if err := os.MkdirAll(stage, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for path, content := range map[string]string{
+		filepath.Join(root, "AGENTS.md"):   "# Workspace map\n",
+		filepath.Join(root, "CONTEXT.md"):  "# Workspace route\n",
+		filepath.Join(root, "config.md"):   "status: active\n",
+		filepath.Join(stage, "CONTEXT.md"): "# Run\n\n## Outputs\n\n| Artifact | Location | Format |\n| --- | --- | --- |\n| Report | `output/report.md` | Markdown |\n",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pb, err := loadPlaybookWorkspace(home, "entry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pb.Agents != "# Workspace map\n" || pb.RootContext != "# Workspace route\n" {
+		t.Fatalf("entry layers not retained: agents=%q root=%q", pb.Agents, pb.RootContext)
+	}
+}
+
 func TestManagePlaybookLifecycle(t *testing.T) {
 	home := t.TempDir()
 	settings := &Settings{Home: home, Workspace: home}

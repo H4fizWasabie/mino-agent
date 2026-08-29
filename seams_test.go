@@ -211,8 +211,8 @@ func TestBuildWorkspaceStagePromptIncludesContractAndRules(t *testing.T) {
 		Number:  1,
 		Name:    "provoke",
 		Context: "# Arena Post\n\n## Process\n\n1. Post it.\n\n## Tools\n\n- threads_post\n\n## Outputs\n\n| Artifact | Location | Format |\n| --- | --- | --- |\n| Battle log | `output/battle.md` | Markdown |\n",
-		Tools:    []string{"threads_post", "write_file"},
-		Outputs:  []StageOutput{{Name: "Battle log", Path: "output/battle.md"}},
+		Tools:   []string{"threads_post", "write_file"},
+		Outputs: []StageOutput{{Name: "Battle log", Path: "output/battle.md"}},
 	}
 	loc := time.FixedZone("MYT", 8*3600)
 	now := time.Date(2026, 8, 10, 8, 30, 0, 0, loc)
@@ -243,9 +243,9 @@ func TestVerifyWorkspaceStageOutputsSuccessOutcome(t *testing.T) {
 	pb := &PlaybookWorkspace{Dir: t.TempDir()}
 	run := &PlaybookRun{ID: "run"}
 	stage := WorkspaceStage{
-		Number: 1,
-		Name:   "post",
-		Dir:    filepath.Join(pb.Dir, "stages", "01-post"),
+		Number:  1,
+		Name:    "post",
+		Dir:     filepath.Join(pb.Dir, "stages", "01-post"),
 		Success: []StageSuccess{{Outcome: "Post published", Tool: "threads_post"}},
 	}
 	// The declared output must exist for the output check to pass; the
@@ -322,6 +322,30 @@ func TestBuildPlaybookSystemUsesAgentPersona(t *testing.T) {
 	} {
 		if !strings.Contains(sys, want) {
 			t.Fatalf("BuildPlaybookSystem missing %q in:\n%s", want, sys)
+		}
+	}
+}
+
+func TestBuildPlaybookSystemIncludesWorkspaceEntryLayers(t *testing.T) {
+	home := t.TempDir()
+	sess := NewSession(&Settings{Home: home, Workspace: home}, nil)
+	pb := &PlaybookWorkspace{
+		Name:        "marketing",
+		Agents:      "# Marketing workspace\n\n## Routing\nStart at CONTEXT.md.\n",
+		RootContext: "# Marketing routing\n\n| Task | Go To |\n| plan | stages/01-brief/CONTEXT.md |\n",
+	}
+	sys, err := sess.BuildPlaybookSystem(pb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"WORKSPACE MAP (AGENTS.md — authoritative):",
+		"# Marketing workspace",
+		"WORKSPACE ROUTING (CONTEXT.md — authoritative):",
+		"# Marketing routing",
+	} {
+		if !strings.Contains(sys, want) {
+			t.Fatalf("BuildPlaybookSystem missing workspace entry layer %q in:\n%s", want, sys)
 		}
 	}
 }
@@ -430,7 +454,6 @@ var promptAssemblySeams = []string{
 	"ContextMessages",
 	"stripLegacyToolCallXML",
 	"buildCommunitySynthesisPrompt",
-
 }
 
 func TestPromptAssemblySeamsCovered(t *testing.T) {
