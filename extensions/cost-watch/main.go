@@ -76,6 +76,7 @@ type catalogueEntry struct {
 	Discount     float64 `json:"discount"`
 	Uptime       float64 `json:"uptime"`
 	Latency      float64 `json:"latency"`
+	LatencyKnown bool    `json:"latency_known"`
 	DataHandling string  `json:"data_handling"`
 }
 
@@ -371,8 +372,8 @@ func fetchCatalogue(cfg *config) (catalogue, error) {
 						InputCacheRead string  `json:"input_cache_read"`
 						Discount       float64 `json:"discount"`
 					} `json:"pricing"`
-					Uptime  float64 `json:"uptime_last_30m"`
-					Latency float64 `json:"latency_last_30m"`
+					Uptime  float64  `json:"uptime_last_30m"`
+					Latency *float64 `json:"latency_last_30m"`
 				} `json:"endpoints"`
 			} `json:"data"`
 		}
@@ -391,6 +392,10 @@ func fetchCatalogue(cfg *config) (catalogue, error) {
 			if flag == "" {
 				flag = "unknown" // curated elsewhere; never scraped (verify-then-claim)
 			}
+			latency := 0.0
+			if ep.Latency != nil {
+				latency = *ep.Latency
+			}
 			cat.Entries = append(cat.Entries, catalogueEntry{
 				Model:        slug,
 				Provider:     provider,
@@ -399,7 +404,8 @@ func fetchCatalogue(cfg *config) (catalogue, error) {
 				Cache:        cache * 1e6,
 				Discount:     ep.Pricing.Discount,
 				Uptime:       ep.Uptime,
-				Latency:      ep.Latency,
+				Latency:      latency,
+				LatencyKnown: ep.Latency != nil,
 				DataHandling: flag,
 			})
 		}
@@ -503,7 +509,10 @@ func rankCatalogueEntries(entries []catalogueEntry) []catalogueEntry {
 		if ranked[i].entry.Uptime != ranked[j].entry.Uptime {
 			return ranked[i].entry.Uptime > ranked[j].entry.Uptime
 		}
-		if ranked[i].entry.Latency != ranked[j].entry.Latency {
+		if ranked[i].entry.LatencyKnown != ranked[j].entry.LatencyKnown {
+			return ranked[i].entry.LatencyKnown
+		}
+		if ranked[i].entry.LatencyKnown && ranked[i].entry.Latency != ranked[j].entry.Latency {
 			return ranked[i].entry.Latency < ranked[j].entry.Latency
 		}
 		if ranked[i].entry.Cache != ranked[j].entry.Cache {

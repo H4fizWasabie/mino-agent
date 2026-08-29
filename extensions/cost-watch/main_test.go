@@ -260,13 +260,24 @@ func TestPinOrderTieBreaksCacheThenOutput(t *testing.T) {
 func TestPinOrderUsesUptimeThenLatencyAfterPrice(t *testing.T) {
 	cfg := defaultConfig()
 	cat := []catalogueEntry{
-		{Model: "m", Provider: "slow", In: 0.10, Cache: 0.10, Out: 0.10, Uptime: 98, Latency: 1, DataHandling: "zdr"},
-		{Model: "m", Provider: "healthy", In: 0.10, Cache: 0.10, Out: 0.10, Uptime: 99, Latency: 5, DataHandling: "zdr"},
-		{Model: "m", Provider: "fast", In: 0.10, Cache: 0.10, Out: 0.10, Uptime: 99, Latency: 2, DataHandling: "zdr"},
+		{Model: "m", Provider: "slow", In: 0.10, Cache: 0.10, Out: 0.10, Uptime: 98, Latency: 1, LatencyKnown: true, DataHandling: "zdr"},
+		{Model: "m", Provider: "healthy", In: 0.10, Cache: 0.10, Out: 0.10, Uptime: 99, Latency: 5, LatencyKnown: true, DataHandling: "zdr"},
+		{Model: "m", Provider: "fast", In: 0.10, Cache: 0.10, Out: 0.10, Uptime: 99, Latency: 2, LatencyKnown: true, DataHandling: "zdr"},
 		{Model: "m", Provider: "cheap", In: 0.01, Cache: 0.01, Out: 0.01, Uptime: 80, Latency: 10, DataHandling: "zdr"},
 	}
 	if got, want := strings.Join(pinOrder(cfg, cat), ","), "cheap,fast,healthy,slow"; got != want {
 		t.Fatalf("cost/uptime/latency order = %v, want [%s]", got, strings.ReplaceAll(want, ",", " "))
+	}
+}
+
+func TestPinOrderPutsUnknownLatencyAfterMeasured(t *testing.T) {
+	cfg := defaultConfig()
+	cat := []catalogueEntry{
+		{Model: "m", Provider: "unknown", In: 0.10, Cache: 0.10, Out: 0.10, Uptime: 99, DataHandling: "zdr"},
+		{Model: "m", Provider: "measured", In: 0.10, Cache: 0.10, Out: 0.10, Uptime: 99, Latency: 2, LatencyKnown: true, DataHandling: "zdr"},
+	}
+	if got := pinOrder(cfg, cat); len(got) != 2 || got[0] != "measured" {
+		t.Fatalf("unknown-latency order = %v, want measured first", got)
 	}
 }
 
@@ -414,7 +425,7 @@ func TestFetchCatalogueParsesDiscount(t *testing.T) {
 		t.Fatalf("entries = %+v", cat.Entries)
 	}
 	e := cat.Entries[0]
-	if !approx(e.In, 0.0798) || !approx(e.Discount, 0.43) || !approx(e.Uptime, 99.5) || !approx(e.Latency, 1.25) {
+	if !approx(e.In, 0.0798) || !approx(e.Discount, 0.43) || !approx(e.Uptime, 99.5) || !approx(e.Latency, 1.25) || !e.LatencyKnown {
 		t.Fatalf("price/discount = %+v", e)
 	}
 }
