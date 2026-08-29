@@ -259,6 +259,11 @@ playbook context contract—workspace map, root routing, stage contract,
 selective references, and selective working artifacts—while Mino runtime owns
 run state, filtering, audit, memory distillation, and autonomous recovery.
 
+Confirmed direction: Layer 0 is a root `AGENTS.md` per workspace, containing
+the map, triggers, hard rules, routing, source-of-truth boundaries, and load
+exclusions. Persona remains a distinct workspace voice/role layer and uses
+Mino's existing binding and validation path.
+
 ## Frontier
 
 - [PB-001 — Playbooks as navigable workspaces](tickets/pb-001-navigable-workspaces.md) (**open**, GitHub #380) — define the workspace model, failure-recovery boundaries, and the narrow implementation tickets that follow.

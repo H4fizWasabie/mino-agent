@@ -22,6 +22,10 @@
   ICM's workspace map, root routing, stage contract, selective references, and
   selective working artifacts as the context contract; Mino-specific runtime
   state and recovery wrap that protocol.
+- **PB-001 workspace map and persona boundary (#380)**: confirmed that each
+  playbook workspace uses root `AGENTS.md` for navigation and policy, while
+  persona files remain a separate voice/role layer selected through Mino's
+  existing persona binding.
 
 ### Fixed
 

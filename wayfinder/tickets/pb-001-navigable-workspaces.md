@@ -83,6 +83,19 @@ and autonomous recovery wrap this protocol without replacing its layered
 loading rules. Orientation is therefore a routing operation, not a large
 repeated summary injected into every stage.
 
+## Decision -- workspace map and persona boundary -- 2026-08-29
+
+The Layer 0 workspace map is `AGENTS.md`, not `CLAUDE.md`. Each playbook
+workspace owns one root `AGENTS.md` containing its folder map, triggers, hard
+rules, routing, source-of-truth boundaries, and load exclusions. Stage folders
+use `CONTEXT.md` for stage contracts; they do not need their own `AGENTS.md`.
+
+Persona remains a separate workspace layer. Each workspace must provide its
+voice and role context through its persona files, while Mino's existing
+persona binding and validation remain the runtime mechanism for selecting and
+injecting the run persona. The map routes to persona context; it does not
+become the persona.
+
 ## Failure recovery boundary
 
 | Failure | Default response |
@@ -120,6 +133,8 @@ repeated summary injected into every stage.
       execution narrows context.
 - [ ] The runtime maps the five ICM layers to playbook files and selective
       stage loading without duplicating the workspace into every prompt.
+- [ ] Each playbook workspace has an `AGENTS.md` map and a distinct persona
+      context that Mino binds and validates before execution.
 - [ ] Stage outputs are stored and attributed before filtering or distillation;
       retention policy remains separate from workspace navigation.
 - [ ] Stage tool guidance is separated from runtime tool authority and retry
