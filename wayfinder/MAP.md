@@ -249,6 +249,11 @@ Confirmed direction: stage tool declarations become capability guidance rather
 than rigid allowlists; runtime policy remains authoritative for tool access,
 risk, retry, audit, and approval.
 
+Confirmed direction: every run starts with workspace orientation, then narrows
+to stage execution. Outputs remain durable run artifacts and pass through
+Mino's existing handoff, audit, and selective memory-distillation paths; the
+workspace does not bypass output filtering or promote every artifact to memory.
+
 ## Frontier
 
 - [PB-001 — Playbooks as navigable workspaces](tickets/pb-001-navigable-workspaces.md) (**open**, GitHub #380) — define the workspace model, failure-recovery boundaries, and the narrow implementation tickets that follow.

@@ -14,6 +14,10 @@
 - **PB-001 tool exposure boundary (#380)**: confirmed that stage tool lists
   should guide capability selection rather than rigidly fence recovery, while
   runtime policy remains authoritative for access, risk, retry, and audit.
+- **PB-001 orientation and output lifecycle (#380)**: confirmed that runs begin
+  with workspace orientation before narrowing to a stage, while outputs remain
+  subject to Mino's existing artifact, audit, handoff, and selective memory
+  distillation policy.
 
 ### Fixed
 

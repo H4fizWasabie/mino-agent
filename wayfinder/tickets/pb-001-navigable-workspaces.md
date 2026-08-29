@@ -54,6 +54,19 @@ Mino's runtime remains authoritative for actual tool availability, side-effect
 risk, retry safety, audit records, and owner approval. Removing the stage
 whitelist is not permission to expose or retry every tool blindly.
 
+## Decision -- orientation and output lifecycle -- 2026-08-29
+
+A playbook run begins with workspace orientation: Mino receives the root
+workspace map, stage graph, active run identity, and current progress before
+the prompt narrows to the current stage contract and its working inputs.
+
+Workspace outputs remain first-class run artifacts, but workspace navigation
+does not replace Mino's output policy. The existing pipeline remains the
+authority for what is retained for handoff, preserved for audit and resume,
+and distilled into episodic or semantic memory. Mino must not inject every
+artifact into every later prompt or promote every artifact into the knowledge
+base.
+
 ## Failure recovery boundary
 
 | Failure | Default response |
@@ -87,6 +100,10 @@ whitelist is not permission to expose or retry every tool blindly.
 - [ ] The playbook-as-workspace model is documented in Mino terminology.
 - [ ] Mino can identify the active playbook, run, stage, inputs, outputs, and
       failure reason from durable state.
+- [ ] A run's initial context establishes workspace orientation before stage
+      execution narrows context.
+- [ ] Stage outputs are stored and attributed before filtering or distillation;
+      retention policy remains separate from workspace navigation.
 - [ ] Stage tool guidance is separated from runtime tool authority and retry
       safety.
 - [ ] Safe repair, adaptation, retry, and escalation boundaries are explicit.
