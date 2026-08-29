@@ -109,6 +109,19 @@ Workspace routing chooses the stage and its context; it does not decide that
 every stage should be handled by an LLM or that every result should be trusted
 because the model said it passed.
 
+## Decision -- workspace truth and runtime state -- 2026-08-29
+
+The completed Ascencio marketing workspace is the canonical reference for the
+workspace contract. User-authored `AGENTS.md`, `CONTEXT.md`, persona files,
+references, stage contracts, and output handoff structure remain workspace
+truth. Mino must not copy or rewrite that workspace into its legacy playbook
+shape.
+
+Mino-managed run IDs, execution status, audit logs, traces, retry state, and
+memory-distillation metadata remain separate runtime state. The social-media
+workspace is deferred as a migration reference until its remaining decisions
+are confirmed.
+
 ## Failure recovery boundary
 
 | Failure | Default response |
@@ -156,4 +169,6 @@ because the model said it passed.
       safety.
 - [ ] Safe repair, adaptation, retry, and escalation boundaries are explicit.
 - [ ] Existing playbooks are assessed before implementation tickets are split.
+- [ ] Workspace-authored files and Mino-managed runtime state have separate
+      ownership and storage boundaries.
 - [ ] Narrow child tickets are opened only after the model is agreed.

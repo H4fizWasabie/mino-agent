@@ -29,6 +29,10 @@
 - **PB-001 mechanical and LLM judgement boundary (#380)**: confirmed that
   navigable playbooks retain deterministic script stages, LLM judgement stages,
   and mechanical output verification as distinct paths.
+- **PB-001 workspace truth boundary (#380)**: confirmed that the completed
+  Ascencio marketing workspace is the canonical reference, while Mino keeps
+  execution state, telemetry, retries, and memory-distillation metadata
+  separately; the unfinished social workspace is deferred.
 
 ### Fixed
 

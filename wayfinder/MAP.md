@@ -269,6 +269,12 @@ stages and LLM judgement stages. Mechanical output/success verification stays
 authoritative; LLM audits may assess quality but self-declared audits remain
 self-certified.
 
+Confirmed direction: the completed Ascencio marketing workspace is the
+canonical reference. Its user-authored map, routing, persona, references,
+stage contracts, and handoffs remain truth; Mino keeps run state, audits,
+traces, retries, and memory-distillation metadata separately. Social media is
+deferred until its decisions are confirmed.
+
 ## Frontier
 
 - [PB-001 — Playbooks as navigable workspaces](tickets/pb-001-navigable-workspaces.md) (**open**, GitHub #380) — define the workspace model, failure-recovery boundaries, and the narrow implementation tickets that follow.
