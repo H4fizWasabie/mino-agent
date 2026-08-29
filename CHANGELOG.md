@@ -12,6 +12,10 @@
 
 ### Changed
 
+- **Cost Watch provider routing (#395)**: catalogues both configured model
+  roles, records OpenRouter uptime and latency, and ranks eligible providers
+  by price first, then uptime and latency before pinning each role.
+
 - **Playbook IDE dashboard (#393)**: made Work the filesystem-first playbook
   workspace with a persistent explorer, full-height conversation, bottom-pinned
   composer, artifact preview, and a live five-layer routing inventory sourced
