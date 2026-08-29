@@ -188,7 +188,7 @@ func (s *Session) BuildPlaybookSystem(pb *PlaybookWorkspace) (string, error) {
 		}
 	}
 	if pb != nil && pb.Agent != "" {
-		persona, err := loadAgentPersona(s.settings.Home, pb.Agent)
+		persona, err := loadPlaybookPersona(s.settings.Home, pb)
 		if err != nil {
 			return "", err
 		}

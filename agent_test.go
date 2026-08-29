@@ -98,6 +98,55 @@ func TestValidatePlaybookPersona(t *testing.T) {
 	}
 }
 
+func TestPlaybookPersonaPrefersWorkspacePersona(t *testing.T) {
+	home := t.TempDir()
+	shared := filepath.Join(home, "agents")
+	workspace := filepath.Join(home, "playbooks", "instagram", "persona")
+	if err := os.MkdirAll(shared, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	write := func(path, name, body string) {
+		t.Helper()
+		content := "---\nname: " + name + "\n---\n\n" + body
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(shared, "instagram-curator.md"), "instagram-curator", "shared persona")
+	write(filepath.Join(workspace, "instagram-curator.md"), "instagram-curator", "workspace persona")
+
+	pb := &PlaybookWorkspace{Name: "instagram", Dir: filepath.Join(home, "playbooks", "instagram"), Agent: "instagram-curator"}
+	got, err := loadPlaybookPersona(home, pb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Body != "workspace persona" {
+		t.Fatalf("persona body = %q, want workspace persona", got.Body)
+	}
+}
+
+func TestPlaybookPersonaFallsBackToSharedRoster(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "agents"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "agents", "trend-researcher.md"),
+		[]byte("---\nname: trend-researcher\n---\n\nlegacy persona\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	pb := &PlaybookWorkspace{Name: "news", Dir: filepath.Join(home, "playbooks", "news"), Agent: "trend-researcher"}
+	got, err := loadPlaybookPersona(home, pb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Body != "legacy persona" {
+		t.Fatalf("persona body = %q, want legacy persona", got.Body)
+	}
+}
+
 func TestManagedPlaybookRefusesUnknownAgent(t *testing.T) {
 	// PSN-001 acceptance: the config.md agent: reference is validated at edit
 	// time — a missing persona refuses the playbook like a missing tool.
