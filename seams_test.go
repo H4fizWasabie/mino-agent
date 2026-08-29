@@ -326,6 +326,30 @@ func TestBuildPlaybookSystemUsesAgentPersona(t *testing.T) {
 	}
 }
 
+func TestBuildPlaybookSystemIncludesWorkspaceEntryLayers(t *testing.T) {
+	home := t.TempDir()
+	sess := NewSession(&Settings{Home: home, Workspace: home}, nil)
+	pb := &PlaybookWorkspace{
+		Name:        "marketing",
+		Agents:      "# Marketing workspace\n\n## Routing\nStart at CONTEXT.md.\n",
+		RootContext: "# Marketing routing\n\n| Task | Go To |\n| plan | stages/01-brief/CONTEXT.md |\n",
+	}
+	sys, err := sess.BuildPlaybookSystem(pb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"WORKSPACE MAP (AGENTS.md — authoritative):",
+		"# Marketing workspace",
+		"WORKSPACE ROUTING (CONTEXT.md — authoritative):",
+		"# Marketing routing",
+	} {
+		if !strings.Contains(sys, want) {
+			t.Fatalf("BuildPlaybookSystem missing workspace entry layer %q in:\n%s", want, sys)
+		}
+	}
+}
+
 func TestBuildPlaybookSystemRailsPresent(t *testing.T) {
 	home := t.TempDir()
 	writeTestPersona(t, home, "trend-researcher")

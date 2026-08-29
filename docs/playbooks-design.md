@@ -10,6 +10,7 @@ Every message still enters the canonical runtime. Mino may choose a relevant pla
 
 ```text
 ~/.mino/playbooks/<name>/
+├── AGENTS.md                  # workspace map, rules, and routing boundaries
 ├── CONTEXT.md                 # workspace purpose and routing
 ├── config.md                  # description, status, and shared values
 ├── stages/
@@ -27,6 +28,10 @@ Every message still enters the canonical runtime. Mino may choose a relevant pla
 ```
 
 Definitions are editable by Mino. A run is separate from its definition, so a new run cannot overwrite prior evidence and a failed run can resume without redoing completed work.
+
+`AGENTS.md` is the workspace Layer 0 entry map. `CONTEXT.md` is the Layer 1
+workflow route. The runner loads both before narrowing into a numbered stage;
+legacy definitions without `AGENTS.md` remain compatible during migration.
 
 ## Stage contract
 

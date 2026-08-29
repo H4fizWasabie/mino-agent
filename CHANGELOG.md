@@ -40,6 +40,10 @@
 - **PB-001 heavy-playbook evidence boundary (#380)**: confirmed that heavy
   playbooks mechanically scope and bound evidence before LLM judgement, while
   retaining pointers to full artifacts and existing audit/distillation rules.
+- **PB-002 workspace entry slice**: playbook loading now retains root
+  `AGENTS.md` and `CONTEXT.md` as distinct workspace entry layers and includes
+  bounded copies in the stable playbook profile; definitions without
+  `AGENTS.md` remain compatible during migration.
 
 ### Fixed
 

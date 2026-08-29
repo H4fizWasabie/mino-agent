@@ -179,6 +179,14 @@ const playbookRails = `## Operating Rules (absolute — override persona and sta
 // never silently degrade to rails-only: a hatless run is a contract violation.
 func (s *Session) BuildPlaybookSystem(pb *PlaybookWorkspace) (string, error) {
 	parts := []string{playbookRails}
+	if pb != nil {
+		if pb.Agents != "" {
+			parts = append(parts, "\nWORKSPACE MAP (AGENTS.md — authoritative):\n"+truncateWorkspaceInput(pb.Agents))
+		}
+		if pb.RootContext != "" {
+			parts = append(parts, "\nWORKSPACE ROUTING (CONTEXT.md — authoritative):\n"+truncateWorkspaceInput(pb.RootContext))
+		}
+	}
 	if pb != nil && pb.Agent != "" {
 		persona, err := loadAgentPersona(s.settings.Home, pb.Agent)
 		if err != nil {
