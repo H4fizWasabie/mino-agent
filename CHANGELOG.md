@@ -61,6 +61,10 @@
 
 ### Fixed
 
+- **Dashboard snapshot responses are compressed (#385)**: remote dashboards no
+  longer transfer multi-megabyte JSON snapshots uncompressed on every refresh;
+  gzip-capable clients receive compressed responses while SSE streams remain
+  uncompressed for timely delivery.
 - **PB-001 review formatting**: removed trailing blank lines from the local
   child-ticket documents so the branch passes `git diff --check`.
 - **Playbook Telegram reports are sent once (closes #378)**: repeated model verification after an outbox draft was delivered could queue the same scheduled report multiple times. Stage-scoped receipts now distinguish pending delivery from confirmed delivery while preserving outbox retries.
