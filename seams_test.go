@@ -229,7 +229,7 @@ func TestBuildWorkspaceStagePromptIncludesContractAndRules(t *testing.T) {
 		"## Required Outputs",
 		"- Battle log: `" + filepath.Join("/x/runs/20260810T000000Z/stages/01-provoke/output/battle.md"),
 		"## Rules",
-		"Use only these tools: threads_post, write_file.",
+		"Declared capabilities for this stage: threads_post, write_file. Runtime policy remains authoritative.",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("buildWorkspaceStagePrompt missing %q in:\n%s", want, msg)
