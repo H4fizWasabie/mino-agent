@@ -1312,6 +1312,62 @@ async function pollEvents(){
 }
 
 let activeView = null, activeSub = null, renderedRoute = "", renderedMarkup = "";
+let selectedWorkspacePlaybook = "", selectedWorkspaceArtifact = "", workspaceShellSignature = "";
+
+function workspacePlaybook(){
+  const playbooks=D?.playbooks||[];
+  return playbooks.find(p=>p.name===selectedWorkspacePlaybook)||playbooks[0]||null;
+}
+function workspaceArtifactPath(pb){
+  return selectedWorkspaceArtifact || pb?.outputs?.[pb.outputs.length-1] || (pb?`${pb.path}/CONTEXT.md`:"");
+}
+function workspaceTree(pb){
+  if(!pb) return `<div class="workspace-empty"><strong>No playbooks yet</strong><span>Ask Mino to create a recurring workspace.</span></div>`;
+  const routing=pb.routing||{};
+  const fileNode=(path, selected=false)=>`<button type="button" class="workspace-node workspace-file ${selected?"selected":""}" onclick="selectWorkspaceArtifact(${jsArg(path)})"><span class="workspace-icon">□</span><span>${esc(path.split("/").pop())}</span></button>`;
+  const fileNodes=files=>files.map(path=>{const nodePath=pb.path+"/"+path;return fileNode(nodePath,workspaceArtifactPath(pb)===nodePath);}).join("");
+  const layer=(name, files, empty="not present")=>`<div class="workspace-group"><div class="workspace-group-title"><span>${name}</span><small>${files.length||empty}</small></div>${files.length?fileNodes(files):`<div class="workspace-missing">${empty}</div>`}</div>`;
+  return `<div class="workspace-group"><div class="workspace-group-title"><span>PLAYBOOKS</span><small>${(D.playbooks||[]).length}</small></div>${(D.playbooks||[]).map(item=>`<button type="button" class="workspace-node workspace-playbook ${item.name===pb.name?"selected":""}" onclick="selectWorkspacePlaybook(${jsArg(item.name)})"><span class="workspace-icon">⌄</span><span>${esc(item.name)}</span><small>${(item.stages||[]).length} stage${(item.stages||[]).length===1?"":"s"}</small></button>`).join("")}</div>
+    <div class="workspace-group"><div class="workspace-group-title"><span>MINO MAP</span><small>global</small></div>${fileNode("MAP.md",workspaceArtifactPath(pb)==="MAP.md")}</div>
+    ${layer("LAYER 0 · MAP",routing.layer0||[],"AGENTS.md not present")}
+    ${layer("LAYER 1 · ROUTING",routing.layer1||[])}
+    ${layer("LAYER 2 · STAGES",routing.layer2||[])}
+    ${layer("LAYER 3 · REFERENCES",routing.layer3||[])}
+    ${layer("LAYER 4 · WORKING",routing.layer4||[],"no run evidence")}
+    <div class="workspace-group"><div class="workspace-group-title"><span>SUPPORTING FILES</span><small>${(routing.supporting||[]).length}</small></div>${(routing.supporting||[]).map(path=>fileNode(`${pb.path}/${path}`,workspaceArtifactPath(pb)===`${pb.path}/${path}`)).join("")}</div>
+    ${routing.orphan_check?`<div class="workspace-group"><div class="workspace-group-title"><span>HEALTH CHECK</span></div>${fileNode(routing.orphan_check,workspaceArtifactPath(pb)===routing.orphan_check)}</div>`:""}`;
+}
+function renderWorkspacePreview(pb, path, content=""){
+  const run=pb?.runs?.[0], status=run?.status||"ready";
+  const body=content?`<div class="artifact-content">${renderMarkdown(content)}</div>`:`<div class="artifact-empty"><strong>Select an artifact</strong><span>Choose a file from the explorer to preview its contents.</span></div>`;
+  return `<div class="artifact-head"><div><span class="artifact-kicker">ARTIFACT PREVIEW</span><strong>${esc(path||pb?.name||"Workspace")}</strong></div><button type="button" aria-label="Open artifact" onclick="revealFile(${jsArg(path||"")},${jsArg("Artifact")})">↗</button></div>${body}<div class="artifact-status"><i class="${status==="complete"?"good":"live"}"></i><span><b>${esc(pb?.name||"No workspace")}</b><small>${esc(status)} · ${(pb?.stages||[]).length} stages</small></span></div>`;
+}
+async function loadWorkspacePreview(path){
+  const target=document.getElementById("artifact-preview"); if(!target||!path) return;
+  target.innerHTML=renderWorkspacePreview(workspacePlaybook(),path);
+  try{
+    const r=await fetch("/api/files?path="+encodeURIComponent(path)+"&action=view");
+    if(!r.ok) throw new Error(`artifact returned ${r.status}`);
+    const type=r.headers.get("content-type")||"";
+    if(!type.startsWith("text/")&&!type.includes("json")) return;
+    const content=await r.text();
+    if(document.getElementById("artifact-preview")) target.innerHTML=renderWorkspacePreview(workspacePlaybook(),path,content);
+  }catch(error){ target.innerHTML=renderWorkspacePreview(workspacePlaybook(),path)+`<div class="artifact-error">Preview unavailable: ${esc(error.message)}</div>`; }
+}
+function renderWorkspaceShell(){
+  const explorer=document.getElementById("workspace-explorer"), preview=document.getElementById("artifact-preview");
+  if(!explorer||!preview) return;
+  const pb=workspacePlaybook();
+  if(pb&&!selectedWorkspacePlaybook) selectedWorkspacePlaybook=pb.name;
+  const path=workspaceArtifactPath(pb), signature=JSON.stringify([selectedWorkspacePlaybook,path,(D.playbooks||[]).map(p=>[p.name,p.outputs?.length,p.runs?.[0]?.id])]);
+  explorer.innerHTML=`<div class="workspace-title"><span>WORKSPACE EXPLORER</span><small>PLAYBOOKS</small></div>${workspaceTree(pb)}`;
+  if(signature!==workspaceShellSignature){ workspaceShellSignature=signature; loadWorkspacePreview(path); }
+  const title=document.querySelector("#dock .dockhead strong"); if(title) title.textContent=pb?.name||"Conversation";
+  const status=document.querySelector("#dock .arch-status"); if(status) status.textContent=pb?"Playbook workspace":"No workspace selected";
+}
+function selectWorkspacePlaybook(name){ selectedWorkspacePlaybook=name; selectedWorkspaceArtifact=""; workspaceShellSignature=""; renderWorkspaceShell(); }
+function selectWorkspaceArtifact(path){ selectedWorkspaceArtifact=path; workspaceShellSignature=""; renderWorkspaceShell(); }
+
 const TITLES = {chat:"Chat & watch", conversations:"Conversations", system:"System", ops:"System",
                 universe:"Living Field",
                 today:"Today — owner journal", work:"Work — responsibilities", responsibility:"Responsibility",
@@ -1351,6 +1407,7 @@ function render(){
   const view = VIEWS[v] ? v : "universe";
   document.body.classList.toggle("onboarding-mode", view === "onboarding");
   document.body.dataset.view=view;
+  if(view === "work") renderWorkspaceShell();
   const subChanged = sub !== activeSub || view !== activeView;
   const primary=view==="responsibility"?"work":view;
   document.querySelectorAll("[data-v]").forEach(a=>a.classList.toggle("on", a.dataset.v===primary));

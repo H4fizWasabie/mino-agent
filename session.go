@@ -82,6 +82,17 @@ func loadSoul(home string) string {
 	return string(data)
 }
 
+// loadRuntimeMap is the owner-maintained orientation layer for Mino itself.
+// It is separate from playbook contracts so every chat and playbook run can
+// orient against the same current MINO_HOME filesystem map.
+func loadRuntimeMap(home string) string {
+	data, err := os.ReadFile(filepath.Join(home, "MAP.md"))
+	if err != nil {
+		return ""
+	}
+	return truncateWorkspaceInput(string(data))
+}
+
 // BuildContext returns (static system prompt, per-turn routing block). The
 // routing block (matched skills + playbook routing) is appended to the user
 // message tail by the caller; splitting it from the system prompt keeps the
@@ -167,6 +178,9 @@ const playbookRails = `## Operating Rules (absolute — override persona and sta
 // never silently degrade to rails-only: a hatless run is a contract violation.
 func (s *Session) BuildPlaybookSystem(pb *PlaybookWorkspace) (string, error) {
 	parts := []string{playbookRails}
+	if runtimeMap := loadRuntimeMap(s.settings.Home); runtimeMap != "" {
+		parts = append(parts, "\nMINO RUNTIME MAP (MAP.md — authoritative orientation):\n"+runtimeMap)
+	}
 	if pb != nil {
 		if pb.Agents != "" {
 			parts = append(parts, "\nWORKSPACE MAP (AGENTS.md — authoritative):\n"+truncateWorkspaceInput(pb.Agents))
@@ -193,6 +207,11 @@ func (s *Session) buildSystem(userMessage, source string, includePlaybookRouting
 	static := []string{
 		loadSoul(s.settings.Home),
 		fmt.Sprintf("\nLOCAL WORKSPACE (authoritative): %s\nThis overrides any hardcoded workspace path in a skill. Local files may be edited in place. Stage remote files here, verify locally, then sync them back once.", s.settings.Workspace),
+	}
+	if runtimeMap := loadRuntimeMap(s.settings.Home); runtimeMap != "" {
+		static = append(static, "\nMINO RUNTIME MAP (MAP.md — authoritative orientation):\n"+runtimeMap)
+	}
+	static = append(static,
 		"\nMemory snapshot discipline (DRF-002): a fact about live config (current model stack, current schedule, current routes) is a dated snapshot, not a truth — when you store one, set a short stale_after (manage_memory stale_after, e.g. 7d) or skip the fact and answer from the live source (providers.json, list_schedules, system_check). Never write a config-mirror fact as an immortal user/agent fact.",
 		"\nVerification discipline: when a question involves state that changes over time — database records (POs, orders, inventory), schedules, files on disk, service status — verify the current state with a tool (bash/sqlite3, list_playbooks, system_check, read_file) BEFORE answering. Memory may be stale; the live state is truth. Provenance gate (CTX-022 C): a USER-AUTHORED memory fact (matched rationale says \"user-provenanced\") outranks live/web data unless the fact is flagged stale or superseded — live verification fills gaps, it does not re-litigate the owner's own fact.",
 		"\nInstall verification (issue #235): after ANY install command (pip install, npm install, go install, apt-get install...), verify the package is actually present — pip show <pkg>, an import check, or which <bin> — BEFORE building on it. An install that printed nothing and exited 0 can still have failed: --quiet suppresses output, and a pipe (`cmd | tail`) reports the LAST element's exit code, not the installer's.",
@@ -204,7 +223,7 @@ func (s *Session) buildSystem(userMessage, source string, includePlaybookRouting
 		"\nTool calls: use native function calling when the API provides it. Do NOT write tool calls as plain text like [tool_call: ...] — text markers are a fallback that is only parsed when the JSON inside is exactly valid (no shell-style escapes like \\'). The legacy XML form <tool_call><function=...> is NEVER parsed — never emit it.",
 		"\nIteration discipline (issues #171): each turn has a limited iteration budget, reported to you as you go. If you have repeated the same tool call several times with no progress, or you are deep into the budget without a result — CHANGE APPROACH or state explicitly why you are abandoning the current one. Do not keep retrying the same thing to the iteration cap.",
 		"\nMid-flight discipline (CTX-019): when a system observation tells you to change approach or abandon (repeated tool, near the iteration cap, or lost context), CHANGE BEHAVIOR immediately — take a genuinely different action, read session_notes to recover the method, or state the blocker and stop. Do NOT re-narrate why you are stuck; a self-explanation mid-flight is provisional at best. Acting on the verified signal beats explaining it.",
-	}
+	)
 	if source == "telegram" {
 		static = append(static, "\nYou are responding via Telegram. If you are going to call a tool, do NOT output explanatory text. Just call the tool silently. Reply to the user ONLY after all tools have completed. Never say 'Let me...' in Telegram mode.")
 	}

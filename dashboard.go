@@ -901,12 +901,71 @@ func loadPlaybookCatalog(home string) []map[string]any {
 			"name": name, "path": filepath.Join("playbooks", name), "description": pb.Description,
 			"schedule": pb.Schedule, "status": pb.Status, "notify": pb.Config["notify"] == "true",
 			"stages": stages, "outputs": outputs, "runs": playbookRunList(home, name),
+			"routing": playbookRoutingMap(home, name),
 		})
 	}
 	if out == nil {
 		return []map[string]any{}
 	}
 	return out
+}
+
+// playbookRoutingMap reports the files that actually exist in a workspace,
+// grouped by the five ICM loading layers. Runtime run content is limited to
+// the newest run so the dashboard stays useful on long-lived playbooks.
+func playbookRoutingMap(home, name string) map[string]any {
+	root := filepath.Join(home, "playbooks", name)
+	layers := map[string][]string{
+		"layer0": {}, "layer1": {}, "layer2": {}, "layer3": {}, "layer4": {}, "supporting": {},
+	}
+	latest := ""
+	if runs := playbookRunList(home, name); len(runs) > 0 {
+		if id, ok := runs[0]["id"].(string); ok {
+			latest = id
+		}
+	}
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		if strings.HasPrefix(rel, "runs/") && (latest == "" || !strings.HasPrefix(rel, "runs/"+latest+"/")) {
+			return nil
+		}
+		switch {
+		case rel == "AGENTS.md":
+			layers["layer0"] = append(layers["layer0"], rel)
+		case rel == "CONTEXT.md":
+			layers["layer1"] = append(layers["layer1"], rel)
+		case strings.HasPrefix(rel, "stages/") && filepath.Base(rel) == "CONTEXT.md":
+			layers["layer2"] = append(layers["layer2"], rel)
+		case strings.Contains(rel, "/references/"):
+			layers["layer3"] = append(layers["layer3"], rel)
+		case latest != "" && strings.HasPrefix(rel, "runs/"+latest+"/"):
+			layers["layer4"] = append(layers["layer4"], rel)
+		default:
+			layers["supporting"] = append(layers["supporting"], rel)
+		}
+		return nil
+	})
+	for _, files := range layers {
+		sort.Strings(files)
+	}
+	return map[string]any{
+		"layer0": layers["layer0"], "layer1": layers["layer1"], "layer2": layers["layer2"],
+		"layer3": layers["layer3"], "layer4": layers["layer4"], "supporting": layers["supporting"],
+		"orphan_check": func() string {
+			path := filepath.Join(root, "tools", "link-check.sh")
+			if _, err := os.Stat(path); err == nil {
+				return filepath.ToSlash(filepath.Join("playbooks", name, "tools", "link-check.sh"))
+			}
+			return ""
+		}(),
+	}
 }
 
 // playbookRunList returns recent run ids + status for a playbook (newest first).
@@ -1982,6 +2041,7 @@ func resolveDashboardArtifact(home, memoriesDir, raw string) (string, os.FileInf
 	}
 	allowedArtifactPath := func(candidate string) bool {
 		if artifactPathWithin(candidate, filepath.Join(home, "SOUL.md")) ||
+			artifactPathWithin(candidate, filepath.Join(home, "MAP.md")) ||
 			artifactPathWithin(candidate, filepath.Join(home, "calendar.ics")) ||
 			artifactPathWithin(candidate, filepath.Join(home, "usage.jsonl")) {
 			return true

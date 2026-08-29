@@ -614,6 +614,41 @@ body.workbench-max #dock{height:calc(100vh - 64px)}body.workbench-max main{min-h
   .operator-nav{grid-template-columns:auto 1fr auto;gap:12px;padding:9px 16px}.operator-nav>nav{justify-content:center}.operator-nav>nav a{padding:9px 8px;font-size:12px}.ask-button{display:none}.health-button{padding:0 10px}
   main{padding-right:24px;padding-left:24px}
 }
+
+/* Work is the playbook IDE: filesystem left, conversation center, artifact right. */
+#workspace-explorer,#artifact-preview{display:none}
+body[data-view="work"]{grid-template-columns:minmax(220px,245px) minmax(420px,1fr) minmax(300px,365px);grid-template-rows:64px minmax(0,1fr)}
+body[data-view="work"] .operator-nav{grid-column:1/-1;grid-row:1}
+body[data-view="work"] main{display:none}
+body[data-view="work"] #workspace-explorer{display:block;grid-column:1;grid-row:2;min-width:0;height:100%;overflow-y:auto;padding:18px 12px;border-right:1px solid var(--line);background:color-mix(in srgb,var(--panel) 82%,var(--bg))}
+body[data-view="work"] #artifact-preview{display:flex;grid-column:3;grid-row:2;min-width:0;height:100%;min-height:0;flex-direction:column;gap:14px;overflow:hidden;padding:18px 16px;border-left:1px solid var(--line);background:color-mix(in srgb,var(--panel) 82%,var(--bg))}
+body[data-view="work"] #dock{display:flex;grid-column:2;grid-row:2;width:auto;height:100%;min-width:0;padding:0;border:0;border-radius:0;background:var(--panel);box-shadow:none;transform:none}
+body[data-view="work"] #dock .workbench-conversation{height:100%}
+body[data-view="work"] #dock .dockhead{display:flex;align-items:center;justify-content:space-between;padding:16px 24px 13px;border-bottom:1px solid var(--line)}
+body[data-view="work"] #dock .dockhead>div:first-child{display:flex;min-width:0;flex-direction:column;gap:2px}
+body[data-view="work"] #dock .dockhead strong{overflow:hidden;font-size:14px;text-overflow:ellipsis;white-space:nowrap}
+body[data-view="work"] #dock .dockhead .arch-status{margin-left:0;color:var(--ink3);font:9px var(--mono);letter-spacing:.06em;text-transform:uppercase}
+body[data-view="work"] #dock .workbench-controls{display:flex}
+body[data-view="work"] #dock .sesshead{display:flex;padding:10px 24px 0}
+body[data-view="work"] #dock .chatlog{display:flex;min-height:0;flex:1;overflow-y:auto;padding:18px 24px}
+body[data-view="work"] #dock .chatbar{display:flex;width:100%;height:auto;margin:0;padding:12px 24px 18px;border-top:1px solid var(--line)}
+body[data-view="work"] #dock .ask-expand{display:none}
+body[data-view="work"] #dock .workbench-context{display:none}
+body[data-view="work"] #dock .composer-shell{flex-direction:column;align-items:stretch;padding:10px 12px 8px}
+body[data-view="work"] #dock .composer-footer>span{display:block}
+body[data-view="work"] #dock .chatbar button{min-height:38px}
+.workspace-title{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:2px 8px 17px;color:var(--ink);font-weight:750;font-size:10px;letter-spacing:.14em}
+.workspace-title small,.workspace-group-title{color:var(--ink3);font:9px var(--mono);letter-spacing:.1em;text-transform:uppercase}
+.workspace-group{margin-bottom:21px}.workspace-group-title{display:flex;justify-content:space-between;padding:0 8px 7px;border-bottom:1px solid var(--line)}
+.workspace-node,.workspace-folder{display:flex;align-items:center;gap:8px;width:100%;min-height:34px;padding:7px 8px;border-radius:7px;text-align:left;color:var(--ink2);font-size:12px}
+button.workspace-node{border:0;background:transparent;cursor:pointer}.workspace-node:hover{background:var(--accent-soft);color:var(--ink)}.workspace-node.selected{background:var(--accent-soft);color:var(--accent);font-weight:700}
+.workspace-node small{margin-left:auto;color:var(--ink3);font:9px var(--mono)}.workspace-icon{width:13px;flex:0 0 13px;color:var(--accent);font:12px var(--mono);text-align:center}.workspace-folder{color:var(--ink3);font-weight:650}
+.workspace-file{padding-left:25px}.workspace-empty{display:grid;gap:5px;padding:18px 8px;color:var(--ink2)}.workspace-empty span{color:var(--ink3);font-size:11px}.workspace-missing{padding:8px 25px;color:var(--ink3);font:10px var(--mono)}
+.artifact-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding-bottom:13px;border-bottom:1px solid var(--line)}.artifact-head>div{min-width:0}.artifact-kicker{display:block;margin-bottom:7px;color:var(--ink3);font:9px var(--mono);letter-spacing:.12em}.artifact-head strong{display:block;overflow:hidden;color:var(--ink);font:11px var(--mono);text-overflow:ellipsis;white-space:nowrap}.artifact-head button{color:var(--accent);font-size:18px}
+.artifact-content{min-height:0;flex:1;overflow-y:auto;overflow-wrap:anywhere;padding:16px 2px;color:var(--ink2);font-size:12px}.artifact-content .mdh{color:var(--ink);font-size:17px;font-weight:700;margin:0 0 10px}.artifact-content .mdp{margin:0 0 9px}.artifact-content .mdlist{padding-left:18px}.artifact-empty{display:grid;gap:6px;place-content:center;min-height:180px;padding:20px;text-align:center;color:var(--ink2)}.artifact-empty span{color:var(--ink3);font-size:11px}.artifact-status{display:flex;flex:0 0 auto;align-items:center;gap:9px;margin-top:0;padding:11px 12px;border:1px solid var(--line);border-radius:9px;background:var(--bg)}.artifact-status i{width:7px;height:7px;border-radius:50%;background:var(--accent);animation:pulse 1.8s ease-in-out infinite}.artifact-status i.good{background:var(--good);animation:none}.artifact-status span{display:grid;gap:2px;min-width:0}.artifact-status b{overflow:hidden;font-size:11px;text-overflow:ellipsis;white-space:nowrap}.artifact-status small{color:var(--ink3);font:9px var(--mono);text-transform:uppercase}.artifact-error{padding:10px;color:var(--bad);font-size:11px}
+@media(max-width:900px) and (min-width:720px){body[data-view="work"]{grid-template-columns:205px minmax(360px,1fr) 290px}.workspace-node{font-size:11px}}
+@media(max-width:719px){body[data-view="work"]{display:block;height:100dvh;overflow:hidden;padding-bottom:0}body[data-view="work"] .operator-nav{position:relative;display:flex;height:58px;min-height:58px}body[data-view="work"] #workspace-explorer{display:none}body[data-view="work"] #artifact-preview{display:none}body[data-view="work"] main{display:none}body[data-view="work"] #dock{display:flex;position:relative;inset:auto;width:100%;height:calc(100dvh - 58px);border:0}body[data-view="work"] #dock .dockhead{padding:13px 16px 10px}body[data-view="work"] #dock .sesshead{padding:8px 16px 0}body[data-view="work"] #dock .chatlog{padding:14px 16px}body[data-view="work"] #dock .chatbar{padding:10px 16px 14px}.mobile-nav{display:none}}
+
 @media(max-width:719px){
   body{padding-bottom:68px}.operator-nav{display:flex;min-height:58px;justify-content:space-between;padding:7px 16px}.operator-nav>nav,.operator-actions .ask-button{display:none}.operator-brand .brand-mark{width:29px;height:29px}.health-button{min-height:44px}
   .health-panel{position:fixed;top:54px;right:12px}

@@ -13,6 +13,48 @@ import (
 	"testing"
 )
 
+func TestPlaybookRoutingMapReflectsWorkspaceFiles(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, "playbooks", "brief")
+	for _, path := range []string{
+		"CONTEXT.md", "config.md", "stages/01-collect/CONTEXT.md",
+		"stages/01-collect/references/rule.md", "tools/link-check.sh",
+		"runs/20260829/stages/01-collect/output/result.md", "runs/20260829/state.json",
+	} {
+		full := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0700); err != nil {
+			t.Fatal(err)
+		}
+		data := []byte("x")
+		if path == "runs/20260829/state.json" {
+			data = []byte(`{"id":"20260829","status":"complete"}`)
+		}
+		if err := os.WriteFile(full, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	routing := playbookRoutingMap(home, "brief")
+	if len(routing["layer0"].([]string)) != 0 {
+		t.Fatalf("layer0 = %v, want absent AGENTS.md", routing["layer0"])
+	}
+	if got := routing["layer1"].([]string); len(got) != 1 || got[0] != "CONTEXT.md" {
+		t.Fatalf("layer1 = %v, want root CONTEXT.md", got)
+	}
+	if got := routing["layer2"].([]string); len(got) != 1 || got[0] != "stages/01-collect/CONTEXT.md" {
+		t.Fatalf("layer2 = %v, want stage contract", got)
+	}
+	if got := routing["layer3"].([]string); len(got) != 1 || got[0] != "stages/01-collect/references/rule.md" {
+		t.Fatalf("layer3 = %v, want reference", got)
+	}
+	if got := routing["layer4"].([]string); len(got) != 2 {
+		t.Fatalf("layer4 = %v, want latest run files", got)
+	}
+	if routing["orphan_check"] != "playbooks/brief/tools/link-check.sh" {
+		t.Fatalf("orphan_check = %v", routing["orphan_check"])
+	}
+}
+
 func TestDashboardHTTPRouteContract(t *testing.T) {
 	mux := http.NewServeMux()
 	registerDashboardRoutes(mux, t.TempDir())
@@ -150,6 +192,9 @@ func TestDashboardArtifactActionContract(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "SOUL.md"), []byte("owner preferences"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(home, "MAP.md"), []byte("runtime map"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(home, "providers.json"), []byte(`{"api_key":"secret"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -169,6 +214,7 @@ func TestDashboardArtifactActionContract(t *testing.T) {
 		kind               string
 	}{
 		{name: "relative file", path: "SOUL.md", action: "inspect", status: http.StatusOK, ok: true, kind: "file"},
+		{name: "runtime map", path: "MAP.md", action: "inspect", status: http.StatusOK, ok: true, kind: "file"},
 		{name: "relative directory", path: "playbooks", action: "inspect", status: http.StatusOK, ok: true, kind: "directory"},
 		{name: "download directory", path: "playbooks", action: "download", status: http.StatusBadRequest},
 		{name: "missing target", path: "playbooks/missing.md", action: "inspect", status: http.StatusNotFound},

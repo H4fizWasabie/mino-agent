@@ -64,6 +64,20 @@ func TestBuildSystemIncludesStateMap(t *testing.T) {
 	}
 }
 
+func TestBuildSystemIncludesRuntimeMap(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "MAP.md"), []byte("# Mino runtime map\n\n- Playbooks live here.\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s := NewSession(&Settings{Home: home, Workspace: home}, nil)
+	got, _ := s.BuildContext("where are my playbooks", "cli")
+	for _, want := range []string{"MINO RUNTIME MAP (MAP.md — authoritative orientation):", "Playbooks live here."} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("runtime map missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // CTX-003: a user-named value that differs from a computed one must be
 // stated, never smoothed — the rule lives in the system prompt.
 func TestBuildSystemIncludesNumberVerificationRule(t *testing.T) {
