@@ -12,6 +12,10 @@
 
 ### Changed
 
+- **CI deduplication (#402)**: limits push-triggered CI to `master` while
+  retaining pull-request validation, removing duplicate full test runs for
+  feature and fix branch pushes.
+
 - **ICM authoring skill reconciliation (#400)**: ported the mandatory
   five-layer playbook checklist onto current master, preserved the workspace
   persona contract, made link-check guidance portable, and removed the stale
