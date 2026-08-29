@@ -686,7 +686,7 @@ func buildWorkspaceStagePrompt(pb *PlaybookWorkspace, run *PlaybookRun, stage Wo
 	}
 	b.WriteString("\n## Rules\n\n- Execute only this stage.\n- Use the declared inputs; do not infer missing state.\n- Complete the stage audit before writing outputs.\n- This playbook is an autonomous contract; do not request approval.\n- If the contract cannot be fulfilled or verified, state the failure plainly and do not claim success.\n")
 	if len(stage.Tools) > 0 {
-		fmt.Fprintf(&b, "- Use only these tools: %s.\n", strings.Join(stage.Tools, ", "))
+		fmt.Fprintf(&b, "- Declared capabilities for this stage: %s. Runtime policy remains authoritative.\n", strings.Join(stage.Tools, ", "))
 	}
 	return b.String()
 }

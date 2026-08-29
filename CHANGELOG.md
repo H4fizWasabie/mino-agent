@@ -12,6 +12,9 @@
 
 ### Changed
 
+- **Playbook tool guidance (#383)**: stage tool lists now describe declared
+  capabilities instead of pretending to be runtime allowlists; the harness
+  remains authoritative for access, risk, retry, and audit decisions.
 - **Agent execution approval gates (#382)**: coding agents may now execute the
   merge, release, and deployment workflow after explicit approval immediately
   before each consequential boundary; issue-first, staging, checksum, and
