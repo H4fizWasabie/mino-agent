@@ -26,6 +26,9 @@
   playbook workspace uses root `AGENTS.md` for navigation and policy, while
   persona files remain a separate voice/role layer selected through Mino's
   existing persona binding.
+- **PB-001 mechanical and LLM judgement boundary (#380)**: confirmed that
+  navigable playbooks retain deterministic script stages, LLM judgement stages,
+  and mechanical output verification as distinct paths.
 
 ### Fixed
 

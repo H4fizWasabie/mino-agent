@@ -96,6 +96,19 @@ persona binding and validation remain the runtime mechanism for selecting and
 injecting the run persona. The map routes to persona context; it does not
 become the persona.
 
+## Decision -- mechanical and LLM judgement -- 2026-08-29
+
+The navigable workspace model preserves Mino's two judgement paths. A stage
+may be mechanically executed through its `script.sh`, or executed by the LLM
+under its stage contract when judgement, interpretation, or creative work is
+required. Mechanical output and success verification remain authoritative even
+for LLM stages. An LLM audit may judge quality, but a self-declared audit is
+marked self-certified and cannot be presented as mechanical verification.
+
+Workspace routing chooses the stage and its context; it does not decide that
+every stage should be handled by an LLM or that every result should be trusted
+because the model said it passed.
+
 ## Failure recovery boundary
 
 | Failure | Default response |
@@ -135,6 +148,8 @@ become the persona.
       stage loading without duplicating the workspace into every prompt.
 - [ ] Each playbook workspace has an `AGENTS.md` map and a distinct persona
       context that Mino binds and validates before execution.
+- [ ] Mechanical script stages, LLM stages, and mechanical output verification
+      remain distinct execution/judgement paths.
 - [ ] Stage outputs are stored and attributed before filtering or distillation;
       retention policy remains separate from workspace navigation.
 - [ ] Stage tool guidance is separated from runtime tool authority and retry

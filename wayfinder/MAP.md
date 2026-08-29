@@ -264,6 +264,11 @@ the map, triggers, hard rules, routing, source-of-truth boundaries, and load
 exclusions. Persona remains a distinct workspace voice/role layer and uses
 Mino's existing binding and validation path.
 
+Confirmed direction: navigable playbooks retain both mechanical `script.sh`
+stages and LLM judgement stages. Mechanical output/success verification stays
+authoritative; LLM audits may assess quality but self-declared audits remain
+self-certified.
+
 ## Frontier
 
 - [PB-001 — Playbooks as navigable workspaces](tickets/pb-001-navigable-workspaces.md) (**open**, GitHub #380) — define the workspace model, failure-recovery boundaries, and the narrow implementation tickets that follow.
