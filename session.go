@@ -66,23 +66,11 @@ type Session struct {
 	mem       *Memory
 	sessionID string
 	history   []Message
-	// offerFencedLast records whether the PREVIOUS turn was a fenced taskify
-	// offer turn (#335 finding 2) — the trigger for the fence-lifted note on
-	// the next unfenced turn. In-memory only: a restart re-injects the offer
-	// on the next task-verb message anyway.
-	offerFencedLast bool
 }
 
 func NewSession(s *Settings, mem *Memory) *Session {
 	return &Session{settings: s, mem: mem, sessionID: "default", history: make([]Message, 0)}
 }
-
-// OfferFencedLastTurn reports whether the previous turn carried the taskify
-// offer fence — the trigger for the fence-lifted note (applyFenceLiftedNote).
-func (s *Session) OfferFencedLastTurn() bool { return s.offerFencedLast }
-
-// SetOfferFenced records whether THIS turn was fenced, for the next turn.
-func (s *Session) SetOfferFenced(fenced bool) { s.offerFencedLast = fenced }
 
 // loadSoul — Core's load_soul(): editable persona file.
 func loadSoul(home string) string {
@@ -561,29 +549,6 @@ func (s *Session) PlaybookContext(system string) []Message {
 	}
 	historyBudget := max(0, s.settings.ContextChars-len(system)-len(catalog))
 	messages := s.ContextMessages(historyBudget)
-	if catalog != "" {
-		messages = append(messages, Message{Role: "assistant", Content: catalog})
-	}
-	if s.mem != nil {
-		if note := s.mem.SessionNote(s.sessionID, sessionNoteInjectionLimit); note != "" {
-			messages = append(messages, Message{Role: "assistant", Content: "Session working note (established by earlier turns — do not re-discover; verify only if contradictory):\n" + note})
-		}
-	}
-	return messages
-}
-
-// TaskPlaybookContext builds the stage base context for a taskified run
-// (issue #237): the session working note and artifact catalog ride along
-// (bounded, established working state), but the raw turn history does not — a
-// taskified stage's context is its contract plus the prior stages' declared
-// outputs (owner lock 4: never raw session history; that history is the
-// context tax the ticket exists to kill).
-func (s *Session) TaskPlaybookContext(system string) []Message {
-	catalog := ""
-	if s.mem != nil {
-		catalog = s.mem.SessionArtifacts(s.sessionID, 2000)
-	}
-	var messages []Message
 	if catalog != "" {
 		messages = append(messages, Message{Role: "assistant", Content: catalog})
 	}

@@ -12,6 +12,16 @@
 
 ### Changed
 
+- **Taskify removed (PB-006)**: removed the obsolete chat-task scaffold,
+  task-intent offer, approval gate, and taskify-only checkpoint path. Mino now
+  enters ordinary playbooks directly.
+
+- **Playbooks are adaptively maintainable (PB-007)**: Mino may edit and
+  validate workspace definitions when run evidence identifies a contract,
+  routing, input, or output defect. Failed runs remain as evidence and are
+  superseded by a fresh run after a validated definition change; run-output
+  attribution and external-side-effect protections remain enforced.
+
 - **Workspace-local playbook personas (#386)**: playbook runs now resolve a
   bound persona from the active workspace's `persona/` directory first, while
   retaining the shared roster only as a migration fallback for legacy
@@ -60,6 +70,10 @@
   repository's changed-file formatting gate passes.
 
 ### Fixed
+
+- **Changed-file formatting gate ignores deleted Go files**: the CI gofmt check
+  now excludes deleted paths so code removals pass the same formatting gate as
+  additions and edits.
 
 - **Dashboard snapshot responses are compressed (#385)**: remote dashboards no
   longer transfer multi-megabyte JSON snapshots uncompressed on every refresh;

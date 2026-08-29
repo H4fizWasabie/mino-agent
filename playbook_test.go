@@ -222,19 +222,18 @@ func TestWorkspaceStageEventsCarryTraceTag(t *testing.T) {
 }
 
 func TestPlaybookWriteGuard(t *testing.T) {
-	// The playbook tree is read-only to the main loop and to stages outside
-	// their own run directory: pre-seeding outputs before run_playbook (the VPS
-	// cheat) must be refused, while a stage may write its own run outputs.
+	// Definitions are editable by Mino, while run artifacts remain scoped to the
+	// executing stage so pre-seeding outputs cannot rubber-stamp a run.
 	home := t.TempDir()
 	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect"})
 	ctx := context.Background()
 
-	// Main loop: any write into the playbook tree is refused.
-	if guard := playbookWriteGuard(home, filepath.Join(home, "playbooks", "brief", "output", "pre-seed.md"), ctx); guard == "" {
-		t.Fatal("main-loop write into playbook tree was allowed")
+	// Main loop: workspace definitions are editable.
+	if guard := playbookWriteGuard(home, filepath.Join(home, "playbooks", "brief", "runs", "run-123", "stages", "01-collect", "output", "pre-seed.md"), ctx); guard == "" {
+		t.Fatal("main-loop write into an unscoped run artifact was allowed")
 	}
-	if guard := playbookWriteGuard(home, filepath.Join(home, "playbooks", "brief", "stages", "01-collect", "CONTEXT.md"), ctx); guard == "" {
-		t.Fatal("main-loop write into stage contract was allowed")
+	if guard := playbookWriteGuard(home, filepath.Join(home, "playbooks", "brief", "stages", "01-collect", "CONTEXT.md"), ctx); guard != "" {
+		t.Fatalf("main-loop write into workspace definition refused: %s", guard)
 	}
 	// Outside the tree: always allowed.
 	if guard := playbookWriteGuard(home, filepath.Join(home, "notes.md"), ctx); guard != "" {
@@ -266,8 +265,8 @@ func TestPlaybookWriteGuard(t *testing.T) {
 	if guard := playbookWriteGuard(home, filepath.Join(home, "playbooks", "brief", "runs", "run-123", "stages", "01-collect", "output", "result.md"), stageCtx); guard != "" {
 		t.Fatalf("stage write to own run output refused: %s", guard)
 	}
-	if guard := playbookWriteGuard(home, filepath.Join(home, "playbooks", "brief", "stages", "01-collect", "CONTEXT.md"), stageCtx); guard == "" {
-		t.Fatal("stage write to contract was allowed")
+	if guard := playbookWriteGuard(home, filepath.Join(home, "playbooks", "brief", "stages", "01-collect", "CONTEXT.md"), stageCtx); guard != "" {
+		t.Fatalf("stage write to workspace definition refused: %s", guard)
 	}
 	if guard := playbookWriteGuard(home, filepath.Join(home, "playbooks", "brief", "runs", "other-run", "output", "result.md"), stageCtx); guard == "" {
 		t.Fatal("stage write to another run was allowed")
@@ -548,7 +547,7 @@ func TestManagePlaybookLifecycle(t *testing.T) {
 	}
 }
 
-func TestManagePlaybookRefusesUpdateWithResumableRun(t *testing.T) {
+func TestManagePlaybookUpdateSupersedesFailedRun(t *testing.T) {
 	home := t.TempDir()
 	settings := &Settings{Home: home, Workspace: home}
 	registry := NewRegistry()
@@ -559,16 +558,25 @@ func TestManagePlaybookRefusesUpdateWithResumableRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadOrCreatePlaybookRun(pb, registry, "brief", "test", time.Now()); err != nil {
+	run, err := loadOrCreatePlaybookRun(pb, registry, "brief", "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Status = "failed"
+	if err := savePlaybookRun(pb, run); err != nil {
 		t.Fatal(err)
 	}
 	got := makeManagePlaybookTool(core).Fn(map[string]any{"action": "update", "name": "brief", "config": "status: paused\n"})
-	if !strings.Contains(got, "resumable run") {
+	if !strings.Contains(got, "Updated and validated") {
 		t.Fatalf("update = %q", got)
 	}
 	data, err := os.ReadFile(filepath.Join(home, "playbooks", "brief", "config.md"))
-	if err == nil && strings.Contains(string(data), "paused") {
-		t.Fatalf("resumable playbook was changed: %s", data)
+	if err != nil || !strings.Contains(string(data), "paused") {
+		t.Fatalf("updated playbook config = %s, err=%v", data, err)
+	}
+	latest, err := latestPlaybookRun(pb)
+	if err != nil || latest.Status != "superseded" {
+		t.Fatalf("updated run status = %+v, err=%v", latest, err)
 	}
 }
 
