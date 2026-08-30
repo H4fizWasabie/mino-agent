@@ -75,6 +75,7 @@ type ProviderManager struct {
 	clients       map[string]*Client
 	state         map[string]*providerState
 	sticky        map[string]string
+	stickyAt      map[string]time.Time
 	preferred     map[string]providerPreference
 	providersHash string
 	// config-change push signal (#204): set when ReloadProviders sees the
@@ -92,7 +93,7 @@ func NewProviderManager(home string, legacy *Settings, authStore *AuthStore, db 
 	if err != nil {
 		return nil, err
 	}
-	m := &ProviderManager{db: db, clients: map[string]*Client{}, state: map[string]*providerState{}, sticky: map[string]string{}, preferred: map[string]providerPreference{}, authStore: authStore, now: time.Now}
+	m := &ProviderManager{db: db, clients: map[string]*Client{}, state: map[string]*providerState{}, sticky: map[string]string{}, stickyAt: map[string]time.Time{}, preferred: map[string]providerPreference{}, authStore: authStore, now: time.Now}
 	m.providersHash = fileHash(filepath.Join(home, "providers.json"))
 	for _, p := range configs {
 		key := ""
@@ -341,16 +342,46 @@ func stripProviderPin(model string) string {
 func (m *ProviderManager) key(session string, role ModelRole) string {
 	return session + ":" + string(role)
 }
+
+// primaryName returns the name of the highest-priority provider eligible for
+// role (m.providers is kept sorted by priority ascending), or "" if none.
+// Caller must hold m.mu.
+func (m *ProviderManager) primaryName(role ModelRole) string {
+	for _, p := range m.providers {
+		if role == VisionModel && p.TextOnly {
+			continue
+		}
+		return p.Name
+	}
+	return ""
+}
+
+// stickyFallbackTTL bounds how long a (session, role) key stays pinned to a
+// non-primary provider before candidates() lets it retry the primary again
+// (#463). Fixed-key background tasks (consolidation, reply-verify, etc. —
+// memory.go/app.go pass a hardcoded literal instead of a per-turn session
+// id) share one sticky slot forever: a single transient primary failure used
+// to pin that slot to the fallback permanently, since success() on the
+// fallback just re-confirmed the same pin every time with no expiry — so the
+// slot never got a chance to notice the primary's problem was fixed hours
+// later. A pin to the primary itself never needs this check (there's nothing
+// better to route back to).
+const stickyFallbackTTL = 5 * time.Minute
+
 func (m *ProviderManager) candidates(session string, role ModelRole) []ProviderConfig {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := m.now()
 	var out []ProviderConfig
-	name := m.sticky[m.key(session, role)]
+	key := m.key(session, role)
+	name := m.sticky[key]
 	if name != "" {
 		if st := m.state[name]; st == nil || !st.openUntil.Before(now) {
 			name = "" // stale sticky (provider removed or cooling down): fall through to the normal chain
 		}
+	}
+	if _, explicit := m.preferred[key]; !explicit && name != "" && name != m.primaryName(role) && now.Sub(m.stickyAt[key]) > stickyFallbackTTL {
+		name = "" // #463: give the primary a periodic chance to prove it's healthy again
 	}
 	if name != "" {
 		for _, p := range m.providers {
@@ -376,7 +407,17 @@ func (m *ProviderManager) success(session string, role ModelRole, name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.state[name].failures = 0
-	m.sticky[m.key(session, role)] = name
+	key := m.key(session, role)
+	if m.stickyAt == nil {
+		m.stickyAt = map[string]time.Time{}
+	}
+	// stickyAt marks when the pin FIRST landed on this provider, not the
+	// latest success — refreshing it on every success would keep the
+	// stickyFallbackTTL clock permanently at zero and recreate #463.
+	if m.sticky[key] != name {
+		m.stickyAt[key] = m.now()
+	}
+	m.sticky[key] = name
 }
 func (m *ProviderManager) failure(session string, role ModelRole, name string) {
 	m.mu.Lock()

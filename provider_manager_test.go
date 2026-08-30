@@ -52,7 +52,7 @@ func TestParseSSEStreamAcceptsReasoningContent(t *testing.T) {
 func testManager() *ProviderManager {
 	return &ProviderManager{
 		providers: []ProviderConfig{{Name: "mimo", Priority: 1, Model: "mimo"}, {Name: "backup", Priority: 2, Model: "backup"}},
-		state:     map[string]*providerState{"mimo": {}, "backup": {}}, sticky: map[string]string{}, now: func() time.Time { return time.Unix(100, 0) },
+		state:     map[string]*providerState{"mimo": {}, "backup": {}}, sticky: map[string]string{}, stickyAt: map[string]time.Time{}, now: func() time.Time { return time.Unix(100, 0) },
 	}
 }
 
@@ -71,6 +71,41 @@ func TestProviderCandidates(t *testing.T) {
 	got := m.candidates("s", MainModel)
 	if len(got) != 1 || got[0].Name != "mimo" {
 		t.Fatalf("open circuit candidates = %#v", got)
+	}
+}
+
+// TestStickyFallbackExpiresAndRetriesPrimary reproduces issue #463: a
+// (session, role) key that once fell over to the fallback provider must not
+// stay pinned there forever once the primary recovers — a fixed-key
+// background task (consolidation, reply-verify, etc. all pass the same
+// literal string as "session") shares one sticky slot across every call,
+// so a single transient primary failure used to pin that slot to the
+// fallback permanently.
+func TestStickyFallbackExpiresAndRetriesPrimary(t *testing.T) {
+	m := testManager()
+	now := time.Unix(1000, 0)
+	m.now = func() time.Time { return now }
+
+	m.success("s", MainModel, "backup") // fell over to the fallback once
+	if got := m.candidates("s", MainModel); got[0].Name != "backup" {
+		t.Fatalf("expected still-fresh sticky pin, got %s", got[0].Name)
+	}
+
+	now = now.Add(stickyFallbackTTL - time.Second) // just under the TTL
+	if got := m.candidates("s", MainModel); got[0].Name != "backup" {
+		t.Fatalf("expected sticky pin to still hold before TTL, got %s", got[0].Name)
+	}
+
+	now = now.Add(2 * time.Second) // now just past the TTL
+	if got := m.candidates("s", MainModel); got[0].Name != "mimo" {
+		t.Fatalf("expected the primary to be retried after the TTL, got %s", got[0].Name)
+	}
+
+	// A pin to the primary itself never expires — nothing better to retry.
+	m.success("s", MainModel, "mimo")
+	now = now.Add(10 * stickyFallbackTTL)
+	if got := m.candidates("s", MainModel); got[0].Name != "mimo" {
+		t.Fatalf("primary pin should never go stale, got %s", got[0].Name)
 	}
 }
 
@@ -190,10 +225,10 @@ func visionManager() *ProviderManager {
 			{Name: "pro", Priority: 1, Model: "mimo-v2.5-pro", TextOnly: true},
 			{Name: "omni", Priority: 2, Model: "mimo-v2.5"},
 		},
-		state:  map[string]*providerState{"pro": {}, "omni": {}},
-		sticky: map[string]string{},
-		now:    func() time.Time { return time.Unix(100, 0) },
-		
+		state:    map[string]*providerState{"pro": {}, "omni": {}},
+		sticky:   map[string]string{},
+		stickyAt: map[string]time.Time{},
+		now:      func() time.Time { return time.Unix(100, 0) },
 	}
 }
 
@@ -392,6 +427,7 @@ func TestReloadProvidersPrunesStickyForRemovedProvider(t *testing.T) {
 		clients:   map[string]*Client{},
 		state:     map[string]*providerState{},
 		sticky:    map[string]string{},
+		stickyAt:  map[string]time.Time{},
 		preferred: map[string]providerPreference{},
 		now:       func() time.Time { return time.Unix(100, 0) },
 	}
@@ -427,6 +463,7 @@ func TestReloadProvidersSignalsConfigChangeOnce(t *testing.T) {
 		clients:   map[string]*Client{},
 		state:     map[string]*providerState{},
 		sticky:    map[string]string{},
+		stickyAt:  map[string]time.Time{},
 		preferred: map[string]providerPreference{},
 		now:       func() time.Time { return time.Unix(100, 0) },
 	}
