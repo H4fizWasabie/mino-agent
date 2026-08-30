@@ -1,5 +1,18 @@
 ## [Unreleased]
 
+### Fixed
+
+- **JSON-mode small-model calls still failed empty after #440's fallback**:
+  a reasoning model that puts its answer under `reasoning` instead of
+  `content` was tolerated everywhere except JSON mode, by design — JSON mode
+  needs a real content field, not a reasoning trace, so an empty content was
+  treated as a signal to retry the next response_format/reasoning variation.
+  For a model whose every variation still lands the answer in `reasoning`
+  (GLM 5.3 flash small-role calls, observed after the #440 fix), all four
+  ladder attempts failed identically. The true last resort now promotes
+  `reasoning` into `content` like the non-JSON path always has, since the
+  tolerant JSON parsers already extract an object from surrounding prose.
+
 ## [v3.6.2] — live-eval bug fixes: reply verification, playbook run-gate, stage detachment, read_file paging (2026-08-30)
 
 ### Added

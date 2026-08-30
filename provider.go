@@ -167,7 +167,7 @@ func (c *Client) createWithRouting(ctx context.Context, model, reasoning string,
 	}
 
 	url := c.baseURL + "/chat/completions"
-	send := func(withJSON bool) (*LLMResponse, error) {
+	send := func(withJSON, lastResort bool) (*LLMResponse, error) {
 		p := payload
 		if withJSON {
 			p["response_format"] = map[string]string{"type": "json_object"}
@@ -196,7 +196,7 @@ func (c *Client) createWithRouting(ctx context.Context, model, reasoning string,
 			c.logUsage(ctx, model, resp, startTime)
 			return resp, err
 		}
-		resp2, err := parseResponse(resp.Body, jsonOutput)
+		resp2, err := parseResponse(resp.Body, jsonOutput && !lastResort)
 		c.logUsage(ctx, model, resp2, startTime)
 		return resp2, err
 	}
@@ -209,9 +209,9 @@ func (c *Client) createWithRouting(ctx context.Context, model, reasoning string,
 		payload["reasoning"] = map[string]bool{"enabled": false}
 		// Retry once without response_format too: some models null content when
 		// forced into json_object mode.
-		if r, err := send(true); err == nil {
+		if r, err := send(true, false); err == nil {
 			return r, nil
-		} else if r2, err2 := send(false); err2 == nil {
+		} else if r2, err2 := send(false, false); err2 == nil {
 			return r2, nil
 		} else {
 			// Some endpoints require the opposite (GLM 5.3 flash, 2026-08-30):
@@ -220,16 +220,22 @@ func (c *Client) createWithRouting(ctx context.Context, model, reasoning string,
 			// just ignoring it. Last resort: drop the override and let the
 			// model use its own default, same two response_format attempts.
 			delete(payload, "reasoning")
-			if r3, err3 := send(true); err3 == nil {
+			if r3, err3 := send(true, false); err3 == nil {
 				return r3, nil
-			} else if r4, err4 := send(false); err4 == nil {
+			} else if r4, err4 := send(false, true); err4 == nil {
+				// GLM 5.3 flash puts its JSON answer under reasoning even with
+				// reasoning enabled and response_format dropped, so content stays
+				// empty on every prior attempt — the true last resort promotes
+				// reasoning into content like the non-JSON path already does
+				// (tolerant JSON-mode parsers extract the object from surrounding
+				// prose, so a reasoning-trace-wrapped answer still parses).
 				return r4, nil
 			} else {
 				return nil, err4
 			}
 		}
 	}
-	return send(false)
+	return send(false, false)
 }
 
 func parseResponse(r io.Reader, jsonMode bool) (*LLMResponse, error) {
@@ -283,8 +289,12 @@ func parseResponse(r io.Reader, jsonMode bool) (*LLMResponse, error) {
 	// thinking under "reasoning" and leave content null — without capturing
 	// both names the response was dropped wholesale as "empty model response"
 	// (2026-08-12, #163: qwen fallback streamed reasoning-only, empty content).
-	// JSON mode excludes this: a reasoning-only reply is not a JSON answer, so
-	// it must stay "empty" to trigger CreateJSON's response_format retry.
+	// JSON mode excludes this during createWithRouting's retry ladder: a
+	// reasoning-only reply must stay "empty" so each response_format/reasoning
+	// variation gets a real chance to work. The ladder's true last resort
+	// passes jsonMode=false here on purpose (GLM 5.3 flash, #436 live eval:
+	// every JSON-mode variation still lands its answer in reasoning) so the
+	// promotion below finally applies instead of failing outright.
 	if !jsonMode && content == "" && reasoning != "" {
 		content = reasoning
 	}
