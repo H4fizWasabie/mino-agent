@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -66,6 +67,16 @@ type Session struct {
 	mem       *Memory
 	sessionID string
 	history   []Message
+
+	// openLoopsMu guards openLoopsThrough and openLoopsInFlight (#405):
+	// ContextMessages can run concurrently with the async extraction
+	// goroutine it starts.
+	openLoopsMu sync.Mutex
+	// openLoopsThrough is how many leading s.history entries have already
+	// been offered to ExtractOpenLoops. Only advances after a successful
+	// extraction, so a failed call retries the same span next time.
+	openLoopsThrough  int
+	openLoopsInFlight bool
 }
 
 func NewSession(s *Settings, mem *Memory) *Session {
@@ -503,6 +514,8 @@ func (s *Session) ContextMessages(maxChars int) []Message {
 	if s.settings.MaxHistoryTurns > 0 && len(history) > 2 {
 		keep := s.settings.MaxHistoryTurns * 2
 		if len(history) > keep {
+			dropEnd := len(history) - keep
+			s.triggerOpenLoopsExtraction(dropEnd)
 			marker := Message{Role: "assistant", Content: fmt.Sprintf("[%d earlier turns compacted. Use remember for details.]", (len(history)-keep)/2)}
 			history = append([]Message{marker}, history[len(history)-keep:]...)
 		}
@@ -534,6 +547,38 @@ func (s *Session) ContextMessages(maxChars int) []Message {
 		history = append([]Message{{Role: "assistant", Content: marker}}, history[start:]...)
 	}
 	return history
+}
+
+// triggerOpenLoopsExtraction starts a background ExtractOpenLoops call for
+// s.history[s.openLoopsThrough:dropEnd] the first time turns-based
+// compaction is about to drop that span (#405) — never inline: the model
+// call must not add latency to the turn that happened to cross the
+// threshold. At most one extraction runs at a time per session; the
+// boundary only advances on success, so a failed call is retried the next
+// time ContextMessages is called.
+func (s *Session) triggerOpenLoopsExtraction(dropEnd int) {
+	if s.mem == nil {
+		return
+	}
+	s.openLoopsMu.Lock()
+	if s.openLoopsInFlight || dropEnd <= s.openLoopsThrough {
+		s.openLoopsMu.Unlock()
+		return
+	}
+	from := s.openLoopsThrough
+	dropped := append([]Message(nil), s.history[from:dropEnd]...)
+	s.openLoopsInFlight = true
+	s.openLoopsMu.Unlock()
+
+	go func() {
+		ok := s.mem.ExtractOpenLoops(s.sessionID, dropEnd, dropped)
+		s.openLoopsMu.Lock()
+		s.openLoopsInFlight = false
+		if ok {
+			s.openLoopsThrough = dropEnd
+		}
+		s.openLoopsMu.Unlock()
+	}()
 }
 
 func (s *Session) ContextFor(system, userMessage string) ([]Message, string) {

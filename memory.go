@@ -845,6 +845,108 @@ func parseConsolidationResponse(text string) (distilledMemory, error) {
 	return distilledMemory{}, fmt.Errorf("no valid consolidation object")
 }
 
+// --- Open-loops checkpoint (#405) ---
+//
+// Turns-based history compaction (session.go ContextMessages) keeps only the
+// most recent turns in the prompt the model actually sees; raw chat history
+// in SQLite is untouched either way, but a promise or open question in a
+// dropped turn otherwise survives only if the model happened to call
+// remember on it. ExtractOpenLoops runs once per newly-dropped span (Session
+// tracks the boundary) and writes a bounded memory fact instead, so the next
+// turn's normal recall path can surface it — no new injection mechanism.
+
+const openLoopsPrompt = `From this conversation excerpt, which is about to drop out of active context, extract only genuinely unresolved items: open questions, pending decisions, and promised follow-ups. Include exact identifiers, numbers, or names when present. Skip anything already resolved and skip chit-chat — most excerpts have zero open loops.
+
+Reply with ONLY this JSON:
+{"loops": ["<one self-contained sentence per open loop>"]}
+
+Exchanges:
+%s`
+
+type openLoopsResponse struct {
+	Loops []string `json:"loops"`
+}
+
+func parseOpenLoopsResponse(text string) (openLoopsResponse, error) {
+	text = strings.TrimSpace(strings.TrimPrefix(text, "```json"))
+	text = strings.TrimSpace(strings.TrimSuffix(text, "```"))
+	if text == "" {
+		return openLoopsResponse{}, fmt.Errorf("empty response")
+	}
+	for start := 0; start < len(text); start++ {
+		if text[start] != '{' {
+			continue
+		}
+		for end := start + 1; end <= len(text); end++ {
+			if text[end-1] != '}' || !json.Valid([]byte(text[start:end])) {
+				continue
+			}
+			var parsed openLoopsResponse
+			if json.Unmarshal([]byte(text[start:end]), &parsed) == nil {
+				return parsed, nil
+			}
+		}
+	}
+	return openLoopsResponse{}, fmt.Errorf("no valid open-loops object")
+}
+
+// ExtractOpenLoops distills dropped into a bounded open-loops fact tagged
+// Tier "open_loop", tied to sessionID and boundary so a repeat call for the
+// same span merges rather than duplicating. Returns false on any failure —
+// caller must not treat the span as processed, so the same turns are offered
+// again on the next compaction.
+func (m *Memory) ExtractOpenLoops(sessionID string, boundary int, dropped []Message) bool {
+	if m.client == nil || len(dropped) == 0 {
+		return false
+	}
+	var log strings.Builder
+	for _, msg := range dropped {
+		fmt.Fprintf(&log, "%s: %s\n", msg.Role, msg.Content)
+	}
+	text := log.String()
+	if len(text) > 20000 { // ponytail: cap the prompt, matches consolidation's cap
+		text = text[len(text)-20000:]
+	}
+	resp, err := m.client.CreateJSON("open-loops", SmallModel,
+		[]Message{{Role: "user", Content: fmt.Sprintf(openLoopsPrompt, text)}}, 400, "")
+	if err != nil {
+		slog.Warn("open-loops extraction model call failed", "session", sessionID, "error", err)
+		return false
+	}
+	out := resp.FinalText
+	if out == "" { // reasoning models sometimes answer via reasoning only
+		for _, b := range resp.Content {
+			if b.Type == "text" {
+				out += b.Text
+			}
+		}
+	}
+	parsed, err := parseOpenLoopsResponse(out)
+	if err != nil {
+		slog.Warn("open-loops response JSON invalid", "session", sessionID, "error", err)
+		return false
+	}
+	var nonEmpty []string
+	for _, loop := range parsed.Loops {
+		if strings.TrimSpace(loop) != "" {
+			nonEmpty = append(nonEmpty, strings.TrimSpace(loop))
+		}
+	}
+	if len(nonEmpty) == 0 {
+		return true // genuinely nothing open — not a failure, boundary still advances
+	}
+	fact := Fact{
+		ID:      fmt.Sprintf("open_loop_%s_%d", sessionID, boundary),
+		Type:    "semantic",
+		Tier:    "open_loop",
+		Subject: fmt.Sprintf("Open loops from session %s", sessionID),
+		At:      time.Now(),
+		Source:  "open-loops-extraction",
+		Body:    "- " + strings.Join(nonEmpty, "\n- "),
+	}
+	return m.graph.ReplaceFact(fact) == nil
+}
+
 func (m *Memory) graphCandidates(text string) graphCandidateSet {
 	set := graphCandidateSet{ids: make(map[string]bool)}
 	facts := m.graph.Facts()
