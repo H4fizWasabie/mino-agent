@@ -48,6 +48,13 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "audit-memory", "--audit-memory":
+			s := LoadSettings()
+			if err := AuditMemory(s); err != nil {
+				fmt.Fprintf(os.Stderr, "memory audit failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "migrate-memories", "--migrate-memories":
 			s := LoadSettings()
 			MigrateMemories(s.Home, s.MemoriesDir)
