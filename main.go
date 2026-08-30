@@ -79,6 +79,13 @@ func main() {
 			s := LoadSettings()
 			SynthesizeMemory(s)
 			return
+		case "eval-memory", "--eval-memory":
+			s := LoadSettings()
+			if len(os.Args) < 3 {
+				fmt.Fprintln(os.Stderr, "usage: mino eval-memory <cases.json>")
+				os.Exit(2)
+			}
+			os.Exit(RunMemoryEval(s.MemoriesDir, os.Args[2]))
 		case "eval":
 			s := LoadSettings()
 			os.Exit(RunEval(s.Home))

@@ -1,0 +1,36 @@
+[
+  {
+    "name": "user preference",
+    "query": "What coffee preference do I have?",
+    "expected_ids": ["pref_coffee"]
+  },
+  {
+    "name": "project system state",
+    "query": "How does the project run as a service?",
+    "expected_ids": ["project_system"]
+  },
+  {
+    "name": "stale fact is visibly marked",
+    "query": "What is the current image endpoint?",
+    "expected_ids": ["stale_endpoint"],
+    "must_contain": ["possibly stale"]
+  },
+  {
+    "name": "archived fact remains findable",
+    "query": "What was the retired history?",
+    "expected_ids": ["archived_endpoint"],
+    "must_contain": ["[archived]"]
+  },
+  {
+    "name": "duplicate family does not hide",
+    "query": "What is the deployment endpoint?",
+    "expected_ids": ["endpoint_primary"],
+    "unwanted_ids": ["endpoint_duplicate"]
+  },
+  {
+    "name": "irrelevant query returns no fact",
+    "query": "quantum banana gardening",
+    "expected_ids": [],
+    "unwanted_ids": ["pref_coffee", "endpoint_primary"]
+  }
+]

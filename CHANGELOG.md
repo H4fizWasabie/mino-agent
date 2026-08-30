@@ -6,6 +6,10 @@
   source-less facts, duplicate ID/subject families, conflicting bodies, and
   stale configuration-snapshot candidates without modifying Markdown memory.
 
+- **Retrieval-quality evaluation (#408)**: adds a deterministic, read-only
+  `mino eval-memory` check for expected hits, unwanted hits, stale visibility,
+  archived recall, and irrelevant queries without external embeddings.
+
 - **Playbooks as navigable workspaces (#380)**: opened the Wayfinder design
   frontier for making playbook workspaces self-navigating and failure-aware,
   while preserving Mino's single-agent loop and explicit authority boundaries.
