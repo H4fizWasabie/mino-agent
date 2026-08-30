@@ -1029,8 +1029,14 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 			// Tag trace events inside this stage with its playbook/stage/run
 			// identity so the dashboard can group stage work instead of
 			// flattening it; the tags also put any tool-path write under the
-			// playbookWriteGuard's run-scoped writable zone.
-			stageCtx := context.WithValue(ctx, traceTagKey{}, map[string]string{
+			// playbookWriteGuard's run-scoped writable zone. Built from runCtx,
+			// not ctx (issue #438): ctx is the caller's request context, which
+			// #316 detached specifically so the stage's own work survives a
+			// client disconnect or the outer turn's context ending — wrapping
+			// ctx here silently undid that isolation for every stage's actual
+			// execution, leaving only the stage-boundary check upstream
+			// protected.
+			stageCtx := context.WithValue(runCtx, traceTagKey{}, map[string]string{
 				"playbook": pb.Name,
 				"stage":    fmt.Sprintf("%02d-%s", stage.Number, stage.Name),
 				"run":      run.ID,
@@ -1102,8 +1108,12 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 				return nil, err
 			}
 			// Tag every trace event inside this stage with its playbook/stage identity
-			// so the dashboard can group stage work instead of flattening it.
-			stageCtx := context.WithValue(ctx, traceTagKey{}, map[string]string{
+			// so the dashboard can group stage work instead of flattening it. Built
+			// from runCtx, not ctx (issue #438) — see the script-stage branch above
+			// for why: ctx is the caller's request context, and wrapping it here
+			// re-exposed the stage's LLM loop to whatever cancels the caller even
+			// though #316 detached the run specifically to prevent that.
+			stageCtx := context.WithValue(runCtx, traceTagKey{}, map[string]string{
 				"playbook": pb.Name,
 				"stage":    fmt.Sprintf("%02d-%s", stage.Number, stage.Name),
 				"run":      run.ID,

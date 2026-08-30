@@ -262,6 +262,7 @@ func RunLoopContext(
 	}
 	ctx = context.WithValue(ctx, sessionIDKey{}, sessionID)
 	ctx = context.WithValue(ctx, userMessageKey{}, lastUserContent(messages))
+	ctx = context.WithValue(ctx, knownArtifactsKey{}, &sync.Map{})
 
 	// Config-change push signal (#204): if providers.json changed since the
 	// last load, the FIRST turn after the change carries a re-verify notice so
@@ -583,7 +584,7 @@ func RunLoopContext(
 					raw = "[view_image: " + desc + "]"
 				}
 			}
-			output := prepareToolOutput(traceHome, sessionID, i, tc.Name, raw)
+			output := prepareToolOutput(ctx, traceHome, sessionID, i, tc.Name, raw)
 			result.ToolCalls = append(result.ToolCalls, ToolCall{Name: tc.Name, Args: args, Output: output})
 
 			// #337 (finding 4): read-spiral accounting — read_file calls count
@@ -1417,8 +1418,8 @@ const (
 	toolPreviewTail = 500
 )
 
-func prepareToolOutput(home, sessionID string, turn int, tool, output string) string {
-	return compactToolOutput(home, sessionID, turn, tool, output)
+func prepareToolOutput(ctx context.Context, home, sessionID string, turn int, tool, output string) string {
+	return compactToolOutput(ctx, home, sessionID, turn, tool, output)
 }
 
 // visionPrompt maps the view_image task argument to a curated prompt
@@ -1570,7 +1571,7 @@ func pruneSpills(home string) {
 	}
 }
 
-func compactToolOutput(home, sessionID string, turn int, tool, output string) string {
+func compactToolOutput(ctx context.Context, home, sessionID string, turn int, tool, output string) string {
 	if len(output) <= artifactInlineLimit {
 		return output
 	}
@@ -1581,6 +1582,9 @@ func compactToolOutput(home, sessionID string, turn int, tool, output string) st
 	path := filepath.Join(dir, fmt.Sprintf("%s-%d.txt", safePath(tool), time.Now().UnixNano())) // unique name: reused turn dirs across days must never serve stale files as fresh results
 	if err := os.WriteFile(path, []byte(output), 0600); err != nil {
 		return output[:artifactInlineLimit] + "\n[artifact write failed]"
+	}
+	if known, ok := ctx.Value(knownArtifactsKey{}).(*sync.Map); ok {
+		known.Store(path, true)
 	}
 	head := toolPreviewHead
 	if head > len(output) {

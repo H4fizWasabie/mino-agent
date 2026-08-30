@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -144,7 +145,7 @@ func TestSettingsDefaultToUniversalWorkspaceAnd16KOutput(t *testing.T) {
 func TestCompactToolOutputWritesArtifact(t *testing.T) {
 	home := t.TempDir()
 	output := strings.Repeat("x", artifactInlineLimit+1)
-	compact := compactToolOutput(home, "test-session", 1, "bash", output)
+	compact := compactToolOutput(context.Background(), home, "test-session", 1, "bash", output)
 	if !strings.Contains(compact, "artifact") {
 		t.Fatalf("got %q", compact)
 	}
@@ -209,13 +210,13 @@ func TestPrepareToolOutputCompactsReadFileToo(t *testing.T) {
 	// 8k chars each, re-sent every iteration — dominated a 2.48M-token run.
 	// read_file is deliberately not exempt from the inline cap.
 	output := strings.Repeat("x", artifactInlineLimit+1)
-	got := prepareToolOutput(t.TempDir(), "test-session", 1, "read_file", output)
+	got := prepareToolOutput(context.Background(), t.TempDir(), "test-session", 1, "read_file", output)
 	if !strings.Contains(got, "artifact") || strings.Contains(got, strings.Repeat("x", artifactInlineLimit+1)) {
 		t.Fatalf("read_file not compacted: %.200q", got)
 	}
 	// Small read_file results stay inline (offset/limit slicing still works).
 	small := strings.Repeat("y", 100)
-	if got := prepareToolOutput(t.TempDir(), "test-session", 1, "read_file", small); got != small {
+	if got := prepareToolOutput(context.Background(), t.TempDir(), "test-session", 1, "read_file", small); got != small {
 		t.Fatalf("small read_file result altered: %.100q", got)
 	}
 }
@@ -226,9 +227,52 @@ func TestReadFileReturnsRequestedInlineSlice(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
-	got := makeReadTool().Fn(map[string]any{"path": path, "offset": float64(650), "limit": float64(100)})
+	got := makeReadTool().ContextFn(context.Background(), map[string]any{"path": path, "offset": float64(650), "limit": float64(100)})
 	if !strings.Contains(got, "TARGET") || strings.Contains(got, "[artifact:") {
 		t.Fatalf("read slice = %q", got)
+	}
+}
+
+// TestReadFileSkipsPagingWhenRemainderFitsOneCall reproduces issue #439: a
+// weak model requesting small, inconsistent chunk sizes against an artifact
+// that fits comfortably under the single-call cap must still get the whole
+// remainder back in one call, not a slow drip.
+func TestReadFileSkipsPagingWhenRemainderFitsOneCall(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "artifact.txt")
+	content := strings.Repeat("z", 8943)
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got := makeReadTool().ContextFn(context.Background(), map[string]any{"path": path, "offset": float64(0), "limit": float64(120)})
+	if got != content {
+		t.Fatalf("expected full %d-byte remainder in one call despite limit=120, got %d bytes", len(content), len(got))
+	}
+}
+
+// TestReadFileRejectsFabricatedArtifactPath reproduces issue #439: a
+// results/ path never returned by a prior tool result this turn must be
+// rejected rather than round-tripped on a guessed filename.
+func TestReadFileRejectsFabricatedArtifactPath(t *testing.T) {
+	home := t.TempDir()
+	ctx := context.WithValue(context.Background(), knownArtifactsKey{}, &sync.Map{})
+	fake := filepath.Join(home, "results", "s", "1", "remember-guessed-name.txt")
+	got := makeReadTool().ContextFn(ctx, map[string]any{"path": fake})
+	if !strings.Contains(got, "was not returned by any prior tool result") {
+		t.Fatalf("fabricated artifact path was not rejected: %q", got)
+	}
+
+	real := filepath.Join(home, "results", "s", "1", "remember-1788084059688349802.txt")
+	if err := os.MkdirAll(filepath.Dir(real), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(real, []byte("hi"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	known, _ := ctx.Value(knownArtifactsKey{}).(*sync.Map)
+	known.Store(real, true)
+	got = makeReadTool().ContextFn(ctx, map[string]any{"path": real})
+	if got != "hi" {
+		t.Fatalf("known artifact path was rejected: %q", got)
 	}
 }
 
@@ -497,11 +541,43 @@ func TestExplicitPlaybookCommandDetection(t *testing.T) {
 		{"tell me about gmail", "gmail-daily-cleanup", false},
 		{"run the report", "daily-ai-company-news", false},
 		{"execute the news playbook", "daily-ai-company-news", true},
+		// issue #437: naming the playbook to ask about it is not a run command.
+		{"I want to understand the weekly-work-report playbook. Walk me through how it works, what stages it has, and what happens if I mention a work item mid-week before the report runs.", "weekly-work-report", false},
+		{"run weekly-work-report now", "weekly-work-report", true},
 	}
 	for _, c := range cases {
 		if got := explicitPlaybookCommand(c.msg, c.name); got != c.want {
 			t.Errorf("explicitPlaybookCommand(%q, %q) = %v, want %v", c.msg, c.name, got, c.want)
 		}
+	}
+}
+
+// TestOwnerEstablishedFactsGatesPerFact reproduces issue #436: a recall
+// bundle with an unrelated user-provenanced fact must not ride into the
+// owner-established-facts bundle just because a different fact in the same
+// bundle happens to overlap the query.
+func TestOwnerEstablishedFactsGatesPerFact(t *testing.T) {
+	recall := strings.Join([]string{
+		"Addah is a new inventory clerk Abah hired  # abah-hospital-inventory-context",
+		"  why: staffing context for the hospital inventory business",
+		"  body: Abah's company operates in hospital inventory; he hired Addah as a new inventory clerk.",
+		"  matched: subject (abah); user-provenanced",
+		"Abah's name is spelled Abah, not Addah  # abah-name-spelling",
+		"  why: prevent misaddressing the owner",
+		"  body: the owner's name is Abah.",
+		"  matched: subject (test session); user-provenanced",
+	}, "\n")
+
+	// A greeting has no topical overlap with either fact's subject/body text.
+	got := ownerEstablishedFacts("Hello, this is a test session. Please just say hi back briefly.", recall)
+	if strings.Contains(got, "abah-hospital-inventory-context") {
+		t.Fatalf("unrelated fact rode into the bundle on another fact's word match: %q", got)
+	}
+
+	// A query that genuinely overlaps a fact's own text still includes it.
+	got = ownerEstablishedFacts("what business does Abah's hospital inventory company do", recall)
+	if !strings.Contains(got, "abah-hospital-inventory-context") {
+		t.Fatalf("topically-matched fact was dropped: %q", got)
 	}
 }
 
