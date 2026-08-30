@@ -20,9 +20,9 @@ func TestMemoryEvalCasesExerciseRecallAndFlagDuplicate(t *testing.T) {
 		"user preference":                  true,
 		"project system state":             true,
 		"stale fact is visibly marked":     true,
-		"archived fact remains findable":   false,
+		"archived fact remains findable":   true,
 		"duplicate family does not hide":   false,
-		"irrelevant query returns no fact": false,
+		"irrelevant query returns no fact": true,
 	}
 	for _, c := range cases {
 		result := evaluateMemoryCase(graph, c)

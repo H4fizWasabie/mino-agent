@@ -600,6 +600,46 @@ func TestGraphMemoryLenientTimestampSelfHeals(t *testing.T) {
 
 // issue #180: a user correction outranks a model re-entry of the same
 // knowledge, even when the re-entry is newer.
+func TestRememberDoesNotPromoteUnrelatedUserFacts(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), nil)
+	for _, fact := range []Fact{
+		{ID: "unrelated_user", Type: "semantic", Subject: "Coffee preference", Source: "user"},
+		{ID: "another_unrelated_user", Type: "semantic", Subject: "Repository identity", Source: "user"},
+		{ID: "project_state", Type: "semantic", Subject: "Scheduler runs in process"},
+	} {
+		if err := gm.RecordFact(fact); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ranked := gm.entryRanking("quantum banana", "", gm.facts, true); len(ranked) != 0 {
+		t.Fatalf("unrelated user facts ranked: %+v", ranked)
+	}
+	got := gm.Remember("scheduler", "")
+	if strings.Contains(got, "Coffee preference") || !strings.Contains(got, "Scheduler runs in process") {
+		t.Fatalf("retrieval polluted or missed relevant fact:\n%s", got)
+	}
+	if got := gm.Remember("quantum banana", ""); !strings.Contains(got, "No memories found") {
+		t.Fatalf("irrelevant query returned a fact:\n%s", got)
+	}
+}
+
+func TestRememberArchiveFallbackIgnoresUnrelatedUserFacts(t *testing.T) {
+	gm := NewGraphMemory(t.TempDir(), nil)
+	if err := gm.RecordFact(Fact{ID: "unrelated_user", Type: "semantic", Subject: "Coffee preference", Source: "user"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gm.RecordFact(Fact{ID: "retired", Type: "semantic", Subject: "Retired deployment endpoint", Body: "https://old.example"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gm.ArchiveFact(*gm.facts["retired"], "stale"); err != nil {
+		t.Fatal(err)
+	}
+	got := gm.Remember("retired deployment", "")
+	if !strings.Contains(got, "[archived]") || !strings.Contains(got, "retired") {
+		t.Fatalf("archive fallback was blocked by unrelated user fact:\n%s", got)
+	}
+}
+
 func TestEntryRankingPrefersUserProvenance(t *testing.T) {
 	gm := NewGraphMemory(t.TempDir(), nil)
 	if err := gm.RecordFact(Fact{ID: "hosting_reentry", Type: "semantic", Subject: "Image hosting runs on the legacy box", At: time.Now()}); err != nil {
