@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [v3.6.2] — live-eval bug fixes: reply verification, playbook run-gate, stage detachment, read_file paging (2026-08-30)
+
 ### Added
 
 - **Repository context map (#414)**: adds `CONTEXT.md`, a task-to-area
