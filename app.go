@@ -416,7 +416,14 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 		}
 	}
 
-	conversation.Session.AddExchange(userMessage, userContext, result.Reply, result.ToolCalls, source)
+	// #452: a scheduled fire's own pseudo-session ("scheduled-<name>") never
+	// exchanges messages with an owner — persisting its tool-call trail into
+	// history would grow that session's context forever, re-billed on every
+	// future fire, for no reader. Every other source keeps the existing
+	// behavior unchanged.
+	if source != "schedule" {
+		conversation.Session.AddExchange(userMessage, userContext, result.Reply, result.ToolCalls, source)
+	}
 	return result
 }
 

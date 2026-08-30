@@ -2,6 +2,16 @@
 
 ### Changed
 
+- **Scheduled playbook runs fire through the normal loop (#452)**: a
+  schedule fire now sends a synthetic instruction through Mino's own normal
+  loop instead of calling a dedicated executor directly — Mino calls
+  `run_playbook` and does the real stage work itself, exactly like a
+  chat-triggered navigated run, sharing the same run state and resume rules.
+  A scheduled fire's own session never accumulates chat history, and every
+  scheduled fire (plus any chat turn mid playbook navigation) now gets the
+  playbook operating-rules discipline that only the old dedicated loop used
+  to inject, so an autonomous run with no owner present is less likely to
+  stop early without finishing.
 - **Chat-triggered playbook runs navigate instead of looping (#450, #451)**:
   calling `run_playbook` from chat now advances a run one mechanical step per
   call — verify whatever stage is in progress, drive any zero-inference
@@ -9,11 +19,9 @@
   place of a dedicated stage loop running the whole playbook in one call. A
   crash mid-stage with only read-only/`write_file` tools resumes safely on
   the next call; a crash mid-stage with any other tool is never auto-resumed,
-  and the next call starts a fresh run and names the abandoned one. Scheduled
-  runs (`schedule_playbook`) are unchanged: they still run every stage
-  through the dedicated loop in one call, sharing the same run state and
-  resume rules. `cancel_run` now also marks a run interrupted directly on
-  disk when there is no live call to cancel between navigation steps.
+  and the next call starts a fresh run and names the abandoned one.
+  `cancel_run` now also marks a run interrupted directly on disk when there
+  is no live call to cancel between navigation steps.
 - **Stage-aware additive tool exposure (#449)**: playbook stages now add their
   declared capabilities to the normal loop's always-available and sliding tool
   surfaces. Stage declarations are choices for the model, not a second tool

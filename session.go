@@ -238,6 +238,20 @@ func (s *Session) buildSystem(userMessage, source string, includePlaybookRouting
 	if source == "telegram" {
 		static = append(static, "\nYou are responding via Telegram. If you are going to call a tool, do NOT output explanatory text. Just call the tool silently. Reply to the user ONLY after all tools have completed. Never say 'Let me...' in Telegram mode.")
 	}
+	// #450/#451/#452: a playbook navigated inside the normal loop (via
+	// run_playbook's stage-by-stage hand-back, whether from chat or a
+	// scheduled fire) needs the same "finish it, don't hand back unfinished
+	// work, no narration" discipline the dedicated stage loop always gave it
+	// via BuildPlaybookSystem's playbookRails — buildSystem otherwise never
+	// includes that block. source == "schedule" has no owner present to
+	// notice a run that quietly stopped early, so it always gets the rails;
+	// a chat turn gets them only once a navigation is actually in progress
+	// (sessionNav is set), not on every turn.
+	if source == "schedule" {
+		static = append(static, "\n"+playbookRails)
+	} else if _, navigating := sessionNav(s.sessionID); navigating {
+		static = append(static, "\n"+playbookRails)
+	}
 
 	var dyn []string
 	// CTX-022 C (structural): owner-established facts are a condition, not

@@ -100,6 +100,84 @@ func NavigatePlaybookRun(ctx context.Context, core *Core, name, request, session
 	return result, nil
 }
 
+// respondForScheduledPlaybook is an internal seam (same pattern as
+// runPlaybookStageLoop): production drives a scheduled fire through the
+// canonical normal-loop turn; focused tests substitute a deterministic
+// LoopResult instead of running a real model.
+var respondForScheduledPlaybook = func(core *Core, ctx context.Context, sessionID, instruction string, obs Observer) *LoopResult {
+	return core.RespondForContext(ctx, sessionID, instruction, "schedule", obs, false)
+}
+
+// scheduledPlaybookInstruction is the synthetic message a scheduled fire
+// hands to Mino's normal loop in place of a chat message (#452). It has to
+// be self-contained and directive: there is no owner present to answer a
+// clarifying question or notice a run that quietly stopped early.
+func scheduledPlaybookInstruction(name string) string {
+	return fmt.Sprintf(
+		"[Scheduled trigger — autonomous, no owner present] Call run_playbook with name=%q now. "+
+			"Act on the stage contract it hands back with your own tool calls, then call run_playbook "+
+			"again to advance once that stage's declared outputs exist. Repeat until run_playbook reports "+
+			"the run complete. Do not stop partway and wait — there is no further input coming this turn; "+
+			"finish the entire playbook now or report exactly what blocked you.", name)
+}
+
+// NavigateScheduledPlaybook is the scheduler's unified-loop entry point
+// (#452): it fires a synthetic instruction through Mino's normal loop
+// (respondForScheduledPlaybook) instead of calling RunPlaybook's dedicated
+// stage loop directly, so the model drives run_playbook's stage-by-stage
+// navigation the same way a chat-triggered run does. The outcome for
+// schedule-health tracking (alertScheduleHealth, finishRoutine) comes from
+// the run's own state.json, not the turn's LoopResult — only the run record
+// knows whether the playbook actually finished, and finishing is what those
+// callers care about, not how many loop iterations it took.
+func NavigateScheduledPlaybook(ctx context.Context, core *Core, name, request, sessionID string, obs Observer) (*PlaybookResult, error) {
+	loop := respondForScheduledPlaybook(core, ctx, sessionID, scheduledPlaybookInstruction(name), obs)
+	result := &PlaybookResult{Name: name, Reply: loop.Reply, TokensIn: loop.TokensIn, TokensOut: loop.TokensOut, ToolCalls: loop.ToolCalls}
+
+	pb, err := loadPlaybookWorkspace(core.Settings.Home, name)
+	if err != nil {
+		return nil, err
+	}
+	run, err := latestPlaybookRun(pb)
+	if err != nil {
+		return nil, err
+	}
+	if run == nil {
+		// The model never advanced (or never called) run_playbook this fire —
+		// there is nothing for the run-state machinery to report, so this
+		// counts as a failure the same way a pre-run validation error does.
+		result.Status = "failed"
+		result.Reply = "scheduled fire produced no playbook run: " + result.Reply
+		return result, nil
+	}
+	for _, stage := range run.Stages {
+		if stage.Status == "complete" {
+			result.StagesRun++
+			result.Outputs = append(result.Outputs, stage.Outputs...)
+		}
+	}
+	switch run.Status {
+	case "complete":
+		result.Status = "complete"
+	case "failed":
+		result.Status = "failed"
+	case "interrupted":
+		// Owner-initiated stop, not a failure — alertScheduleHealth only acts
+		// on "failed"/"iteration_limit", so this status quietly skips both
+		// the alert and the streak update, the same as a cancelled run does
+		// on the dedicated loop.
+		result.Status = "interrupted"
+	default:
+		// Still "running": the turn ended (naturally, iteration cap, or a
+		// provider error) without the playbook reaching a terminal state.
+		// Schedule health cares whether the run finished, not why the turn
+		// ended, so every non-terminal outcome folds into the same bucket
+		// the existing one-time retry-then-alert contract already handles.
+		result.Status = "iteration_limit"
+	}
+	return result, nil
+}
+
 func appendSystemTime(system string, now time.Time, location *time.Location) string {
 	local := now.In(location)
 	zone, offset := local.Zone()
@@ -1291,7 +1369,7 @@ func listActiveTasksPlaybook(home string) []map[string]any {
 // catch-up pass (same-day misses fire late, older misses are recorded and
 // notified), then checks schedules.json every minute.
 func runScheduleDispatcher(core *Core) {
-	catchUpSchedulesAt(core, time.Now(), RunPlaybook)
+	catchUpSchedulesAt(core, time.Now(), NavigateScheduledPlaybook)
 
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -1302,7 +1380,7 @@ func runScheduleDispatcher(core *Core) {
 }
 
 func dispatchDueSchedules(core *Core) {
-	dispatchDueSchedulesAt(core, time.Now(), RunPlaybook)
+	dispatchDueSchedulesAt(core, time.Now(), NavigateScheduledPlaybook)
 }
 
 type scheduledPlaybookRunner func(context.Context, *Core, string, string, string, Observer) (*PlaybookResult, error)
