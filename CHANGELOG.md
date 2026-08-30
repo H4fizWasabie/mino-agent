@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [v3.6.4] — stage output verification is tool-agnostic (2026-08-30)
+
 ### Fixed
 
 - **Stage output verification only recognized write_file, false-failing a
