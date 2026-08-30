@@ -84,10 +84,13 @@ mino
 | `mino cli` | Terminal chat |
 | `mino remember "query"` | Print graph-memory recall (same output as the in-loop `remember` tool, no LLM call) |
 | `mino audit-memory` | Read-only report of source-less, duplicate, conflicting, and stale graph facts |
+| `mino eval-memory <cases.json>` | Run deterministic, read-only retrieval checks |
 | `mino memory path <from> <to>` | Shortest path between two memory facts |
 | `mino version` | Show version |
 | `mino update` | Self-update from GitHub releases |
 | `mino setup-privileges` | Write the sudoers command whitelist — run as root |
+
+Run the bundled retrieval fixture with `MINO_MEMORIES_DIR=eval/memory-fixture mino eval-memory eval/memory_cases.json`.
 
 ## Configuration
 
