@@ -204,8 +204,8 @@ func (c *Client) createWithRouting(ctx context.Context, model, reasoning string,
 	if jsonOutput {
 		// Reasoning models (DeepSeek v4 flash) spiral into endless reasoning on
 		// large prompts — content stays null, finish:length at any token budget,
-		// in json or plain mode. JSON-mode background tasks disable reasoning
-		// entirely; the tolerant parsers extract facts from a normal reply.
+		// in json or plain mode. JSON-mode background tasks disable reasoning by
+		// default; the tolerant parsers extract facts from a normal reply.
 		payload["reasoning"] = map[string]bool{"enabled": false}
 		// Retry once without response_format too: some models null content when
 		// forced into json_object mode.
@@ -214,7 +214,19 @@ func (c *Client) createWithRouting(ctx context.Context, model, reasoning string,
 		} else if r2, err2 := send(false); err2 == nil {
 			return r2, nil
 		} else {
-			return nil, err
+			// Some endpoints require the opposite (GLM 5.3 flash, 2026-08-30):
+			// they reject a disabled reasoning field outright ("Reasoning is
+			// mandatory for this endpoint and cannot be disabled") instead of
+			// just ignoring it. Last resort: drop the override and let the
+			// model use its own default, same two response_format attempts.
+			delete(payload, "reasoning")
+			if r3, err3 := send(true); err3 == nil {
+				return r3, nil
+			} else if r4, err4 := send(false); err4 == nil {
+				return r4, nil
+			} else {
+				return nil, err4
+			}
 		}
 	}
 	return send(false)

@@ -46,6 +46,17 @@
 
 ### Fixed
 
+- **JSON-mode calls unconditionally disabled reasoning, breaking models that
+  require it (#440)**: `CreateJSON` (consolidation, distillation,
+  community-synthesis, graph-rebuild, open-loops extraction, etc.) forced
+  `reasoning: {enabled: false}` on every attempt — a fix for DeepSeek v4
+  flash's endless-reasoning spiral — but GLM 5.3 flash's endpoint rejects a
+  disabled-reasoning request outright, failing every JSON-mode call and
+  forcing background work onto a materially weaker fallback model all day.
+  When both reasoning-disabled attempts fail, the client now retries once
+  more with the override dropped entirely; models that already succeed are
+  unaffected.
+
 - **Gate provenance ranking on query relevance (#411)**: user-provenanced
   memories now receive their priority bonus only after matching the query or
   active turn, preventing unrelated facts from blocking relevant recall and
