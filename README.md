@@ -302,7 +302,10 @@ adds its declared capabilities to the normal tool surface; those declarations
 guide the model but do not remove its always-available or sliding tools. The
 attempt mechanically flags undeclared output targets or verification failures
 to the trace, audit log, and owner outbox without blocking execution. Read-only stages retry on failure; destructive stages fail
-loud and never double-execute.
+loud and never double-execute. Calling `run_playbook` from chat advances a run
+one stage at a time — verify what's in progress, hand back the next stage's
+contract — instead of running the whole playbook in one call; scheduled runs
+still execute every stage in one call.
 Playbooks are autonomous-only — if a task needs the owner mid-way, it is a
 conversation, not a playbook. See [docs/playbooks-design.md](docs/playbooks-design.md).
 

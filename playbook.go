@@ -70,6 +70,36 @@ func RunPlaybook(ctx context.Context, core *Core, name, request, sessionID strin
 	return result, nil
 }
 
+// NavigatePlaybookRun is the chat-facing entry point for the unified-loop
+// navigation model (#450/#451): each call advances a run by one mechanical
+// step (playbook_workspace.go's navigatePlaybookRun) instead of running the
+// whole playbook through a dedicated stage loop. The run-lock here only
+// covers this one bookkeeping call — unlike RunPlaybook's flock, it does NOT
+// defer the self-updater for the side-effecting work Mino does between calls
+// while navigating a stage. That gap versus #309 is a known limitation,
+// carried in this change's ship note pending a later map ticket.
+func NavigatePlaybookRun(ctx context.Context, core *Core, name, request, sessionID string, obs Observer) (*PlaybookResult, error) {
+	unlock, err := takeRunLock(core.Settings.Home, name)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	result, err := navigatePlaybookRun(ctx, core, name, request, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	for _, output := range result.Outputs {
+		if !strings.HasPrefix(filepath.Clean(output), filepath.Clean(filepath.Join(core.Settings.Home, "playbooks"))+string(os.PathSeparator)) {
+			continue
+		}
+		if info, statErr := os.Stat(output); statErr == nil && core.Memory != nil {
+			core.Memory.RecordArtifact(sessionID, name+" output", output, int(info.Size()))
+		}
+	}
+	logTrace(core.Settings.Home, "playbook_navigate", map[string]any{"name": name, "status": result.Status, "stages": result.StagesRun})
+	return result, nil
+}
+
 func appendSystemTime(system string, now time.Time, location *time.Location) string {
 	local := now.In(location)
 	zone, offset := local.Zone()
@@ -263,11 +293,14 @@ func CreateExamplePlaybook(home string) error {
 // run-locks is Linux-only, so windows needs no lock semantics (#309).
 
 // makeRunPlaybookTool creates the run_playbook tool.
-// When the LLM calls this, the playbook runner executes the stages.
+// When the LLM calls this, it advances one mechanical step of the run:
+// verify whatever stage is in progress, drive any script stages straight
+// through, and hand back the next stage's contract to act on directly. Call
+// it again to advance once the current stage's declared outputs are written.
 func makeRunPlaybookTool(core *Core) *Tool {
 	return &Tool{
 		Name:        "run_playbook",
-		Description: "Execute a playbook by name. Use when the user asks to run a specific workflow or task. If unsure which playbook, call list_playbooks first.",
+		Description: "Advance a playbook run by name: creates or resumes the run, verifies the currently in-progress stage's declared outputs if any, and returns the next stage's contract to act on with your own tool calls. Call again to advance once you've produced that stage's declared outputs. Use when the user asks to run a specific workflow or task. If unsure which playbook, call list_playbooks first.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -301,7 +334,11 @@ func makeRunPlaybookTool(core *Core) *Tool {
 			// treat the whitelisted-out tool as a skip reason (issue #97). Pass
 			// the clean request.
 			request = cleanPlaybookRequest(request)
-			output, err := runPlaybookWithResponsibility(ctx, core, name, request, sid, RunPlaybook, time.Now().UTC())
+			// #450/#451: chat-triggered runs navigate one mechanical step per
+			// call instead of running the whole playbook through a dedicated
+			// stage loop — schedule_playbook is the only remaining caller of
+			// RunPlaybook's full-loop path, until #452.
+			output, err := runPlaybookWithResponsibility(ctx, core, name, request, sid, NavigatePlaybookRun, time.Now().UTC())
 			if err != nil {
 				return fmt.Sprintf("Error: %v", err)
 			}
@@ -364,10 +401,10 @@ func cleanPlaybookRequest(request string) string {
 // session) cancels a live playbook run by id. The run marks itself
 // interrupted cleanly at its next stage boundary — never silent, never a
 // stuck "running" record.
-func makeCancelRunTool() *Tool {
+func makeCancelRunTool(home string) *Tool {
 	return &Tool{
 		Name:        "cancel_run",
-		Description: "Cancel a live playbook run by run id. The run records itself as interrupted (not failed) with the reason; partial outputs stay on disk. Use when the owner asks to stop a running playbook, or a run is visibly stuck.",
+		Description: "Cancel a playbook run by run id. The run records itself as interrupted (not failed) with the reason; partial outputs stay on disk. Use when the owner asks to stop a running playbook, or a run is visibly stuck.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -387,10 +424,18 @@ func makeCancelRunTool() *Tool {
 			}
 			// Set the reason BEFORE cancelling so the runner picks it up.
 			setRunInterruptReason(id, reason)
-			if !cancelRun(id) {
-				return fmt.Sprintf("No live run %s found (already finished or not running)", id)
+			if cancelRun(id) {
+				return fmt.Sprintf("Cancelling run %s (%s) — the run records itself interrupted.", id, reason)
 			}
-			return fmt.Sprintf("Cancelling run %s (%s) — the run records itself interrupted.", id, reason)
+			// #450: no live dedicated-loop call to cancel (either finished, or
+			// a navigation-mode run sitting between run_playbook calls with no
+			// call in flight). Mark it interrupted on disk directly so the next
+			// run_playbook call for this run halts instead of ignoring the
+			// cancellation.
+			if interruptRunOnDisk(home, id, reason) {
+				return fmt.Sprintf("Run %s (%s) marked interrupted — it will stop at the next run_playbook call for this run.", id, reason)
+			}
+			return fmt.Sprintf("No run %s found (already finished or does not exist)", id)
 		},
 	}
 }
