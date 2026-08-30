@@ -1206,66 +1206,32 @@ func TestDetachCancelKeepsValuesSeversCancellation(t *testing.T) {
 	}
 }
 
+// TestManualRunSurvivesClientDisconnect covered the dedicated stage loop's
+// detachCancel behavior (#316): a long-running loop kept working after the
+// caller's ctx was cancelled. Navigation-mode calls (#450/#451) are short
+// mechanical steps with nothing long-lived to detach — "surviving disconnect"
+// is now just "the call completes and reports its outcome to the outbox
+// instead of a dead connection," which this covers by cancelling ctx before
+// the call rather than mid-flight.
 func TestManualRunSurvivesClientDisconnect(t *testing.T) {
 	home := t.TempDir()
-	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect", "02-report"})
+	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect"})
 	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
 	registry := NewRegistry()
 	registry.Register(makeWriteTool(home, home))
 	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
 
-	pb, err := loadPlaybookWorkspace(home, "brief")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The declared outputs the stages must produce for verification to pass.
-	run, err := loadOrCreatePlaybookRun(pb, registry, "x", "test", time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	stage1, _ := workspaceStage(pb, 1)
-	stage2, _ := workspaceStage(pb, 2)
-	path1 := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
-	path2 := playbookRunOutputPath(pb, run, stage2, stage2.Outputs[0])
-
-	started := make(chan struct{})
-	var signalOnce sync.Once
-	oldLoop := runPlaybookStageLoop
-	defer func() { runPlaybookStageLoop = oldLoop }()
-	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
-		signalOnce.Do(func() { close(started) })
-		if err := os.MkdirAll(filepath.Dir(path1), 0700); err != nil {
-			t.Error(err)
-		}
-		if err := os.WriteFile(path1, []byte("collected"), 0600); err != nil {
-			t.Error(err)
-		}
-		if err := os.MkdirAll(filepath.Dir(path2), 0700); err != nil {
-			t.Error(err)
-		}
-		if err := os.WriteFile(path2, []byte("report"), 0600); err != nil {
-			t.Error(err)
-		}
-		return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{
-			{Name: "write_file", Args: map[string]any{"path": path1}},
-			{Name: "write_file", Args: map[string]any{"path": path2}},
-		}}
-	}
-
-	// Simulate the caller (browser tab) disconnecting mid-run: cancel the
-	// parent ctx after the run has started; the run must complete anyway.
-	parent, cancel := context.WithCancel(context.WithValue(context.Background(), sessionIDKey{}, "tg:1"))
+	// Simulate the caller (browser tab) having already disconnected: the ctx
+	// is cancelled before the tool call even starts.
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), sessionIDKey{}, "tg:1"))
+	cancel()
 	tool := makeRunPlaybookTool(core)
-	done := make(chan string, 1)
-	go func() { done <- tool.ContextFn(parent, map[string]any{"name": "brief"}) }()
-	<-started // run is in flight
-	cancel()  // client disconnects NOW
-	out := <-done
-	if !strings.Contains(out, "done") {
-		t.Fatalf("run output = %q", out)
+	out := tool.ContextFn(ctx, map[string]any{"name": "brief"})
+	if !strings.Contains(out, "01-collect") {
+		t.Fatalf("navigate call should still complete despite the disconnected ctx, got %q", out)
 	}
 
-	// The outbox must hold a completion notice for the disconnected client.
+	// The outbox must hold a delivery for the disconnected client.
 	dir := filepath.Join(home, "outbox")
 	entries, err := os.ReadDir(dir)
 	if err != nil || len(entries) == 0 {
@@ -1276,13 +1242,22 @@ func TestManualRunSurvivesClientDisconnect(t *testing.T) {
 		t.Fatalf("outbox entry missing playbook name: %q err=%v", data, err)
 	}
 
-	// Run state persisted as complete, not interrupted/cancelled.
-	run2, err := latestPlaybookRun(pb)
-	if err != nil || run2.Status != "complete" {
-		t.Fatalf("run status = %v err=%v, want complete", run2, err)
+	// Run state persisted, not lost, despite the disconnected caller.
+	pb, err := loadPlaybookWorkspace(home, "brief")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := latestPlaybookRun(pb)
+	if err != nil || run == nil || run.Status != "running" {
+		t.Fatalf("run status = %+v err=%v, want an in-progress run persisted to disk", run, err)
 	}
 }
 
+// TestRunPlaybookToolNoOutboxWhenClientConnected covers the #450/#451
+// navigation model: run_playbook no longer drives the stage loop itself
+// (that's runWorkspacePlaybook, still used by schedule_playbook) — it hands
+// back a stage to act on, verifies it on the next call, and still never
+// pages the owner while the client is connected.
 func TestRunPlaybookToolNoOutboxWhenClientConnected(t *testing.T) {
 	home := t.TempDir()
 	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect"})
@@ -1290,27 +1265,33 @@ func TestRunPlaybookToolNoOutboxWhenClientConnected(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(makeWriteTool(home, home))
 	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
+	tool := makeRunPlaybookTool(core)
+
+	out := tool.ContextFn(context.Background(), map[string]any{"name": "brief"})
+	if !strings.Contains(out, "Navigating playbook brief") || !strings.Contains(out, "01-collect") {
+		t.Fatalf("first call should hand back stage 1 to navigate, got %q", out)
+	}
+
 	pb, err := loadPlaybookWorkspace(home, "brief")
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err := loadOrCreatePlaybookRun(pb, registry, "x", "test", time.Now())
-	if err != nil {
-		t.Fatal(err)
+	run, err := latestPlaybookRun(pb)
+	if err != nil || run == nil {
+		t.Fatalf("expected a run on disk: %v", err)
 	}
 	stage1, _ := workspaceStage(pb, 1)
 	path1 := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
-	oldLoop := runPlaybookStageLoop
-	defer func() { runPlaybookStageLoop = oldLoop }()
-	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
-		os.MkdirAll(filepath.Dir(path1), 0700)
-		os.WriteFile(path1, []byte("collected"), 0600)
-		return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{{Name: "write_file", Args: map[string]any{"path": path1}}}}
+	if err := os.MkdirAll(filepath.Dir(path1), 0700); err != nil {
+		t.Fatal(err)
 	}
-	tool := makeRunPlaybookTool(core)
-	out := tool.ContextFn(context.Background(), map[string]any{"name": "brief"})
-	if !strings.Contains(out, "done") {
-		t.Fatalf("run output = %q", out)
+	if err := os.WriteFile(path1, []byte("collected"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	out = tool.ContextFn(context.Background(), map[string]any{"name": "brief"})
+	if !strings.Contains(out, "complete") {
+		t.Fatalf("second call should verify stage 1 and report completion, got %q", out)
 	}
 	if entries, err := os.ReadDir(filepath.Join(home, "outbox")); err == nil && len(entries) > 0 {
 		t.Fatalf("connected client must not get an outbox notice, found %d entries", len(entries))

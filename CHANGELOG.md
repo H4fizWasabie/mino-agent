@@ -2,6 +2,18 @@
 
 ### Changed
 
+- **Chat-triggered playbook runs navigate instead of looping (#450, #451)**:
+  calling `run_playbook` from chat now advances a run one mechanical step per
+  call — verify whatever stage is in progress, drive any zero-inference
+  script stages straight through, hand back the next stage's contract — in
+  place of a dedicated stage loop running the whole playbook in one call. A
+  crash mid-stage with only read-only/`write_file` tools resumes safely on
+  the next call; a crash mid-stage with any other tool is never auto-resumed,
+  and the next call starts a fresh run and names the abandoned one. Scheduled
+  runs (`schedule_playbook`) are unchanged: they still run every stage
+  through the dedicated loop in one call, sharing the same run state and
+  resume rules. `cancel_run` now also marks a run interrupted directly on
+  disk when there is no live call to cancel between navigation steps.
 - **Stage-aware additive tool exposure (#449)**: playbook stages now add their
   declared capabilities to the normal loop's always-available and sliding tool
   surfaces. Stage declarations are choices for the model, not a second tool

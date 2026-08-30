@@ -4,7 +4,7 @@
 
 A playbook is an autonomous, repeatable contract between Mino and its owner. It is a filesystem workspace with ordered stage contracts and durable run state. It does not replace Mino's normal reasoning loop.
 
-Every message still enters the canonical runtime. Mino may choose a relevant playbook and call `run_playbook`. Once started, the runner creates or resumes a playbook run and executes from the first incomplete stage.
+Every message still enters the canonical runtime. Mino may choose a relevant playbook and call `run_playbook`. Each call creates or resumes a playbook run, verifies whatever stage is currently in progress, drives any zero-inference script stages straight through, and hands back the next stage's contract for Mino to act on with its own tool calls — call `run_playbook` again to advance once that stage's declared outputs exist. Scheduled invocations (`schedule_playbook`) still run every stage of a playbook through a dedicated loop in one call; the two entry points share the same run state and resume rules, described below.
 
 ## Definition layout
 
@@ -87,13 +87,13 @@ run or scheduler fire
   → continue to the next stage
 ```
 
-`state.json` records each stage's status, attempts, timestamps, outputs, and error. A failed stage stops the run. The next invocation resumes that stage; completed stages are never re-executed merely because a later stage failed.
+`state.json` records each stage's status, attempts, timestamps, outputs, and error. A failed stage stops the run. The next invocation resumes that stage; completed stages are never re-executed merely because a later stage failed. A stage whose tools are all read-only or `write_file` is retry-safe and resumes automatically; a stage with any other tool is never auto-resumed — the run is left untouched on disk and the next invocation starts fresh, naming the abandoned run so nothing is silently repeated (the guard against a duplicate side effect on resume, such as a duplicate social post).
 
 The playbook is an agreed autonomous contract. There is no approval protocol or human checkpoint state. Mino stops only when the contract cannot be fulfilled or verified truthfully.
 
 ## Scheduling
 
-Schedules decide when to invoke a playbook. They do not create a separate executor. A scheduled invocation uses the same run discovery and resume path as a manual invocation. `last_run` is timing metadata; the run state and its outputs are the outcome evidence.
+Schedules decide when to invoke a playbook. A scheduled invocation uses the same run discovery and resume rules as a manual invocation, but drives every stage through a dedicated loop in one call rather than navigating one stage per call the way chat's `run_playbook` does — the two entry points share `state.json` and are interchangeable across invocations of the same run. `last_run` is timing metadata; the run state and its outputs are the outcome evidence.
 
 ## Management
 

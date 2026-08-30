@@ -203,7 +203,7 @@ func NewCore() *Core {
 	tools.Register(behaves(makeRestartServiceTool(host), BehaviorMutate))
 	tools.Register(behaves(makeRequestApprovalTool(w.approvals), BehaviorMutate))
 	tools.Register(behaves(makeRunPlaybookTool(w), BehaviorMutate))
-	tools.Register(behaves(makeCancelRunTool(), BehaviorMutate))
+	tools.Register(behaves(makeCancelRunTool(s.Home), BehaviorMutate))
 	tools.Register(behaves(makeCapturePlaybookTool(w), BehaviorMutate))
 	tools.Register(behaves(makeSchedulePlaybookTool(s.Home, s.Timezone), BehaviorMutate))
 	tools.Register(behaves(makeListSchedulesTool(s.Home), BehaviorObserve))
