@@ -32,6 +32,7 @@ navigating this repo's source.
 | Dashboard | `dashboard.go`, `dashboard_universe.go` | `dashboard_test.go`, `dashboard_eval_test.go`, `dashboard_universe_test.go` | [docs/dashboard-design.md](docs/dashboard-design.md) |
 | Release & deployment | `build-release.sh`, `scripts/release.sh`, `scripts/stage-smoke.sh` | `scripts/stage-smoke.sh` run against staged state is the verification step | [AGENTS.md#building-and-shipping-mino-mandatory-before-you-build](AGENTS.md#building-and-shipping-mino-mandatory-before-you-build) |
 | Open decisions / architecture proposals | — | — | [wayfinder/MAP.md](wayfinder/MAP.md), `wayfinder/tickets/` |
+| New feature or non-trivial bug fix (resumable pipeline) | [dev-pipeline/feature-dev/CONTEXT.md](dev-pipeline/feature-dev/CONTEXT.md) | stage 04's own verification report | intake→design→implement→verify→ship; each stage's `output/` lets a fresh session resume exactly where the last one stopped |
 
 ## The layers below this one
 
