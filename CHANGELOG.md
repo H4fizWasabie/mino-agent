@@ -2,6 +2,11 @@
 
 ### Changed
 
+- **CI runs only on pull requests, not on push to master**: every merge to
+  master goes through a PR, so the push-triggered run tested byte-identical
+  code to the PR run that had just passed (fast-forward merges have an
+  identical tree) — pure duplicate wall-clock with no added coverage.
+
 - **Mid-flight self-repair (#448)**: after two identical tool call/result
   outcomes, Mino now tells the model to choose a genuinely different next
   action or state its blocker. The existing progress nudge and hard stop still
