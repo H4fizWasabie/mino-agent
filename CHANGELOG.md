@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [v3.6.3] — JSON-mode reasoning promotion + verification-block reword (2026-08-30)
+
 ### Fixed
 
 - **JSON-mode small-model calls still failed empty after #440's fallback**:
