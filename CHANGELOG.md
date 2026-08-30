@@ -1,5 +1,19 @@
 ## [Unreleased]
 
+### Fixed
+
+- **Sticky provider pinning never recovered to the primary provider (#463)**:
+  background small-model calls (consolidation, distillation, community
+  synthesis, open-loops extraction, graph rebuild, reply verification) each
+  route through a fixed, hardcoded session key rather than a per-turn id, so
+  a single sticky slot is shared across every call to that task forever. A
+  transient primary-provider failure that fell over to the fallback used to
+  pin that slot to the fallback permanently — `success()` re-confirmed the
+  same pin every time with no expiry, so the slot never got a chance to
+  notice the primary's problem was fixed. A sticky pin to a non-primary
+  provider now expires after 5 minutes, giving the primary a periodic chance
+  to prove it's healthy again; a pin to the primary itself never expires.
+
 ### Changed
 
 - **CI runs only on pull requests, not on push to master**: every merge to
