@@ -231,7 +231,7 @@ tools refuse every op with a clear boundary message, and `bash` refuses `sudo` o
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `(stopped after N iterations: ...)` | The turn stalled or reached the hard 60-iteration ceiling | Check the stated reason and checkpoint, then send `continue`; `MINO_MAX_ITERATIONS` is the base budget and useful progress may extend it automatically |
+| `(stopped after N iterations: ...)` | The turn stalled or reached the hard 60-iteration ceiling | Check the stated reason and checkpoint, then send `continue`; `MINO_MAX_ITERATIONS` is the base budget and useful progress may extend it automatically. Repeated work gets a self-repair prompt after two identical call/result outcomes |
 | Reply cuts off mid-sentence, or Mino repeats itself | `MINO_MAX_TOKENS` too small for the output | Raise `MINO_MAX_TOKENS` (16384 works well) |
 | Mino forgets earlier context in long chats | `MINO_MAX_HISTORY_TURNS` too low | Raise it — 10 is a good ceiling |
 | Tool errors, wrong results, or a tool that exists but is never used | Missing helper binary, or the model needs a clearer instruction | Install rtk/markitdown above; check the dashboard traces page or `MINO_HOME/traces/` and `MINO_HOME/audit.jsonl`, then retry with a more specific instruction |

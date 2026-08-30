@@ -802,6 +802,34 @@ func TestLoopStopsAfterNoProgressNudge(t *testing.T) {
 	}
 }
 
+func TestLoopSelfRepairsAtTwoNoProgressIterations(t *testing.T) {
+	tools := NewRegistry()
+	tools.Register(&Tool{Name: "bounce", Description: "returns fixed output", Fn: func(args map[string]any) string { return "bounced" }})
+	var script []*LLMResponse
+	for i := 0; i < 2; i++ {
+		script = append(script, scriptedResp([]ContentBlock{toolBlock("bounce", map[string]any{"k": "same"})}, "tool_use"))
+	}
+	script = append(script, scriptedResp([]ContentBlock{toolBlock("bounce", map[string]any{"k": "changed"})}, "tool_use"))
+	for i := 0; i < 2; i++ {
+		script = append(script, scriptedResp([]ContentBlock{toolBlock("bounce", map[string]any{"k": "same-again"})}, "tool_use"))
+	}
+	script = append(script, scriptedResp([]ContentBlock{textBlock("done")}, "stop"))
+	client := &fakeClient{script: script}
+	result := RunLoopContext(context.Background(), client, "repair", "", []Message{{Role: "user", Content: "go"}}, tools, 30, 100, nil, false, "")
+	if result.Status != "complete" {
+		t.Fatalf("status = %q, want complete", result.Status)
+	}
+	count := 0
+	for _, message := range client.messages[len(client.messages)-1] {
+		if strings.Contains(message.Content, "Self-repair now") {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Fatalf("self-repair prompts = %d, want one per stalled run", count)
+	}
+}
+
 func TestLoopExtendsBaseBudgetWhileProgressing(t *testing.T) {
 	tools := NewRegistry()
 	tools.Register(&Tool{Name: "step", Description: "returns fixed output", Fn: func(args map[string]any) string { return "ok" }})

@@ -339,6 +339,7 @@ func RunLoopContext(
 	// prompt, so prefix-cache warmth is preserved).
 	repStreak := 0
 	var lastProgressSig string
+	selfRepairSent := false
 	repetitionNudged := false
 
 	// #337 (finding 4) — read-spiral tracking: consecutive read_file calls
@@ -373,6 +374,7 @@ func RunLoopContext(
 			} else {
 				lastProgressSig = sig
 				repStreak = 1
+				selfRepairSent = false
 				repetitionNudged = false
 			}
 			if repStreak >= 6 && repetitionNudged {
@@ -380,6 +382,16 @@ func RunLoopContext(
 				result.Status = "iteration_limit"
 				result.Reply = iterationCapReply(result.Iterations, result.ToolCalls, checkpointTurnProgress(traceHome, sessionID, result.ToolCalls), "stalled after the no-progress nudge")
 				return result
+			}
+			if repStreak == 2 && !selfRepairSent {
+				selfRepairSent = true
+				messages = append(messages, Message{
+					Role: "user",
+					Content: fmt.Sprintf(
+						"[System: the last two tool calls produced the same result (%s). Self-repair now: choose a genuinely different next action, or state the blocker explicitly. Do not repeat this action again.]",
+						call.Name),
+				})
+				trace("midflight_signal", map[string]any{"signal": "self_repair", "iteration": i - 1, "tool": sig, "streak": repStreak})
 			}
 			if repStreak >= 3 && repStreak%3 == 0 {
 				repetitionNudged = true
