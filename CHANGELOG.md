@@ -57,6 +57,37 @@
   more with the override dropped entirely; models that already succeed are
   unaffected.
 
+- **Reply-verification false positives from bundle-level fact matching
+  (#436)**: the post-reply owner-fact check gated topical overlap across an
+  entire recalled fact bundle instead of per fact, so one relevant fact could
+  drag an unrelated fact along for the ride and produce a spurious
+  contradiction note. The overlap check is now per fact block, and a genuine
+  contradiction is logged for review instead of appended to the visible
+  reply.
+
+- **Informational playbook questions could trigger a real run (#437)**: the
+  explicit-run-command detector treated a message that merely named a
+  playbook as a run order, even with no run verb present, injecting a "you
+  must run this now" directive into an exploratory question. It now requires
+  an actual run verb (run/execute/start) before classifying a message as an
+  explicit command.
+
+- **Playbook stage work stayed tied to the caller's context despite
+  detachment (#438)**: the per-stage execution context was built from the
+  playbook run's original caller context instead of the detached run
+  context introduced for issue #316, so a stage's actual LLM/script work
+  remained exposed to whatever could cancel the caller even though the
+  run-boundary check upstream was already isolated. Stage execution now
+  runs entirely under the detached context.
+
+- **Inefficient and fabricated `read_file` paging of small artifacts
+  (#439)**: reading back a spilled tool-result artifact could take many
+  small, inconsistent-sized round-trips, and a caller could request a path
+  that was never returned by any prior tool result. `read_file` now returns
+  the full remainder in one call when it already fits under the single-call
+  cap, and rejects a `results/`-scoped path that wasn't handed back by a
+  prior tool result this turn.
+
 - **Gate provenance ranking on query relevance (#411)**: user-provenanced
   memories now receive their priority bonus only after matching the query or
   active turn, preventing unrelated facts from blocking relevant recall and

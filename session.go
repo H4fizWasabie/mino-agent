@@ -290,16 +290,19 @@ func abs(n int) int {
 
 // ownerEstablishedFacts extracts the user-provenanced top facts from a
 // remember output — subject + rationale, only for facts whose match signal
-// carries user provenance AND whose text overlaps the message (the +30
+// carries user provenance AND whose own text overlaps the message (the +30
 // provenance bonus recalls user facts with zero word matches; topical
-// overlap is required so unrelated turns stay clean).
+// overlap is required so unrelated turns stay clean). The overlap check is
+// per fact block, not across the concatenated bundle — a fact with no real
+// relation to the query must not ride in on another fact's word match
+// (issue #436).
 func ownerEstablishedFacts(query, recall string) string {
 	words := memoryTokenize(query)
 	var out strings.Builder
 	block := ""
 	provenanced := false
 	flush := func() {
-		if provenanced && block != "" {
+		if provenanced && block != "" && len(matchedWords(words, block)) > 0 {
 			out.WriteString(block)
 			out.WriteString("\n")
 		}
@@ -327,18 +330,28 @@ func ownerEstablishedFacts(query, recall string) string {
 		}
 	}
 	flush()
-	if len(matchedWords(words, out.String())) == 0 {
-		return ""
-	}
 	return strings.TrimSpace(out.String())
 }
 
 // explicitPlaybookCommand reports whether the user message is a direct order to
 // run the given playbook rather than an unsolicited request that merely matches
-// it. An explicit command names the playbook ("run the daily news playbook",
-// "run daily-ai-company-news") or uses a run verb plus the playbook's words.
+// it. An explicit command needs a run verb — naming or describing the playbook
+// alone is not enough. Issue #437: "I want to understand the weekly-work-report
+// playbook, walk me through how it works" named the playbook literally with no
+// run verb, was classified as an explicit command by the old name-substring-only
+// check, and produced a real run from a purely informational question.
 func explicitPlaybookCommand(userMessage, playbookName string) bool {
 	msg := strings.ToLower(userMessage)
+	runVerb := false
+	for _, w := range strings.Fields(msg) {
+		if w == "run" || w == "execute" || w == "start" {
+			runVerb = true
+			break
+		}
+	}
+	if !runVerb {
+		return false
+	}
 	if strings.Contains(msg, strings.ToLower(playbookName)) {
 		return true
 	}
@@ -346,19 +359,10 @@ func explicitPlaybookCommand(userMessage, playbookName string) bool {
 	if len(words) < 2 {
 		return false
 	}
-	runVerb := false
-	for _, w := range strings.Fields(msg) {
-		if w == "run" || w == "execute" || w == "start" {
-			runVerb = true
-		}
-	}
-	if !runVerb {
-		return false
-	}
 	// Require the message to mention a playbook and at least one of the
 	// playbook's distinguishing words, so "run the report" does not match
 	// every playbook while "run the news playbook" matches the news one.
-	if !strings.Contains(msg, "playbook") && !strings.Contains(msg, strings.ToLower(playbookName)) {
+	if !strings.Contains(msg, "playbook") {
 		return false
 	}
 	for _, w := range words {

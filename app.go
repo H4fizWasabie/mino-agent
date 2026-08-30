@@ -402,14 +402,16 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 
 	// CTX-022 C (round 3): post-reply verification — generation is
 	// probabilistic, so the harness checks the draft reply against any
-	// owner-established facts it carried before delivery, and signs the
-	// contradiction instead of letting it ship silently. One small call per
-	// turn that carried owner facts; verification failure fails open (never
-	// blocks the reply on a check error).
+	// owner-established facts it carried before delivery. Logged for review
+	// rather than injected into the reply (issue #436): even a correctly
+	// flagged contradiction read as Mino talking to itself mid-reply, and the
+	// per-fact overlap fix alone doesn't guarantee zero false positives. One
+	// small call per turn that carried owner facts; verification failure
+	// fails open (never blocks the reply on a check error).
 	if strings.Contains(routing, ownerEstablishedMarker) && w.Memory != nil && w.Memory.graph != nil {
 		if facts := ownerEstablishedFacts(userMessage, w.Memory.graph.Remember(userMessage, "")); facts != "" {
 			if correction := verifyReplyAgainstOwnerFacts(w.Client, facts, result.Reply, userMessage); correction != "" {
-				result.Reply += "\n\n" + correction
+				slog.Warn("reply verification flagged possible contradiction", "session", conversation.Session.sessionID, "correction", correction)
 			}
 		}
 	}
