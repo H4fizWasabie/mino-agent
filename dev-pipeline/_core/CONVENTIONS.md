@@ -9,14 +9,14 @@ The rules for building and maintaining MWP workspaces. This is the canonical sou
 Agents read down the layers. They stop as soon as they have what they need.
 
 ```
-Layer 0: CLAUDE.md           -> "Where am I?"            (always loaded, ~800 tokens)
+Layer 0: CLAUDE.md -> AGENTS.md -> "Where am I?"  (always loaded, ~800 tokens)
 Layer 1: CONTEXT.md          -> "Where do I go?"          (read on entry, ~300 tokens)
 Layer 2: Stage CONTEXT.md    -> "What do I do?"            (read per-task, ~200-500 tokens)
 Layer 3: Reference material  -> "What rules apply?"        (loaded selectively, varies)
 Layer 4: Working artifacts   -> "What am I working with?"  (loaded selectively, varies)
 ```
 
-**Layer 0 -- CLAUDE.md** is auto-loaded by Claude Code into every conversation. It contains the folder map, naming conventions, and a routing table that points to workspace-level files. One per workspace.
+**Layer 0 -- CLAUDE.md / AGENTS.md** is auto-loaded by Claude Code into every conversation. `CLAUDE.md` is a one-line pointer ("Read AGENTS.md"); `AGENTS.md` holds the actual content: the folder map, naming conventions, and a routing table that points to workspace-level files. This split (rather than putting the content directly in `CLAUDE.md`) keeps the workspace readable by any agent that follows an `AGENTS.md` convention, not only Claude Code. One pair per workspace.
 
 **Layer 1 -- Top-level CONTEXT.md** is the first thing an agent reads when entering the workspace. It contains a task routing table that maps task types to specific stage folders. One per workspace.
 
@@ -30,7 +30,7 @@ The distinction between Layers 3 and 4 matters because they require different th
 
 A rendering agent might only need Layers 0 through 2. A script-writing agent reads down to Layer 4 to access both voice rules (Layer 3) and source material (Layer 4). No agent reads everything.
 
-Every token of irrelevant context is a token of diluted attention. Workspace CLAUDE.md files should explicitly map each task to its minimal required files. Loading more context does not make output better. It makes it worse.
+Every token of irrelevant context is a token of diluted attention. Workspace AGENTS.md files should explicitly map each task to its minimal required files. Loading more context does not make output better. It makes it worse.
 
 ---
 
@@ -159,7 +159,7 @@ Pipeline Status: [workspace-name]
 
 For each stage: if the output folder contains files (other than .gitkeep), the stage is COMPLETE and the filenames are listed. If the output folder is empty or contains only .gitkeep, the stage is PENDING.
 
-Workspaces can define additional trigger keywords in their own CLAUDE.md.
+Workspaces can define additional trigger keywords in their own AGENTS.md.
 
 ---
 

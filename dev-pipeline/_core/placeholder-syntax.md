@@ -40,7 +40,7 @@ Placeholders can appear in any markdown file within a workspace:
 - Stage CONTEXT.md files (only in Inputs table values, not in routing structure)
 
 Placeholders should NOT appear in:
-- CLAUDE.md files (these need to work before onboarding runs)
+- CLAUDE.md / AGENTS.md files (these need to work before onboarding runs)
 - Top-level CONTEXT.md routing tables (these need to work before onboarding runs)
 - The questionnaire.md itself (the questions are the source, not the target)
 

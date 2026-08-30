@@ -1,7 +1,7 @@
 # Feature Development Workspace
 
 Take one Mino harness change from idea to shipped code, with a human review point between
-every stage. Read `CLAUDE.md` first — it has the resume instructions and folder map.
+every stage. Read `AGENTS.md` first — it has the resume instructions and folder map. `CLAUDE.md` is a one-line pointer to it.
 
 ## Task Routing
 
