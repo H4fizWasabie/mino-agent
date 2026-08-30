@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+### Changed
+
+- **Progress-aware iteration limits (#443)**: turns can now continue beyond
+  the base `MINO_MAX_ITERATIONS` budget when tool calls and results keep
+  changing, up to a hard 60-iteration ceiling. Repeated identical call/result
+  pairs trigger a nudge at 3 repetitions and stop at 6 if the model does not
+  change course. Checkpoint replies distinguish a confirmed stall from a hard
+  ceiling reached while progress was still detected.
+
 ## [v3.6.4] — stage output verification is tool-agnostic (2026-08-30)
 
 ### Fixed

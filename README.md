@@ -231,7 +231,7 @@ tools refuse every op with a clear boundary message, and `bash` refuses `sudo` o
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `(stopped after 25 iterations)` | The turn ran out of tool-call budget mid-task | Raise `MINO_MAX_ITERATIONS` (see below), or split the request into smaller steps and send `continue` |
+| `(stopped after N iterations: ...)` | The turn stalled or reached the hard 60-iteration ceiling | Check the stated reason and checkpoint, then send `continue`; `MINO_MAX_ITERATIONS` is the base budget and useful progress may extend it automatically |
 | Reply cuts off mid-sentence, or Mino repeats itself | `MINO_MAX_TOKENS` too small for the output | Raise `MINO_MAX_TOKENS` (16384 works well) |
 | Mino forgets earlier context in long chats | `MINO_MAX_HISTORY_TURNS` too low | Raise it — 10 is a good ceiling |
 | Tool errors, wrong results, or a tool that exists but is never used | Missing helper binary, or the model needs a clearer instruction | Install rtk/markitdown above; check the dashboard traces page or `MINO_HOME/traces/` and `MINO_HOME/audit.jsonl`, then retry with a more specific instruction |
@@ -245,7 +245,7 @@ The defaults are deliberately conservative. If tasks keep hitting limits, raise 
 
 | Env | Default | What it limits | When to raise |
 |-----|---------|----------------|---------------|
-| `MINO_MAX_ITERATIONS` | 25 | Tool calls per turn — the `(stopped after N iterations)` wall | Long multi-step tasks end with the iteration message |
+| `MINO_MAX_ITERATIONS` | 25 | Base tool-call budget per turn; useful progress can extend a turn to the hard 60-iteration ceiling | Long tasks that are still making progress extend automatically; stalled turns stop earlier |
 | `MINO_MAX_TOKENS` | 16384 | Output tokens per model call | Replies truncate or the model stalls |
 | `MINO_CONTEXT_CHARS` | 100000 | Context window budget for history + tool output | Long sessions or playbooks lose early context |
 | `MINO_MAX_HISTORY_TURNS` | 5 | Conversation turns kept in context | Mino forgets earlier turns in long chats |
@@ -253,7 +253,7 @@ The defaults are deliberately conservative. If tasks keep hitting limits, raise 
 | `MINO_CODING_TIMEOUT` | 2m | Coding tool runs | Big repos time out |
 | `MINO_SYNC_TIMEOUT` | 5m | File syncs | Large file transfers time out |
 
-Playbook stages have their own iteration cap (50) — if a playbook run burns through it, the fix is usually in the playbook's stage contract, not the env.
+Playbook stages retain their stage contracts and run under the same hard 60-iteration harness ceiling — if a run burns through it, the fix is usually in the playbook's stage contract, not the env.
 
 ## Architecture
 

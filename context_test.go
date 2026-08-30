@@ -480,26 +480,33 @@ func TestFormatToolResultsFeedsObservation(t *testing.T) {
 	}
 }
 
-func TestLoopHardStopsAfterThreeDetections(t *testing.T) {
+func TestLoopLegacyDetectionAdvisesWithoutHardStop(t *testing.T) {
 	tools := NewRegistry()
 	tools.Register(&Tool{
 		Name: "probe", Schema: map[string]any{"type": "object", "properties": map[string]any{}},
 		Fn: func(map[string]any) string { return "observed" },
 	})
-	// Varying args exercise the same-name loop path (identical-args repeats
-	// trigger earlier); 8 scripted probe calls > loopNameThreshold(6) so the
-	// third consecutive detection fires at iteration 8 and must hard-stop.
+	// Varying args exercise the same-name loop path. The progress-based loop
+	// owns termination; legacy detection remains an advisory observation.
 	script := make([]*LLMResponse, 8)
 	for i := range script {
 		script[i] = scriptedResp([]ContentBlock{toolBlock("probe", map[string]any{"n": i})}, "tool_use")
 	}
 	client := &fakeClient{script: script}
 	result := RunLoopContext(context.Background(), client, "loop-stop", "", []Message{{Role: "user", Content: "go"}}, tools, 20, 100, nil, false, "")
-	if result.Status != "loop" {
-		t.Fatalf("status = %q, want loop (reply=%q)", result.Status, result.Reply)
+	if result.Status != "complete" {
+		t.Fatalf("status = %q, want complete (reply=%q)", result.Status, result.Reply)
 	}
-	if !strings.Contains(result.Reply, "repeated loop detected") {
-		t.Fatalf("reply should explain the stop, got %q", result.Reply)
+	found := false
+	for _, messages := range client.messages {
+		for _, message := range messages {
+			if strings.Contains(message.Content, "loop detected") {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("legacy loop detection should remain observable as an advisory")
 	}
 }
 

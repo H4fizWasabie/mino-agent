@@ -244,21 +244,23 @@ func TestStageRewriteStreakTripwire(t *testing.T) {
 	}
 	client.script = append(client.script, scriptedResp([]ContentBlock{textBlock("done")}, "stop"))
 	ctx := context.WithValue(context.Background(), traceTagKey{}, map[string]string{"playbook": "p", "stage": "01-x"})
-	result := RunLoopContext(ctx, client, "rewrite-loop", "", []Message{{Role: "user", Content: "go"}}, tools, 20, 100, nil, false, "")
-	if result.Status != "complete" {
-		t.Fatalf("status = %q, want complete", result.Status)
+	home := t.TempDir()
+	result := RunLoopContext(ctx, client, "rewrite-loop", "", []Message{{Role: "user", Content: "go"}}, tools, 20, 100, nil, false, home)
+	if result.Status != "iteration_limit" {
+		t.Fatalf("status = %q, want iteration_limit", result.Status)
 	}
-	// The corrective push must have been sent after the 6th consecutive rewrite.
-	pushed := false
-	for _, msgs := range client.messages {
-		for _, m := range msgs {
-			if strings.Contains(m.Content, "rewritten "+out+" repeatedly") {
-				pushed = true
-			}
+	// The progress stop can happen before a seventh provider request delivers
+	// the corrective prompt, so the durable trace is the observable signal.
+	files, _ := filepath.Glob(filepath.Join(home, "traces", "*.jsonl"))
+	found := false
+	for _, file := range files {
+		data, _ := os.ReadFile(file)
+		if strings.Contains(string(data), "stage_rewrite_streak") {
+			found = true
 		}
 	}
-	if !pushed {
-		t.Fatal("rewrite-streak push missing from model messages")
+	if !found {
+		t.Fatalf("rewrite-streak trace missing in %v", files)
 	}
 }
 
@@ -729,7 +731,7 @@ func TestIterationCapReplyReportsProgress(t *testing.T) {
 		{Name: "generate_image", Output: "path"},
 		{Name: "bash", Output: "ok"},
 	}
-	reply := iterationCapReply(50, calls, "")
+	reply := iterationCapReply(50, calls, "", "reached the hard ceiling while progress was still detected")
 	if !strings.Contains(reply, "stopped after 50 iterations") {
 		t.Fatalf("reply missing cap note: %q", reply)
 	}
@@ -745,7 +747,7 @@ func TestIterationCapReplyReportsProgress(t *testing.T) {
 }
 
 func TestIterationCapReplyNoTools(t *testing.T) {
-	reply := iterationCapReply(30, nil, "")
+	reply := iterationCapReply(30, nil, "", "reached the hard ceiling while progress was still detected")
 	if !strings.Contains(reply, "No tools were completed") {
 		t.Fatalf("reply should note no completion: %q", reply)
 	}
@@ -780,6 +782,55 @@ func TestLoopIterationAwarenessRepeatedTool(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("repetition-awareness observation was not injected")
+	}
+}
+
+func TestLoopStopsAfterNoProgressNudge(t *testing.T) {
+	tools := NewRegistry()
+	tools.Register(&Tool{Name: "bounce", Description: "returns fixed output", Fn: func(args map[string]any) string { return "bounced" }})
+	var script []*LLMResponse
+	for i := 0; i < 6; i++ {
+		script = append(script, scriptedResp([]ContentBlock{toolBlock("bounce", map[string]any{"k": "same"})}, "tool_use"))
+	}
+	client := &fakeClient{script: script}
+	result := RunLoopContext(context.Background(), client, "stall", "", []Message{{Role: "user", Content: "go"}}, tools, 30, 100, nil, false, t.TempDir())
+	if result.Status != "iteration_limit" || result.Iterations != 6 {
+		t.Fatalf("result = %+v, want stalled iteration limit at 6", result)
+	}
+	if !strings.Contains(result.Reply, "stalled after the no-progress nudge") {
+		t.Fatalf("reply missing stall reason: %q", result.Reply)
+	}
+}
+
+func TestLoopExtendsBaseBudgetWhileProgressing(t *testing.T) {
+	tools := NewRegistry()
+	tools.Register(&Tool{Name: "step", Description: "returns fixed output", Fn: func(args map[string]any) string { return "ok" }})
+	var script []*LLMResponse
+	for i := 0; i < 4; i++ {
+		script = append(script, scriptedResp([]ContentBlock{toolBlock("step", map[string]any{"n": i})}, "tool_use"))
+	}
+	script = append(script, scriptedResp([]ContentBlock{textBlock("done")}, "stop"))
+	client := &fakeClient{script: script}
+	result := RunLoopContext(context.Background(), client, "extend", "", []Message{{Role: "user", Content: "go"}}, tools, 3, 100, nil, false, "")
+	if result.Status != "complete" || result.Iterations != 5 {
+		t.Fatalf("result = %+v, want completion after extending past base budget", result)
+	}
+}
+
+func TestLoopStopsAtHardIterationCeiling(t *testing.T) {
+	tools := NewRegistry()
+	tools.Register(&Tool{Name: "step", Description: "returns fixed output", Fn: func(args map[string]any) string { return "ok" }})
+	var script []*LLMResponse
+	for i := 0; i < hardIterationCeiling; i++ {
+		script = append(script, scriptedResp([]ContentBlock{toolBlock("step", map[string]any{"n": i})}, "tool_use"))
+	}
+	client := &fakeClient{script: script}
+	result := RunLoopContext(context.Background(), client, "ceiling", "", []Message{{Role: "user", Content: "go"}}, tools, 30, 100, nil, false, t.TempDir())
+	if result.Status != "iteration_limit" || result.Iterations != hardIterationCeiling {
+		t.Fatalf("result = %+v, want hard ceiling at %d", result, hardIterationCeiling)
+	}
+	if !strings.Contains(result.Reply, "reached the hard ceiling") {
+		t.Fatalf("reply missing hard-ceiling reason: %q", result.Reply)
 	}
 }
 
@@ -824,10 +875,10 @@ func TestProvenanceGateWarnsOnSearchAfterUserFact(t *testing.T) {
 	plainFact := "No memories found for: something else"
 
 	cases := []struct {
-		name      string
-		calls     []ToolCall
-		query     string
-		wantWarn  bool
+		name     string
+		calls    []ToolCall
+		query    string
+		wantWarn bool
 	}{
 		{"overlapping query warns", []ToolCall{{Name: "remember", Output: userFact}}, "Agent-Reach repo status", true},
 		{"non-overlapping query silent", []ToolCall{{Name: "remember", Output: userFact}}, "weather in kuala lumpur", false},
@@ -979,7 +1030,7 @@ func TestLoopLogsReadSpiralSignal(t *testing.T) {
 // the resume turn reads it and continues from the last successful step
 // instead of re-deriving state from the whole capped turn's history.
 func TestIterationCapReplyNamesCheckpoint(t *testing.T) {
-	reply := iterationCapReply(30, []ToolCall{{Name: "bash"}}, "/home/x/.mino/checkpoints/tg_1-123.json")
+	reply := iterationCapReply(30, []ToolCall{{Name: "bash"}}, "/home/x/.mino/checkpoints/tg_1-123.json", "reached the hard ceiling while progress was still detected")
 	if !strings.Contains(reply, "checkpointed at /home/x/.mino/checkpoints/tg_1-123.json") {
 		t.Fatalf("reply missing checkpoint path: %q", reply)
 	}
@@ -987,7 +1038,7 @@ func TestIterationCapReplyNamesCheckpoint(t *testing.T) {
 		t.Fatalf("reply missing no-restart direction: %q", reply)
 	}
 	// without a checkpoint the text is unchanged from before
-	plain := iterationCapReply(30, []ToolCall{{Name: "bash"}}, "")
+	plain := iterationCapReply(30, []ToolCall{{Name: "bash"}}, "", "reached the hard ceiling while progress was still detected")
 	if strings.Contains(plain, "checkpoint") {
 		t.Fatalf("no checkpoint mention without a checkpoint file: %q", plain)
 	}
@@ -1042,14 +1093,14 @@ func TestLoopWritesCheckpointOnIterationCap(t *testing.T) {
 	tools := NewRegistry()
 	tools.Register(&Tool{Name: "bounce", Description: "returns fixed output", Fn: func(args map[string]any) string { return "bounced" }})
 	var script []*LLMResponse
-	for i := 0; i < 6; i++ {
+	for i := 0; i < hardIterationCeiling; i++ {
 		script = append(script, scriptedResp([]ContentBlock{toolBlock("bounce", map[string]any{"k": fmt.Sprintf("v%d", i)})}, "tool_use"))
 	}
 	client := &fakeClient{script: script}
 	home := t.TempDir()
 	res := RunLoopContext(context.Background(), client, "capck", "", []Message{{Role: "user", Content: "go"}}, tools, 5, 100, nil, false, home)
-	if res.Status != "iteration_limit" {
-		t.Fatalf("status = %q, want iteration_limit", res.Status)
+	if res.Status != "iteration_limit" || res.Iterations != hardIterationCeiling {
+		t.Fatalf("result = %+v, want hard iteration limit at %d", res, hardIterationCeiling)
 	}
 	files, _ := filepath.Glob(filepath.Join(home, "checkpoints", "*.json"))
 	if len(files) != 1 {

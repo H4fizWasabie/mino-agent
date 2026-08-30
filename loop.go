@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -63,6 +64,8 @@ func RunLoop(
 type traceTagKey struct{}
 
 type stageOutputsKey struct{}
+
+const hardIterationCeiling = 60
 
 // traceTagsFromCtx returns the playbook/stage tag set on the context when the
 // loop is executing inside a playbook stage (see runWorkspacePlaybook).
@@ -308,7 +311,6 @@ func RunLoopContext(
 	}()
 
 	var lastLoopDetected string
-	loopDetections := 0
 	lastRewritePush := ""
 
 	// Tool schemas are computed ONCE per turn, not per iteration. The selected
@@ -336,7 +338,8 @@ func RunLoopContext(
 	// observation injected into the message stream (never the byte-stable system
 	// prompt, so prefix-cache warmth is preserved).
 	repStreak := 0
-	var lastToolSig string
+	var lastProgressSig string
+	repetitionNudged := false
 
 	// #337 (finding 4) — read-spiral tracking: consecutive read_file calls
 	// without an edit/write attempt. The coding skill's read-before-edit is
@@ -345,7 +348,7 @@ func RunLoopContext(
 	readsSinceWrite := 0
 	lastReadNudge := 0
 
-	for i := 1; i <= maxIter; i++ {
+	for i := 1; i <= hardIterationCeiling; i++ {
 		if ctx.Err() != nil {
 			result.Status = "cancelled"
 			result.Reply = "Stopped."
@@ -363,19 +366,28 @@ func RunLoopContext(
 		// injections go into the message stream (cache-safe) — never the static
 		// system prompt — and fire only when notable to avoid token spam.
 		if len(result.ToolCalls) > 0 {
-			sig := loopToolSignature(result.ToolCalls[len(result.ToolCalls)-1])
-			if sig == lastToolSig {
+			call := result.ToolCalls[len(result.ToolCalls)-1]
+			sig := loopProgressSignature(call)
+			if sig == lastProgressSig {
 				repStreak++
 			} else {
-				lastToolSig = sig
+				lastProgressSig = sig
 				repStreak = 1
+				repetitionNudged = false
+			}
+			if repStreak >= 6 && repetitionNudged {
+				result.Iterations = i - 1
+				result.Status = "iteration_limit"
+				result.Reply = iterationCapReply(result.Iterations, result.ToolCalls, checkpointTurnProgress(traceHome, sessionID, result.ToolCalls), "stalled after the no-progress nudge")
+				return result
 			}
 			if repStreak >= 3 && repStreak%3 == 0 {
+				repetitionNudged = true
 				messages = append(messages, Message{
 					Role: "user",
 					Content: fmt.Sprintf(
-						"[System: you have repeated the identical tool call (%s) %d times in a row without progress, and have used %d of %d iterations. CHANGE APPROACH or state explicitly why you are abandoning this one — do not keep retrying the same thing to the iteration cap.]",
-						sig, repStreak, i-1, maxIter),
+						"[System: you have repeated the identical tool call and result (%s) %d times in a row without progress, and have used %d of %d base iterations. CHANGE APPROACH or state explicitly why you are abandoning this one — do not keep retrying the same thing to the hard ceiling.]",
+						call.Name, repStreak, i-1, maxIter),
 				})
 				// CTX-019: make the redirect observable — the post-mortem reads
 				// midflight_signal events + the run outcome to verify whether a
@@ -383,12 +395,12 @@ func RunLoopContext(
 				trace("midflight_signal", map[string]any{"signal": "repetition", "iteration": i - 1, "tool": sig, "streak": repStreak})
 			}
 		}
-		if i == maxIter-3 {
+		if i == hardIterationCeiling-3 {
 			messages = append(messages, Message{
 				Role: "user",
 				Content: fmt.Sprintf(
-					"[System: %d of %d iterations used. Finish the task now with what you have, or state what remains — do not start new exploration.]",
-					i-1, maxIter),
+					"[System: %d of %d hard iterations used. Finish the task now with what you have, or state what remains — do not start new exploration.]",
+					i-1, hardIterationCeiling),
 			})
 			trace("midflight_signal", map[string]any{"signal": "near_cap", "iteration": i - 1})
 		}
@@ -641,7 +653,6 @@ func RunLoopContext(
 			}
 			if loop, msg := detectLoop(history); loop && msg != lastLoopDetected {
 				lastLoopDetected = msg
-				loopDetections++
 				// Push to dashboard event stream
 				pushDashEvent(map[string]any{
 					"type": "loop_detected", "session_id": sessionID,
@@ -653,14 +664,6 @@ func RunLoopContext(
 				}
 				trace("loop_detected", map[string]any{"message": msg, "iteration": i})
 				notify(obs, "loop", map[string]any{"message": msg})
-				// Advisory prompts alone don't stop a stuck agent (observed: 8+ prompts
-				// ignored, ~200k tokens burned on a dead-end investigation). Hard-stop
-				// after three consecutive detections and hand back to the user.
-				if loopDetections >= 3 {
-					result.Status = "loop"
-					result.Reply = "Stopped: repeated loop detected (" + msg + "). Ask the user for guidance."
-					return result
-				}
 				messages = append(messages, Message{
 					Role:    "user",
 					Content: fmt.Sprintf("[System: loop detected — %s. Try a different approach or ask the user for guidance.]", msg),
@@ -695,7 +698,7 @@ func RunLoopContext(
 	// only tool NAMES. The checkpoint carries each step with args + status,
 	// and the reply points the resume turn at it: one read, continue from
 	// the last successful step, never restart from scratch.
-	result.Reply = iterationCapReply(maxIter, result.ToolCalls, checkpointTurnProgress(traceHome, sessionID, result.ToolCalls))
+	result.Reply = iterationCapReply(result.Iterations, result.ToolCalls, checkpointTurnProgress(traceHome, sessionID, result.ToolCalls), "reached the hard ceiling while progress was still detected")
 	return result
 }
 
@@ -707,7 +710,7 @@ func RunLoopContext(
 // the user (and the model on a later turn) resume meaningfully. #334: when a
 // checkpoint file exists, the reply names it — the resume turn reads it and
 // continues from the last successful step instead of re-deriving state.
-func iterationCapReply(maxIter int, toolCalls []ToolCall, checkpoint string) string {
+func iterationCapReply(maxIter int, toolCalls []ToolCall, checkpoint, reason string) string {
 	done := make([]string, 0)
 	seen := map[string]bool{}
 	for _, tc := range toolCalls {
@@ -716,7 +719,7 @@ func iterationCapReply(maxIter int, toolCalls []ToolCall, checkpoint string) str
 			done = append(done, tc.Name)
 		}
 	}
-	header := fmt.Sprintf("(stopped after %d iterations)", maxIter)
+	header := fmt.Sprintf("(stopped after %d iterations: %s)", maxIter, reason)
 	if len(done) == 0 {
 		if checkpoint != "" {
 			return header + " No tools were completed yet. Partial progress checkpointed at " + checkpoint + "."
@@ -729,6 +732,12 @@ func iterationCapReply(maxIter int, toolCalls []ToolCall, checkpoint string) str
 		reply += fmt.Sprintf(" Partial progress is checkpointed at %s — on resume, read that file first and continue from the last successful step; do not restart the task from scratch.", checkpoint)
 	}
 	return reply
+}
+
+// loopProgressSignature extends the existing call signature with a bounded
+// result identity. Hashing keeps repeated large tool output out of loop state.
+func loopProgressSignature(tc ToolCall) string {
+	return loopToolSignature(tc) + ":" + fmt.Sprintf("%x", sha256.Sum256([]byte(tc.Output)))
 }
 
 // checkpointTurnProgress writes the capped turn's tool trail to a durable

@@ -35,7 +35,7 @@ The entire loop is one function: `RunLoop()`. ~95 lines. No external orchestrati
 - No parallelism — sequential tool execution, simpler to reason about
 
 **What we did build:**
-- A hard iteration cap (`MINO_MAX_ITERATIONS`, default 25) — infinite loops can't happen
+- A progress-aware iteration budget (`MINO_MAX_ITERATIONS`, default 25) with a hard 60-iteration ceiling — infinite loops can't happen
 - Tool dedup within a turn — calling the same tool with the same args returns cached result
 - Completion verification — `os.Stat()` checks that claimed files actually exist
 - Observer callbacks — every step (LLM call, tool execution, completion) fires an event for the dashboard/Telegram
@@ -276,10 +276,10 @@ Already covered in #2. `os.Stat()` doesn't negotiate.
 **Guardrail 2: Iteration cap**
 
 ```go
-const maxIter = 25 // configurable via MINO_MAX_ITERATIONS
+const baseIter = 25 // configurable via MINO_MAX_ITERATIONS; hard ceiling is 60
 ```
 
-After 25 tool-calling cycles, the loop stops and returns: "I hit my iteration limit before completing the task." No runaway loops, no infinite API spend.
+The loop can continue past the base budget while calls and results keep changing, but stops after 60 tool-calling cycles at the latest. Repeated identical call/result pairs trigger a nudge at 3 and stop at 6 if the model does not change course. No runaway loops, no infinite API spend.
 
 **Guardrail 3: Tool hygiene (specialized tools over bash)**
 
