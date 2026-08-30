@@ -55,6 +55,45 @@ func TestCreateJSONRetriesWithoutResponseFormat(t *testing.T) {
 	}
 }
 
+// #440: GLM 5.3 flash rejects a disabled-reasoning JSON call outright
+// ("Reasoning is mandatory for this endpoint and cannot be disabled") — the
+// opposite requirement from DeepSeek. Both reasoning-disabled attempts must
+// fail before the client drops the override and retries.
+func TestCreateJSONRetriesWithoutReasoningOverrideWhenMandatory(t *testing.T) {
+	var calls []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var p map[string]any
+		json.Unmarshal(body, &p)
+		calls = append(calls, p)
+		if len(calls) <= 2 {
+			w.WriteHeader(400)
+			w.Write([]byte(`{"error":{"message":"Reasoning is mandatory for this endpoint and cannot be disabled.","code":400}}`))
+			return
+		}
+		w.Write([]byte(`{"choices":[{"message":{"content":"{\"ok\": true}"},"finish_reason":"stop"}],"usage":{}}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{apiKey: "k", baseURL: srv.URL, client: http.DefaultClient}
+	resp, err := c.CreateJSON("z-ai/glm-5.3-flash", []Message{{Role: "user", Content: "json please"}}, 600, "")
+	if err != nil {
+		t.Fatalf("CreateJSON: %v", err)
+	}
+	if !strings.Contains(resp.FinalText, `"ok"`) {
+		t.Fatalf("FinalText = %q, want JSON", resp.FinalText)
+	}
+	if len(calls) != 3 {
+		t.Fatalf("calls = %d, want 3 (2 reasoning-disabled attempts, then the fallback that succeeds)", len(calls))
+	}
+	if calls[0]["reasoning"] == nil || calls[1]["reasoning"] == nil {
+		t.Fatalf("first two attempts must still try reasoning disabled: %v / %v", calls[0], calls[1])
+	}
+	if calls[2]["reasoning"] != nil {
+		t.Fatalf("fallback attempt must drop the reasoning override: %v", calls[2])
+	}
+}
+
 func TestCreateJSONNoRetryOnSuccess(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
