@@ -94,6 +94,36 @@ func TestCreateJSONRetriesWithoutReasoningOverrideWhenMandatory(t *testing.T) {
 	}
 }
 
+// Issue found during v3.6.2 live eval: GLM 5.3 flash puts its JSON answer
+// under reasoning on every attempt of the retry ladder — reasoning disabled
+// or not, response_format set or not — so all four attempts previously
+// failed with "empty model response" even after #440's reasoning-override
+// fallback. The true last resort (reasoning override dropped, no
+// response_format) must promote reasoning into content instead of failing.
+func TestCreateJSONPromotesReasoningOnFinalAttempt(t *testing.T) {
+	var calls []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var p map[string]any
+		json.Unmarshal(body, &p)
+		calls = append(calls, p)
+		w.Write([]byte(`{"choices":[{"message":{"content":null,"reasoning":"thinking... {\"ok\": true}"},"finish_reason":"stop"}],"usage":{}}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{apiKey: "k", baseURL: srv.URL, client: http.DefaultClient}
+	resp, err := c.CreateJSON("z-ai/glm-5.3-flash", []Message{{Role: "user", Content: "json please"}}, 600, "")
+	if err != nil {
+		t.Fatalf("CreateJSON: %v", err)
+	}
+	if !strings.Contains(resp.FinalText, `"ok"`) {
+		t.Fatalf("FinalText = %q, want the reasoning-embedded JSON promoted into content", resp.FinalText)
+	}
+	if len(calls) != 4 {
+		t.Fatalf("calls = %d, want 4 (every ladder rung exhausted before promotion)", len(calls))
+	}
+}
+
 func TestCreateJSONNoRetryOnSuccess(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
