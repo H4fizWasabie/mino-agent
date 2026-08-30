@@ -894,12 +894,26 @@ func makeReadTool() *Tool {
 					}
 				}
 			}
+			// #453: token-efficiency discipline for workspace navigation — a
+			// playbook navigation spans many turns, so nudge (never withhold)
+			// when this exact path was already read this run and hasn't
+			// changed since, so the model can choose not to re-process it.
+			var navNote string
+			if info, statErr := os.Stat(path); statErr == nil {
+				if sid, _ := ctx.Value(sessionIDKey{}).(string); sid != "" {
+					if p, navigating := sessionNav(sid); navigating {
+						if prev, seen := noteNavRead(p.RunID, path, info.ModTime()); seen && prev.ModAt.Equal(info.ModTime()) {
+							navNote = fmt.Sprintf("[note: unchanged since you read it at %s this run — reuse your earlier read if it already answered this; reading on anyway]\n", prev.At.Format("15:04:05"))
+						}
+					}
+				}
+			}
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return fmt.Sprintf("Error reading %s: %v", path, err)
 			}
 			if int(offset) >= len(data) {
-				return "End of file."
+				return navNote + "End of file."
 			}
 			// issue #439: when the remainder already fits in one call, hand
 			// back all of it regardless of a smaller requested limit — stops a
@@ -913,9 +927,9 @@ func makeReadTool() *Tool {
 			}
 			chunk := data[int(offset):end]
 			if end < len(data) {
-				return string(chunk) + fmt.Sprintf("\n... (bytes %d-%d of %d; use offset %d)", int(offset), end, len(data), end)
+				return navNote + string(chunk) + fmt.Sprintf("\n... (bytes %d-%d of %d; use offset %d)", int(offset), end, len(data), end)
 			}
-			return string(chunk)
+			return navNote + string(chunk)
 		},
 	}
 }
