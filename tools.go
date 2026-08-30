@@ -40,6 +40,12 @@ type ContextToolFunc func(context.Context, map[string]any) string
 type sessionIDKey struct{}
 type userMessageKey struct{}
 
+// knownArtifactsKey holds a *sync.Map of artifact paths spilled during this
+// turn (issue #439): read_file rejects a results/ path that was never handed
+// back by a prior tool result, catching a fabricated filename before it
+// wastes a round-trip on a guessed path.
+type knownArtifactsKey struct{}
+
 type ToolBehavior uint8
 
 const (
@@ -849,7 +855,7 @@ func makeReadTool() *Tool {
 			},
 			"required": []string{"path"},
 		},
-		Fn: func(args map[string]any) string {
+		ContextFn: func(ctx context.Context, args map[string]any) string {
 			path, _ := args["path"].(string)
 			offset, _ := args["offset"].(float64)
 			limit, _ := args["limit"].(float64)
@@ -859,12 +865,29 @@ func makeReadTool() *Tool {
 			if limit <= 0 || limit > 16000 {
 				limit = 16000
 			}
+			// issue #439: an artifact path under results/ must have been handed
+			// back verbatim by a prior tool result this turn — reject a
+			// fabricated or guessed filename instead of round-tripping on a
+			// file that was never real.
+			if strings.Contains(path, string(filepath.Separator)+"results"+string(filepath.Separator)) {
+				if known, ok := ctx.Value(knownArtifactsKey{}).(*sync.Map); ok {
+					if _, seen := known.Load(path); !seen {
+						return fmt.Sprintf("Error: %s was not returned by any prior tool result this turn. Do not guess artifact filenames — copy the exact path from the tool result that produced it.", path)
+					}
+				}
+			}
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return fmt.Sprintf("Error reading %s: %v", path, err)
 			}
 			if int(offset) >= len(data) {
 				return "End of file."
+			}
+			// issue #439: when the remainder already fits in one call, hand
+			// back all of it regardless of a smaller requested limit — stops a
+			// weak model from paging a <16KB file across ten round-trips.
+			if remaining := len(data) - int(offset); remaining <= 16000 {
+				limit = float64(remaining)
 			}
 			end := int(offset + limit)
 			if end > len(data) {
