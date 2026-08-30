@@ -83,6 +83,7 @@ mino
 | `mino` | Launch dashboard (default) |
 | `mino cli` | Terminal chat |
 | `mino remember "query"` | Print graph-memory recall (same output as the in-loop `remember` tool, no LLM call) |
+| `mino audit-memory` | Read-only report of source-less, duplicate, conflicting, and stale graph facts |
 | `mino memory path <from> <to>` | Shortest path between two memory facts |
 | `mino version` | Show version |
 | `mino update` | Self-update from GitHub releases |

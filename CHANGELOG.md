@@ -2,6 +2,10 @@
 
 ### Added
 
+- **Read-only memory audit (#406)**: adds `mino audit-memory` to report
+  source-less facts, duplicate ID/subject families, conflicting bodies, and
+  stale configuration-snapshot candidates without modifying Markdown memory.
+
 - **Playbooks as navigable workspaces (#380)**: opened the Wayfinder design
   frontier for making playbook workspaces self-navigating and failure-aware,
   while preserving Mino's single-agent loop and explicit authority boundaries.
