@@ -1,22 +1,22 @@
 package main
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
-// playbook_nav.go — chat-navigation run pointer (issues #450/#451).
+// playbook_nav.go — chat-navigation run pointer (issues #450/#451/#452) and
+// the run-scoped read tracker it enables (#453).
 //
 // run_playbook no longer drives a stage's LLM turn itself for chat-triggered
-// runs (navigatePlaybookRun in playbook_workspace.go); Mino acts on the
-// workspace with its own read_file/write_file calls across many ordinary
-// turns instead of one dedicated stage loop. Something still has to
+// or scheduled runs (navigatePlaybookRun in playbook_workspace.go); Mino acts
+// on the workspace with its own read_file/write_file calls across many
+// ordinary turns instead of one dedicated stage loop. Something still has to
 // remember which run a session is currently authorized to touch between
 // those calls — the old stageCtx-injected traceTagKey did this per attempt,
 // but there is no per-attempt wrapper left to inject it. This is that seam:
 // a lightweight per-session pointer, the same sync.Mutex-guarded map pattern
 // run_registry.go already uses for run cancellation.
-//
-// The scheduler's dedicated stage loop (runWorkspacePlaybook, still used by
-// schedule_playbook until #452) keeps setting traceTagKey per attempt as
-// before and never touches this map.
 
 var (
 	navMu  sync.Mutex
@@ -37,11 +37,16 @@ func setSessionNav(sessionID, playbook, runID string) {
 
 // clearSessionNav drops a session's navigation pointer once its run finishes
 // (complete, failed, or interrupted) so a stale pointer never authorizes
-// writes into a run that is no longer in progress.
+// writes into a run that is no longer in progress. It also drops that run's
+// read tracker (#453) — a finished run has nothing left to avoid re-reading.
 func clearSessionNav(sessionID string) {
 	navMu.Lock()
+	p, ok := navPtr[sessionID]
 	delete(navPtr, sessionID)
 	navMu.Unlock()
+	if ok {
+		clearNavReads(p.RunID)
+	}
 }
 
 // sessionNav reports the run a session is currently authorized to touch, if any.
@@ -50,4 +55,42 @@ func sessionNav(sessionID string) (playbookNavPointer, bool) {
 	defer navMu.Unlock()
 	p, ok := navPtr[sessionID]
 	return p, ok
+}
+
+// navReads tracks, per run, which paths have already been read and when
+// (#453: token-efficiency discipline for workspace navigation). A playbook
+// navigation spans many turns — unlike the per-turn knownArtifactsKey — so
+// nothing else remembers this across the run's whole lifetime. Read-only
+// nudge, never enforcement: read_file always returns real content, this
+// only lets the harness tell the model when a path is unchanged since its
+// last read this run.
+var (
+	navReadsMu sync.Mutex
+	navReads   = map[string]map[string]navRead{} // runID -> path -> last read
+)
+
+type navRead struct {
+	At    time.Time
+	ModAt time.Time
+}
+
+// noteNavRead records path as read now for runID and returns the previous
+// read, if any, so the caller can compare it against the file's current mtime.
+func noteNavRead(runID, path string, modAt time.Time) (navRead, bool) {
+	navReadsMu.Lock()
+	defer navReadsMu.Unlock()
+	paths, ok := navReads[runID]
+	if !ok {
+		paths = map[string]navRead{}
+		navReads[runID] = paths
+	}
+	prev, seen := paths[path]
+	paths[path] = navRead{At: time.Now(), ModAt: modAt}
+	return prev, seen
+}
+
+func clearNavReads(runID string) {
+	navReadsMu.Lock()
+	delete(navReads, runID)
+	navReadsMu.Unlock()
 }

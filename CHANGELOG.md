@@ -2,6 +2,13 @@
 
 ### Changed
 
+- **Token-efficiency discipline for workspace navigation (#453)**: `read_file`
+  now nudges (never withholds) when a path is unchanged since it was last
+  read within the current playbook navigation run, so Mino can skip
+  re-processing content it already has instead of re-reading it out of
+  habit. Scoped entirely to active playbook navigation — zero behavior
+  change for ordinary reads. A stage's rendered contract also now says
+  plainly to read only its declared inputs unless genuinely blocked.
 - **Scheduled playbook runs fire through the normal loop (#452)**: a
   schedule fire now sends a synthetic instruction through Mino's own normal
   loop instead of calling a dedicated executor directly — Mino calls

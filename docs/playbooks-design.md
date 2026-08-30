@@ -72,7 +72,7 @@ Each `stages/NN-name/CONTEXT.md` defines:
 | Candidates | `output/candidates.md` | Markdown table with IDs |
 ```
 
-The runner loads only the declared stage contract and inputs. A stage output from the current run is available to the next stage through its declared relative input, for example `../01-collect/output/candidates.md`.
+The runner loads only the declared stage contract and inputs. A stage output from the current run is available to the next stage through its declared relative input, for example `../01-collect/output/candidates.md`. Mino is told to read only what's declared unless genuinely blocked, and `read_file` nudges (never withholds) when a path is unchanged since it was already read this run, so a simple playbook doesn't burn tokens navigating exhaustively.
 
 ## Execution and recovery
 

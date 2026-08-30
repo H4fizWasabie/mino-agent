@@ -872,7 +872,7 @@ func buildWorkspaceStagePrompt(pb *PlaybookWorkspace, run *PlaybookRun, stage Wo
 	for _, output := range stage.Outputs {
 		fmt.Fprintf(&b, "- %s: `%s`\n", output.Name, playbookRunOutputPath(pb, run, stage, output))
 	}
-	b.WriteString("\n## Rules\n\n- Execute only this stage.\n- Use the declared inputs; do not infer missing state.\n- Complete the stage audit before writing outputs.\n- This playbook is an autonomous contract; do not request approval.\n- If the contract cannot be fulfilled or verified, state the failure plainly and do not claim success.\n")
+	b.WriteString("\n## Rules\n\n- Execute only this stage.\n- Use the declared inputs; do not infer missing state.\n- Complete the stage audit before writing outputs.\n- This playbook is an autonomous contract; do not request approval.\n- If the contract cannot be fulfilled or verified, state the failure plainly and do not claim success.\n- Token discipline (#453): read only the inputs declared above; explore the workspace beyond them only if genuinely blocked, and say why. A read_file result marked unchanged since your last read this run needs no re-processing unless you have reason to expect it changed.\n")
 	if len(stage.Tools) > 0 {
 		fmt.Fprintf(&b, "- Declared capabilities for this stage: %s. Runtime policy remains authoritative.\n", strings.Join(stage.Tools, ", "))
 	}
