@@ -298,9 +298,10 @@ Playbooks are filesystem workspaces with `stages/NN-name/CONTEXT.md` contracts
 audit evidence — real tool calls, real outputs, nothing improvised. Each run
 gets an isolated workspace with verified outputs: a stage only passes when its
 declared outputs were written by that stage's own tool calls. Each LLM stage
-attempt also mechanically flags undeclared tools, undeclared output targets, or
-verification failures to the trace, audit log, and owner outbox without
-blocking execution. Read-only stages retry on failure; destructive stages fail
+adds its declared capabilities to the normal tool surface; those declarations
+guide the model but do not remove its always-available or sliding tools. The
+attempt mechanically flags undeclared output targets or verification failures
+to the trace, audit log, and owner outbox without blocking execution. Read-only stages retry on failure; destructive stages fail
 loud and never double-execute.
 Playbooks are autonomous-only — if a task needs the owner mid-way, it is a
 conversation, not a playbook. See [docs/playbooks-design.md](docs/playbooks-design.md).

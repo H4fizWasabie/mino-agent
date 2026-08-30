@@ -605,8 +605,8 @@ func TestManagePlaybookCanonicalizesGeneratedStageContracts(t *testing.T) {
 	}
 }
 
-// writeWorkspaceStageTool writes a one-stage playbook whose whitelist is the
-// given tools (plus write_file, which every stage must declare).
+// writeWorkspaceStageTool writes a one-stage playbook whose stage tools are
+// the given capabilities (plus write_file, the required output mechanism).
 func writeWorkspaceStageTool(t *testing.T, home, name string, tools ...string) {
 	t.Helper()
 	root := filepath.Join(home, "playbooks", name)
@@ -685,8 +685,8 @@ func TestStageDeviationFlagsAndReports(t *testing.T) {
 		{Name: "bash"},
 		{Name: "write_file", Args: map[string]any{"path": filepath.Join(home, "outside.md")}},
 	}, errors.New(`required output "output/result.md" was not written`))
-	if len(flags) != 3 {
-		t.Fatalf("flags = %v, want undeclared tool, undeclared path, verification error", flags)
+	if len(flags) != 2 {
+		t.Fatalf("flags = %v, want undeclared path and verification error", flags)
 	}
 	reportStageDeviations(core, "test", pb, run, stage, flags)
 	files, _ := filepath.Glob(filepath.Join(home, "outbox", "msg_owner_*.txt"))
@@ -697,7 +697,7 @@ func TestStageDeviationFlagsAndReports(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(alert), "contract deviation") || !strings.Contains(string(alert), "undeclared tool") {
+	if !strings.Contains(string(alert), "contract deviation") || !strings.Contains(string(alert), "undeclared stage output path") {
 		t.Fatalf("alert = %q", alert)
 	}
 }
@@ -752,7 +752,8 @@ func TestWorkspaceReportsDeviationWithoutBlocking(t *testing.T) {
 		}
 		return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{
 			{Name: "write_file", Args: map[string]any{"path": path}},
-			{Name: "bash", Output: "Error: unknown tool 'bash'"},
+			{Name: "search_web"},
+			{Name: "write_file", Args: map[string]any{"path": filepath.Join(home, "outside.md")}},
 		}}
 	}
 	result, err := RunPlaybook(context.Background(), core, "nonblocking", "run", "test", nil)
