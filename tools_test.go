@@ -567,6 +567,33 @@ func TestSchemasForContextCappedUnion(t *testing.T) {
 	}
 }
 
+func TestSchemasForContextAddsStageCapabilities(t *testing.T) {
+	db := Connect(t.TempDir())
+	defer db.Close()
+	r := NewRegistry()
+	r.SetSearchDB(db)
+	for _, name := range essentialNamesSorted {
+		r.Register(&Tool{Name: name, Description: "core capability", Schema: map[string]any{"type": "object"}})
+	}
+	r.Register(&Tool{Name: "stage_only", Description: "capability useful only for the active stage", Schema: map[string]any{"type": "object"}})
+	r.Register(&Tool{Name: "unrelated", Description: "unrelated specialist capability", Schema: map[string]any{"type": "object"}})
+
+	got := r.SchemasForContext("stage-session", "", "", []string{"stage_only"})
+	names := make(map[string]bool, len(got))
+	for _, schema := range got {
+		names[schema.Name] = true
+	}
+	if !names["stage_only"] {
+		t.Fatalf("stage capability missing: %v", names)
+	}
+	if !names["read_file"] || !names["write_file"] {
+		t.Fatalf("always-available tools missing: %v", names)
+	}
+	if names["unrelated"] {
+		t.Fatalf("unrelated sliding tool unexpectedly selected: %v", names)
+	}
+}
+
 // The bash tool rewrites commands through rtk when present (token-lean
 // output). The rewrite is trusted by OUTPUT SHAPE, not exit code: rtk 0.43.0
 // exits 3 (not the documented 0) for valid rewrites, so an exit-code check

@@ -2,10 +2,15 @@
 
 ### Changed
 
+- **Stage-aware additive tool exposure (#449)**: playbook stages now add their
+  declared capabilities to the normal loop's always-available and sliding tool
+  surfaces. Stage declarations are choices for the model, not a second tool
+  whitelist; runtime registration, risk, approval, and output verification
+  remain authoritative.
 - **After-the-fact playbook deviation detection (#447)**: stage attempts now
-  mechanically flag undeclared tool calls, undeclared `write_file` targets, and
-  deterministic contract-verification failures in the trace, audit log, and
-  owner outbox without blocking the run or asking an LLM to judge prose.
+  mechanically flag undeclared output targets and deterministic
+  contract-verification failures in the trace, audit log, and owner outbox
+  without blocking the run or asking an LLM to judge prose.
 
 ## [v3.6.5] — sticky provider recovery, progress-aware iterations, mid-flight self-repair (2026-08-30)
 

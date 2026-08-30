@@ -65,6 +65,8 @@ type traceTagKey struct{}
 
 type stageOutputsKey struct{}
 
+type stageToolNamesKey struct{}
+
 const hardIterationCeiling = 60
 
 // traceTagsFromCtx returns the playbook/stage tag set on the context when the
@@ -320,7 +322,11 @@ func RunLoopContext(
 	// cached 64/10671 tokens). Selection still happens against the full context
 	// available at turn start, so specialist tools for the task are included.
 	oneTurnText := lastTurnContext(messages)
-	schemas := tools.SchemasForContext(sessionID, toolSelectionContext(system, messages), oneTurnText)
+	var stageToolNames []string
+	if names, ok := ctx.Value(stageToolNamesKey{}).([]string); ok {
+		stageToolNames = names
+	}
+	schemas := tools.SchemasForContext(sessionID, toolSelectionContext(system, messages), oneTurnText, stageToolNames)
 	schemaChars := 0
 	schemaNames := make([]string, 0, len(schemas))
 	for _, s := range schemas {

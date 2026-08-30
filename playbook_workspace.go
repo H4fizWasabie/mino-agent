@@ -1083,10 +1083,11 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 			core.auditLog(sessionID, "script_stage", fmt.Sprintf("%s stage %02d-%s: script exit %d, run %s", pb.Name, stage.Number, stage.Name, code, run.ID), 0)
 			continue
 		}
+		// Stage tools expand the normal loop's tool surface; they are not a
+		// whitelist. Core safety, approval, and registered-tool boundaries stay
+		// authoritative while the model retains its always-available and sliding
+		// choices.
 		stageTools := core.Tools
-		if len(stage.Tools) > 0 {
-			stageTools = core.Tools.Only(stage.Tools...)
-		}
 		messages := append([]Message(nil), baseMessages...)
 		stagePrompt := buildWorkspaceStagePrompt(pb, run, stage, time.Now(), core.Settings.Location()) + "\n\n" + appendSystemTime("", time.Now(), core.Settings.Location())
 		if doAudit {
@@ -1126,6 +1127,7 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 				outPaths = append(outPaths, playbookRunOutputPath(pb, run, stage, o))
 			}
 			stageCtx = context.WithValue(stageCtx, stageOutputsKey{}, outPaths)
+			stageCtx = context.WithValue(stageCtx, stageToolNamesKey{}, append([]string(nil), stage.Tools...))
 			// DRF-002 provenance honesty: facts saved during a playbook run are
 			// model-distilled, not user-authored — save_note consults this
 			// counter and stamps "model-distill" instead of "user".
@@ -1291,8 +1293,9 @@ func verifyWorkspaceStageOutputs(pb *PlaybookWorkspace, run *PlaybookRun, stage 
 }
 
 // stageDeviationFlags compares a completed stage attempt with its mechanical
-// contract. Detection is advisory: the existing registry and output verifier
-// remain the enforcement boundaries.
+// output contract. Stage.Tools expands the model's choices; it is not an
+// execution whitelist. The existing registry and output verifier remain the
+// enforcement boundaries.
 func stageDeviationFlags(pb *PlaybookWorkspace, run *PlaybookRun, stage WorkspaceStage, calls []ToolCall, verificationErr error) []string {
 	var flags []string
 	seen := make(map[string]bool)
@@ -1303,9 +1306,6 @@ func stageDeviationFlags(pb *PlaybookWorkspace, run *PlaybookRun, stage Workspac
 		}
 	}
 	for _, call := range calls {
-		if len(stage.Tools) > 0 && !containsString(stage.Tools, call.Name) {
-			add(fmt.Sprintf("undeclared tool %q was attempted", truncate(call.Name, 80)))
-		}
 		if call.Name != "write_file" {
 			continue
 		}

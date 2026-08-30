@@ -273,13 +273,14 @@ var toolFamilies = [][]string{
 
 // SchemasForContext keeps the everyday tools available and retrieves specialist
 // schemas from the full assembled context, including skills, playbooks, history,
-// and prior observations. A registry without an index is static (used by tests
-// and explicit playbook stage registries).
+// and prior observations. stageToolNames adds the active stage's capabilities
+// to that selection; it does not remove always-available or sliding tools. A
+// registry without an index is static (used by tests and explicit registries).
 //
 // oneTurnText is the last user message + last assistant reply — used for semantic
 // embedding and MCP keyword gating so the signal is task-specific, not diluted by
 // full history and system prompt noise.
-func (r *Registry) SchemasForContext(sessionID string, fullCtx string, oneTurnText string) []ToolDef {
+func (r *Registry) SchemasForContext(sessionID string, fullCtx string, oneTurnText string, stageToolNames ...[]string) []ToolDef {
 	if r.searchDB == nil {
 		return r.Schemas()
 	}
@@ -300,6 +301,18 @@ func (r *Registry) SchemasForContext(sessionID string, fullCtx string, oneTurnTe
 		r.toolsMu.RUnlock()
 		if ok {
 			add(name)
+		}
+	}
+	// Active-stage capabilities are additive: the model keeps its core and
+	// sliding choices while gaining the tools declared useful for this stage.
+	if len(stageToolNames) > 0 {
+		for _, name := range stageToolNames[0] {
+			r.toolsMu.RLock()
+			_, ok := r.tools[name]
+			r.toolsMu.RUnlock()
+			if ok {
+				add(name)
+			}
 		}
 	}
 	// Explicit capability names in the current turn are authoritative. This
@@ -381,6 +394,11 @@ func (r *Registry) SchemasForContext(sessionID string, fullCtx string, oneTurnTe
 		immune := make(map[string]bool, len(explicit))
 		for _, name := range explicit {
 			immune[name] = true
+		}
+		if len(stageToolNames) > 0 {
+			for _, name := range stageToolNames[0] {
+				immune[name] = true
+			}
 		}
 		for _, name := range selOrder {
 			sess.selectName(name)
