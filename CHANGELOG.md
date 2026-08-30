@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [v3.6.5] — sticky provider recovery, progress-aware iterations, mid-flight self-repair (2026-08-30)
+
 ### Fixed
 
 - **Sticky provider pinning never recovered to the primary provider (#463)**:
