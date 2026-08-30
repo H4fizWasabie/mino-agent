@@ -1,5 +1,12 @@
 ## [Unreleased]
 
+### Changed
+
+- **After-the-fact playbook deviation detection (#447)**: stage attempts now
+  mechanically flag undeclared tool calls, undeclared `write_file` targets, and
+  deterministic contract-verification failures in the trace, audit log, and
+  owner outbox without blocking the run or asking an LLM to judge prose.
+
 ## [v3.6.5] — sticky provider recovery, progress-aware iterations, mid-flight self-repair (2026-08-30)
 
 ### Fixed

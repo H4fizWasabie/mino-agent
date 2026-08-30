@@ -1139,6 +1139,9 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 			result.StagesRun++
 			state.EndedAt = time.Now().UTC()
 			outputs, verifyErr = verifyWorkspaceStageOutputs(pb, run, stage, stageResult.ToolCalls, state.StartedAt)
+			if flags := stageDeviationFlags(pb, run, stage, stageResult.ToolCalls, verifyErr); len(flags) > 0 {
+				reportStageDeviations(core, sessionID, pb, run, stage, flags)
+			}
 			// A stage's contract is its verified outputs: a runtime error after
 			// the work is written (e.g. a flaked final model call) must not fail
 			// the stage — only a cancelled run or unverified outputs do.
@@ -1285,4 +1288,64 @@ func verifyWorkspaceStageOutputs(pb *PlaybookWorkspace, run *PlaybookRun, stage 
 		}
 	}
 	return outputs, nil
+}
+
+// stageDeviationFlags compares a completed stage attempt with its mechanical
+// contract. Detection is advisory: the existing registry and output verifier
+// remain the enforcement boundaries.
+func stageDeviationFlags(pb *PlaybookWorkspace, run *PlaybookRun, stage WorkspaceStage, calls []ToolCall, verificationErr error) []string {
+	var flags []string
+	seen := make(map[string]bool)
+	add := func(flag string) {
+		if !seen[flag] {
+			seen[flag] = true
+			flags = append(flags, flag)
+		}
+	}
+	for _, call := range calls {
+		if len(stage.Tools) > 0 && !containsString(stage.Tools, call.Name) {
+			add(fmt.Sprintf("undeclared tool %q was attempted", truncate(call.Name, 80)))
+		}
+		if call.Name != "write_file" {
+			continue
+		}
+		path, _ := call.Args["path"].(string)
+		if path == "" {
+			continue
+		}
+		declared := false
+		for _, output := range stage.Outputs {
+			if filepath.Clean(path) == filepath.Clean(playbookRunOutputPath(pb, run, stage, output)) {
+				declared = true
+				break
+			}
+		}
+		if !declared {
+			add("write_file targeted an undeclared stage output path")
+		}
+	}
+	if verificationErr != nil {
+		add("contract verification failed: " + truncate(verificationErr.Error(), 240))
+	}
+	return flags
+}
+
+// reportStageDeviations records and pages a mechanical deviation without
+// changing the stage result. The local trace, audit table, and outbox are the
+// existing inspectable owner-facing channels.
+func reportStageDeviations(core *Core, sessionID string, pb *PlaybookWorkspace, run *PlaybookRun, stage WorkspaceStage, flags []string) {
+	if core == nil || core.Settings == nil || len(flags) == 0 {
+		return
+	}
+	stageName := fmt.Sprintf("%02d-%s", stage.Number, stage.Name)
+	reason := strings.Join(flags, "; ")
+	message := fmt.Sprintf("⚠️ Playbook contract deviation: %s stage %s\n%s\nThe run was not blocked; inspect the stage trace and run artifacts.", pb.Name, stageName, reason)
+	queueOutbox(core.Settings.Home, "owner", message)
+	core.auditLog(sessionID, "stage_deviation", fmt.Sprintf("%s stage %s run %s: %s", pb.Name, stageName, run.ID, reason), 0)
+	logTrace(core.Settings.Home, "stage_deviation", map[string]any{
+		"playbook": pb.Name,
+		"stage":    stageName,
+		"run":      run.ID,
+		"flags":    flags,
+	})
 }

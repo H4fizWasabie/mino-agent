@@ -235,7 +235,7 @@ tools refuse every op with a clear boundary message, and `bash` refuses `sudo` o
 | Reply cuts off mid-sentence, or Mino repeats itself | `MINO_MAX_TOKENS` too small for the output | Raise `MINO_MAX_TOKENS` (16384 works well) |
 | Mino forgets earlier context in long chats | `MINO_MAX_HISTORY_TURNS` too low | Raise it — 10 is a good ceiling |
 | Tool errors, wrong results, or a tool that exists but is never used | Missing helper binary, or the model needs a clearer instruction | Install rtk/markitdown above; check the dashboard traces page or `MINO_HOME/traces/` and `MINO_HOME/audit.jsonl`, then retry with a more specific instruction |
-| Playbook run failed | A stage didn't write its declared outputs, or hit the stage iteration cap | Look in `MINO_HOME/playbooks/<name>/runs/<timestamp>/stages/` for what the failing stage actually wrote, then ask Mino to "check the playbook run" |
+| Playbook run failed | A stage didn't write its declared outputs, hit the stage iteration cap, or reported a contract deviation | Look in `MINO_HOME/playbooks/<name>/runs/<timestamp>/stages/`, `MINO_HOME/traces/`, and `MINO_HOME/audit.jsonl` for the stage evidence, then ask Mino to "check the playbook run" |
 
 When in doubt: retry with a clearer instruction, check the provider key still works, and check `mino update` for a newer build.
 
@@ -297,8 +297,11 @@ Playbooks are filesystem workspaces with `stages/NN-name/CONTEXT.md` contracts
 **capture_playbook**: run a task once, then compile it into a playbook from the
 audit evidence — real tool calls, real outputs, nothing improvised. Each run
 gets an isolated workspace with verified outputs: a stage only passes when its
-declared outputs were written by that stage's own tool calls. Read-only stages
-retry on failure; destructive stages fail loud and never double-execute.
+declared outputs were written by that stage's own tool calls. Each LLM stage
+attempt also mechanically flags undeclared tools, undeclared output targets, or
+verification failures to the trace, audit log, and owner outbox without
+blocking execution. Read-only stages retry on failure; destructive stages fail
+loud and never double-execute.
 Playbooks are autonomous-only — if a task needs the owner mid-way, it is a
 conversation, not a playbook. See [docs/playbooks-design.md](docs/playbooks-design.md).
 
