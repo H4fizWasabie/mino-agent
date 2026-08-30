@@ -26,6 +26,17 @@
   `mino eval-memory` check for expected hits, unwanted hits, stale visibility,
   archived recall, and irrelevant queries without external embeddings.
 
+### Changed
+
+- **Retire legacy SQLite semantic-memory tables (#407)**: schema v9 backs up
+  any unmigrated row in the legacy `facts` table into the graph (same path
+  as the existing `MigrateLegacyFacts`) and drops `facts`, `episodes`, and
+  `facts_fts` — the backup only proceeds to drop on success, so a failed
+  backup leaves the tables in place and retries on the next boot. Markdown
+  graph facts and chat history are untouched. The dashboard's `legacy_facts`
+  diagnostic (unused since the graph migration) is removed, and stale
+  FTS5-retrieval references in comments and docs are corrected.
+
 ### Fixed
 
 - **Gate provenance ranking on query relevance (#411)**: user-provenanced
