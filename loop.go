@@ -559,28 +559,82 @@ func RunLoopContext(
 		// must abort at the same bound.
 		toolResults := make([]map[string]any, 0)
 		provenanceWarned := false // CTX-022 C: warn once per turn
-		for _, tc := range toolUses {
-			args, _ := tc.Input.(map[string]any)
+
+		// #445: a batch of independent, read-only calls in one model response
+		// runs concurrently — only the ExecuteContext calls themselves.
+		// Eligibility is narrow on purpose: every call must be BehaviorObserve
+		// (no approval gate, no mutation-ordering risk) and none may be
+		// view_image (its vision step is a separate synchronous call this
+		// pass doesn't touch). Concurrency only ever affects wall-clock time:
+		// the per-call bookkeeping loop below always processes results in the
+		// model's original emission order, so message history, trace shape,
+		// and read-spiral accounting are identical to a sequential run for
+		// the same inputs. A single call, or any batch containing a mutating
+		// or view_image call, executes exactly as before this change.
+		toolArgs := make([]map[string]any, len(toolUses))
+		for idx, tc := range toolUses {
+			a, _ := tc.Input.(map[string]any)
+			toolArgs[idx] = a
+		}
+		precomputedRaw := map[int]string{}
+		if batchRunsConcurrently(tools, toolUses, toolArgs) {
+			trace("tool_batch", map[string]any{"concurrent": true, "batch_size": len(toolUses), "tools": toolUseNames(toolUses)})
+			raws := make([]string, len(toolUses))
+			var wg sync.WaitGroup
+			for idx, tc := range toolUses {
+				wg.Add(1)
+				go func(idx int, name string, args map[string]any) {
+					defer wg.Done()
+					defer func() {
+						if r := recover(); r != nil {
+							raws[idx] = fmt.Sprintf("Error: tool panicked: %v", r)
+						}
+					}()
+					if rawArgs, bad := args["__raw_arguments__"]; bad {
+						raws[idx] = fmt.Sprintf("Error: tool call arguments did not parse as JSON. Raw arguments: %v. Re-emit this call with valid JSON arguments.", rawArgs)
+						return
+					}
+					raws[idx] = tools.ExecuteContext(ctx, name, args)
+				}(idx, tc.Name, toolArgs[idx])
+			}
+			wg.Wait()
+			if ctx.Err() != nil {
+				result.Status = "cancelled"
+				result.Reply = "Stopped."
+				return result
+			}
+			for idx := range toolUses {
+				precomputedRaw[idx] = raws[idx]
+			}
+		}
+
+		for idx, tc := range toolUses {
+			args := toolArgs[idx]
 
 			// Update snapshot before running tool
 			if update, ok := ctx.Value(snapshotKey{}).(func(LoopSnapshot)); ok {
 				update(LoopSnapshot{Iteration: i, Status: "running_tool", CurrentTool: fmt.Sprintf("%s(%v)", tc.Name, args)})
 			}
 
-			// Malformed native tool-call args (provider.go injected
-			// __raw_arguments__ and logged the raw string). Never execute a tool
-			// with garbage input: return the raw string as the result so the
-			// model sees exactly what it emitted and can re-emit valid JSON.
 			var raw string
-			if rawArgs, bad := args["__raw_arguments__"]; bad {
-				raw = fmt.Sprintf("Error: tool call arguments did not parse as JSON. Raw arguments: %v. Re-emit this call with valid JSON arguments.", rawArgs)
+			if pre, ok := precomputedRaw[idx]; ok {
+				raw = pre
 			} else {
-				raw = tools.ExecuteContext(ctx, tc.Name, args)
-			}
-			if ctx.Err() != nil {
-				result.Status = "cancelled"
-				result.Reply = "Stopped."
-				return result
+				// Malformed native tool-call args (provider.go injected
+				// __raw_arguments__ and logged the raw string). Never execute a
+				// tool with garbage input: return the raw string as the result
+				// so the model sees exactly what it emitted and can re-emit
+				// valid JSON.
+				if rawArgs, bad := args["__raw_arguments__"]; bad {
+					raw = fmt.Sprintf("Error: tool call arguments did not parse as JSON. Raw arguments: %v. Re-emit this call with valid JSON arguments.", rawArgs)
+				} else {
+					raw = tools.ExecuteContext(ctx, tc.Name, args)
+				}
+				if ctx.Err() != nil {
+					result.Status = "cancelled"
+					result.Reply = "Stopped."
+					return result
+				}
 			}
 			// CTX-022 C: provenance gate — when the model reaches for the web
 			// after recall returned user-provenanced facts on the same subject,
@@ -929,6 +983,35 @@ func extractToolUses(blocks []ContentBlock) []ContentBlock {
 		}
 	}
 	return uses
+}
+
+// batchRunsConcurrently reports whether a batch of tool_use blocks is safe to
+// execute concurrently (#445): every call must be BehaviorObserve (no
+// approval gate to serialize, no mutation-ordering risk) and none may be
+// view_image (its vision-description step is a separate synchronous call
+// this pass doesn't cover). A single call gains nothing from concurrency, so
+// it stays sequential too.
+func batchRunsConcurrently(registry *Registry, toolUses []ContentBlock, args []map[string]any) bool {
+	if len(toolUses) < 2 {
+		return false
+	}
+	for i, tc := range toolUses {
+		if tc.Name == "view_image" {
+			return false
+		}
+		if registry.BehaviorFor(tc.Name, args[i]) != BehaviorObserve {
+			return false
+		}
+	}
+	return true
+}
+
+func toolUseNames(toolUses []ContentBlock) []string {
+	names := make([]string, len(toolUses))
+	for i, tc := range toolUses {
+		names[i] = tc.Name
+	}
+	return names
 }
 
 // extractTextToolUses parses text-embedded [tool_call: name({...})] markers.

@@ -2,6 +2,15 @@
 
 ### Changed
 
+- **Concurrent execution for independent read-only tool calls (#445)**: when
+  a model response contains two or more tool calls that are all read-only
+  (no side effects, no approval gate) and none is `view_image`, the harness
+  now runs them concurrently instead of one at a time — cutting wall-clock
+  time for batched lookups. Any batch containing a mutating or
+  approval-gated call stays fully sequential, unchanged. Message history,
+  trace order, and every other observable behavior stay identical to a
+  sequential run regardless of which path executed — only wall-clock time
+  differs.
 - **Token-efficiency discipline for workspace navigation (#453)**: `read_file`
   now nudges (never withholds) when a path is unchanged since it was last
   read within the current playbook navigation run, so Mino can skip
