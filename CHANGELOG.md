@@ -2,6 +2,13 @@
 
 ### Added
 
+- **Repository context map (#414)**: adds `CONTEXT.md`, a task-to-area
+  routing table mapping common work (loop, prompt assembly, memory,
+  playbooks, tools/extensions, dashboard, release) to its entry files, tests,
+  and design reference, so a fresh coding session can navigate without first
+  discovering the layout by trial and error. `AGENTS.md` now points to it as
+  the first step.
+
 - **Read-only memory audit (#406)**: adds `mino audit-memory` to report
   source-less facts, duplicate ID/subject families, conflicting bodies, and
   stale configuration-snapshot candidates without modifying Markdown memory.

@@ -9,10 +9,11 @@
 
 ## First Steps (mandatory)
 
-1. **Check `CHANGELOG.md`** to understand recent changes and patterns.
-2. **Understand the philosophy**: Mino is a Go rewrite synthesizing Mino (architecture), Mino (capabilities), and Mino (context). Keep it simple. If Mino doesn't have it, question why Mino needs it.
-3. **Navigate with the graphs, not grep**: before reading any code, run `graphify query "<question>"` (when `graphify-out/graph.json` exists), `graphify path "<A>" "<B>"` for relationships, and `graphify explain "<concept>"` for concepts. For symbols and call paths, use `codegraph query` and `codegraph explore`. Read files only at the line ranges the graphs surface. After modifying code, run `graphify update .` and `codegraph sync` to keep both indexes current. (Dirty graph files are expected after hooks/incremental updates — not a reason to skip the graphs; only skip if the task is about the graphs themselves.)
-4. **Prompt-assembly seams carry tests (REL-04)**: the named seams in `seams_test.go` (`promptAssemblySeams`) must each have a Test function naming them before any feature touching them ships — the presence check fails `go test ./...` otherwise. New seams join the list when they are born.
+1. **Route by task**: [CONTEXT.md](CONTEXT.md) maps what you're working on (loop, memory, playbooks, tools, dashboard, release) to its entry files, tests, and design doc — check it before grepping around.
+2. **Check `CHANGELOG.md`** to understand recent changes and patterns.
+3. **Understand the philosophy**: Mino is a Go rewrite synthesizing Mino (architecture), Mino (capabilities), and Mino (context). Keep it simple. If Mino doesn't have it, question why Mino needs it.
+4. **Navigate with the graphs, not grep**: before reading any code, run `graphify query "<question>"` (when `graphify-out/graph.json` exists), `graphify path "<A>" "<B>"` for relationships, and `graphify explain "<concept>"` for concepts. For symbols and call paths, use `codegraph query` and `codegraph explore`. Read files only at the line ranges the graphs surface. After modifying code, run `graphify update .` and `codegraph sync` to keep both indexes current. (Dirty graph files are expected after hooks/incremental updates — not a reason to skip the graphs; only skip if the task is about the graphs themselves.)
+5. **Prompt-assembly seams carry tests (REL-04)**: the named seams in `seams_test.go` (`promptAssemblySeams`) must each have a Test function naming them before any feature touching them ships — the presence check fails `go test ./...` otherwise. New seams join the list when they are born.
 
 ## Building and shipping Mino (mandatory before you build)
 
