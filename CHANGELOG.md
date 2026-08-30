@@ -9,6 +9,15 @@
   a durable one-line summary is appended to `runs-archive.jsonl` before a
   run directory is removed.
 
+- **Open-loops checkpoint before context compaction (#405)**: when
+  turns-based history compaction is about to drop turns from the active
+  prompt, an async pass extracts unresolved questions, pending decisions,
+  and promised follow-ups (with exact identifiers when present) into a
+  durable memory fact, so they survive through the normal recall path
+  instead of depending on the model voluntarily calling `remember`. Raw
+  chat history in SQLite is never touched; a failed extraction leaves the
+  span unprocessed so it's retried on the next compaction.
+
 - **Read-only memory audit (#406)**: adds `mino audit-memory` to report
   source-less facts, duplicate ID/subject families, conflicting bodies, and
   stale configuration-snapshot candidates without modifying Markdown memory.
