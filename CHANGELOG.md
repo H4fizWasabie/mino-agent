@@ -2,6 +2,13 @@
 
 ### Added
 
+- **Playbook run retention (#404)**: completed, failed, and interrupted
+  playbook run directories are now pruned after 30 days (matching the
+  existing spill/trace retention horizon), in the same throttled sweep.
+  The newest run per playbook and any run still "running" are never pruned;
+  a durable one-line summary is appended to `runs-archive.jsonl` before a
+  run directory is removed.
+
 - **Read-only memory audit (#406)**: adds `mino audit-memory` to report
   source-less facts, duplicate ID/subject families, conflicting bodies, and
   stale configuration-snapshot candidates without modifying Markdown memory.

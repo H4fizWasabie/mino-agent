@@ -517,6 +517,106 @@ func ReconcileInterruptedRuns(home string) int {
 	return n
 }
 
+// playbookRunRetention bounds how long a finished run directory survives on
+// disk. 30 days matches the spill and trace retention horizons (loop.go).
+const playbookRunRetention = 30 * 24 * time.Hour
+
+// prunePlaybookRuns sweeps playbooks/*/runs/ (DATA-006, #404): trace and
+// spill retention already bound their stores, but completed run directories
+// accumulated with no ceiling. A run is only ever pruned if all of these
+// hold:
+//   - it isn't the newest run for its playbook (the resume path always looks
+//     at the newest run first, so an older run is never the resume target
+//     even if it happens to carry a resumable status)
+//   - its status isn't "running" (an in-flight run is never touched)
+//   - it is older than playbookRunRetention
+//
+// A run with an unreadable or corrupt state.json is left alone rather than
+// guessed at — the same caution ReconcileInterruptedRuns takes.
+//
+// Before removal, a one-line summary is appended to runs-archive.jsonl in
+// the playbook directory so the run's outcome survives even though its
+// artifacts don't (DATA-006's "recoverable or leaves a durable summary"
+// requirement).
+func prunePlaybookRuns(home string) {
+	root := filepath.Join(home, "playbooks")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-playbookRunRetention)
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		prunePlaybookWorkspaceRuns(filepath.Join(root, e.Name()), cutoff)
+	}
+}
+
+func prunePlaybookWorkspaceRuns(pbDir string, cutoff time.Time) {
+	runsDir := filepath.Join(pbDir, "runs")
+	entries, err := os.ReadDir(runsDir)
+	if err != nil {
+		return
+	}
+	var ids []string
+	for _, e := range entries {
+		if e.IsDir() {
+			ids = append(ids, e.Name())
+		}
+	}
+	if len(ids) <= 1 {
+		return // nothing to prune, or only the (protected) newest run exists
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(ids))) // newest first
+	for _, id := range ids[1:] {                   // newest is always protected
+		runDir := filepath.Join(runsDir, id)
+		data, err := os.ReadFile(filepath.Join(runDir, "state.json"))
+		if err != nil {
+			continue // unreadable state: leave it, don't guess
+		}
+		var run PlaybookRun
+		if json.Unmarshal(data, &run) != nil {
+			continue
+		}
+		if run.Status == "running" {
+			continue
+		}
+		if run.CreatedAt.After(cutoff) {
+			continue
+		}
+		if err := archivePlaybookRun(pbDir, &run); err != nil {
+			continue // archive failed: keep the run rather than lose the record
+		}
+		os.RemoveAll(runDir)
+	}
+}
+
+// archivePlaybookRun appends a durable one-line summary of run to
+// runs-archive.jsonl before prunePlaybookWorkspaceRuns deletes its directory.
+func archivePlaybookRun(pbDir string, run *PlaybookRun) error {
+	f, err := os.OpenFile(filepath.Join(pbDir, "runs-archive.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	summary := struct {
+		ID         string    `json:"id"`
+		Status     string    `json:"status"`
+		Request    string    `json:"request,omitempty"`
+		CreatedAt  time.Time `json:"created_at"`
+		UpdatedAt  time.Time `json:"updated_at"`
+		Stages     int       `json:"stages"`
+		ArchivedAt time.Time `json:"archived_at"`
+	}{run.ID, run.Status, run.Request, run.CreatedAt, run.UpdatedAt, len(run.Stages), time.Now().UTC()}
+	data, err := json.Marshal(summary)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(append(data, '\n'))
+	return err
+}
+
 func nextPlaybookStage(run *PlaybookRun) *PlaybookRunStage {
 	for i := range run.Stages {
 		if run.Stages[i].Status != "complete" {
