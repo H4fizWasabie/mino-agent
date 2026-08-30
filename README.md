@@ -24,7 +24,7 @@ Mino is built for more than chat:
 - **Telegram** — same agent, any device
 - **Playbooks** — autonomous repeatable workflows: teach once, compile from evidence, schedule daily, verified outputs, Telegram reports
 - **Coding tools** — read, write, edit, grep, glob, git, graphify, codegraph, bash
-- **Memory** — Markdown-authoritative graph memory (facts as frontmatter `.md` files) with incremental maintenance within minutes and full daily rebuilds, episodic/semantic split (episodes expire to archive after 30 days; semantic facts are protected), config-whitelisted semantic distillation, FTS5 retrieval, auto-consolidation, one-time reminders
+- **Memory** — Markdown-authoritative graph memory (facts as frontmatter `.md` files) with incremental maintenance within minutes and full daily rebuilds, episodic/semantic split (episodes expire to archive after 30 days; semantic facts are protected), config-whitelisted semantic distillation, keyword-narrowed graph retrieval, auto-consolidation, one-time reminders
 - **Multi-provider** — priority, fallback, circuit breaking, and OpenRouter routing (model `:provider` pins + privacy-safe `provider_routing`/`allow_fallbacks`)
 - **OAuth login** — Claude, Codex (ChatGPT), GitHub Copilot, xAI/Grok
 - **Web search** — Tavily API (free tier available)
@@ -286,7 +286,7 @@ post_mortem.go       — failure-evidence extraction for failed runs (CTX-017)
 audit_playbook.go    — design-time contract risk-flags (CTX-018)
 adapters.go          — working memory and patterns
 reminder.go          — persistent one-time reminders with Telegram delivery
-db.go                — SQLite schema and migrations (FTS5, schema v8+)
+db.go                — SQLite schema and migrations (tool-catalog FTS5, schema v9+; legacy semantic-memory tables retired #407)
 config.go            — environment variable → Settings
 update.go            — self-update from GitHub releases (the only production deploy path; see docs/emergency-deploy.md for the manual lane)
 deploy.sh            — VPS bootstrap only (user, oauth, units, DB backup); never pushes binaries

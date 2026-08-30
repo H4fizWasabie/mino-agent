@@ -1504,7 +1504,8 @@ func pruneSpillsIfDue(home string) {
 	}
 	lastSpillPrune = time.Now()
 	pruneSpills(home)
-	pruneTraces(home) // DATA-002 (#345): traces had no retention; same sweep, same bound
+	pruneTraces(home)       // DATA-002 (#345): traces had no retention; same sweep, same bound
+	prunePlaybookRuns(home) // DATA-006 (#404): completed run dirs had no retention; same sweep, same bound
 }
 
 // traceRetentionDays bounds traces/: daily trace files older than this are

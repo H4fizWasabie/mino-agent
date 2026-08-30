@@ -2,7 +2,8 @@ package main
 
 // graph_memory — graphify-style knowledge graph memory.
 // One .md file per fact with YAML front matter carrying explicit edges.
-// remember() traverses the graph; FTS5 provides the entry point.
+// remember() traverses the graph; keyword matching (memory.go) provides the
+// entry point — SQLite FTS5 was retired with the legacy facts table (#407).
 
 import (
 	"database/sql"

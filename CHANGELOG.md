@@ -9,6 +9,22 @@
   discovering the layout by trial and error. `AGENTS.md` now points to it as
   the first step.
 
+- **Playbook run retention (#404)**: completed, failed, and interrupted
+  playbook run directories are now pruned after 30 days (matching the
+  existing spill/trace retention horizon), in the same throttled sweep.
+  The newest run per playbook and any run still "running" are never pruned;
+  a durable one-line summary is appended to `runs-archive.jsonl` before a
+  run directory is removed.
+
+- **Open-loops checkpoint before context compaction (#405)**: when
+  turns-based history compaction is about to drop turns from the active
+  prompt, an async pass extracts unresolved questions, pending decisions,
+  and promised follow-ups (with exact identifiers when present) into a
+  durable memory fact, so they survive through the normal recall path
+  instead of depending on the model voluntarily calling `remember`. Raw
+  chat history in SQLite is never touched; a failed extraction leaves the
+  span unprocessed so it's retried on the next compaction.
+
 - **Read-only memory audit (#406)**: adds `mino audit-memory` to report
   source-less facts, duplicate ID/subject families, conflicting bodies, and
   stale configuration-snapshot candidates without modifying Markdown memory.
@@ -16,6 +32,17 @@
 - **Retrieval-quality evaluation (#408)**: adds a deterministic, read-only
   `mino eval-memory` check for expected hits, unwanted hits, stale visibility,
   archived recall, and irrelevant queries without external embeddings.
+
+### Changed
+
+- **Retire legacy SQLite semantic-memory tables (#407)**: schema v9 backs up
+  any unmigrated row in the legacy `facts` table into the graph (same path
+  as the existing `MigrateLegacyFacts`) and drops `facts`, `episodes`, and
+  `facts_fts` — the backup only proceeds to drop on success, so a failed
+  backup leaves the tables in place and retries on the next boot. Markdown
+  graph facts and chat history are untouched. The dashboard's `legacy_facts`
+  diagnostic (unused since the graph migration) is removed, and stale
+  FTS5-retrieval references in comments and docs are corrected.
 
 ### Fixed
 

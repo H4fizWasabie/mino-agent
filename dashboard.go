@@ -1030,8 +1030,9 @@ func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 	// sessions — grouped by session_id
 	sessions := sessionList(db)
 
-	// Semantic facts come from the graph. SQLite facts remain visible only as
-	// migration diagnostics until the separate retirement release.
+	// Semantic facts come from the graph — the sole source of truth since
+	// the graph migration. The legacy SQLite `facts` table itself was
+	// retired in schema v9 (#407); nothing reads from it anymore.
 	factsData := []map[string]any{}
 	if dashCore.Memory != nil && dashCore.Memory.graph != nil {
 		for _, fact := range dashCore.Memory.graph.Facts() {
@@ -1042,7 +1043,6 @@ func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
-	legacyFactsData := queryAll(db, "SELECT id, subject, content, source, created_at FROM facts ORDER BY id DESC")
 	episodesData := graphEpisodes(dashCore.Memory)
 	calendarData := queryAll(db, "SELECT title, start, \"end\", attendees, created_at FROM calendar_events ORDER BY start")
 	skillsData := skillCatalog(dashCore.Settings.Home)
@@ -1077,7 +1077,6 @@ func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 
 	// counts
 	factsN := len(factsData)
-	legacyFactsN, _ := countRows(db, "facts")
 	episodesN := len(episodesData)
 	calendarN, _ := countRows(db, "calendar_events")
 	chatN, _ := countRows(db, "chat_log")
@@ -1121,9 +1120,8 @@ func handleDataAPI(w http.ResponseWriter, r *http.Request) {
 		"turns":             traceTurns(dashCore.Settings.Home),
 		"trace_tail":        traceTail(dashCore.Settings.Home),
 		"trace_file":        traceFileName(dashCore.Settings.Home),
-		"tables":            map[string]int{"facts": factsN, "legacy_facts": legacyFactsN, "episodes": episodesN, "calendar_events": calendarN, "chat_log": chatN},
+		"tables":            map[string]int{"facts": factsN, "episodes": episodesN, "calendar_events": calendarN, "chat_log": chatN},
 		"facts":             factsData,
-		"legacy_facts":      legacyFactsData,
 		"episodes":          episodesData,
 		"calendar":          calendarData,
 		"outbox":            outboxData,
