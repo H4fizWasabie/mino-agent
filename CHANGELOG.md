@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [v3.7.0] — unified-loop playbook navigation, concurrent tool batching, token discipline (2026-08-30)
+
 ### Changed
 
 - **Concurrent execution for independent read-only tool calls (#445)**: when
