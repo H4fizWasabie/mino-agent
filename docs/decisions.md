@@ -81,7 +81,7 @@ become the state machine for that task and each stage uses the canonical loop.
 
 **Why:** Fast deterministic discovery handles common requests; embeddings improve recall without making every request pay the embedding cost. Keeping the decision inside Mino preserves follow-up context and avoids forcing ordinary questions through a workflow.
 
-**Superseded (EMB-001, v2.9.0):** embeddings are removed entirely — the recall gap-fill contributed zero hits on production, dedup clustering was a silent no-op after fact rekeying, and every other consumer was dead or replaceable. The floor is FTS5 + essentials + skill triggers + keyword-narrowed graph candidates; tool descriptions were strengthened in the user's vocabulary as the data-side fix.
+**Superseded (EMB-001, v2.9.0):** embeddings are removed entirely — the recall gap-fill contributed zero hits on production, dedup clustering was a silent no-op after fact rekeying, and every other consumer was dead or replaceable. The floor is essentials + skill triggers + keyword-narrowed graph candidates (the legacy SQLite FTS5 facts table was retired in schema v9, #407); tool descriptions were strengthened in the user's vocabulary as the data-side fix.
 
 ---
 

@@ -14,7 +14,7 @@ import (
 
 // CurrentSchemaVersion is incremented when the schema changes in a way
 // that needs explicit migration. Add a migration function in runMigrations().
-const CurrentSchemaVersion = 8
+const CurrentSchemaVersion = 9
 
 // Simplified schema — single statements, no triggers with embedded semicolons.
 var schemaStatements = []string{
@@ -214,6 +214,32 @@ func runMigrations(db *sql.DB, home string) {
 	if current < 8 {
 		migrateUsageJSONL(db, home)
 		current = 8
+	}
+	// v9: retire legacy SQLite semantic-memory tables (#407). Markdown graph
+	// facts have been the source of truth since the graph migration; the
+	// live `facts` table was already empty in production. A final
+	// MigrateLegacyFacts pass runs first so any last unmigrated row (on an
+	// install that isn't already empty) is archived under
+	// memory-migration/legacy/ and canonicalized into the graph before its
+	// source table disappears — no legacy fact is ever silently dropped.
+	// `episodes` has had no writer since the graph migration (dashboard.go
+	// reads episodes from the graph only) and `facts_fts` was this table's
+	// FTS5 shadow on installs old enough to have one; both are safe to drop
+	// unconditionally.
+	if current < 9 {
+		memoriesDir := envOr("MINO_MEMORIES_DIR", filepath.Join(home, "memories"))
+		if _, err := MigrateLegacyFacts(db, home, memoriesDir); err != nil {
+			// Leave current at its pre-v9 value: _meta.schema_version is only
+			// written below when current != from, so an unset current here
+			// retries this whole block on the next boot instead of leaving
+			// the facts table dropped without a confirmed backup.
+			slog.Error("v9 migration: legacy facts backup failed, leaving facts table in place", "error", err)
+		} else {
+			db.Exec("DROP TABLE IF EXISTS facts")
+			db.Exec("DROP TABLE IF EXISTS episodes")
+			db.Exec("DROP TABLE IF EXISTS facts_fts")
+			current = 9
+		}
 	}
 
 	if current != from {

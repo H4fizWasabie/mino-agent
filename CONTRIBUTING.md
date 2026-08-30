@@ -32,7 +32,7 @@ go test ./...
 main.go          — entry point
 loop.go          — agent loop (~100 lines)
 session.go       — system prompt, context
-memory.go        — SQLite + FTS5
+memory.go        — Markdown graph facts + SQLite chat log/consolidation
 tools.go         — built-in tools
 provider.go      — LLM client
 dashboard.go     — web UI + API

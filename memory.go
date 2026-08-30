@@ -1,7 +1,7 @@
 package main
 
 // Mino — memory/ — Core's exact memory system.
-// Three pillars: semantic (FTS5), episodic, procedural (skills).
+// Three pillars: semantic (Markdown graph facts, #407), episodic, procedural (skills).
 
 import (
 	"database/sql"
