@@ -1697,6 +1697,7 @@ func TestVerifyStageSuccessOutcomes(t *testing.T) {
 		t.Fatal(err)
 	}
 	stage1, _ := workspaceStage(pb, 1)
+	attemptStart := time.Now()
 	path := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		t.Fatal(err)
@@ -1718,7 +1719,7 @@ func TestVerifyStageSuccessOutcomes(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := verifyWorkspaceStageOutputs(pb, run, stage1, tc.calls)
+			_, err := verifyWorkspaceStageOutputs(pb, run, stage1, tc.calls, attemptStart)
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("verification failed: %v", err)
@@ -1745,6 +1746,7 @@ func TestVerifyStageSuccessOutcomes(t *testing.T) {
 		t.Fatal(err)
 	}
 	stage2, _ := workspaceStage(pb2, 1)
+	attemptStart2 := time.Now()
 	path2 := playbookRunOutputPath(pb2, run2, stage2, stage2.Outputs[0])
 	if err := os.MkdirAll(filepath.Dir(path2), 0700); err != nil {
 		t.Fatal(err)
@@ -1752,9 +1754,56 @@ func TestVerifyStageSuccessOutcomes(t *testing.T) {
 	if err := os.WriteFile(path2, []byte("result"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := verifyWorkspaceStageOutputs(pb2, run2, stage2, []ToolCall{{Name: "write_file", Args: map[string]any{"path": path2}}}); err != nil {
+	if _, err := verifyWorkspaceStageOutputs(pb2, run2, stage2, []ToolCall{{Name: "write_file", Args: map[string]any{"path": path2}}}, attemptStart2); err != nil {
 		t.Fatalf("stage without ## Success should verify on outputs alone, got %v", err)
 	}
+}
+
+// TestVerifyWorkspaceStageOutputsToolAgnostic reproduces issue #460: a stage
+// output written via any whitelisted tool other than write_file (bash
+// heredoc/redirection, in the live case) must still verify, provided it was
+// genuinely produced during this attempt — while a file that predates the
+// attempt (rubber-stamping) must still fail, preserving the original
+// guarantee.
+func TestVerifyWorkspaceStageOutputsToolAgnostic(t *testing.T) {
+	home := t.TempDir()
+	writeWorkspaceStageTool(t, home, "plain", "search_web")
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	registry.Register(&Tool{Name: "search_web", Behavior: BehaviorObserve})
+	pb, err := loadPlaybookWorkspace(home, "plain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := loadOrCreatePlaybookRun(pb, registry, "run", "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, _ := workspaceStage(pb, 1)
+	path := playbookRunOutputPath(pb, run, stage, stage.Outputs[0])
+
+	t.Run("written via bash during the attempt passes", func(t *testing.T) {
+		attemptStart := time.Now()
+		time.Sleep(2 * time.Millisecond) // ensure the write's mtime is strictly after attemptStart
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("result"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		calls := []ToolCall{{Name: "bash", Args: map[string]any{"command": "cat > " + path + " <<'EOF'\nresult\nEOF"}}}
+		if _, err := verifyWorkspaceStageOutputs(pb, run, stage, calls, attemptStart); err != nil {
+			t.Fatalf("bash-written output should verify via mtime, got %v", err)
+		}
+	})
+
+	t.Run("pre-existing file from before the attempt still fails", func(t *testing.T) {
+		time.Sleep(2 * time.Millisecond) // ensure attemptStart is strictly after the pre-seeded write
+		attemptStart := time.Now()
+		if _, err := verifyWorkspaceStageOutputs(pb, run, stage, nil, attemptStart); err == nil {
+			t.Fatal("pre-seeded output (rubber-stamping) should still fail verification")
+		}
+	})
 }
 
 func TestWorkspaceStageOutcomeFailurePushesOnceThenFails(t *testing.T) {

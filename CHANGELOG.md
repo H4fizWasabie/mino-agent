@@ -1,5 +1,22 @@
 ## [Unreleased]
 
+### Fixed
+
+- **Stage output verification only recognized write_file, false-failing a
+  stage whose output was written via bash (#460)**: a stage that produces
+  its declared output through any whitelisted tool other than `write_file`
+  — a `bash` heredoc/redirection, `edit_file`, `sync_file` — was marked
+  failed even though the file was genuinely written and the stage's real
+  work (including a mandatory Telegram send) completed successfully. Caught
+  live: a scheduled run's stage wrote its output via `bash cat > ... <<EOF`,
+  the harness couldn't attribute it, marked the run failed, and queued a
+  false "⚠️ Scheduled run failed" alert next to the run's own genuinely
+  successful message. Verification is now tool-agnostic: an output whose
+  mtime falls at or after the current attempt started counts as written
+  this attempt, regardless of which tool wrote it — a file that predates
+  the attempt (rubber-stamping) still fails, preserving the original
+  guarantee.
+
 ## [v3.6.3] — JSON-mode reasoning promotion + verification-block reword (2026-08-30)
 
 ### Fixed

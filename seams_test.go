@@ -250,6 +250,7 @@ func TestVerifyWorkspaceStageOutputsSuccessOutcome(t *testing.T) {
 	}
 	// The declared output must exist for the output check to pass; the
 	// Success check is what we exercise.
+	attemptStart := time.Now()
 	out := playbookRunOutputPath(pb, run, stage, StageOutput{Name: "Log", Path: "output/log.md"})
 	if err := os.MkdirAll(filepath.Dir(out), 0700); err != nil {
 		t.Fatal(err)
@@ -277,7 +278,7 @@ func TestVerifyWorkspaceStageOutputsSuccessOutcome(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := verifyWorkspaceStageOutputs(pb, run, stage, tc.calls)
+			_, err := verifyWorkspaceStageOutputs(pb, run, stage, tc.calls, attemptStart)
 			if tc.want == "" {
 				if err != nil {
 					t.Fatalf("expected pass, got error: %v", err)

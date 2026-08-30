@@ -1138,7 +1138,7 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 			result.Reply = stageResult.Reply
 			result.StagesRun++
 			state.EndedAt = time.Now().UTC()
-			outputs, verifyErr = verifyWorkspaceStageOutputs(pb, run, stage, stageResult.ToolCalls)
+			outputs, verifyErr = verifyWorkspaceStageOutputs(pb, run, stage, stageResult.ToolCalls, state.StartedAt)
 			// A stage's contract is its verified outputs: a runtime error after
 			// the work is written (e.g. a flaked final model call) must not fail
 			// the stage — only a cancelled run or unverified outputs do.
@@ -1239,12 +1239,18 @@ func (e *outcomeFailure) Error() string {
 }
 
 // verifyWorkspaceStageOutputs enforces write-attributed completion: a declared
-// output passes only if it exists, is non-empty, AND was written by a write_file
-// call recorded inside this stage's own tool log. Pre-seeded files (main loop
-// doing the work, then run_playbook rubber-stamping) fail attribution.
+// output passes only if it exists, is non-empty, AND was genuinely produced
+// during this stage attempt — either a write_file call recorded inside this
+// stage's own tool log (fast path), or, tool-agnostically, an mtime at or
+// after the attempt started (issue #460: a stage that writes its declared
+// output via bash heredoc/redirection, edit_file, or sync_file instead of
+// write_file was false-failing here even though the file was genuinely
+// produced this attempt). Pre-seeded files (main loop doing the work, then
+// run_playbook rubber-stamping) still fail attribution either way, since
+// their mtime predates the attempt.
 // Declared ## Success outcomes are checked next: a successful call to the named
 // tool whose result carries a 15+ digit ID. Absent section = unchanged behavior.
-func verifyWorkspaceStageOutputs(pb *PlaybookWorkspace, run *PlaybookRun, stage WorkspaceStage, calls []ToolCall) ([]string, error) {
+func verifyWorkspaceStageOutputs(pb *PlaybookWorkspace, run *PlaybookRun, stage WorkspaceStage, calls []ToolCall, attemptStart time.Time) ([]string, error) {
 	wrote := make(map[string]bool)
 	for _, call := range calls {
 		if call.Name != "write_file" {
@@ -1261,7 +1267,7 @@ func verifyWorkspaceStageOutputs(pb *PlaybookWorkspace, run *PlaybookRun, stage 
 		if err != nil || info.IsDir() || info.Size() == 0 {
 			return nil, fmt.Errorf("required output %q was not written", output.Path)
 		}
-		if !wrote[filepath.Clean(path)] {
+		if !wrote[filepath.Clean(path)] && info.ModTime().Before(attemptStart) {
 			return nil, fmt.Errorf("required output %q exists but was not written by this stage's tools", output.Path)
 		}
 		outputs = append(outputs, path)
