@@ -13,6 +13,18 @@
   `reasoning` into `content` like the non-JSON path always has, since the
   tolerant JSON parsers already extract an object from surrounding prose.
 
+- **Verification-discipline block caused redundant re-reads of just-read
+  files (#458)**: the system prompt's "verify the current state with a tool
+  before answering" instruction had no scope boundary against a path already
+  read earlier in the same turn — isolated live testing (varying only the
+  system prompt, same task, same full tool registry) showed a weaker model
+  re-reading all three files it had just read before answering, and the
+  duplicate reads disappeared entirely when that one block was removed from
+  an otherwise-untouched real prompt. Reworded to scope the instruction to
+  state that can change between the read and the answer, explicitly noting
+  that a path already read this turn without anything writing to it since
+  does not need a repeat read.
+
 ## [v3.6.2] — live-eval bug fixes: reply verification, playbook run-gate, stage detachment, read_file paging (2026-08-30)
 
 ### Added
