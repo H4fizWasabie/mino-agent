@@ -10,6 +10,13 @@
   `mino eval-memory` check for expected hits, unwanted hits, stale visibility,
   archived recall, and irrelevant queries without external embeddings.
 
+### Fixed
+
+- **Gate provenance ranking on query relevance (#411)**: user-provenanced
+  memories now receive their priority bonus only after matching the query or
+  active turn, preventing unrelated facts from blocking relevant recall and
+  archived fallback.
+
 - **Playbooks as navigable workspaces (#380)**: opened the Wayfinder design
   frontier for making playbook workspaces self-navigating and failure-aware,
   while preserving Mino's single-agent loop and explicit authority boundaries.

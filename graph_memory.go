@@ -5,7 +5,6 @@ package main
 // remember() traverses the graph; FTS5 provides the entry point.
 
 import (
-	"sync/atomic"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -16,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -25,7 +25,7 @@ import (
 
 type Fact struct {
 	ID         string    `yaml:"id"`
-	Type       string    `yaml:"type"` // "semantic" or "episodic"
+	Type       string    `yaml:"type"`           // "semantic" or "episodic"
 	Tier       string    `yaml:"tier,omitempty"` // #321: "owner" | "learning" | "run" — recall/future passes weight by class
 	Subject    string    `yaml:"subject"`
 	At         time.Time `yaml:"at"`
@@ -1519,7 +1519,9 @@ func (gm *GraphMemory) entryRanking(query, turn string, facts map[string]*Fact, 
 		}
 		// issue #180: user authorship outranks model re-entry of the same
 		// knowledge — a correction must not lose to a newer distill fact.
-		if userProvenancedSource(fact.Source) {
+		// Provenance breaks ties among relevant facts; it must not create a
+		// match for an unrelated query (issue #411).
+		if score > 0 && userProvenancedSource(fact.Source) {
 			score += 30
 			signals = append(signals, "user-provenanced")
 		}
