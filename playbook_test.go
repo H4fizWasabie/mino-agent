@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -663,6 +664,107 @@ func TestWorkspaceDoesNotRetryDestructiveStage(t *testing.T) {
 	}
 	if run2.Stages[0].Attempts != 1 {
 		t.Fatalf("Attempts = %d, want 1 (no retry)", run2.Stages[0].Attempts)
+	}
+}
+
+func TestStageDeviationFlagsAndReports(t *testing.T) {
+	home := t.TempDir()
+	writeWorkspaceStageTool(t, home, "deviation", "search_web")
+	settings := &Settings{Home: home, Workspace: home}
+	core := &Core{Settings: settings}
+	pb, err := loadPlaybookWorkspace(home, "deviation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := loadOrCreatePlaybookRun(pb, NewRegistry(), "run", "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, _ := workspaceStage(pb, 1)
+	flags := stageDeviationFlags(pb, run, stage, []ToolCall{
+		{Name: "bash"},
+		{Name: "write_file", Args: map[string]any{"path": filepath.Join(home, "outside.md")}},
+	}, errors.New(`required output "output/result.md" was not written`))
+	if len(flags) != 3 {
+		t.Fatalf("flags = %v, want undeclared tool, undeclared path, verification error", flags)
+	}
+	reportStageDeviations(core, "test", pb, run, stage, flags)
+	files, _ := filepath.Glob(filepath.Join(home, "outbox", "msg_owner_*.txt"))
+	if len(files) != 1 {
+		t.Fatalf("outbox files = %v, want one deviation alert", files)
+	}
+	alert, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(alert), "contract deviation") || !strings.Contains(string(alert), "undeclared tool") {
+		t.Fatalf("alert = %q", alert)
+	}
+}
+
+func TestStageDeviationFlagsCleanAttempt(t *testing.T) {
+	home := t.TempDir()
+	writeWorkspaceStageTool(t, home, "clean", "search_web")
+	pb, err := loadPlaybookWorkspace(home, "clean")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := loadOrCreatePlaybookRun(pb, NewRegistry(), "run", "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, _ := workspaceStage(pb, 1)
+	path := playbookRunOutputPath(pb, run, stage, stage.Outputs[0])
+	if flags := stageDeviationFlags(pb, run, stage, []ToolCall{
+		{Name: "search_web"},
+		{Name: "write_file", Args: map[string]any{"path": path}},
+	}, nil); len(flags) != 0 {
+		t.Fatalf("clean attempt flags = %v", flags)
+	}
+}
+
+func TestWorkspaceReportsDeviationWithoutBlocking(t *testing.T) {
+	home := t.TempDir()
+	writeWorkspaceStageTool(t, home, "nonblocking", "search_web")
+	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	registry.Register(&Tool{Name: "search_web", Behavior: BehaviorObserve})
+	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
+	pb, err := loadPlaybookWorkspace(home, "nonblocking")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := loadOrCreatePlaybookRun(pb, registry, "run", "test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, _ := workspaceStage(pb, 1)
+	path := playbookRunOutputPath(pb, run, stage, stage.Outputs[0])
+	oldLoop := runPlaybookStageLoop
+	defer func() { runPlaybookStageLoop = oldLoop }()
+	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("result"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{
+			{Name: "write_file", Args: map[string]any{"path": path}},
+			{Name: "bash", Output: "Error: unknown tool 'bash'"},
+		}}
+	}
+	result, err := RunPlaybook(context.Background(), core, "nonblocking", "run", "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "complete" {
+		t.Fatalf("deviation should not block the stage, got %+v", result)
+	}
+	files, _ := filepath.Glob(filepath.Join(home, "outbox", "msg_owner_*.txt"))
+	if len(files) != 1 {
+		t.Fatalf("outbox files = %v, want one deviation alert", files)
 	}
 }
 

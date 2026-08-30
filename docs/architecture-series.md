@@ -304,6 +304,12 @@ This is a belt-and-suspenders defense against prompt injection through external 
 
 `RecordArtifact()` only accepts paths where the file actually exists and has size > 0. The model can claim it created a 10KB file, but if `os.Stat()` says otherwise, it doesn't make it into the artifact catalog.
 
+Completed playbook stage attempts also compare their tool trail with the
+declared contract. Undeclared tools, undeclared `write_file` targets, and
+deterministic verification failures are flagged in the trace, audit log, and
+owner outbox. Detection is after the fact and advisory; it does not add an LLM
+judge or a blocking gate.
+
 **File:** [`loop.go`](https://github.com/H4fizWasabie/mino-agent/blob/master/loop.go), [`extensions.go`](https://github.com/H4fizWasabie/mino-agent/blob/master/extensions.go#L121)
 
 ---
