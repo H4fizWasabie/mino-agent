@@ -2,6 +2,11 @@
 
 ### Changed
 
+- **Mid-flight self-repair (#448)**: after two identical tool call/result
+  outcomes, Mino now tells the model to choose a genuinely different next
+  action or state its blocker. The existing progress nudge and hard stop still
+  apply if the model continues repeating itself.
+
 - **Progress-aware iteration limits (#443)**: turns can now continue beyond
   the base `MINO_MAX_ITERATIONS` budget when tool calls and results keep
   changing, up to a hard 60-iteration ceiling. Repeated identical call/result
