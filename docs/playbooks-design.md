@@ -4,7 +4,7 @@
 
 A playbook is an autonomous, repeatable contract between Mino and its owner. It is a filesystem workspace with ordered stage contracts and durable run state. It does not replace Mino's normal reasoning loop.
 
-Every message still enters the canonical runtime. Mino may choose a relevant playbook and call `run_playbook`. Each call creates or resumes a playbook run, verifies whatever stage is currently in progress, drives any zero-inference script stages straight through, and hands back the next stage's contract for Mino to act on with its own tool calls — call `run_playbook` again to advance once that stage's declared outputs exist. Scheduled invocations (`schedule_playbook`) still run every stage of a playbook through a dedicated loop in one call; the two entry points share the same run state and resume rules, described below.
+Every message still enters the canonical runtime. Mino may choose a relevant playbook and call `run_playbook`. Each call creates or resumes a playbook run, verifies whatever stage is currently in progress, drives any zero-inference script stages straight through, and hands back the next stage's contract for Mino to act on with its own tool calls — call `run_playbook` again to advance once that stage's declared outputs exist. Scheduled invocations (`schedule_playbook`) fire the same `run_playbook` navigation through a synthetic instruction instead of a chat message, with no owner present; the two entry points share the same run state and resume rules, described below.
 
 ## Definition layout
 
@@ -93,7 +93,7 @@ The playbook is an agreed autonomous contract. There is no approval protocol or 
 
 ## Scheduling
 
-Schedules decide when to invoke a playbook. A scheduled invocation uses the same run discovery and resume rules as a manual invocation, but drives every stage through a dedicated loop in one call rather than navigating one stage per call the way chat's `run_playbook` does — the two entry points share `state.json` and are interchangeable across invocations of the same run. `last_run` is timing metadata; the run state and its outputs are the outcome evidence.
+Schedules decide when to invoke a playbook. A scheduled fire drives Mino's own normal loop with a synthetic instruction (no chat message, no owner present) instead of calling a dedicated executor — Mino calls `run_playbook` and does the real stage work itself, the same as a chat-triggered run, sharing the same `state.json` and resume rules. `last_run` is timing metadata; the run state and its outputs are the outcome evidence. A scheduled fire's own session never accumulates chat history and always gets the playbook operating-rules discipline (finish it, don't hand back unfinished work) regardless of how far the run gets, since there is no owner present to notice an autonomous run that stopped early.
 
 ## Management
 
