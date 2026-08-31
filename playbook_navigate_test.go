@@ -12,6 +12,133 @@ import (
 // Tests for the #450/#451 navigation model: run_playbook advances one
 // mechanical step per call instead of driving a dedicated stage loop.
 
+// writeSideEffectingStagePlaybook writes a two-stage playbook whose second
+// stage declares a BehaviorMutate tool (send_message) alongside write_file —
+// the shape of the live morning-briefing/threads-tribal-battle playbooks
+// that hit the #476 incident.
+func writeSideEffectingStagePlaybook(t *testing.T, home, name string) {
+	t.Helper()
+	root := filepath.Join(home, "playbooks", name)
+	if err := os.MkdirAll(filepath.Join(root, "stages", "01-gather"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "stages", "02-deliver"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "CONTEXT.md"), []byte("# Test playbook\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	stage1 := "# Gather\n\n## Process\n\n1. Write the result.\n\n## Tools\n\n- write_file\n\n## Outputs\n\n| Artifact | Location | Format |\n| --- | --- | --- |\n| Result | `output/result.md` | Markdown |\n"
+	if err := os.WriteFile(filepath.Join(root, "stages", "01-gather", "CONTEXT.md"), []byte(stage1), 0600); err != nil {
+		t.Fatal(err)
+	}
+	stage2 := "# Deliver\n\n## Process\n\n1. Send the message, then write the marker.\n\n## Tools\n\n- send_message\n- write_file\n\n## Outputs\n\n| Artifact | Location | Format |\n| --- | --- | --- |\n| Marker | `output/delivered.md` | Markdown |\n"
+	if err := os.WriteFile(filepath.Join(root, "stages", "02-deliver", "CONTEXT.md"), []byte(stage2), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestNavigatePlaybookRunContinuesSameRunAcrossSideEffectingStage is the
+// regression test for the #476 live incident (2026-08-31): a session
+// advancing its own in-progress run past a side-effecting (non-retry-safe)
+// stage must keep advancing that exact run, never spawn a fresh one. Before
+// the fix, every advance call re-derived resumability from scratch via
+// loadOrCreatePlaybookRun, which cannot tell "the same session verifying its
+// own just-finished side-effecting stage" apart from "resuming a different
+// process's run after a crash" — it always chose the second interpretation,
+// abandoning the run and starting a new one that redid the side effect from
+// stage 1 (the owner received the same Telegram brief five times).
+func TestNavigatePlaybookRunContinuesSameRunAcrossSideEffectingStage(t *testing.T) {
+	home := t.TempDir()
+	writeSideEffectingStagePlaybook(t, home, "brief")
+	settings := &Settings{Home: home, Workspace: home}
+	registry := NewRegistry()
+	registry.Register(makeWriteTool(home, home))
+	registry.Register(&Tool{Name: "send_message", Behavior: BehaviorMutate})
+	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
+	sessionID := "scheduled-brief"
+
+	first, err := navigatePlaybookRun(context.Background(), core, "brief", "go", sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Status != "running" || !strings.Contains(first.Reply, "01-gather") {
+		t.Fatalf("expected stage 1 navigation, got %+v", first)
+	}
+
+	pb, err := loadPlaybookWorkspace(home, "brief")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := latestPlaybookRun(pb)
+	if err != nil || run == nil {
+		t.Fatalf("expected a run on disk: %v", err)
+	}
+	firstRunID := run.ID
+	stage1, _ := workspaceStage(pb, 1)
+	path1 := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
+	if err := os.MkdirAll(filepath.Dir(path1), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path1, []byte("gathered"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Advance past stage 1 (retry-safe, write_file only) into stage 2, the
+	// side-effecting one. This call must still be operating on firstRunID.
+	second, err := navigatePlaybookRun(context.Background(), core, "brief", "go", sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Status != "running" || !strings.Contains(second.Reply, "02-deliver") {
+		t.Fatalf("expected stage 2 navigation, got %+v", second)
+	}
+	run, err = latestPlaybookRun(pb)
+	if err != nil || run.ID != firstRunID {
+		t.Fatalf("expected the same run %s to still be the latest after advancing to stage 2, got %+v (err=%v)", firstRunID, run, err)
+	}
+
+	// Simulate stage 2's side effect having happened (send_message already
+	// executed for real) and its declared marker written. A small sleep
+	// keeps the marker's mtime unambiguously after state.StartedAt — the
+	// same margin real tool-call latency gives in production.
+	time.Sleep(5 * time.Millisecond)
+	stage2, _ := workspaceStage(pb, 2)
+	path2 := playbookRunOutputPath(pb, run, stage2, stage2.Outputs[0])
+	if err := os.MkdirAll(filepath.Dir(path2), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path2, []byte("delivered"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// The critical assertion: advancing past the side-effecting stage must
+	// complete firstRunID, never abandon it for a fresh run that would redo
+	// the send_message call.
+	third, err := navigatePlaybookRun(context.Background(), core, "brief", "go", sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.Status != "complete" {
+		t.Fatalf("expected the run to complete, got %+v", third)
+	}
+	if !strings.Contains(third.Reply, firstRunID) {
+		t.Fatalf("expected completion to reference the original run %s, got %+v", firstRunID, third)
+	}
+	pbRunsDir := playbookRunsDir(pb)
+	entries, err := os.ReadDir(pbRunsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		names := make([]string, len(entries))
+		for i, e := range entries {
+			names[i] = e.Name()
+		}
+		t.Fatalf("expected exactly one run directory (no fresh run spawned), got %d: %v", len(entries), names)
+	}
+}
+
 func TestNavigatePlaybookRunScriptStageAutoDrives(t *testing.T) {
 	// A script-backed stage must stay zero-inference (#304): one navigate
 	// call should run it straight through with no model turn, landing

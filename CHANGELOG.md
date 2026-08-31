@@ -1,5 +1,18 @@
 ## [Unreleased]
 
+### Fixed
+
+- **Playbook navigation spawned a fresh run instead of continuing past a
+  side-effecting stage (#475)**: a session advancing its own in-progress run
+  past a non-retry-safe stage it had just finished (e.g. sending a message,
+  publishing a post) was judged unsafe to resume on every `run_playbook`
+  call, abandoned, and replaced with a fresh run that redid the side effect
+  from stage 1 — a live incident sent the owner the same Telegram brief 5
+  times and nearly caused a duplicate social post. `navigatePlaybookRun` now
+  recognizes a session already navigating a specific run (via the existing
+  `sessionNav` pointer) and keeps advancing that exact run; the crash-safety
+  resumability check now only applies to a genuinely fresh entry point.
+
 ## [v3.7.0] — unified-loop playbook navigation, concurrent tool batching, token discipline (2026-08-30)
 
 ### Changed

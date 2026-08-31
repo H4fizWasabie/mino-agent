@@ -486,6 +486,24 @@ func latestPlaybookRun(pb *PlaybookWorkspace) (*PlaybookRun, error) {
 	return nil, nil
 }
 
+// loadPlaybookRunByID reads one run's state.json directly by ID, without any
+// resumability judgment. Used by navigatePlaybookRun (#476) to continue a run
+// a session is already known to be navigating — the crash-safety
+// resumability gate (latestResumablePlaybookRun) must never re-run against a
+// run the caller is legitimately still working on, only against a run found
+// with no other evidence of who is (or isn't) still driving it.
+func loadPlaybookRunByID(pb *PlaybookWorkspace, id string) (*PlaybookRun, error) {
+	data, err := os.ReadFile(filepath.Join(playbookRunsDir(pb), id, "state.json"))
+	if err != nil {
+		return nil, err
+	}
+	var run PlaybookRun
+	if err := json.Unmarshal(data, &run); err != nil {
+		return nil, err
+	}
+	return &run, nil
+}
+
 func savePlaybookRun(pb *PlaybookWorkspace, run *PlaybookRun) error {
 	run.UpdatedAt = time.Now().UTC()
 	dir := filepath.Join(playbookRunsDir(pb), run.ID)
@@ -1326,9 +1344,11 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 //   - hands Mino the next LLM stage's contract to act on directly with its
 //     own tool calls, instead of nesting a second loop.
 //
-// schedule_playbook keeps using runWorkspacePlaybook's dedicated loop until
-// #452 designs the scheduler's own unified-loop entry point — this function
-// is chat-only.
+// schedule_playbook's own dedicated stage loop (runWorkspacePlaybook) also
+// still exists as a distinct execution path for the pre-#452 tests that
+// exercise it directly; NavigateScheduledPlaybook (playbook.go) drives
+// scheduled fires through this function like any other navigation entry
+// point.
 func navigatePlaybookRun(ctx context.Context, core *Core, name, request, sessionID string) (*PlaybookResult, error) {
 	pb, err := loadPlaybookWorkspace(core.Settings.Home, name)
 	if err != nil {
@@ -1337,14 +1357,43 @@ func navigatePlaybookRun(ctx context.Context, core *Core, name, request, session
 	if err := validatePlaybookPreRun(core, pb); err != nil {
 		return nil, err
 	}
-	// #450: surface an abandoned unsafe run once, so the caller learns a run
-	// exists and was deliberately left untouched rather than silently getting
-	// a fresh run with no explanation.
-	abandoned, hadAbandoned := abandonedUnsafeRun(pb, core.Tools)
 
-	run, err := loadOrCreatePlaybookRun(pb, core.Tools, request, sessionID, time.Now())
-	if err != nil {
-		return nil, err
+	var run *PlaybookRun
+	var abandoned *PlaybookRun
+	var hadAbandoned bool
+
+	// #476 (live incident, 2026-08-31: morning-briefing sent the owner 5
+	// duplicate Telegram briefs; threads-tribal-battle abandoned its own
+	// just-published run): a session already navigating a specific run must
+	// keep advancing that exact run directly, never re-derive resumability
+	// from scratch. loadOrCreatePlaybookRun's crash-safety gate
+	// (latestResumablePlaybookRun) cannot tell "this session is verifying
+	// the side-effecting stage it just finished" apart from "resuming a
+	// different process's run after a crash" — every call landed on the
+	// second interpretation, abandoned the in-progress run, and started a
+	// fresh one that redid the side effect from stage 1. sessionNav already
+	// tracks exactly which run this session is authorized to touch; when it
+	// points at this playbook, that run — if still running or failed — is
+	// the one and only run to continue, full stop.
+	if p, navigating := sessionNav(sessionID); navigating && p.Playbook == name {
+		if existing, lookupErr := loadPlaybookRunByID(pb, p.RunID); lookupErr == nil &&
+			(existing.Status == "running" || existing.Status == "failed") {
+			run = existing
+		}
+	}
+	if run == nil {
+		// No run this session is already known to be driving — this is a
+		// genuinely fresh entry point (first call of a session, or a
+		// process restart that wiped the in-memory sessionNav map), so the
+		// crash-safety resumability gate is exactly the right check here.
+		// #450: surface an abandoned unsafe run once, so the caller learns a
+		// run exists and was deliberately left untouched rather than
+		// silently getting a fresh run with no explanation.
+		abandoned, hadAbandoned = abandonedUnsafeRun(pb, core.Tools)
+		run, err = loadOrCreatePlaybookRun(pb, core.Tools, request, sessionID, time.Now())
+		if err != nil {
+			return nil, err
+		}
 	}
 	run, err = bindOrRefreshRunContract(pb, core.Tools, run, request, sessionID, time.Now())
 	if err != nil {
