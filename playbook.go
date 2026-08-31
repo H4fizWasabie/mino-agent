@@ -1589,7 +1589,7 @@ func claimIterationRetry(name string, at time.Time) bool {
 // in its own goroutine; LastRun was already claimed synchronously by the
 // dispatcher before spawning.
 func fireSchedule(core *Core, s PlaybookSchedule, at time.Time, run scheduledPlaybookRunner) {
-	sessionID := "scheduled-" + s.Name
+	sessionID := scheduledSessionPrefix + s.Name
 	if err := core.Responsibilities.startRoutine(s, at); err != nil {
 		slog.Error("schedule responsibility start failed", "name", s.Name, "error", err)
 		// Never fail silently: the incident that broke every schedule was

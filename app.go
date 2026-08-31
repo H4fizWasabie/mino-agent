@@ -355,14 +355,35 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 	ctx = context.WithValue(ctx, auditKey{}, func(eventType, message string, iteration int) {
 		w.auditLog(sessionID, eventType, message, iteration)
 	})
-	system, routing := conversation.Session.BuildContext(userMessage, source)
+	// #477: a turn already known to be navigating a playbook (a scheduled
+	// fire, or a chat turn continuing a run an earlier message started) gets
+	// the narrow, ICM-scoped system prompt and message context the dedicated
+	// stage loop always used, instead of the full general-chat system prompt
+	// and its skill/owner-fact-matching overhead — neither of which playbook
+	// navigation needs, and both of which measurably cost extra iterations
+	// (2026-08-31 live incident: an Instagram playbook needing "a few
+	// iterations" under the old dedicated loop hit the 60-iteration ceiling
+	// under the unified loop's general-chat prompt).
+	var system, routing string
+	var messages []Message
+	var userContext string
+	if navName, navigating := navigationPlaybookForTurn(source, sessionID); navigating {
+		if built, err := conversation.Session.BuildNavigationSystem(w.Settings.Home, navName); err == nil {
+			system = built
+			userContext = userMessage
+			messages = conversation.Session.BuildNavigationContext(system, userMessage)
+		}
+	}
+	if system == "" {
+		system, routing = conversation.Session.BuildContext(userMessage, source)
+		messages, userContext = conversation.Session.ContextFor(system, userMessage)
+	}
 	// Cache stability: keep the system prompt byte-stable across calls so the
 	// provider prefix cache stays warm. The clock AND the per-turn routing
 	// block (matched skills + playbook routing) are appended to the fresh user
 	// turn only — they change per message, so they must live at the tail, not
 	// in the system prompt, or every turn would invalidate the cached prefix.
 	clock := authoritativeClock(time.Now(), w.Settings.Location())
-	messages, userContext := conversation.Session.ContextFor(system, userMessage)
 	if len(messages) > 0 {
 		tail := clock + "\nUse this clock; do not infer the current time from conversation history."
 		if routing != "" {

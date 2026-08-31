@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+### Fixed
+
+- **Restored ICM-scoped context for playbook navigation (#477)**: a turn
+  already known to be navigating a playbook (a scheduled fire, or a chat
+  turn continuing a run an earlier message started) now gets the narrow,
+  stage-focused system prompt the dedicated stage loop always used, instead
+  of the full general-chat system prompt and its skill/owner-fact-matching
+  overhead. A live incident showed this overhead costing real iterations —
+  a playbook that used to complete in a few iterations was hitting the
+  60-iteration ceiling. Ordinary chat with no active navigation is
+  unaffected.
+
 ## [v3.7.1] — playbook navigation run-continuity hotfix (2026-08-31)
 
 ### Fixed
