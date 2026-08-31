@@ -223,11 +223,9 @@ func registerDashboardRoutes(mux *http.ServeMux, memDir string) {
 	mux.HandleFunc("/api/memory/remember", handleMemoryRecallAPI)
 	mux.HandleFunc("/api/memory/path", handleMemoryPathAPI)
 	mux.HandleFunc("/api/query", handleQueryAPI)
-	mux.HandleFunc("/api/events", handleEventsAPI)
 	mux.HandleFunc("/api/nerves", handleNervesAPI)
 	mux.HandleFunc("/api/data", handleDataAPI)
 	mux.HandleFunc("/api/universe", handleUniverseAPI)
-	mux.HandleFunc("/api/universe/projection", handleUniverseProjectionAPI)
 	mux.HandleFunc("/api/responsibilities", handleResponsibilitiesAPI)
 	mux.HandleFunc("/api/responsibility-evidence", handleResponsibilityEvidence)
 	mux.HandleFunc("/api/reveal", handleRevealAPI)
@@ -727,26 +725,6 @@ func graphEpisodes(mem *Memory) []map[string]any {
 		return episodes[i]["happened_at"].(string) > episodes[j]["happened_at"].(string)
 	})
 	return episodes
-}
-
-func handleEventsAPI(w http.ResponseWriter, r *http.Request) {
-	requested, _ := strconv.ParseInt(r.URL.Query().Get("cursor"), 10, 64)
-	dashEventMu.Lock()
-	events := make([]map[string]any, 0, len(dashEventQ))
-	for _, event := range dashEventQ {
-		cursor, _ := event["cursor"].(int64)
-		if cursor > requested {
-			events = append(events, event)
-		}
-	}
-	cursor := dashCursor
-	dashEventMu.Unlock()
-
-	w.Header().Set("Cache-Control", "no-store")
-	json.NewEncoder(w).Encode(map[string]any{
-		"events": events,
-		"cursor": cursor,
-	})
 }
 
 // handleNervesAPI returns the live nervous-system snapshot for a session.
