@@ -239,20 +239,26 @@ func TestPinOrderRanksAllThreePrices(t *testing.T) {
 		{Model: "m", Provider: "C", In: 0.10, Cache: 0.01, Out: 0.01, DataHandling: "zdr"},
 	}
 	order := pinOrder(cfg, cat)
-	if got, want := strings.Join(order, ","), "C,B,A"; got != want {
+	if got, want := strings.Join(order, ","), "A,B,C"; got != want {
 		t.Fatalf("all-price order = %v, want [%s]", order, strings.ReplaceAll(want, ",", " "))
 	}
 }
 
-func TestPinOrderRanksCacheBeforeInputAndOutput(t *testing.T) {
+// TestPinOrderRanksInputBeforeOutputAndCache covers the 2026-08-31 reorder
+// (owner decision, issue #497): a cache-first order let Morph's cheap
+// cache-read price outrank objectively-better providers on input/output
+// price, latency, throughput, and uptime. Input now decides first, then
+// output, then cache — each tier below exercises exactly one tiebreak level.
+func TestPinOrderRanksInputBeforeOutputAndCache(t *testing.T) {
 	cfg := defaultConfig()
 	cat := []catalogueEntry{
-		{Model: "m", Provider: "A", In: 0.10, Cache: 0.01, Out: 0.10, DataHandling: "zdr"},
-		{Model: "m", Provider: "B", In: 0.01, Cache: 0.10, Out: 0.10, DataHandling: "zdr"},
-		{Model: "m", Provider: "C", In: 0.05, Cache: 0.05, Out: 0.01, DataHandling: "zdr"},
+		{Model: "m", Provider: "cheapest_in", In: 0.01, Out: 0.10, Cache: 0.10, DataHandling: "zdr"},
+		{Model: "m", Provider: "cheapest_out", In: 0.05, Out: 0.01, Cache: 0.05, DataHandling: "zdr"},
+		{Model: "m", Provider: "cheapest_cache", In: 0.05, Out: 0.05, Cache: 0.01, DataHandling: "zdr"},
+		{Model: "m", Provider: "priciest", In: 0.05, Out: 0.05, Cache: 0.10, DataHandling: "zdr"},
 	}
 	order := pinOrder(cfg, cat)
-	if got, want := strings.Join(order, ","), "A,C,B"; got != want {
+	if got, want := strings.Join(order, ","), "cheapest_in,cheapest_out,cheapest_cache,priciest"; got != want {
 		t.Fatalf("tie-break order = %v, want [%s]", order, strings.ReplaceAll(want, ",", " "))
 	}
 }
@@ -320,7 +326,7 @@ func TestPinOrderMissingCacheDoesNotWin(t *testing.T) {
 	}
 }
 
-func TestPinOrderCurrentDeepSeekPricesPreferStreamLake(t *testing.T) {
+func TestPinOrderCurrentDeepSeekPricesPreferOpenInference(t *testing.T) {
 	cfg := defaultConfig()
 	cat := []catalogueEntry{
 		{Model: "m", Provider: "OpenInference", In: 0.035, Cache: 0.01, Out: 0.12, DataHandling: "unknown"},
@@ -329,8 +335,8 @@ func TestPinOrderCurrentDeepSeekPricesPreferStreamLake(t *testing.T) {
 		{Model: "m", Provider: "Sail Research", In: 0.065, Cache: 0.02, Out: 0.18, DataHandling: "unknown"},
 	}
 	order := pinOrder(cfg, cat)
-	if len(order) == 0 || order[0] != "StreamLake" {
-		t.Fatalf("current DeepSeek order = %v, want StreamLake first", order)
+	if len(order) == 0 || order[0] != "OpenInference" {
+		t.Fatalf("current DeepSeek order = %v, want OpenInference first (cheapest input price, decides first post-#497)", order)
 	}
 }
 
