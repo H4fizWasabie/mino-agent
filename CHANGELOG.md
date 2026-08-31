@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [v3.9.1] — navigation success-verification + send_message dedup (2026-08-31)
+
 ### Fixed
 
 - **`## Success` outcome verification always failed under navigation (#486)**: `navigatePlaybookRun`
