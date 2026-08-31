@@ -49,7 +49,7 @@ func TestOSV04ReminderQuestionUsesReminderStoreNotCalendar(t *testing.T) {
 		scriptedResp([]ContentBlock{textBlock("Your last Arachem meeting reminder is Friday 7 Aug at 12:30 — a system reminder, never in your calendar.")}, "stop"),
 	}}
 	msgs := []Message{{Role: "user", Content: "When was my last Arachem meeting?"}}
-	result := RunLoopContext(context.Background(), client, "osv04-reminder", "", msgs, r, 5, 100, nil, false, "",)
+	result := RunLoopContext(context.Background(), client, "osv04-reminder", "", msgs, r, 5, 100, nil, false, "")
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete", result.Status)
 	}
@@ -92,7 +92,7 @@ func TestOSV04ToolResultsReportDestinationAndState(t *testing.T) {
 	loc := time.FixedZone("MYT", 8*60*60)
 
 	mem := &Memory{graph: NewGraphMemory(t.TempDir(), nil)}
-	mem.skills = NewSkillLoader(home,)
+	mem.skills = NewSkillLoader(home)
 
 	// Minimal playbook so schedule_playbook can validate.
 	if err := os.MkdirAll(filepath.Join(home, "playbooks", "daily", "stages", "01-gather"), 0755); err != nil {
