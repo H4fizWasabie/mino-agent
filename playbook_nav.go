@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -93,4 +94,29 @@ func clearNavReads(runID string) {
 	navReadsMu.Lock()
 	delete(navReads, runID)
 	navReadsMu.Unlock()
+}
+
+// scheduledSessionPrefix is the deterministic session ID prefix fireSchedule
+// (playbook.go) uses for every scheduled fire: "scheduled-" + playbook name.
+const scheduledSessionPrefix = "scheduled-"
+
+// navigationPlaybookForTurn reports the playbook name a turn is already
+// known, at its start, to be navigating (#477 ICM-scoped context
+// restoration) — a scheduled fire's entire purpose is always exactly one
+// playbook (derivable from its deterministic session ID, no need to wait for
+// a run_playbook call to find out), and a chat turn continuing a run an
+// earlier message already started is exactly what sessionNav tracks. A chat
+// turn that will only decide to call run_playbook partway through its own
+// tool-calling loop isn't covered — the system prompt is fixed for the whole
+// turn (cache stability), so there's nothing to detect yet at this point.
+func navigationPlaybookForTurn(source, sessionID string) (string, bool) {
+	if source == "schedule" {
+		if name := strings.TrimPrefix(sessionID, scheduledSessionPrefix); name != "" && name != sessionID {
+			return name, true
+		}
+	}
+	if p, navigating := sessionNav(sessionID); navigating {
+		return p.Playbook, true
+	}
+	return "", false
 }

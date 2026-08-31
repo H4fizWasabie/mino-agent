@@ -214,6 +214,25 @@ func (s *Session) BuildPlaybookSystem(pb *PlaybookWorkspace) (string, error) {
 	return strings.Join(parts, "\n"), nil
 }
 
+// BuildNavigationSystem builds the ICM-scoped system prompt for a turn
+// already known to be navigating a playbook (#477) — a scheduled fire from
+// its first call, or a chat turn continuing a run an earlier message
+// started. It reuses BuildPlaybookSystem unchanged: the same narrow,
+// stage-focused prompt (playbook rails, workspace map, persona) the
+// dedicated stage loop always used, instead of the full general-chat system
+// prompt (buildSystem) with its skill-matching and owner-fact-matching
+// overhead — none of which a turn doing only playbook work needs. Per the
+// Interpretable Context Methodology principle this restores: "agents load
+// only the context they need for the current stage... this is prevention
+// rather than compression."
+func (s *Session) BuildNavigationSystem(home, name string) (string, error) {
+	pb, err := loadPlaybookWorkspace(home, name)
+	if err != nil {
+		return "", err
+	}
+	return s.BuildPlaybookSystem(pb)
+}
+
 func (s *Session) buildSystem(userMessage, source string, includePlaybookRouting bool) (string, string) {
 	static := []string{
 		loadSoul(s.settings.Home),
@@ -639,6 +658,26 @@ func (s *Session) PlaybookContext(system string) []Message {
 			messages = append(messages, Message{Role: "assistant", Content: "Session working note (established by earlier turns — do not re-discover; verify only if contradictory):\n" + note})
 		}
 	}
+	return messages
+}
+
+// BuildNavigationContext pairs with BuildNavigationSystem (#477): existing
+// history plus the session note, then the turn's own message — without
+// ContextFor's general-chat overhead (artifact catalog, owner-fact/skill
+// matching against the message), none of which a turn doing only playbook
+// navigation needs. Unlike PlaybookContext (which the dedicated stage loop
+// paired with a stage prompt appended separately by its caller), this
+// appends userMessage itself: navigation has no separate caller-side append
+// step, the model acts directly on whatever this turn's message says.
+func (s *Session) BuildNavigationContext(system, userMessage string) []Message {
+	historyBudget := max(0, s.settings.ContextChars-len(system))
+	messages := s.ContextMessages(historyBudget)
+	if s.mem != nil {
+		if note := s.mem.SessionNote(s.sessionID, sessionNoteInjectionLimit); note != "" {
+			messages = append(messages, Message{Role: "assistant", Content: "Session working note (established by earlier turns — do not re-discover; verify only if contradictory):\n" + note})
+		}
+	}
+	messages = append(messages, Message{Role: "user", Content: userMessage})
 	return messages
 }
 
