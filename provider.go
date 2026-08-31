@@ -146,9 +146,19 @@ func (c *Client) createWithRouting(ctx context.Context, model, reasoning string,
 		"repetition_penalty": envFloat("MINO_REPETITION_PENALTY", 1.1),
 	}
 	if len(routing) > 0 {
+		// #499: OpenRouter's own fallback (order + allow_fallbacks) only
+		// triggers on an explicit provider error — a provider that hangs
+		// rather than erroring (observed live 2026-08-31: multi-minute
+		// stalls ending in Mino's own client-side context-deadline timeout)
+		// is invisible to it. preferred_max_latency/preferred_min_throughput
+		// deprioritize (not exclude) endpoints missing these thresholds in
+		// real time, ahead of any curated order — a faster, live signal than
+		// cost-watch's hourly-refreshed static ranking.
 		payload["provider"] = map[string]any{
-			"order":           routing,
-			"allow_fallbacks": c.allowFallbacks,
+			"order":                    routing,
+			"allow_fallbacks":          c.allowFallbacks,
+			"preferred_max_latency":    envFloat("MINO_PREFERRED_MAX_LATENCY", 5),
+			"preferred_min_throughput": envFloat("MINO_PREFERRED_MIN_THROUGHPUT", 20),
 		}
 	}
 	if sessionID != "" {

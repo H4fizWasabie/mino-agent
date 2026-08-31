@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Added
+
+- **`preferred_max_latency` / `preferred_min_throughput` on every OpenRouter request with a provider routing list (closes #499)**: OpenRouter's own `order`/`allow_fallbacks` fallback only triggers on an explicit provider error — a provider that hangs instead of erroring (observed live 2026-08-31, three times: multi-minute stalls ending in Mino's own client-side timeout) is invisible to it. These deprioritize (not exclude) slow/low-throughput endpoints in real time, ahead of cost-watch's hourly-refreshed static ranking. Configurable via `MINO_PREFERRED_MAX_LATENCY` (seconds, default `5`) and `MINO_PREFERRED_MIN_THROUGHPUT` (tokens/sec, default `20`).
+
 ### Changed
 
 - **cost-watch provider pinning ranks input/output price before cache-read price (closes #497)**: previously cache-read price decided first, which let Morph (3.32s latency, 16 tps, 91.4% uptime — the worst of GLM-5.3-flash's routing candidates on every reliability metric) hold a routing slot ahead of Novita, DeepInfra, and GMICloud purely because its cache-read price happened to be the cheapest, despite losing on input price, output price, and every reliability metric. Ranking is now precision → input price → output price → cache-read price → uptime → latency.

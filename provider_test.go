@@ -95,6 +95,78 @@ func TestCreateContextSendsRepetitionPenaltyFromEnv(t *testing.T) {
 	}
 }
 
+// #499: OpenRouter's own order+allow_fallbacks fallback only triggers on an
+// explicit provider error, never on a hang — preferred_max_latency/
+// preferred_min_throughput deprioritize slow/low-throughput endpoints in
+// real time regardless, closing that gap. Only sent when a routing list is
+// present (the provider object itself is otherwise omitted).
+func TestCreateContextSendsPreferredLatencyThroughputDefaults(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &got)
+		w.Write([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{apiKey: "k", baseURL: srv.URL, client: http.DefaultClient, providerRouting: []string{"Novita", "DeepInfra"}}
+	if _, err := c.Create("model", []Message{{Role: "user", Content: "hi"}}, 100, "", nil); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	provider, _ := got["provider"].(map[string]any)
+	if provider == nil {
+		t.Fatalf("no provider object sent: %v", got)
+	}
+	if provider["preferred_max_latency"] != 5.0 {
+		t.Fatalf("preferred_max_latency = %v, want default 5", provider["preferred_max_latency"])
+	}
+	if provider["preferred_min_throughput"] != 20.0 {
+		t.Fatalf("preferred_min_throughput = %v, want default 20", provider["preferred_min_throughput"])
+	}
+}
+
+func TestCreateContextSendsPreferredLatencyThroughputFromEnv(t *testing.T) {
+	t.Setenv("MINO_PREFERRED_MAX_LATENCY", "3")
+	t.Setenv("MINO_PREFERRED_MIN_THROUGHPUT", "40")
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &got)
+		w.Write([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{apiKey: "k", baseURL: srv.URL, client: http.DefaultClient, providerRouting: []string{"Novita"}}
+	if _, err := c.Create("model", []Message{{Role: "user", Content: "hi"}}, 100, "", nil); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	provider, _ := got["provider"].(map[string]any)
+	if provider["preferred_max_latency"] != 3.0 {
+		t.Fatalf("preferred_max_latency = %v, want configured 3", provider["preferred_max_latency"])
+	}
+	if provider["preferred_min_throughput"] != 40.0 {
+		t.Fatalf("preferred_min_throughput = %v, want configured 40", provider["preferred_min_throughput"])
+	}
+}
+
+func TestCreateContextOmitsProviderObjectWithNoRouting(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &got)
+		w.Write([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{apiKey: "k", baseURL: srv.URL, client: http.DefaultClient}
+	if _, err := c.Create("model", []Message{{Role: "user", Content: "hi"}}, 100, "", nil); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, ok := got["provider"]; ok {
+		t.Fatalf("provider object sent with no routing list: %v", got["provider"])
+	}
+}
+
 // #440: GLM 5.3 flash rejects a disabled-reasoning JSON call outright
 // ("Reasoning is mandatory for this endpoint and cannot be disabled") — the
 // opposite requirement from DeepSeek. Both reasoning-disabled attempts must
