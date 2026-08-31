@@ -490,9 +490,14 @@ func precisionTier(quant string) int {
 
 // pinOrder returns the routing order for one model slug: eligible providers
 // rank by precision tier (fp8-or-better beats known-worse, e.g. fp4) first,
-// then cache-read price, input price, output price, uptime, then latency.
+// then input price, output price, cache-read price, uptime, then latency.
 // Incomplete prices trail complete ones so an omitted cache-read field cannot
-// become a false winner.
+// become a false winner. Input/output rank ahead of cache-read (owner
+// decision, 2026-08-31: a cache-first order let Morph — 3.32s latency, 16
+// tps, 91.4% uptime — outrank Novita/DeepInfra/GMICloud on a cheap cache-read
+// price alone, despite losing on input/output price and every reliability
+// metric; input+output now decide first, so the tied-cheapest full-price
+// providers win before cache price or uptime ever get checked).
 func rankCatalogueEntries(entries []catalogueEntry) []catalogueEntry {
 	type scored struct {
 		entry catalogueEntry
@@ -509,14 +514,14 @@ func rankCatalogueEntries(entries []catalogueEntry) []catalogueEntry {
 		if ranked[i].full != ranked[j].full {
 			return ranked[i].full
 		}
-		if ranked[i].entry.Cache != ranked[j].entry.Cache {
-			return ranked[i].entry.Cache < ranked[j].entry.Cache
-		}
 		if ranked[i].entry.In != ranked[j].entry.In {
 			return ranked[i].entry.In < ranked[j].entry.In
 		}
 		if ranked[i].entry.Out != ranked[j].entry.Out {
 			return ranked[i].entry.Out < ranked[j].entry.Out
+		}
+		if ranked[i].entry.Cache != ranked[j].entry.Cache {
+			return ranked[i].entry.Cache < ranked[j].entry.Cache
 		}
 		if ranked[i].entry.Uptime != ranked[j].entry.Uptime {
 			return ranked[i].entry.Uptime > ranked[j].entry.Uptime
@@ -527,13 +532,13 @@ func rankCatalogueEntries(entries []catalogueEntry) []catalogueEntry {
 		if ranked[i].entry.LatencyKnown && ranked[i].entry.Latency != ranked[j].entry.Latency {
 			return ranked[i].entry.Latency < ranked[j].entry.Latency
 		}
-		if ranked[i].entry.Cache != ranked[j].entry.Cache {
-			return ranked[i].entry.Cache < ranked[j].entry.Cache
+		if ranked[i].entry.In != ranked[j].entry.In {
+			return ranked[i].entry.In < ranked[j].entry.In
 		}
 		if ranked[i].entry.Out != ranked[j].entry.Out {
 			return ranked[i].entry.Out < ranked[j].entry.Out
 		}
-		return ranked[i].entry.In < ranked[j].entry.In
+		return ranked[i].entry.Cache < ranked[j].entry.Cache
 	})
 	out := make([]catalogueEntry, len(ranked))
 	for i, entry := range ranked {

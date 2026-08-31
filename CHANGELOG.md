@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Changed
+
+- **cost-watch provider pinning ranks input/output price before cache-read price (closes #497)**: previously cache-read price decided first, which let Morph (3.32s latency, 16 tps, 91.4% uptime — the worst of GLM-5.3-flash's routing candidates on every reliability metric) hold a routing slot ahead of Novita, DeepInfra, and GMICloud purely because its cache-read price happened to be the cheapest, despite losing on input price, output price, and every reliability metric. Ranking is now precision → input price → output price → cache-read price → uptime → latency.
+
 ## [v3.10.0] — GLM decode-collapse mitigation: precision-first routing + repetition_penalty (2026-08-31)
 
 ### Added
