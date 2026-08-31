@@ -15,7 +15,7 @@ the case where nothing cheap is left.
 ```
 hourly (service refresh loop)
   └─ scrape the endpoints API → per-provider pricing + promo discount
-       └─ rank eligible hosts by price (curated `trains` = hard-excluded)
+       └─ rank eligible hosts by precision floor (fp8+, curated `trains` = hard-excluded), then price
             └─ order changed? → rewrite provider_routing (backup first)
                  └─ SIGHUP mino → hot-reload, no restart
 hourly (systemd timer)
@@ -84,7 +84,8 @@ Owned by the `mino` user so the model can edit its own watchdog (CTX-020 hot-rel
 - `threshold` — alert when the best price exceeds `expected × threshold`
 - `data_handling` — per-provider curation: `zdr` | `cache_only` | `trains` |
   `unknown` (unlisted). `trains` providers are hard-excluded from routing;
-  everything else is eligible and ranked by price.
+  everything else is eligible and ranked by precision floor (fp8+ beats known
+  weaker quantizations like fp4), then price.
 
 Telegram alerts use `TELEGRAM_BOT_TOKEN` + `MINO_TELEGRAM_CHAT_ID` from
 mino.env (or `telegram_chat_id` in the config).

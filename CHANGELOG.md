@@ -1,5 +1,23 @@
 ## [Unreleased]
 
+### Added
+
+- **`repetition_penalty` on every OpenRouter request (#495)**: mitigates the decode-time
+  repetition collapse observed live 2026-08-31 — GLM 5.3 Flash ran a single non-streamed reply
+  away to the full `MINO_MAX_TOKENS` ceiling instead of stopping naturally, producing garbled
+  output. Configurable via `MINO_REPETITION_PENALTY` (default `1.1`); most currently-routed
+  backends support the parameter and OpenRouter drops it silently for the ones that don't.
+
+### Changed
+
+- **cost-watch's autonomous provider pinning now ranks by precision before price (#495)**: an
+  endpoint quantized below fp8 (e.g. fp4) no longer outranks a pricier fp8 alternative for the
+  same model — a floor, not a fine-grained ladder (fp8/fp16/bf16/unknown all rank equally
+  above the floor). Found live: the cheapest host in GLM 5.3 Flash's routing chain was serving
+  at fp4, the most aggressively quantized option available and a known contributor to the
+  repetition-collapse failure above. Price, uptime, and latency ranking is unchanged among
+  hosts at or above the floor.
+
 ## [v3.9.1] — navigation success-verification + send_message dedup (2026-08-31)
 
 ### Fixed

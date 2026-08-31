@@ -78,6 +78,7 @@ type catalogueEntry struct {
 	Latency      float64 `json:"latency"`
 	LatencyKnown bool    `json:"latency_known"`
 	DataHandling string  `json:"data_handling"`
+	Quantization string  `json:"quantization"` // e.g. "fp8", "fp4", "unknown" — from the endpoints API
 }
 
 type catalogue struct {
@@ -372,8 +373,9 @@ func fetchCatalogue(cfg *config) (catalogue, error) {
 						InputCacheRead string  `json:"input_cache_read"`
 						Discount       float64 `json:"discount"`
 					} `json:"pricing"`
-					Uptime  float64  `json:"uptime_last_30m"`
-					Latency *float64 `json:"latency_last_30m"`
+					Uptime       float64  `json:"uptime_last_30m"`
+					Latency      *float64 `json:"latency_last_30m"`
+					Quantization string   `json:"quantization"`
 				} `json:"endpoints"`
 			} `json:"data"`
 		}
@@ -407,6 +409,7 @@ func fetchCatalogue(cfg *config) (catalogue, error) {
 				Latency:      latency,
 				LatencyKnown: ep.Latency != nil,
 				DataHandling: flag,
+				Quantization: ep.Quantization,
 			})
 		}
 	}
@@ -467,8 +470,27 @@ func (cfg *config) eligibleForPin(provider string) bool {
 	return cfg.DataHandling[provider] != "trains"
 }
 
+// precisionWorseThanFP8 is the known-worse-than-fp8 set (2026-08-31, issue
+// #495: an fp4 endpoint outranked fp8 alternatives on price alone and was
+// implicated in a live GLM decode-collapse incident). This is a floor, not a
+// ladder — anything not in this set (fp8, fp16, bf16, fp32, "unknown", "")
+// ranks in the same top tier, since there's no evidence those are worse.
+var precisionWorseThanFP8 = map[string]bool{
+	"fp4": true, "fp2": true, "fp1": true, "int4": true, "int2": true,
+}
+
+// precisionTier returns 1 for a quantization known to be worse than fp8, 0
+// otherwise (including unknown/empty — never penalize what isn't proven bad).
+func precisionTier(quant string) int {
+	if precisionWorseThanFP8[strings.ToLower(quant)] {
+		return 1
+	}
+	return 0
+}
+
 // pinOrder returns the routing order for one model slug: eligible providers
-// rank by cache-read price, input price, output price, uptime, then latency.
+// rank by precision tier (fp8-or-better beats known-worse, e.g. fp4) first,
+// then cache-read price, input price, output price, uptime, then latency.
 // Incomplete prices trail complete ones so an omitted cache-read field cannot
 // become a false winner.
 func rankCatalogueEntries(entries []catalogueEntry) []catalogueEntry {
@@ -481,6 +503,9 @@ func rankCatalogueEntries(entries []catalogueEntry) []catalogueEntry {
 		ranked[i] = scored{entry: entry, full: entry.In > 0 && entry.Cache > 0 && entry.Out > 0}
 	}
 	sort.SliceStable(ranked, func(i, j int) bool {
+		if pi, pj := precisionTier(ranked[i].entry.Quantization), precisionTier(ranked[j].entry.Quantization); pi != pj {
+			return pi < pj
+		}
 		if ranked[i].full != ranked[j].full {
 			return ranked[i].full
 		}
