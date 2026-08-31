@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [v3.8.0] — dashboard redesign: calm, work-focused shell (2026-08-31)
+
 ### Changed
 
 - **Dashboard redesign: replaced the Living Field universe with a calm,
