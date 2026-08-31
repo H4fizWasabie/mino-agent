@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [v3.11.0] — Real-time provider deprioritization + price-order fix (2026-08-31)
+
 ### Added
 
 - **`preferred_max_latency` / `preferred_min_throughput` on every OpenRouter request with a provider routing list (closes #499)**: OpenRouter's own `order`/`allow_fallbacks` fallback only triggers on an explicit provider error — a provider that hangs instead of erroring (observed live 2026-08-31, three times: multi-minute stalls ending in Mino's own client-side timeout) is invisible to it. These deprioritize (not exclude) slow/low-throughput endpoints in real time, ahead of cost-watch's hourly-refreshed static ranking. Configurable via `MINO_PREFERRED_MAX_LATENCY` (seconds, default `5`) and `MINO_PREFERRED_MIN_THROUGHPUT` (tokens/sec, default `20`).
