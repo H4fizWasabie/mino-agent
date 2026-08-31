@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [v3.7.1] — playbook navigation run-continuity hotfix (2026-08-31)
+
 ### Fixed
 
 - **Playbook navigation spawned a fresh run instead of continuing past a
