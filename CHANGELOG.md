@@ -1,5 +1,26 @@
 ## [Unreleased]
 
+### Changed
+
+- **Dashboard redesign: replaced the Living Field universe with a calm,
+  work-focused shell (#479)**: Work is now the default landing page instead
+  of the WebGL "Living Field" spatial map — a bespoke orbit-camera
+  interaction pattern nothing else in the app (or elsewhere) works like,
+  and unrelated to the app's actual daily-use surface. The Work view's
+  sidebar now merges the conversation session list with the playbook file
+  explorer into one rail, and the artifact panel gained Source/Preview
+  tabs. Colors and toolbar chrome moved to a lighter, calmer palette. The
+  Memory page's "Graph" tab, previously silently redirected into the
+  universe view by `canonicalRoute()`, now reaches the real force-directed
+  (Obsidian-style) 2D graph renderer that already existed in `app.js` but
+  had never been reachable. The universe map is fully removed:
+  `static/universe.js`, its nav entries and CSS, and the backend endpoints
+  that existed only to feed it (`handleUniverseProjectionAPI`,
+  `/api/events`) — `/api/universe` (`handleUniverseAPI`) stays, since
+  `rollback.go`'s deploy health check depends on it. Also removed a chunk
+  of dead pre-Living-Field CSS/JS left over from an even older sidebar-nav
+  shell.
+
 ## [v3.7.2] — ICM-scoped context for playbook navigation (2026-08-31)
 
 ### Fixed

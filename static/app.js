@@ -1154,7 +1154,6 @@ function systemView(d, sub){
 }
 
 const VIEWS = {
-  universe(d, lens){ return universeView(U,lens||"universe"); },
   today(d){ return todayView(d); },
   work(d){ return workView(d); },
   responsibility(d, id){
@@ -1191,7 +1190,6 @@ const VIEWS = {
   },
   conversations(d){ return VIEWS.gateway(d); },
   system(d, sub){ return systemView(d,sub); },
-  overview(d){ return universeView(U,"universe"); },
   memory(d, sub){
     sub = sub || "overview";
     const tabs = [["overview","Overview"],["semantic","Knowledge",(d.facts||[]).length],
@@ -1292,23 +1290,11 @@ async function loadFilesView(sub){
 }
 
 function activateView(view, sub){
-  if(view==="universe") setTimeout(()=>initUniverse(U,sub||"universe"),20);
   if(view==="responsibility") setTimeout(()=>loadResponsibilityDetail(decodeURIComponent(sub||"")),0);
   if(view==="memory"&&sub==="graph"&&D.graph?.facts) setTimeout(()=>initGraph(D.graph),50);
   if((view==="system"&&sub==="files")||view==="files") setTimeout(()=>loadFilesView(""),50);
   if(view==="system"&&sub?.startsWith("files-")) setTimeout(()=>loadFilesView(sub.slice(6)),50);
   if((view==="system"&&sub==="settings")||view==="settings") setTimeout(loadOAuthProviders,0);
-}
-
-// Runtime work appears as transient paths on the Living Field. Durable nodes
-// still arrive only through /api/universe after the underlying write exists.
-let evCursor = null, animating = false;
-async function pollEvents(){
-  try{
-    const r = await (await fetch("/api/events" + (evCursor==null?"":"?cursor="+evCursor))).json();
-    if (evCursor != null) (r.events||[]).forEach(universeActivity);
-    evCursor = r.cursor;
-  } catch(e){ /* server busy */ }
 }
 
 let activeView = null, activeSub = null, renderedRoute = "", renderedMarkup = "";
@@ -1337,13 +1323,24 @@ function workspaceTree(pb){
     <div class="workspace-group"><div class="workspace-group-title"><span>SUPPORTING FILES</span><small>${(routing.supporting||[]).length}</small></div>${(routing.supporting||[]).map(path=>fileNode(`${pb.path}/${path}`,workspaceArtifactPath(pb)===`${pb.path}/${path}`)).join("")}</div>
     ${routing.orphan_check?`<div class="workspace-group"><div class="workspace-group-title"><span>HEALTH CHECK</span></div>${fileNode(routing.orphan_check,workspaceArtifactPath(pb)===routing.orphan_check)}</div>`:""}`;
 }
+let workspacePreviewMode="preview", workspacePreviewRaw="";
+function setWorkspacePreviewMode(mode){
+  workspacePreviewMode=mode;
+  const target=document.getElementById("artifact-preview"); if(!target) return;
+  target.innerHTML=renderWorkspacePreview(workspacePlaybook(),workspaceArtifactPath(workspacePlaybook()),workspacePreviewRaw);
+}
 function renderWorkspacePreview(pb, path, content=""){
   const run=pb?.runs?.[0], status=run?.status||"ready";
-  const body=content?`<div class="artifact-content">${renderMarkdown(content)}</div>`:`<div class="artifact-empty"><strong>Select an artifact</strong><span>Choose a file from the explorer to preview its contents.</span></div>`;
-  return `<div class="artifact-head"><div><span class="artifact-kicker">ARTIFACT PREVIEW</span><strong>${esc(path||pb?.name||"Workspace")}</strong></div><button type="button" aria-label="Open artifact" onclick="revealFile(${jsArg(path||"")},${jsArg("Artifact")})">↗</button></div>${body}<div class="artifact-status"><i class="${status==="complete"?"good":"live"}"></i><span><b>${esc(pb?.name||"No workspace")}</b><small>${esc(status)} · ${(pb?.stages||[]).length} stages</small></span></div>`;
+  const tabs=content?`<div class="artifact-tabs"><button type="button" class="${workspacePreviewMode==="preview"?"on":""}" onclick="setWorkspacePreviewMode('preview')">Preview</button><button type="button" class="${workspacePreviewMode==="source"?"on":""}" onclick="setWorkspacePreviewMode('source')">Source</button></div>`:"";
+  const meta=content?`<span class="artifact-meta">${content.split("\n").length} lines</span>`:"";
+  const body=!content?`<div class="artifact-empty"><strong>Select an artifact</strong><span>Choose a file from the explorer to preview its contents.</span></div>`
+    :workspacePreviewMode==="source"?`<pre class="artifact-source">${esc(content)}</pre>`
+    :`<div class="artifact-content">${renderMarkdown(content)}</div>`;
+  return `<div class="artifact-head"><div class="artifact-crumb"><span class="artifact-kicker">${esc(path||pb?.name||"Workspace")}</span><button type="button" aria-label="Open artifact" onclick="revealFile(${jsArg(path||"")},${jsArg("Artifact")})">↗</button></div><div class="artifact-headrow">${meta}${tabs}</div></div>${body}<div class="artifact-status"><i class="${status==="complete"?"good":"live"}"></i><span><b>${esc(pb?.name||"No workspace")}</b><small>${esc(status)} · ${(pb?.stages||[]).length} stages</small></span></div>`;
 }
 async function loadWorkspacePreview(path){
   const target=document.getElementById("artifact-preview"); if(!target||!path) return;
+  workspacePreviewMode="preview"; workspacePreviewRaw="";
   target.innerHTML=renderWorkspacePreview(workspacePlaybook(),path);
   try{
     const r=await fetch("/api/files?path="+encodeURIComponent(path)+"&action=view");
@@ -1351,8 +1348,17 @@ async function loadWorkspacePreview(path){
     const type=r.headers.get("content-type")||"";
     if(!type.startsWith("text/")&&!type.includes("json")) return;
     const content=await r.text();
+    workspacePreviewRaw=content;
     if(document.getElementById("artifact-preview")) target.innerHTML=renderWorkspacePreview(workspacePlaybook(),path,content);
   }catch(error){ target.innerHTML=renderWorkspacePreview(workspacePlaybook(),path)+`<div class="artifact-error">Preview unavailable: ${esc(error.message)}</div>`; }
+}
+// The Work sidebar stacks recent conversations over the playbook tree, like a
+// coding-agent shell — pick up mid-thread without leaving the workspace view.
+function workspaceSessionList(){
+  const sessions=(D&&D.sessions)||[];
+  const rows=sessions.length?sessions.slice(0,6).map(s=>`<button type="button" class="ws-session ${s.id===SESSION?"on":""}" onclick="switchSession(${jsArg(s.id)})"><strong>${esc(s.title||s.id)}</strong><span>${esc((s.last_at||"").slice(0,10))} · ${s.messages} msg</span></button>`).join("")
+    :`<div class="ws-session-empty">No past conversations yet</div>`;
+  return `<div class="ws-sessions"><div class="workspace-title"><span>CONVERSATIONS</span><button type="button" class="ws-session-new" onclick="newChat()">+ New</button></div>${rows}<button type="button" class="ws-session-more" onclick="toggleSessMenu(event)">All conversations</button></div>`;
 }
 function renderWorkspaceShell(){
   const explorer=document.getElementById("workspace-explorer"), preview=document.getElementById("artifact-preview");
@@ -1360,7 +1366,7 @@ function renderWorkspaceShell(){
   const pb=workspacePlaybook();
   if(pb&&!selectedWorkspacePlaybook) selectedWorkspacePlaybook=pb.name;
   const path=workspaceArtifactPath(pb), signature=JSON.stringify([selectedWorkspacePlaybook,path,(D.playbooks||[]).map(p=>[p.name,p.outputs?.length,p.runs?.[0]?.id])]);
-  explorer.innerHTML=`<div class="workspace-title"><span>WORKSPACE EXPLORER</span><small>PLAYBOOKS</small></div>${workspaceTree(pb)}`;
+  explorer.innerHTML=`${workspaceSessionList()}<div class="workspace-title"><span>WORKSPACE EXPLORER</span><small>PLAYBOOKS</small></div>${workspaceTree(pb)}`;
   if(signature!==workspaceShellSignature){ workspaceShellSignature=signature; loadWorkspacePreview(path); }
   const title=document.querySelector("#dock .dockhead strong"); if(title) title.textContent=pb?.name||"Conversation";
   const status=document.querySelector("#dock .arch-status"); if(status) status.textContent=pb?"Playbook workspace":"No workspace selected";
@@ -1369,7 +1375,6 @@ function selectWorkspacePlaybook(name){ selectedWorkspacePlaybook=name; selected
 function selectWorkspaceArtifact(path){ selectedWorkspaceArtifact=path; workspaceShellSignature=""; renderWorkspaceShell(); }
 
 const TITLES = {chat:"Chat & watch", conversations:"Conversations", system:"System", ops:"System",
-                universe:"Living Field",
                 today:"Today — owner journal", work:"Work — responsibilities", responsibility:"Responsibility",
                 database:"Database — everything Mino stores (state.db)", activetasks:"Active Schedules — playbook runs",
                 files:"Files — VPS artifacts and outputs",
@@ -1377,9 +1382,9 @@ const TITLES = {chat:"Chat & watch", conversations:"Conversations", system:"Syst
                 onboarding:"Welcome — set up your Mino"};
 
 function canonicalRoute(){
-  const parts=(location.hash||"#universe").slice(1).split("/"), raw=parts[0]||"universe", sub=parts[1]||null;
+  const parts=(location.hash||"#work").slice(1).split("/"), raw=parts[0]||"work", sub=parts[1]||null;
   let route=[raw,sub];
-  if(raw==="overview") route=["universe",null];
+  if(raw==="overview") route=["work",null];
   else if(raw==="gateway"||raw==="chat") route=["conversations",null];
   else if(raw==="loop") route=["system","traces"];
   else if(raw==="tools") route=["system",sub==="results"?"tool-results":sub==="mcp"?"mcp":"tools"];
@@ -1388,38 +1393,34 @@ function canonicalRoute(){
   else if(raw==="ops") route=["system",sub&&sub!=="overview"?sub:"overview"];
   else if(raw==="settings") route=["system","settings"];
   else if(raw==="activetasks") route=["system","schedules"];
-  else if(raw==="graph"||(raw==="memory"&&sub==="graph")) route=["universe","memory"];
+  else if(raw==="graph") route=["memory","graph"];
   const canonical=route[0]+(route[1]?`/${route[1]}`:"");
   if(canonical!==parts.slice(0,2).filter(Boolean).join("/")) history.replaceState(null,"","#"+canonical);
   return route;
 }
 
 function render(){
-  if (!D || !U) return;
+  if (!D) return;
   // onboarding gate: redirect if no API key configured
   if (D.needs_onboarding && !location.hash.startsWith("#onboarding")) {
     location.hash = "#onboarding"; return;
   }
   if (!D.needs_onboarding && location.hash.startsWith("#onboarding")) {
-    location.hash = "#universe"; return;
+    location.hash = "#work"; return;
   }
   const [v, sub] = canonicalRoute();
-  const view = VIEWS[v] ? v : "universe";
+  const view = VIEWS[v] ? v : "work";
   document.body.classList.toggle("onboarding-mode", view === "onboarding");
   document.body.dataset.view=view;
   if(view === "work") renderWorkspaceShell();
   const subChanged = sub !== activeSub || view !== activeView;
   const primary=view==="responsibility"?"work":view;
   document.querySelectorAll("[data-v]").forEach(a=>a.classList.toggle("on", a.dataset.v===primary));
-  document.querySelectorAll("[data-lens]").forEach(a=>a.classList.toggle("on",view==="universe"&&a.dataset.lens===(sub||"universe")));
   const title=TITLES[view] || view[0].toUpperCase()+view.slice(1);
   document.getElementById("title").textContent = title;
   document.title=title.replace(/\s+—.*$/,"")+" · Mino";
   let preserve=false;
-  if (view === "universe" && activeView === "universe" && activeSub === sub && universeState?.canvas?.isConnected){
-    universeState.lens=sub||"universe";
-    preserve=true;
-  } else if ((view === "memory" || view === "settings" || view === "database" || view === "onboarding") && editing && !subChanged){
+  if ((view === "memory" || view === "settings" || view === "database" || view === "onboarding") && editing && !subChanged){
     // don't wipe an in-progress edit on the 5s refresh — but DO switch sub-tabs
     preserve=true;
   } else if (view === "memory" && sub === "graph" && activeView === "memory" && activeSub === "graph") {
@@ -1460,14 +1461,7 @@ function tickLive(){
   document.getElementById("health-panel-label").textContent=label;
   document.getElementById("health-freshness").textContent=freshness;
   const details=document.getElementById("health-details");
-  if(details&&D) details.innerHTML=`<div><dt>Provider</dt><dd>${esc(fullDataLoaded?(D.active_provider||D.provider||"Unavailable"):"Connected runtime")}</dd></div><div><dt>Responsibilities</dt><dd>${responsibilityError?"Unavailable":`${U?.counts?.responsibilities||0} mapped`}</dd></div><div><dt>Schedules</dt><dd>${fullDataLoaded?(D.active_tasks||[]).length:U?.counts?.schedules||0}</dd></div><div><dt>MCP</dt><dd>${mcp?(mcp.live?"Connected":mcp.configured?"Unavailable":"Not configured"):"Open System to inspect"}</dd></div>`;
-}
-function universeOnlyRoute(){
-  const parts=(location.hash||"#universe").slice(1).split("/"),raw=parts[0]||"universe",sub=parts[1]||"";
-  return raw==="universe"||raw==="overview"||raw==="graph"||(raw==="memory"&&sub==="graph");
-}
-function dashboardDataFromUniverse(snapshot){
-  return {needs_onboarding:snapshot.needs_onboarding,timezone:snapshot.timezone,responsibilities:{today:[],work:[]},active_tasks:[],sessions:[],tools:{mcp:{}}};
+  if(details&&D) details.innerHTML=`<div><dt>Provider</dt><dd>${esc(fullDataLoaded?(D.active_provider||D.provider||"Unavailable"):"Connected runtime")}</dd></div><div><dt>Schedules</dt><dd>${(D.active_tasks||[]).length}</dd></div><div><dt>MCP</dt><dd>${mcp?(mcp.live?"Connected":mcp.configured?"Unavailable":"Not configured"):"Open System to inspect"}</dd></div>`;
 }
 async function loadDashboardData(){
   if(dashboardDataRequest) return dashboardDataRequest;
@@ -1480,13 +1474,9 @@ async function loadDashboardData(){
 }
 async function refresh(){
   try {
-    const universeResponse=await fetch("/api/universe/projection?scope=overview");
-    if(!universeResponse.ok) throw new Error(`dashboard returned ${universeResponse.status}`);
-    const nextUniverse=await universeResponse.json();U=nextUniverse;
-    if(!D) D=dashboardDataFromUniverse(nextUniverse);
-    if(!universeOnlyRoute()) await loadDashboardData();
+    await loadDashboardData();
     lastFetch = Date.now(); refreshFailed=false;
-    render(); universeUpdate(nextUniverse); tickLive();
+    render(); tickLive();
     syncLiveView();   // live-update an opened conversation (e.g. new phone messages)
   } catch(e){ refreshFailed=true; if(!D) renderRefreshError(e); tickLive(); }
 }
@@ -1495,40 +1485,6 @@ function renderRefreshError(error){
   if(!target) return;
   target.innerHTML=`<div class="nowfield-loading error" role="alert"><span>!</span><strong>Current Responsibility is unavailable.</strong><p>${esc(error&&error.message||"Mino could not load dashboard state.")}</p><button type="button" onclick="refresh()">Try again</button></div>`;
 }
-// --- resizable columns: drag the thin handle between nav|main and main|dock.
-// Width lives in a CSS var + localStorage, so it survives refreshes.
-function wireResizer(id, cssVar, key, fromRight, min, max){
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.onmousedown = e => {
-    e.preventDefault();
-    document.body.classList.add("resizing");
-    const move = ev => {
-      let w = fromRight ? (window.innerWidth - ev.clientX) : ev.clientX;
-      w = Math.max(min, Math.min(max, w));
-      document.documentElement.style.setProperty(cssVar, w + "px");
-      localStorage.setItem(key, w);
-    };
-    const up = () => { document.body.classList.remove("resizing");
-      document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); };
-    document.addEventListener("mousemove", move);
-    document.addEventListener("mouseup", up);
-  };
-}
-function wireChrome(){
-  // restore saved widths
-  const nw = localStorage.getItem("navW"); if (nw) document.documentElement.style.setProperty("--nav-w", nw+"px");
-  const dw = localStorage.getItem("dockW"); if (dw) document.documentElement.style.setProperty("--dock-w", dw+"px");
-  wireResizer("nav-resizer", "--nav-w", "navW", false, 150, 380);
-  wireResizer("dock-resizer", "--dock-w", "dockW", true, 260, 680);
-  // hide / show the sidebar
-  const setNav = v => { document.body.classList.toggle("nav-hidden", v); localStorage.setItem("navHidden", v?"1":"0"); };
-  const nt = document.getElementById("nav-toggle"), nr = document.getElementById("nav-reopen");
-  if (nt) nt.onclick = () => setNav(true);
-  if (nr) nr.onclick = () => setNav(false);
-  setNav(localStorage.getItem("navHidden") === "1");
-}
-
 function spinner(){ return `<div class="files-loading"><span class="spinner"></span> Loading...</div>`; }
 function renderFileTree(tree, parent){
   if (!tree.length) return `<span class="files-empty">No files in this directory.</span>`;
@@ -2081,7 +2037,7 @@ function clearGraphQuery() {
 }
 
 window.addEventListener("hashchange", async()=>{
-  try{if(!universeOnlyRoute()&&!fullDataLoaded)await loadDashboardData();render();tickLive();}
+  try{if(!fullDataLoaded)await loadDashboardData();render();tickLive();}
   catch(error){refreshFailed=true;renderRefreshError(error);tickLive();}
 });
 const THEME_KEY = "mino-theme";
@@ -2098,14 +2054,5 @@ function initTheme() {
   document.getElementById("theme-mode")?.addEventListener("change", event => applyTheme(event.target.value));
 }
 initTheme();
-let orbitNarrow = window.innerWidth < 720;
-window.addEventListener("resize", () => {
-  const narrow = window.innerWidth < 720;
-  if (narrow === orbitNarrow) return;
-  orbitNarrow = narrow;
-  if (D && activeView === "overview") document.getElementById("view").innerHTML = VIEWS.overview(D);
-});
-window.__hold = (v)=>{ animating = v; };   // test hook: freeze the diagram
 wireDock(); wireOperatorShell();
 refresh(); setInterval(refresh, 5000); setInterval(tickLive, 1000);
-pollEvents(); setInterval(pollEvents, 450);   // live harness animation
