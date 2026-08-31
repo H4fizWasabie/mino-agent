@@ -1,0 +1,93 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Studio Desk · Mino design concept A</title>
+<style>
+:root{
+  --bg:#f6f4ee; --panel:#fffefb; --line:#e5ded0; --line2:#d3c9b4;
+  --ink:#26221b; --ink2:#6b6152; --ink3:#948a76;
+  --accent:#3d5c4e; --accent-soft:#e5ece6; --accent-deep:#2a4237;
+  --serif:"Iowan Old Style","Palatino Linotype",Georgia,serif;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,monospace;
+}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--ink);font:14px/1.55 var(--sans);height:100vh;display:grid;grid-template-columns:200px minmax(360px,1fr) 300px;overflow:hidden}
+
+/* left: folder-tab nav — playbooks are case files you pull */
+.tabs{border-right:1px solid var(--line);padding:20px 0 20px 14px;display:flex;flex-direction:column;gap:2px;overflow-y:auto}
+.brand{font-family:var(--serif);font-size:17px;letter-spacing:-.01em;padding:0 6px 22px;color:var(--ink)}
+.brand small{display:block;font:10px var(--mono);color:var(--ink3);margin-top:3px;letter-spacing:.06em}
+.group-label{font:700 9px var(--mono);letter-spacing:.13em;text-transform:uppercase;color:var(--ink3);padding:16px 6px 8px}
+.tab{position:relative;display:block;padding:9px 12px 9px 14px;margin-right:-1px;border:1px solid transparent;border-right:1px solid var(--bg);color:var(--ink2);font-size:13px;text-decoration:none;border-radius:8px 0 0 8px}
+.tab:hover{background:var(--panel);color:var(--ink)}
+.tab.on{background:var(--panel);border-color:var(--line);color:var(--accent-deep);font-weight:650}
+.tab.on::after{content:"";position:absolute;top:1px;bottom:1px;right:-1px;width:3px;background:var(--accent);border-radius:2px}
+.tab small{display:block;color:var(--ink3);font:9.5px var(--mono);margin-top:2px}
+
+/* center: the conversation, quiet and text-first */
+.desk{border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0}
+.deskhead{padding:18px 26px 14px;border-bottom:1px solid var(--line)}
+.deskhead .eyebrow{font:700 10px var(--mono);letter-spacing:.1em;color:var(--accent);text-transform:uppercase}
+.deskhead h1{font-family:var(--serif);font-weight:500;font-size:22px;margin-top:4px;letter-spacing:-.01em}
+.deskhead p{color:var(--ink3);font-size:12px;margin-top:4px;font-family:var(--mono)}
+.log{flex:1;overflow-y:auto;padding:22px 26px;display:flex;flex-direction:column;gap:18px}
+.msg{max-width:74ch}
+.msg .who{font:700 9.5px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink3);margin-bottom:5px}
+.msg.mino .who{color:var(--accent)}
+.msg p{font-size:13.5px;line-height:1.65;color:var(--ink)}
+.msg .step{margin-top:8px;padding:9px 12px;border-left:2px solid var(--accent);background:var(--accent-soft);font:11.5px var(--mono);color:var(--accent-deep)}
+.composer{padding:16px 26px 20px;border-top:1px solid var(--line)}
+.composer .box{border:1px solid var(--line2);border-radius:10px;background:var(--panel);padding:12px 14px;display:flex;gap:10px;align-items:flex-end}
+.composer textarea{flex:1;border:0;background:none;resize:none;font:13.5px var(--sans);color:var(--ink);outline:none;height:22px}
+.composer button{border:1px solid var(--accent);background:var(--accent);color:#fff;border-radius:7px;padding:8px 16px;font:600 12px var(--sans);cursor:pointer}
+.composer .hint{margin-top:7px;color:var(--ink3);font:10px var(--mono)}
+
+/* right: the artifact, a single quiet reading pane */
+.artifact{padding:20px;overflow-y:auto}
+.artifact .kicker{font:700 9px var(--mono);letter-spacing:.1em;color:var(--ink3);text-transform:uppercase}
+.artifact h2{font-family:var(--serif);font-size:16px;font-weight:500;margin:6px 0 12px}
+.artifact .card{border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:14px;margin-bottom:10px}
+.artifact .card .status{display:inline-block;font:700 8.5px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--accent-deep);background:var(--accent-soft);padding:2px 8px;border-radius:99px;margin-bottom:7px}
+.artifact .card strong{display:block;font-size:12.5px}
+.artifact .card span{display:block;color:var(--ink3);font-size:11px;margin-top:3px;font-family:var(--mono)}
+</style></head>
+<body>
+  <nav class="tabs">
+    <div class="brand">Mino<small>STUDIO DESK</small></div>
+    <a class="group-label">Desk</a>
+    <a class="tab on">Now<small>2 need you</small></a>
+    <a class="tab">Work</a>
+    <a class="tab">Memory</a>
+    <a class="group-label">Case files</a>
+    <a class="tab">morning-briefing<small>runs daily · 07:00</small></a>
+    <a class="tab">weekly-cost<small>runs Mon · 09:00</small></a>
+    <a class="tab">ai-news-daily<small>runs daily · 06:30</small></a>
+    <a class="tab">weekly-audit<small>runs Fri · 17:00</small></a>
+  </nav>
+
+  <section class="desk">
+    <div class="deskhead">
+      <div class="eyebrow">weekly-cost · run #214</div>
+      <h1>Weekly cost audit</h1>
+      <p>started 09:00 · 3 steps · needs your review</p>
+    </div>
+    <div class="log">
+      <div class="msg mino"><div class="who">Mino</div><p>Cost for the week is up 12% over baseline, mostly from the eval sandbox left running Tuesday night. I paused it and flagged the two runs that look intentional.</p>
+        <div class="step">→ paused sandbox/eval-7f2 · saved ~$4.10/day</div></div>
+      <div class="msg"><div class="who">You</div><p>Good catch. Leave the flagged ones, close this out.</p></div>
+      <div class="msg mino"><div class="who">Mino</div><p>Closing the audit. I'll carry the sandbox pause forward into next week's baseline so it doesn't show as a false spike.</p></div>
+    </div>
+    <div class="composer">
+      <div class="box"><textarea placeholder="Ask Mino…"></textarea><button>Send</button></div>
+      <div class="hint">Enter for a new line · ⌘Enter to send</div>
+    </div>
+  </section>
+
+  <aside class="artifact">
+    <div class="kicker">This run</div>
+    <h2>Evidence</h2>
+    <div class="card"><span class="status">verified</span><strong>sandbox/eval-7f2 usage.csv</strong><span>pulled 09:00 · 214 rows</span></div>
+    <div class="card"><span class="status">needs you</span><strong>cost-delta report</strong><span>flagged 2 of 9 runs for review</span></div>
+    <div class="card"><span class="status">verified</span><strong>prior baseline</strong><span>week of Aug 17</span></div>
+  </aside>
+</body></html>
