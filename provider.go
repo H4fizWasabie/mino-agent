@@ -138,6 +138,12 @@ func (c *Client) createWithRouting(ctx context.Context, model, reasoning string,
 		"messages":              oaiMsgs,
 		"max_completion_tokens": maxTokens,
 		"stream":                stream,
+		// #495: a standard mitigation against decode-time repetition collapse
+		// on long non-streamed completions — observed live 2026-08-31 (GLM
+		// 5.3 Flash ran away to MINO_MAX_TOKENS on plain-text replies).
+		// OpenRouter drops parameters a specific backend doesn't support
+		// rather than rejecting the request.
+		"repetition_penalty": envFloat("MINO_REPETITION_PENALTY", 1.1),
 	}
 	if len(routing) > 0 {
 		payload["provider"] = map[string]any{

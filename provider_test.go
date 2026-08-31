@@ -55,6 +55,46 @@ func TestCreateJSONRetriesWithoutResponseFormat(t *testing.T) {
 	}
 }
 
+// #495: every OpenRouter request carries repetition_penalty — a mitigation
+// against the decode-time repetition collapse observed live 2026-08-31
+// (GLM 5.3 Flash ran away to MINO_MAX_TOKENS on a non-streamed reply).
+func TestCreateContextSendsRepetitionPenaltyDefault(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &got)
+		w.Write([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{apiKey: "k", baseURL: srv.URL, client: http.DefaultClient}
+	if _, err := c.Create("model", []Message{{Role: "user", Content: "hi"}}, 100, "", nil); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if got["repetition_penalty"] != 1.1 {
+		t.Fatalf("repetition_penalty = %v, want default 1.1", got["repetition_penalty"])
+	}
+}
+
+func TestCreateContextSendsRepetitionPenaltyFromEnv(t *testing.T) {
+	t.Setenv("MINO_REPETITION_PENALTY", "1.3")
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &got)
+		w.Write([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{apiKey: "k", baseURL: srv.URL, client: http.DefaultClient}
+	if _, err := c.Create("model", []Message{{Role: "user", Content: "hi"}}, 100, "", nil); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if got["repetition_penalty"] != 1.3 {
+		t.Fatalf("repetition_penalty = %v, want configured 1.3", got["repetition_penalty"])
+	}
+}
+
 // #440: GLM 5.3 flash rejects a disabled-reasoning JSON call outright
 // ("Reasoning is mandatory for this endpoint and cannot be disabled") — the
 // opposite requirement from DeepSeek. Both reasoning-disabled attempts must

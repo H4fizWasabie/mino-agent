@@ -15,7 +15,7 @@ triggers:
 
 Use the `cost_watch_*` tools whenever prices, costs, or promos come up. Do not wait to be asked about the tools — use them, then answer.
 
-**Pinning is autonomous: every catalogue refresh re-ranks the brain's routing to the cheapest eligible host (trains providers hard-excluded) and hot-reloads mino via SIGHUP — silent, no owner paging. Your job is reporting, not deciding: state what's pinned and why, never promise a model/host change the owner must approve.**
+**Pinning is autonomous: every catalogue refresh re-ranks the brain's routing to the best eligible host — precision floor first (fp8+ beats known weaker quantizations like fp4), then cheapest (trains providers hard-excluded) — and hot-reloads mino via SIGHUP — silent, no owner paging. Your job is reporting, not deciding: state what's pinned and why, never promise a model/host change the owner must approve.**
 
 ### Status
 - `cost_watch_status` — current best provider prices for the configured models (the REL-01 policy models: deepseek:deepinfra, qwen3.7-flash), last check time, and flags.

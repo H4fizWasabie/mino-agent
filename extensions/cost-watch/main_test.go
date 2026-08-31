@@ -270,6 +270,33 @@ func TestPinOrderUsesUptimeThenLatencyAfterPrice(t *testing.T) {
 	}
 }
 
+// TestPinOrderPrefersFP8OverCheaperFP4 covers issue #495: a cheaper fp4
+// endpoint must rank below a pricier fp8 one — precision is a floor, checked
+// before price, not a tiebreak after it.
+func TestPinOrderPrefersFP8OverCheaperFP4(t *testing.T) {
+	cfg := defaultConfig()
+	cat := []catalogueEntry{
+		{Model: "m", Provider: "Relace", In: 0.01, Cache: 0.01, Out: 0.01, Uptime: 99, DataHandling: "zdr", Quantization: "fp4"},
+		{Model: "m", Provider: "Novita", In: 0.10, Cache: 0.10, Out: 0.10, Uptime: 99, DataHandling: "zdr", Quantization: "fp8"},
+	}
+	if got, want := strings.Join(pinOrder(cfg, cat), ","), "Novita,Relace"; got != want {
+		t.Fatalf("precision-floor order = %v, want [%s] (cheaper fp4 must not outrank fp8)", got, strings.ReplaceAll(want, ",", " "))
+	}
+}
+
+// TestPinOrderUnknownQuantizationNotPenalized covers issue #495: no evidence
+// "unknown" is bad, so it must rank alongside fp8, not behind it.
+func TestPinOrderUnknownQuantizationNotPenalized(t *testing.T) {
+	cfg := defaultConfig()
+	cat := []catalogueEntry{
+		{Model: "m", Provider: "cheaper-unknown", In: 0.01, Cache: 0.01, Out: 0.01, Uptime: 99, DataHandling: "zdr", Quantization: "unknown"},
+		{Model: "m", Provider: "pricier-fp8", In: 0.10, Cache: 0.10, Out: 0.10, Uptime: 99, DataHandling: "zdr", Quantization: "fp8"},
+	}
+	if got, want := strings.Join(pinOrder(cfg, cat), ","), "cheaper-unknown,pricier-fp8"; got != want {
+		t.Fatalf("unknown-quantization order = %v, want [%s] (unknown must not be penalized)", got, strings.ReplaceAll(want, ",", " "))
+	}
+}
+
 func TestPinOrderPutsUnknownLatencyAfterMeasured(t *testing.T) {
 	cfg := defaultConfig()
 	cat := []catalogueEntry{
