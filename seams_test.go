@@ -449,6 +449,7 @@ var promptAssemblySeams = []string{
 	"ContextMessages",
 	"stripLegacyToolCallXML",
 	"buildCommunitySynthesisPrompt",
+	"renderDeferredToolIndex",
 }
 
 func TestPromptAssemblySeamsCovered(t *testing.T) {

@@ -327,6 +327,18 @@ func RunLoopContext(
 		stageToolNames = names
 	}
 	schemas := tools.SchemasForContext(sessionID, toolSelectionContext(system, messages), oneTurnText, stageToolNames)
+	// #483: everything not in `schemas` is still reachable via tool_search +
+	// tool_call — append the tier-2 name+description index to the (already
+	// fixed-for-the-turn) system text so the model knows what to search for.
+	// This appends to system, not to schemas, so it never touches the
+	// once-per-turn cache-preserving contract above.
+	selectedNames := make(map[string]bool, len(schemas))
+	for _, s := range schemas {
+		selectedNames[s.Name] = true
+	}
+	if index := renderDeferredToolIndex(tools.deferredToolIndex(selectedNames)); index != "" {
+		system += index
+	}
 	schemaChars := 0
 	schemaNames := make([]string, 0, len(schemas))
 	for _, s := range schemas {

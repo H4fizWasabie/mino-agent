@@ -1,5 +1,53 @@
 ## [Unreleased]
 
+### Added
+
+- **`tool_search` / `tool_call`: on-demand access to every registered tool, not just the
+  loaded set (#483)**: Mino now keeps a small always-loaded tool set per turn (the tools it
+  uses often, plus a short safety-pinned list) and reaches everything else — the other
+  ~60 registered tools — through two always-present dispatcher tools: `tool_search(name)`
+  looks up any tool's real arguments, `tool_call(name, args)` runs it. This mirrors how
+  composio's own two dispatcher tools already worked in this codebase, and replaces the old
+  keyword/semantic sliding window that guessed which tools a turn needed before the model
+  said anything — a guess that could be wrong (#481: a stage-declared composio tool losing
+  its slot contest, the model falling back to `bash`+`curl` instead). Nothing is unreachable
+  now; a rarely-used tool costs one extra `tool_search`+`tool_call` round trip instead of
+  never showing up at all.
+
+### Changed
+
+- **Tool essentials are now usage-derived, not just incident-driven (#483)**: the always-loaded
+  tool set is computed from real tool-usage history (`tool_calls`, 30-day rolling window, top
+  tools by call count) instead of a hand-maintained list that only grew when something broke.
+  A small safety-pinned floor (`send_document`, composio's two dispatcher tools) survives
+  regardless of usage frequency — the specific case a frequency ranking can't cover, since a
+  rare-but-critical tool by definition won't rank high.
+
+### Config
+
+- `MINO_TOOL_ESSENTIALS_COUNT` (default: `8`) — how many tools the frequency tier keeps
+  always-loaded. Absent or invalid → default of 8, no error.
+- `MINO_TOOL_ESSENTIALS_WINDOW_DAYS` (default: `30`) — how far back the usage-frequency
+  count looks. Absent or invalid → default of 30 days; a newer install just has fewer rows
+  in that window, not an error.
+- `MINO_TOOL_ESSENTIALS_REFRESH_HOURS` (default: `24`) — how often the frequency tier
+  recomputes. Absent or invalid → default of 24 hours; recomputation runs once at startup
+  regardless, so a fresh restart isn't cold if usage history already exists.
+
+### Known limitations
+
+- The defaults above are the values discussed at design time, not yet tuned against real
+  production `tool_calls` volume — this shipped without a shadow-run/calibration period by
+  owner instruction, so the essentials cutoff may need adjusting once real usage patterns are
+  visible.
+- Every use of a deferred (non-essential) tool costs a `tool_search` + `tool_call` round trip
+  every time, with no harness-tracked "already searched this session" state — a model that
+  used a tool two turns ago pays the search tax again unless it recalls the schema from its
+  own conversation history. Accepted tradeoff, not a defect: an earlier design that tried to
+  make a searched tool "sticky" turned out to require mutating the turn's tool schema
+  mid-turn, which breaks the provider prompt-cache — the shipped design avoids that at the
+  cost of the search tax repeating.
+
 ## [v3.8.1] — composio dispatcher tools always reachable (2026-08-31)
 
 ### Fixed

@@ -425,73 +425,12 @@ func TestToolDefCapsLongDescription(t *testing.T) {
 	}
 }
 
-func unionNames(u *schemaUnion) []string {
-	return append([]string(nil), u.order...)
-}
-
-func TestSchemaUnionCapEvictsLRU(t *testing.T) {
-	u := newSchemaUnion()
-	for _, n := range []string{"a", "b", "c", "d", "e"} {
-		u.selectName(n)
-	}
-	u.capAt(3, nil, nil)
-	if got, want := unionNames(u), []string{"c", "d", "e"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("after cap 3: %v, want %v", got, want)
-	}
-}
-
-func TestSchemaUnionRefreshKeepsRecent(t *testing.T) {
-	u := newSchemaUnion()
-	for _, n := range []string{"a", "b", "c"} {
-		u.selectName(n)
-	}
-	u.selectName("a") // refresh: a is now most recent
-	u.capAt(2, nil, nil)
-	if got, want := unionNames(u), []string{"c", "a"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("after refresh+cap: %v, want %v", got, want)
-	}
-}
-
-func TestSchemaUnionPinnedNeverEvicted(t *testing.T) {
-	u := newSchemaUnion()
-	for _, n := range []string{"a", "b", "c", "d"} {
-		u.selectName(n)
-	}
-	u.capAt(2, map[string]bool{"b": true}, nil)
-	if got, want := unionNames(u), []string{"b", "d"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("pinned b evicted or wrong survivors: %v, want %v", got, want)
-	}
-}
-
-func TestSchemaUnionExplicitImmunity(t *testing.T) {
-	u := newSchemaUnion()
-	for _, n := range []string{"a", "b", "c", "d"} {
-		u.selectName(n)
-	}
-	// a is oldest but explicitly named this turn → survives; b, c go.
-	u.capAt(2, nil, map[string]bool{"a": true})
-	if got, want := unionNames(u), []string{"a", "d"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("immune a evicted: %v, want %v", got, want)
-	}
-}
-
-func TestSchemaUnionImmuneOverflowStays(t *testing.T) {
-	// pinned+immune > cap: protected tools survive, union stays larger.
-	u := newSchemaUnion()
-	for _, n := range []string{"a", "b", "c", "d"} {
-		u.selectName(n)
-	}
-	u.capAt(2, map[string]bool{"a": true, "b": true}, map[string]bool{"c": true, "d": true})
-	if got, want := unionNames(u), []string{"a", "b", "c", "d"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("protected tools dropped: %v, want %v", got, want)
-	}
-}
-
-// TestSchemasForContextCappedUnion exercises the union through the real
-// selection path: essentials always present, cap 20 enforced, oldest explicit
-// tools evicted when new ones arrive, and the output byte-stable across
-// identical turns (prefix-cache requirement).
-func TestSchemasForContextCappedUnion(t *testing.T) {
+// TestSchemasForContextFixedTierOneSet exercises tier-1 selection through the
+// real path (issue #483): floor + dispatchers + stage tools are present
+// every turn regardless of turn content, deferred (non-tier-1) tools are
+// absent from the schema array, and identical turns produce byte-stable
+// output (no session-churn eviction left to make it unstable).
+func TestSchemasForContextFixedTierOneSet(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -501,9 +440,11 @@ func TestSchemasForContextCappedUnion(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := NewRegistry()
-	for _, name := range essentialNamesSorted {
-		r.Register(&Tool{Name: name, Description: "essential", Schema: map[string]any{"type": "object"}})
+	for _, name := range floorNamesSorted {
+		r.Register(&Tool{Name: name, Description: "floor", Schema: map[string]any{"type": "object"}})
 	}
+	r.Register(makeToolSearchTool(r))
+	r.Register(makeToolCallTool(r))
 	for i := 100; i < 130; i++ {
 		r.Register(&Tool{Name: fmt.Sprintf("special_%d", i), Description: "specialized tool", Schema: map[string]any{"type": "object"}})
 	}
@@ -532,40 +473,21 @@ func TestSchemasForContextCappedUnion(t *testing.T) {
 		}
 	}
 
-	// Turn 1: 15 essentials (send_document CTX-013, composio #481) + 4 explicit
-	// = 19, under the cap by the same margin as before either essential grew.
 	first := names(r.SchemasForContext("s1", "", "use special_101 special_102 special_103 special_104 now"))
-	if len(first) != 19 {
-		t.Fatalf("turn 1: %d schemas, want 19: %v", len(first), first)
-	}
-	hasAll(t, first, essentialNamesSorted...)
-
-	// Turn 2: 4 new explicit tools → union 23 → evict the 3 oldest explicit,
-	// one turn-1 survivor remains (same partial-eviction shape as before).
-	second := names(r.SchemasForContext("s1", "", "use special_105 special_106 special_107 special_108 now"))
-	if len(second) != schemaUnionCap {
-		t.Fatalf("turn 2: %d schemas, want cap %d", len(second), schemaUnionCap)
-	}
-	hasAll(t, second, essentialNamesSorted...)
-	hasAll(t, second, "special_104", "special_105", "special_106", "special_107", "special_108")
-	for _, gone := range []string{"special_101", "special_102", "special_103"} {
-		for _, g := range second {
-			if g == gone {
-				t.Fatalf("%s survived eviction: %v", gone, second)
+	hasAll(t, first, floorNamesSorted...)
+	hasAll(t, first, toolSearchName, toolCallName)
+	for _, deferred := range []string{"special_101", "special_102", "special_103", "special_104"} {
+		for _, g := range first {
+			if g == deferred {
+				t.Fatalf("deferred tool %s appeared directly in tier 1, mentioning it in turn text must not add it: %v", deferred, first)
 			}
 		}
 	}
 
-	// Turn 3: identical to turn 2 → identical output (prefix-cache stability).
-	third := names(r.SchemasForContext("s1", "", "use special_105 special_106 special_107 special_108 now"))
-	if !reflect.DeepEqual(second, third) {
-		t.Fatalf("unstable output across identical turns:\n%v\n%v", second, third)
-	}
-
-	// A different session starts its own union.
-	other := names(r.SchemasForContext("s2", "", "use special_105 special_106 special_107 special_108 now"))
-	if len(other) != 19 {
-		t.Fatalf("session s2 inherited union: %d schemas, want 19", len(other))
+	// Identical turns → identical output (no session-churn eviction left).
+	second := names(r.SchemasForContext("s1", "", "use special_101 special_102 special_103 special_104 now"))
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("unstable output across identical turns:\n%v\n%v", first, second)
 	}
 }
 
@@ -574,8 +496,8 @@ func TestSchemasForContextAddsStageCapabilities(t *testing.T) {
 	defer db.Close()
 	r := NewRegistry()
 	r.SetSearchDB(db)
-	for _, name := range essentialNamesSorted {
-		r.Register(&Tool{Name: name, Description: "core capability", Schema: map[string]any{"type": "object"}})
+	for _, name := range floorNamesSorted {
+		r.Register(&Tool{Name: name, Description: "floor capability", Schema: map[string]any{"type": "object"}})
 	}
 	r.Register(&Tool{Name: "stage_only", Description: "capability useful only for the active stage", Schema: map[string]any{"type": "object"}})
 	r.Register(&Tool{Name: "unrelated", Description: "unrelated specialist capability", Schema: map[string]any{"type": "object"}})
@@ -588,11 +510,155 @@ func TestSchemasForContextAddsStageCapabilities(t *testing.T) {
 	if !names["stage_only"] {
 		t.Fatalf("stage capability missing: %v", names)
 	}
-	if !names["read_file"] || !names["write_file"] {
-		t.Fatalf("always-available tools missing: %v", names)
-	}
 	if names["unrelated"] {
-		t.Fatalf("unrelated sliding tool unexpectedly selected: %v", names)
+		t.Fatalf("unrelated deferred tool unexpectedly selected: %v", names)
+	}
+}
+
+func TestDeferredToolIndexListsUnselectedToolsOnly(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("CREATE VIRTUAL TABLE tool_catalog_fts USING fts5(name, description, keywords)"); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry()
+	r.SetSearchDB(db)
+	r.Register(&Tool{Name: "in_tier_one", Description: "already selected", Schema: map[string]any{"type": "object"}})
+	r.Register(&Tool{Name: "deferred_one", Description: "Fetch supplier purchase orders. Long usage prose follows.", Schema: map[string]any{"type": "object"}})
+	r.syncToolCatalog()
+
+	entries := r.deferredToolIndex(map[string]bool{"in_tier_one": true})
+	found := false
+	for _, e := range entries {
+		if e.Name == "in_tier_one" {
+			t.Fatalf("selected tool leaked into deferred index: %v", entries)
+		}
+		if e.Name == "deferred_one" {
+			found = true
+			if e.Description != "Fetch supplier purchase orders" {
+				t.Fatalf("expected first-sentence trim, got %q", e.Description)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected deferred_one in the index: %v", entries)
+	}
+	if rendered := renderDeferredToolIndex(entries); !strings.Contains(rendered, "deferred_one") {
+		t.Fatalf("rendered index missing deferred_one: %q", rendered)
+	}
+	if rendered := renderDeferredToolIndex(nil); rendered != "" {
+		t.Fatalf("empty entries should render empty, got %q", rendered)
+	}
+}
+
+// TestRenderDeferredToolIndexNamesEntryAndNudgesToolCall names the seam
+// (REL-04, seams_test.go) and checks the rendered block tells the model how
+// to reach a deferred tool (search then call), not just that it exists.
+func TestRenderDeferredToolIndexNamesEntryAndNudgesToolCall(t *testing.T) {
+	rendered := renderDeferredToolIndex([]DeferredToolEntry{{Name: "widget", Description: "Makes widgets"}})
+	if !strings.Contains(rendered, "widget") || !strings.Contains(rendered, "tool_search") || !strings.Contains(rendered, "tool_call") {
+		t.Fatalf("rendered index missing name or search/call guidance: %q", rendered)
+	}
+}
+
+func TestToolSearchReturnsSchemaText(t *testing.T) {
+	r := NewRegistry()
+	r.Register(&Tool{Name: "widget", Description: "Makes widgets", Schema: map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"count": map[string]any{"type": "integer"}},
+		"required":   []string{"count"},
+	}})
+	out := r.handleToolSearch("widget")
+	if !strings.Contains(out, "widget") || !strings.Contains(out, "count") {
+		t.Fatalf("expected schema text for widget, got %q", out)
+	}
+	if err := r.handleToolSearch("does_not_exist"); !strings.Contains(err, "no tool named") {
+		t.Fatalf("expected clear unknown-tool error, got %q", err)
+	}
+	if empty := r.handleToolSearch(""); !strings.Contains(empty, "Error") {
+		t.Fatalf("expected error for empty name, got %q", empty)
+	}
+}
+
+func TestToolCallDispatchesToRealHandler(t *testing.T) {
+	r := NewRegistry()
+	called := false
+	r.Register(&Tool{
+		Name:        "widget",
+		Description: "Makes widgets",
+		Schema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"count": map[string]any{"type": "integer"}},
+			"required":   []string{"count"},
+		},
+		Fn: func(args map[string]any) string {
+			called = true
+			return fmt.Sprintf("made %v widgets", args["count"])
+		},
+	})
+
+	out := r.handleToolCall(context.Background(), "widget", map[string]any{"count": float64(3)})
+	if !called {
+		t.Fatal("tool_call did not reach the real handler")
+	}
+	if out != "made 3 widgets" {
+		t.Fatalf("expected the real handler's real result verbatim, got %q", out)
+	}
+
+	if out := r.handleToolCall(context.Background(), "does_not_exist", nil); !strings.Contains(out, "no tool named") {
+		t.Fatalf("expected clear unknown-tool error, got %q", out)
+	}
+
+	// Invalid args: missing required "count" — same validation ExecuteContext
+	// would apply on a direct call.
+	if out := r.handleToolCall(context.Background(), "widget", map[string]any{}); !strings.Contains(out, "Error") {
+		t.Fatalf("expected a validation error for missing required arg, got %q", out)
+	}
+}
+
+func TestRefreshFrequencyEssentialsColdStartAndStaleCacheOnError(t *testing.T) {
+	db := Connect(t.TempDir())
+	defer db.Close()
+	r := NewRegistry()
+	r.SetSearchDB(db)
+
+	// Cold start: tool_calls has zero rows — frequency tier is empty, not an
+	// error, and refresh itself does not fail.
+	if err := r.refreshFrequencyEssentials(context.Background()); err != nil {
+		t.Fatalf("cold start should not error: %v", err)
+	}
+	r.essentialsMu.RLock()
+	coldCount := len(r.frequencyTools)
+	r.essentialsMu.RUnlock()
+	if coldCount != 0 {
+		t.Fatalf("expected empty frequency tier on cold start, got %d entries", coldCount)
+	}
+
+	db.Exec("INSERT INTO tool_calls (session_id, tool_name) VALUES ('s', 'widget')")
+	if err := r.refreshFrequencyEssentials(context.Background()); err != nil {
+		t.Fatalf("refresh with data should not error: %v", err)
+	}
+	r.essentialsMu.RLock()
+	warm := r.frequencyTools["widget"]
+	r.essentialsMu.RUnlock()
+	if !warm {
+		t.Fatal("expected widget in the frequency tier after a real tool_calls row")
+	}
+
+	// DB error: close the connection, refresh must fail but keep the last
+	// good cache rather than zeroing it out.
+	db.Close()
+	if err := r.refreshFrequencyEssentials(context.Background()); err == nil {
+		t.Fatal("expected an error querying a closed DB")
+	}
+	r.essentialsMu.RLock()
+	stillWarm := r.frequencyTools["widget"]
+	r.essentialsMu.RUnlock()
+	if !stillWarm {
+		t.Fatal("a failed refresh must keep the last successfully cached frequency set")
 	}
 }
 

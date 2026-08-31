@@ -14,10 +14,10 @@ import (
 // lost when #450/#451/#452 removed the per-stage loop that used to wire it.
 
 func TestComposioToolsAreEssential(t *testing.T) {
-	if !essentialToolNames["MCP_composio_COMPOSIO_MULTI_EXECUTE_TOOL"] {
+	if !floorToolNames["MCP_composio_COMPOSIO_MULTI_EXECUTE_TOOL"] {
 		t.Fatal("expected the composio executor tool to be essential")
 	}
-	if !essentialToolNames["MCP_composio_COMPOSIO_GET_TOOL_SCHEMAS"] {
+	if !floorToolNames["MCP_composio_COMPOSIO_GET_TOOL_SCHEMAS"] {
 		t.Fatal("expected the composio schema-lookup tool to be essential")
 	}
 }
@@ -27,7 +27,7 @@ func TestSchemasForContextAlwaysIncludesComposioEssentials(t *testing.T) {
 	defer db.Close()
 	r := NewRegistry()
 	r.SetSearchDB(db)
-	for _, name := range essentialNamesSorted {
+	for _, name := range floorNamesSorted {
 		r.Register(&Tool{Name: name, Description: "core capability", Schema: map[string]any{"type": "object"}})
 	}
 	// A turn with context that has nothing to do with composio or Instagram —
@@ -107,7 +107,7 @@ func TestNavigatingTurnForceIncludesDeclaredStageTool(t *testing.T) {
 	db := Connect(t.TempDir())
 	defer db.Close()
 	core.Tools.SetSearchDB(db)
-	for _, name := range essentialNamesSorted {
+	for _, name := range floorNamesSorted {
 		core.Tools.Register(&Tool{Name: name, Description: "core capability", Schema: map[string]any{"type": "object"}})
 	}
 	core.Tools.Register(&Tool{Name: "stage_only_capability", Description: "capability useful only for the active stage", Schema: map[string]any{"type": "object"}})

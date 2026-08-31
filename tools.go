@@ -80,13 +80,13 @@ type Registry struct {
 	searchDB  *sql.DB      // optional: FTS5 index for context-conditioned tool selection
 	searchMu  sync.Mutex
 
-	// Per-session tool union capped at schemaUnionCap: a tool stays selected
-	// once chosen so the `tools` array in the request payload stabilizes
-	// across turns and the provider's prompt-prefix cache stays warm.
-	// Essentials are pinned; overflow evicts the least-recently-selected
-	// non-essential tool (explicit mentions are immune for the turn).
-	schemaMu       sync.Mutex
-	sessionSchemas map[string]*schemaUnion
+	// Frequency-derived tool essentials (issue #483): the top-N most-used
+	// tools by 30-day tool_calls count, refreshed periodically (not queried
+	// per turn) so a turn never blocks on the query. essentialsMu guards the
+	// only mutable piece of tier-1 selection; refreshFrequencyEssentials is
+	// the sole writer.
+	essentialsMu   sync.RWMutex
+	frequencyTools map[string]bool
 
 	maxToolDesc int // description cap in toolDef (0 = toolDescCap)
 }
@@ -233,20 +233,22 @@ func (r *Registry) Schemas() []ToolDef {
 	return schemas
 }
 
-var essentialToolNames = map[string]bool{
-	"remember": true, "read_file": true, "write_file": true,
-	"save_note": true, "search_web": true, "bash": true,
-	"list_playbooks": true, "run_playbook": true,
-	"manage_playbook": true,
-	"list_schedules":  true, "cancel_schedule": true,
-	"note_session": true,
+// floorToolNames are pinned to tier 1 regardless of usage frequency — the
+// safety floor a frequency-only essentials tier structurally cannot cover,
+// since a rare-but-critical tool by definition never clears a frequency
+// threshold (issue #483, grilled 2026-08-31). Re-triaged from the old flat
+// essentialToolNames: only the incident-driven entries stay pinned here.
+// Everyday tools (read_file, bash, search_web, ...) now compete for the
+// frequency tier like anything else — usage data will confirm their
+// inclusion without needing to hardcode it.
+var floorToolNames = map[string]bool{
 	// CTX-013: recurring owner need + token-leak safety. Must be in every
 	// turn's schema so the model never believes "no native tool exists" and
 	// falls back to bash+curl with the bot token in args (observed 2026-08-11:
 	// raw token in the api.telegram.org/bot<token>/sendDocument URL). The
 	// original ticket's "no pinning" call assumed the tool was available and
 	// the model merely preferred curl; production disproved that — without
-	// essentials membership it isn't in the schema at all.
+	// floor membership it isn't in the schema at all.
 	"send_document": true,
 	// #481: same failure shape as CTX-013, this time for composio. Composio
 	// registers exactly two MCP tools — COMPOSIO_MULTI_EXECUTE_TOOL (the
@@ -259,61 +261,49 @@ var essentialToolNames = map[string]bool{
 	// (observed live, 2026-08-31: an Instagram publish stage that explicitly
 	// declared it), the model fell back to bash+curl straight at composio's
 	// HTTP endpoint — a real post went out, but with no tool call the harness
-	// could verify against the stage's declared Success outcome. Essentials
+	// could verify against the stage's declared Success outcome. Floor
 	// membership removes composio from that contest entirely, the same fix
 	// CTX-013 already proved for send_document. A Mino without composio
-	// configured just never has these names in its registry — the essentials
+	// configured just never has these names in its registry — the floor
 	// lookup silently skips a name that isn't there.
 	"MCP_composio_COMPOSIO_MULTI_EXECUTE_TOOL": true,
 	"MCP_composio_COMPOSIO_GET_TOOL_SCHEMAS":   true,
 }
 
-// essentialNamesSorted is essentialToolNames in sorted order — the per-turn
-// selection merge must be deterministic (map iteration order is random) so
-// eviction tiebreaks are stable.
-var essentialNamesSorted = func() []string {
-	names := make([]string, 0, len(essentialToolNames))
-	for name := range essentialToolNames {
+// floorNamesSorted is floorToolNames in sorted order — deterministic
+// selection order (map iteration is random).
+var floorNamesSorted = func() []string {
+	names := make([]string, 0, len(floorToolNames))
+	for name := range floorToolNames {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names
 }()
 
-var toolFamilies = [][]string{
-	{"read_file", "write_file", "edit_file"},
-	{"create_event", "list_events"},
-	{"create_reminder", "list_reminders", "cancel_reminder"},
-	{"list_playbooks", "manage_playbook", "run_playbook", "schedule_playbook"},
-	{"list_schedules", "cancel_schedule"},
-	{"search_web", "fetch_url"},
-}
-
-// SchemasForContext keeps the everyday tools available and retrieves specialist
-// schemas from the full assembled context, including skills, playbooks, history,
-// and prior observations. stageToolNames adds the active stage's capabilities
-// to that selection; it does not remove always-available or sliding tools. A
-// registry without an index is static (used by tests and explicit registries).
-//
-// oneTurnText is the last user message + last assistant reply — used for semantic
-// embedding and MCP keyword gating so the signal is task-specific, not diluted by
-// full history and system prompt noise.
+// SchemasForContext returns this turn's fixed tier-1 schema set: the two
+// dispatcher tools (tool_search, tool_call), the safety floor, the
+// frequency-derived essentials (last refresh, not recomputed per turn), and
+// any force-included active-stage tools. Everything else stays deferred —
+// reachable through tool_search/tool_call, never added to this array — so
+// the set returned here is stable for the whole turn regardless of what the
+// model ends up calling (issue #483: schemas are computed once per turn,
+// loop.go:318-329, and must stay that way for the provider's prompt-prefix
+// cache). fullCtx and oneTurnText are unused now that keyword/semantic
+// auto-inclusion is gone; kept in the signature so call sites are unchanged.
+// A registry without an index is static (used by tests and explicit
+// registries).
 func (r *Registry) SchemasForContext(sessionID string, fullCtx string, oneTurnText string, stageToolNames ...[]string) []ToolDef {
 	if r.searchDB == nil {
 		return r.Schemas()
 	}
-	selected := make(map[string]bool, len(essentialToolNames))
-	// selOrder records the deterministic insertion order (map iteration is
-	// random): essentials → explicit → keyword → semantic → MCP → families.
-	// The capped union uses it as the eviction tiebreak within a turn.
-	var selOrder []string
+	selected := make(map[string]bool, len(floorToolNames)+8)
 	add := func(name string) {
-		if !selected[name] {
-			selected[name] = true
-			selOrder = append(selOrder, name)
-		}
+		selected[name] = true
 	}
-	for _, name := range essentialNamesSorted {
+	add(toolSearchName)
+	add(toolCallName)
+	for _, name := range floorNamesSorted {
 		r.toolsMu.RLock()
 		_, ok := r.tools[name]
 		r.toolsMu.RUnlock()
@@ -321,8 +311,26 @@ func (r *Registry) SchemasForContext(sessionID string, fullCtx string, oneTurnTe
 			add(name)
 		}
 	}
-	// Active-stage capabilities are additive: the model keeps its core and
-	// sliding choices while gaining the tools declared useful for this stage.
+	r.essentialsMu.RLock()
+	freq := r.frequencyTools
+	r.essentialsMu.RUnlock()
+	freqNames := make([]string, 0, len(freq))
+	for name := range freq {
+		freqNames = append(freqNames, name)
+	}
+	sort.Strings(freqNames)
+	for _, name := range freqNames {
+		r.toolsMu.RLock()
+		_, ok := r.tools[name]
+		r.toolsMu.RUnlock()
+		if ok {
+			add(name)
+		}
+	}
+	// Active-stage capabilities are force-included: the harness already knows
+	// with certainty (chat continuation) or high confidence (scheduled fire)
+	// what this stage declared, so it skips the deferred-tool round-trip
+	// entirely (#481's guarantee, kept under the new mechanism).
 	if len(stageToolNames) > 0 {
 		for _, name := range stageToolNames[0] {
 			r.toolsMu.RLock()
@@ -332,101 +340,6 @@ func (r *Registry) SchemasForContext(sessionID string, fullCtx string, oneTurnTe
 				add(name)
 			}
 		}
-	}
-	// Explicit capability names in the current turn are authoritative. This
-	// keeps channel-specific context from hiding a named registered tool.
-	explicit := r.explicitToolNames(oneTurnText)
-	for _, name := range explicit {
-		add(name)
-	}
-
-	// Built-in tools: keyword FTS5 on the user's own words is the primary
-	// signal, full context the fallback (issue #179: semantic selection
-	// removed). Live 2026-08-17: the 80-word budget was consumed by system
-	// prompt vocabulary before the user message was reached, so a "remind me"
-	// request never surfaced create_reminder and the model fell back to
-	// bash+sqlite. oneTurnText is the last user message + reply — the same
-	// signal the MCP gate below already uses.
-	for _, name := range r.searchToolNames(oneTurnText + "\n" + fullCtx) {
-		if !strings.HasPrefix(name, "MCP_") {
-			add(name)
-		}
-	}
-
-	// MCP tools: keyword FTS5 is the final gate (one-turn window).
-	// searchToolNames returns matches already ranked by bm25 relevance — the
-	// order is meaningful (best match first), so take the top-N in that order
-	// and never re-sort alphabetically. Cap 5 keeps the context budget bounded
-	// while giving the model the handful of relevant schemas it needs.
-	const maxMCPTools = 5
-	mcpCount := 0
-	for _, name := range r.searchToolNames(oneTurnText) {
-		if !strings.HasPrefix(name, "MCP_") {
-			continue
-		}
-		add(name)
-		mcpCount++
-		if mcpCount >= maxMCPTools {
-			break
-		}
-	}
-
-	for _, family := range toolFamilies {
-		matched := false
-		for _, name := range family {
-			if selected[name] {
-				matched = true
-				break
-			}
-		}
-		if matched {
-			for _, name := range family {
-				r.toolsMu.RLock()
-				_, ok := r.tools[name]
-				r.toolsMu.RUnlock()
-				if ok {
-					add(name)
-				}
-			}
-		}
-	}
-	// Per-session capped union: merge this turn's selection so the tools
-	// array stabilizes across turns for the provider prefix cache — but bound
-	// it, the old monotonic union converged to near-total tool coverage on
-	// long-lived sessions (28-47 tools observed). Essentials are pinned;
-	// when the union exceeds the cap the least-recently-selected non-essential
-	// tool is evicted, except tools explicitly named in this turn (immune
-	// until the next turn). Eviction happens only on selection churn
-	// (task-phase changes): each churn costs one prefix-cache miss, then
-	// re-caches.
-	if sessionID != "" {
-		r.schemaMu.Lock()
-		if r.sessionSchemas == nil {
-			r.sessionSchemas = make(map[string]*schemaUnion)
-		}
-		sess := r.sessionSchemas[sessionID]
-		if sess == nil {
-			sess = newSchemaUnion()
-			r.sessionSchemas[sessionID] = sess
-		}
-		immune := make(map[string]bool, len(explicit))
-		for _, name := range explicit {
-			immune[name] = true
-		}
-		if len(stageToolNames) > 0 {
-			for _, name := range stageToolNames[0] {
-				immune[name] = true
-			}
-		}
-		for _, name := range selOrder {
-			sess.selectName(name)
-		}
-		sess.capAt(schemaUnionCap, essentialToolNames, immune)
-		selected = make(map[string]bool, len(sess.set))
-		for name := range sess.set {
-			selected[name] = true
-		}
-		r.schemaMu.Unlock()
 	}
 
 	var schemas []ToolDef
@@ -440,95 +353,6 @@ func (r *Registry) SchemasForContext(sessionID string, fullCtx string, oneTurnTe
 	}
 	sort.Slice(schemas, func(i, j int) bool { return schemas[i].Name < schemas[j].Name })
 	return schemas
-}
-
-// schemaUnionCap bounds the per-session tool union (essentials count toward
-// it). Sized from compacted schema bytes (~500-800 chars/tool → 10-16k chars
-// ≈ 7-12k tokens at 20 tools); the cap cuts the observed 28-47-tool chat
-// payload roughly another 30% (design: issue #92).
-const schemaUnionCap = 20
-
-// schemaUnion is a per-session set of tool names ordered by recency of
-// selection (front = least recently selected, evicted first). pinned tools
-// are never evicted; immune tools (explicitly named this turn) survive until
-// the next turn.
-type schemaUnion struct {
-	set   map[string]bool
-	order []string
-}
-
-func newSchemaUnion() *schemaUnion {
-	return &schemaUnion{set: make(map[string]bool)}
-}
-
-// selectName marks name as selected this turn, refreshing its recency.
-func (u *schemaUnion) selectName(name string) {
-	if u.set[name] {
-		for i, n := range u.order {
-			if n == name {
-				copy(u.order[i:], u.order[i+1:])
-				u.order = u.order[:len(u.order)-1]
-				break
-			}
-		}
-	} else {
-		u.set[name] = true
-	}
-	u.order = append(u.order, name)
-}
-
-// capAt evicts least-recently-selected tools until the union holds at most n
-// names. If pinned+immune alone exceed n the union stays larger until the
-// next turn (explicit mentions are authoritative over the budget).
-func (u *schemaUnion) capAt(n int, pinned, immune map[string]bool) {
-	for len(u.order) > n {
-		evict := -1
-		for i, name := range u.order {
-			if !pinned[name] && !immune[name] {
-				evict = i
-				break
-			}
-		}
-		if evict < 0 {
-			return
-		}
-		delete(u.set, u.order[evict])
-		u.order = append(u.order[:evict], u.order[evict+1:]...)
-	}
-}
-
-func (r *Registry) explicitToolNames(contextText string) []string {
-	words := make(map[string]bool)
-	for _, raw := range strings.FieldsFunc(strings.ToLower(contextText), func(ch rune) bool {
-		return (ch < 'a' || ch > 'z') && (ch < '0' || ch > '9')
-	}) {
-		if len(raw) >= 3 {
-			words[raw] = true
-		}
-	}
-	var names []string
-	r.toolsMu.RLock()
-	for name := range r.tools {
-		if strings.HasPrefix(name, "MCP_") {
-			continue
-		}
-		parts := strings.Split(strings.ToLower(name), "_")
-		if len(parts) < 2 {
-			continue
-		}
-		matched := true
-		for _, part := range parts {
-			if len(part) < 3 || !words[part] {
-				matched = false
-				break
-			}
-		}
-		if matched {
-			names = append(names, name)
-		}
-	}
-	sort.Strings(names)
-	return names
 }
 
 // syncToolCatalog rebuilds the FTS tool index. Self-locking (toolsMu.RLock
@@ -551,46 +375,238 @@ func (r *Registry) syncToolCatalog() {
 	}
 }
 
-func (r *Registry) searchToolNames(contextText string) []string {
+// --- Tool essentials + deferred-tool dispatchers (issue #483) ---
+
+const (
+	toolSearchName = "tool_search"
+	toolCallName   = "tool_call"
+
+	toolEssentialsDefaultCount        = 8
+	toolEssentialsDefaultWindowDays   = 30
+	toolEssentialsDefaultRefreshHours = 24
+)
+
+// DeferredToolEntry is one line of the tier-2 tool index rendered into the
+// turn's context: every registered tool not already in tier 1, name plus a
+// one-line description, so the model can find it and reach it via
+// tool_search/tool_call without it ever occupying a schema-array slot.
+type DeferredToolEntry struct {
+	Name        string
+	Description string
+}
+
+// deferredToolIndex lists every registered tool not in selected, sourced from
+// tool_catalog_fts (already populated by syncToolCatalog for the old sliding
+// window; reused here as the tier-2 discoverability index). Descriptions are
+// already capped at toolDescCap by the time they reach the FTS table via
+// Description, which is long-form; deferredToolIndex takes just the first
+// sentence so the index stays a name+one-liner, not a second copy of the
+// full schema payload.
+func (r *Registry) deferredToolIndex(selected map[string]bool) []DeferredToolEntry {
 	if r.searchDB == nil {
 		return nil
 	}
-	words := toolSearchWords(contextText)
-	if len(words) == 0 {
-		return nil
-	}
-	match := strings.Join(words, " OR ")
-	rows, err := r.searchDB.Query("SELECT name FROM tool_catalog_fts WHERE tool_catalog_fts MATCH ? ORDER BY bm25(tool_catalog_fts) LIMIT 16", match)
+	rows, err := r.searchDB.Query("SELECT name, description FROM tool_catalog_fts ORDER BY name")
 	if err != nil {
 		return nil
 	}
 	defer rows.Close()
-	var names []string
+	var entries []DeferredToolEntry
 	for rows.Next() {
-		var name string
-		if rows.Scan(&name) == nil {
-			names = append(names, name)
-		}
-	}
-	return names
-}
-
-func toolSearchWords(contextText string) []string {
-	var words []string
-	seen := make(map[string]bool)
-	for _, raw := range strings.FieldsFunc(strings.ToLower(contextText), func(r rune) bool {
-		return (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_'
-	}) {
-		if len(raw) < 3 || seen[raw] || toolSearchStopWords[raw] {
+		var name, desc string
+		if rows.Scan(&name, &desc) != nil || selected[name] {
 			continue
 		}
-		seen[raw] = true
-		words = append(words, `"`+strings.ReplaceAll(raw, `"`, "")+`"`)
-		if len(words) == 80 {
-			break
+		entries = append(entries, DeferredToolEntry{Name: name, Description: firstSentence(desc)})
+	}
+	return entries
+}
+
+// firstSentence trims a description to its first sentence (or a hard char
+// cap if no sentence break is found) for a one-line tier-2 index entry.
+func firstSentence(desc string) string {
+	const cap = 160
+	if i := strings.IndexAny(desc, ".\n"); i >= 0 && i < cap {
+		return desc[:i]
+	}
+	if len(desc) > cap {
+		return desc[:cap] + "…"
+	}
+	return desc
+}
+
+// renderDeferredToolIndex renders the tier-2 index as the text block injected
+// into a turn's context (loop.go, after SchemasForContext). A named prompt-
+// assembly seam (REL-04, seams_test.go).
+func renderDeferredToolIndex(entries []DeferredToolEntry) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\nAdditional tools not loaded above (call tool_search with the name to see its arguments, then tool_call to run it):\n")
+	for _, e := range entries {
+		b.WriteString("- ")
+		b.WriteString(e.Name)
+		if e.Description != "" {
+			b.WriteString(": ")
+			b.WriteString(e.Description)
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// makeToolSearchTool and makeToolCallTool close over r like every other
+// factory in this file (e.g. makeManageMemoryTool over mem) — both
+// dispatchers need to reach the registry that registered them, and Registry
+// itself is always available at registration time in BuildRegistry.
+func makeToolSearchTool(r *Registry) *Tool {
+	return &Tool{
+		Name:        toolSearchName,
+		Description: "Look up a tool's real arguments by exact name — essential or deferred, any registered tool. Returns its description and parameter schema as text. Use before tool_call on a tool not already visible in your loaded tools.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string", "description": "Exact registered tool name"},
+			},
+			"required": []string{"name"},
+		},
+		ContextFn: func(_ context.Context, args map[string]any) string {
+			name, _ := args["name"].(string)
+			return r.handleToolSearch(name)
+		},
+	}
+}
+
+func makeToolCallTool(r *Registry) *Tool {
+	return &Tool{
+		Name:        toolCallName,
+		Description: "Run any registered tool by exact name, essential or deferred. args must satisfy that tool's real parameter schema (see tool_search). Returns the same result a direct call would.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{"type": "string", "description": "Exact registered tool name"},
+				"args": map[string]any{"type": "object", "description": "Arguments matching the target tool's schema"},
+			},
+			"required": []string{"name"},
+		},
+		ContextFn: func(ctx context.Context, args map[string]any) string {
+			name, _ := args["name"].(string)
+			targetArgs, _ := args["args"].(map[string]any)
+			if targetArgs == nil {
+				targetArgs = map[string]any{}
+			}
+			return r.handleToolCall(ctx, name, targetArgs)
+		},
+	}
+}
+
+// handleToolSearch looks up a tool by exact name and returns its description
+// and parameter schema as text. Stateless — every call is a fresh lookup,
+// there is nothing to unlock or persist (issue #483: an earlier design that
+// tried to add the looked-up tool into the turn's live schema array broke
+// loop.go's once-per-turn schema computation; this dispatcher shape avoids
+// that by never touching the schema array at all).
+func (r *Registry) handleToolSearch(name string) string {
+	if name == "" {
+		return "Error: tool_search requires a name"
+	}
+	r.toolsMu.RLock()
+	t, ok := r.tools[name]
+	r.toolsMu.RUnlock()
+	if !ok {
+		return fmt.Sprintf("Error: no tool named %q", name)
+	}
+	schema, _ := json.Marshal(compactSchema(t.Schema))
+	return fmt.Sprintf("%s: %s\nParameters: %s", t.Name, t.Description, string(schema))
+}
+
+// handleToolCall validates args against the target tool's real schema and
+// dispatches to its actual handler via ExecuteContext — the same validation,
+// logging, and audit path a direct call would use, so the model sees the
+// real tool's real result, not a dispatcher-wrapped summary.
+func (r *Registry) handleToolCall(ctx context.Context, name string, args map[string]any) string {
+	if name == "" {
+		return "Error: tool_call requires a name"
+	}
+	r.toolsMu.RLock()
+	_, ok := r.tools[name]
+	r.toolsMu.RUnlock()
+	if !ok {
+		return fmt.Sprintf("Error: no tool named %q", name)
+	}
+	return r.ExecuteContext(ctx, name, args)
+}
+
+// toolEssentialsEnvInt reads a positive int from the environment, falling
+// back to def on absence or an invalid/non-positive value.
+func toolEssentialsEnvInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
 		}
 	}
-	return words
+	return def
+}
+
+// refreshFrequencyEssentials recomputes the frequency tier from tool_calls
+// (MINO_TOOL_ESSENTIALS_WINDOW_DAYS-day rolling window, top
+// MINO_TOOL_ESSENTIALS_COUNT by call count) and swaps it in atomically. On
+// query failure the last successfully cached set is kept — an empty
+// essentials tier would silently strand the model with only the floor and
+// dispatchers, worse than serving a stale-but-populated set.
+func (r *Registry) refreshFrequencyEssentials(ctx context.Context) error {
+	if r.searchDB == nil {
+		return nil
+	}
+	windowDays := toolEssentialsEnvInt("MINO_TOOL_ESSENTIALS_WINDOW_DAYS", toolEssentialsDefaultWindowDays)
+	count := toolEssentialsEnvInt("MINO_TOOL_ESSENTIALS_COUNT", toolEssentialsDefaultCount)
+	since := time.Now().AddDate(0, 0, -windowDays).UTC().Format("2006-01-02 15:04:05")
+	rows, err := r.searchDB.QueryContext(ctx,
+		"SELECT tool_name, COUNT(*) c FROM tool_calls WHERE created_at >= ? GROUP BY tool_name ORDER BY c DESC LIMIT ?",
+		since, count)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	fresh := make(map[string]bool, count)
+	for rows.Next() {
+		var name string
+		var c int
+		if rows.Scan(&name, &c) != nil {
+			continue
+		}
+		fresh[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	r.essentialsMu.Lock()
+	r.frequencyTools = fresh
+	r.essentialsMu.Unlock()
+	return nil
+}
+
+// startToolEssentialsRefresher runs an initial synchronous refresh (so the
+// frequency tier isn't empty for the first turn after a warm restart with
+// existing history) then keeps it current on a
+// MINO_TOOL_ESSENTIALS_REFRESH_HOURS ticker for the process lifetime — a
+// background goroutine, not a request-path loop, so a turn never blocks on
+// it (same shape as the memory graph's reconciler).
+func (r *Registry) startToolEssentialsRefresher() {
+	if err := r.refreshFrequencyEssentials(context.Background()); err != nil {
+		slog.Error("tool essentials: initial frequency refresh failed", "err", err)
+	}
+	hours := toolEssentialsEnvInt("MINO_TOOL_ESSENTIALS_REFRESH_HOURS", toolEssentialsDefaultRefreshHours)
+	safeGo("tool-essentials-refresh", func() {
+		ticker := time.NewTicker(time.Duration(hours) * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			if err := r.refreshFrequencyEssentials(context.Background()); err != nil {
+				slog.Error("tool essentials: frequency refresh failed, keeping stale cache", "err", err)
+			}
+		}
+	})
 }
 
 var toolSearchStopWords = map[string]bool{
@@ -775,6 +791,9 @@ func (r *Registry) Only(names ...string) *Registry {
 func BuildRegistry(db *sql.DB, home, workspace string, mem *Memory, location ...*time.Location) *Registry {
 	r := NewRegistry()
 	r.SetSearchDB(db)
+	r.Register(makeToolSearchTool(r))
+	r.Register(makeToolCallTool(r))
+	r.startToolEssentialsRefresher()
 	loc := time.Local
 	bashTimeout, codingTimeout, syncTimeout := 2*time.Minute, 2*time.Minute, 5*time.Minute
 	if len(location) > 0 && location[0] != nil {
