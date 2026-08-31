@@ -355,6 +355,13 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 	ctx = context.WithValue(ctx, auditKey{}, func(eventType, message string, iteration int) {
 		w.auditLog(sessionID, eventType, message, iteration)
 	})
+	// #481: force-include the stage a navigating turn will reach's declared
+	// tools in this turn's schema selection (computed once, below, before
+	// RunLoopContext's iterations start) — see activeStageToolNames for why
+	// this prediction replaces the per-stage loop wiring #450/#451/#452 lost.
+	if names := activeStageToolNames(w.Settings.Home, source, sessionID); len(names) > 0 {
+		ctx = context.WithValue(ctx, stageToolNamesKey{}, names)
+	}
 	// #477: a turn already known to be navigating a playbook (a scheduled
 	// fire, or a chat turn continuing a run an earlier message started) gets
 	// the narrow, ICM-scoped system prompt and message context the dedicated
