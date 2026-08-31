@@ -1,5 +1,23 @@
 ## [Unreleased]
 
+## [v3.8.1] — composio dispatcher tools always reachable (2026-08-31)
+
+### Fixed
+
+- **Composio dispatcher tools made essential; stage-declared tools
+  force-included again (#481)**: composio registers exactly two MCP tools
+  (a universal executor and a universal schema lookup — everything else is
+  a slug argument, not a separate schema), but both had to compete for one
+  of only 5 capped sliding-window slots like any other MCP tool. A live
+  incident showed the model falling back to `bash`+`curl` against
+  composio's HTTP endpoint directly when the intended tool lost that
+  contest — the same failure shape already fixed for `send_document`
+  (CTX-013). Both composio tools are now essential (always present, no
+  contest). Also restores the general guarantee #449's additive-tools
+  design intended: a navigating turn's active stage tools are force-included
+  in that turn's schema selection, which #450/#451/#452 silently dropped
+  when they removed the per-stage loop that used to wire it.
+
 ## [v3.8.0] — dashboard redesign: calm, work-focused shell (2026-08-31)
 
 ### Changed
