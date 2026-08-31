@@ -30,6 +30,8 @@ func TestOSV04ReminderQuestionUsesReminderStoreNotCalendar(t *testing.T) {
 
 	r := NewRegistry()
 	r.SetSearchDB(db)
+	r.Register(makeToolSearchTool(r))
+	r.Register(makeToolCallTool(r))
 	for _, tool := range makeReminderTools(db, loc) {
 		r.Register(tool)
 	}
@@ -38,38 +40,46 @@ func TestOSV04ReminderQuestionUsesReminderStoreNotCalendar(t *testing.T) {
 		r.Register(tool)
 	}
 
+	// list_reminders is neither floor nor (on a fresh DB with no tool_calls
+	// history) frequency-derived, so it's deferred (issue #483): the model
+	// reaches it via tool_search then tool_call, not a direct offered slot.
 	client := &fakeClient{script: []*LLMResponse{
-		scriptedResp([]ContentBlock{toolBlock("list_reminders", map[string]any{})}, "tool_use"),
+		scriptedResp([]ContentBlock{toolBlock(toolSearchName, map[string]any{"name": "list_reminders"})}, "tool_use"),
+		scriptedResp([]ContentBlock{toolBlock(toolCallName, map[string]any{"name": "list_reminders", "args": map[string]any{}})}, "tool_use"),
 		scriptedResp([]ContentBlock{textBlock("Your last Arachem meeting reminder is Friday 7 Aug at 12:30 — a system reminder, never in your calendar.")}, "stop"),
 	}}
 	msgs := []Message{{Role: "user", Content: "When was my last Arachem meeting?"}}
-	result := RunLoopContext(context.Background(), client, "osv04-reminder", "", msgs, r, 5, 100, nil, false, "",)
+	result := RunLoopContext(context.Background(), client, "osv04-reminder", "", msgs, r, 5, 100, nil, false, "")
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete", result.Status)
 	}
 	if !strings.Contains(result.Reply, "7 Aug") || !strings.Contains(result.Reply, "12:30") {
 		t.Fatalf("reply does not answer from the reminder store: %q", result.Reply)
 	}
-	if len(result.ToolCalls) != 1 || result.ToolCalls[0].Name != "list_reminders" {
-		t.Fatalf("tool calls = %v, want exactly [list_reminders]", result.ToolCalls)
+	if len(result.ToolCalls) != 2 || result.ToolCalls[0].Name != toolSearchName || result.ToolCalls[1].Name != toolCallName {
+		t.Fatalf("tool calls = %v, want exactly [%s %s]", result.ToolCalls, toolSearchName, toolCallName)
 	}
 	for _, tc := range result.ToolCalls {
-		if tc.Name == "list_events" || tc.Name == "create_event" {
-			t.Fatalf("calendar tool invoked: %s", tc.Name)
+		if name, _ := tc.Args["name"].(string); name == "list_events" || name == "create_event" {
+			t.Fatalf("calendar tool invoked via dispatcher: %s", name)
 		}
 	}
-	if !strings.Contains(result.ToolCalls[0].Output, "Arachem") || !strings.Contains(result.ToolCalls[0].Output, "12:30") {
-		t.Fatalf("list_reminders output missing meeting: %q", result.ToolCalls[0].Output)
+	if !strings.Contains(result.ToolCalls[1].Output, "Arachem") || !strings.Contains(result.ToolCalls[1].Output, "12:30") {
+		t.Fatalf("tool_call(list_reminders) output missing meeting: %q", result.ToolCalls[1].Output)
 	}
-	// The harness offered the reminder store in the schema set.
-	offered := false
+	// The harness offered both dispatchers, the model's only path to a
+	// deferred tool like list_reminders on a turn with no usage history yet.
+	hasSearch, hasCall := false, false
 	for _, s := range client.toolSets[0] {
-		if s.Name == "list_reminders" {
-			offered = true
+		if s.Name == toolSearchName {
+			hasSearch = true
+		}
+		if s.Name == toolCallName {
+			hasCall = true
 		}
 	}
-	if !offered {
-		t.Fatal("list_reminders not offered to the model")
+	if !hasSearch || !hasCall {
+		t.Fatalf("tool_search/tool_call not offered to the model: %v", client.toolSets[0])
 	}
 }
 
@@ -82,7 +92,7 @@ func TestOSV04ToolResultsReportDestinationAndState(t *testing.T) {
 	loc := time.FixedZone("MYT", 8*60*60)
 
 	mem := &Memory{graph: NewGraphMemory(t.TempDir(), nil)}
-	mem.skills = NewSkillLoader(home,)
+	mem.skills = NewSkillLoader(home)
 
 	// Minimal playbook so schedule_playbook can validate.
 	if err := os.MkdirAll(filepath.Join(home, "playbooks", "daily", "stages", "01-gather"), 0755); err != nil {

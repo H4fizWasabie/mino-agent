@@ -7,7 +7,7 @@ import "testing"
 // tool and falls back to bash+curl, leaking the Telegram bot token in args
 // (observed 2026-08-11 — raw token in the api.telegram.org/bot<token> URL).
 func TestSendDocumentIsEssential(t *testing.T) {
-	if !essentialToolNames["send_document"] {
+	if !floorToolNames["send_document"] {
 		t.Fatalf("send_document must be essential; otherwise the model reverts to curl with the bot token in bash args (CTX-013)")
 	}
 }
