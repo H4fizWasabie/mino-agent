@@ -532,21 +532,23 @@ func TestSchemasForContextCappedUnion(t *testing.T) {
 		}
 	}
 
-	// Turn 1: 13 essentials (send_document added, CTX-013) + 6 explicit = 19, under the cap.
-	first := names(r.SchemasForContext("s1", "", "use special_101 special_102 special_103 special_104 special_105 special_106 now"))
+	// Turn 1: 15 essentials (send_document CTX-013, composio #481) + 4 explicit
+	// = 19, under the cap by the same margin as before either essential grew.
+	first := names(r.SchemasForContext("s1", "", "use special_101 special_102 special_103 special_104 now"))
 	if len(first) != 19 {
 		t.Fatalf("turn 1: %d schemas, want 19: %v", len(first), first)
 	}
 	hasAll(t, first, essentialNamesSorted...)
 
-	// Turn 2: 6 new explicit tools → union 23 → evict the 3 oldest explicit.
-	second := names(r.SchemasForContext("s1", "", "use special_107 special_108 special_109 special_110 special_111 special_112 now"))
+	// Turn 2: 4 new explicit tools → union 23 → evict the 3 oldest explicit,
+	// one turn-1 survivor remains (same partial-eviction shape as before).
+	second := names(r.SchemasForContext("s1", "", "use special_105 special_106 special_107 special_108 now"))
 	if len(second) != schemaUnionCap {
 		t.Fatalf("turn 2: %d schemas, want cap %d", len(second), schemaUnionCap)
 	}
 	hasAll(t, second, essentialNamesSorted...)
-	hasAll(t, second, "special_106", "special_107", "special_108", "special_109", "special_110", "special_111", "special_112")
-	for _, gone := range []string{"special_101", "special_102", "special_103", "special_104", "special_105"} {
+	hasAll(t, second, "special_104", "special_105", "special_106", "special_107", "special_108")
+	for _, gone := range []string{"special_101", "special_102", "special_103"} {
 		for _, g := range second {
 			if g == gone {
 				t.Fatalf("%s survived eviction: %v", gone, second)
@@ -555,13 +557,13 @@ func TestSchemasForContextCappedUnion(t *testing.T) {
 	}
 
 	// Turn 3: identical to turn 2 → identical output (prefix-cache stability).
-	third := names(r.SchemasForContext("s1", "", "use special_107 special_108 special_109 special_110 special_111 special_112 now"))
+	third := names(r.SchemasForContext("s1", "", "use special_105 special_106 special_107 special_108 now"))
 	if !reflect.DeepEqual(second, third) {
 		t.Fatalf("unstable output across identical turns:\n%v\n%v", second, third)
 	}
 
 	// A different session starts its own union.
-	other := names(r.SchemasForContext("s2", "", "use special_107 special_108 special_109 special_110 special_111 special_112 now"))
+	other := names(r.SchemasForContext("s2", "", "use special_105 special_106 special_107 special_108 now"))
 	if len(other) != 19 {
 		t.Fatalf("session s2 inherited union: %d schemas, want 19", len(other))
 	}

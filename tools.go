@@ -248,6 +248,24 @@ var essentialToolNames = map[string]bool{
 	// the model merely preferred curl; production disproved that — without
 	// essentials membership it isn't in the schema at all.
 	"send_document": true,
+	// #481: same failure shape as CTX-013, this time for composio. Composio
+	// registers exactly two MCP tools — COMPOSIO_MULTI_EXECUTE_TOOL (the
+	// universal dispatcher: pass a tool_slug + arguments, it runs any of
+	// composio's hundreds of actions) and COMPOSIO_GET_TOOL_SCHEMAS (looks up
+	// an action's expected arguments by slug) — everything else is a string
+	// slug passed into those two, never a separate schema competing for a
+	// slot. But both still had to win one of only maxMCPTools(5) sliding-
+	// window slots by FTS5 relevance; when the executor lost that contest
+	// (observed live, 2026-08-31: an Instagram publish stage that explicitly
+	// declared it), the model fell back to bash+curl straight at composio's
+	// HTTP endpoint — a real post went out, but with no tool call the harness
+	// could verify against the stage's declared Success outcome. Essentials
+	// membership removes composio from that contest entirely, the same fix
+	// CTX-013 already proved for send_document. A Mino without composio
+	// configured just never has these names in its registry — the essentials
+	// lookup silently skips a name that isn't there.
+	"MCP_composio_COMPOSIO_MULTI_EXECUTE_TOOL": true,
+	"MCP_composio_COMPOSIO_GET_TOOL_SCHEMAS":   true,
 }
 
 // essentialNamesSorted is essentialToolNames in sorted order — the per-turn

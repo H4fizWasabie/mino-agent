@@ -120,3 +120,53 @@ func navigationPlaybookForTurn(source, sessionID string) (string, bool) {
 	}
 	return "", false
 }
+
+// activeStageToolNames predicts the declared tools of the stage a navigating
+// turn will reach, so they can be force-included in this turn's tool schema
+// selection before the turn starts (#481) — the same guarantee #449's
+// additive-tools design intended stage declarations to have, which was lost
+// when #450/#451/#452 replaced the per-stage loop that used to wire
+// stageToolNamesKey (loop.go) per attempt. There is no per-stage loop left to
+// set it fresh each time, so this predicts it once, at the point the whole
+// turn's schema selection is fixed.
+//
+// For a chat turn continuing an already-active navigation, sessionNav names
+// the exact run, so this is exact, not a guess. For a scheduled fire's first
+// call (no sessionNav yet), it is best-effort: the newest run's current
+// stage, or the playbook's first stage if no run exists yet. A wrong guess
+// is harmless — the mechanism is additive, so at worst a declared tool isn't
+// force-included this one call and falls back to today's uncertain
+// sliding-window selection, exactly the status quo this is improving on.
+func activeStageToolNames(home, source, sessionID string) []string {
+	var playbook, runID string
+	if p, navigating := sessionNav(sessionID); navigating {
+		playbook, runID = p.Playbook, p.RunID
+	} else if source == "schedule" {
+		playbook = strings.TrimPrefix(sessionID, scheduledSessionPrefix)
+	}
+	if playbook == "" {
+		return nil
+	}
+	pb, err := loadPlaybookWorkspace(home, playbook)
+	if err != nil || len(pb.Stages) == 0 {
+		return nil
+	}
+	var run *PlaybookRun
+	if runID != "" {
+		run, _ = loadPlaybookRunByID(pb, runID)
+	} else {
+		run, _ = latestPlaybookRun(pb)
+	}
+	if run == nil {
+		return pb.Stages[0].Tools
+	}
+	state := nextPlaybookStage(run)
+	if state == nil {
+		return nil
+	}
+	stage, ok := workspaceStageFor(pb, state.Number, state.Name)
+	if !ok {
+		return nil
+	}
+	return stage.Tools
+}
