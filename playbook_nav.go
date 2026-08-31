@@ -47,6 +47,7 @@ func clearSessionNav(sessionID string) {
 	navMu.Unlock()
 	if ok {
 		clearNavReads(p.RunID)
+		clearNavCalls(p.RunID)
 	}
 }
 
@@ -94,6 +95,73 @@ func clearNavReads(runID string) {
 	navReadsMu.Lock()
 	delete(navReads, runID)
 	navReadsMu.Unlock()
+}
+
+// navCalls tracks, per run, every tool call made during the current stage
+// attempt (#486/#485). Under the old dedicated stage loop, one
+// runPlaybookStageLoop call was scoped to exactly one stage attempt and
+// naturally produced a bounded ToolCall list; navigatePlaybookRun has no such
+// bounded call, so #450/#451 always verified stage outcomes against calls=nil
+// — a stage declaring ## Success could never pass. This tracker restores that
+// per-attempt window: noteNavCall records every call while a session is
+// navigating, stageNavCalls hands the accumulated list to verification, and
+// clearNavCalls resets it at each stage transition (new attempt or retry) so
+// verification only ever sees the current attempt's calls, matching the old
+// per-attempt granularity.
+var (
+	navCallsMu sync.Mutex
+	navCalls   = map[string][]ToolCall{} // runID -> calls made this stage attempt
+)
+
+// noteNavCall records call as made during runID's current stage attempt.
+func noteNavCall(runID string, call ToolCall) {
+	navCallsMu.Lock()
+	navCalls[runID] = append(navCalls[runID], call)
+	navCallsMu.Unlock()
+}
+
+// stageNavCalls returns a copy of the calls recorded for runID's current
+// stage attempt so far.
+func stageNavCalls(runID string) []ToolCall {
+	navCallsMu.Lock()
+	defer navCallsMu.Unlock()
+	calls := navCalls[runID]
+	if len(calls) == 0 {
+		return nil
+	}
+	out := make([]ToolCall, len(calls))
+	copy(out, calls)
+	return out
+}
+
+func clearNavCalls(runID string) {
+	navCallsMu.Lock()
+	delete(navCalls, runID)
+	navCallsMu.Unlock()
+}
+
+// duplicateNavSendMessage reports whether an identical send_message (same
+// "to" and "message") was already made during sessionID's current stage
+// attempt. Not active outside navigation — a session that isn't navigating a
+// playbook stage has no per-attempt window to compare against.
+func duplicateNavSendMessage(sessionID string, args map[string]any) bool {
+	p, navigating := sessionNav(sessionID)
+	if !navigating {
+		return false
+	}
+	to, _ := args["to"].(string)
+	msg, _ := args["message"].(string)
+	for _, call := range stageNavCalls(p.RunID) {
+		if call.Name != "send_message" {
+			continue
+		}
+		prevTo, _ := call.Args["to"].(string)
+		prevMsg, _ := call.Args["message"].(string)
+		if prevTo == to && prevMsg == msg {
+			return true
+		}
+	}
+	return false
 }
 
 // scheduledSessionPrefix is the deterministic session ID prefix fireSchedule

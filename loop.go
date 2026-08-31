@@ -631,6 +631,14 @@ func RunLoopContext(
 			var raw string
 			if pre, ok := precomputedRaw[idx]; ok {
 				raw = pre
+			} else if tc.Name == "send_message" && duplicateNavSendMessage(sessionID, args) {
+				// #485: a navigating stage that retries or over-calls can send the
+				// same owner report twice (observed live, facebook-daily-ai-post,
+				// two identical send_message calls 2s apart). Stage contracts
+				// already say "send exactly once"; this is the mechanical
+				// backstop — suppress an exact repeat within the same stage
+				// attempt instead of trusting prose alone.
+				raw = "Error: duplicate send_message suppressed — an identical message (same recipient and content) was already sent this stage attempt."
 			} else {
 				// Malformed native tool-call args (provider.go injected
 				// __raw_arguments__ and logged the raw string). Never execute a
@@ -682,6 +690,13 @@ func RunLoopContext(
 			}
 			output := prepareToolOutput(ctx, traceHome, sessionID, i, tc.Name, raw)
 			result.ToolCalls = append(result.ToolCalls, ToolCall{Name: tc.Name, Args: args, Output: output})
+			// #486: record every call made while navigating a playbook stage, so
+			// verifyWorkspaceStageOutputs/stageDeviationFlags can check a real
+			// call list instead of the nil they were always given (see
+			// playbook_nav.go's navCalls doc comment for the full history).
+			if p, navigating := sessionNav(sessionID); navigating {
+				noteNavCall(p.RunID, ToolCall{Name: tc.Name, Args: args, Output: output})
+			}
 
 			// #337 (finding 4): read-spiral accounting — read_file calls count
 			// up; any file mutation resets the streak.

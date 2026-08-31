@@ -1,5 +1,22 @@
 ## [Unreleased]
 
+### Fixed
+
+- **`## Success` outcome verification always failed under navigation (#486)**: `navigatePlaybookRun`
+  always called `verifyWorkspaceStageOutputs`/`stageDeviationFlags` with a `nil` call list — a
+  stage declaring `## Success` could never pass, regardless of whether the declared tool
+  genuinely succeeded (confirmed live: Instagram post ID 18351111289174874 still recorded
+  `status: "failed"`). Added a run-scoped tool-call tracker (`playbook_nav.go`'s `navCalls`,
+  mirroring #453's `navReads`) that records every call made while a session is navigating a
+  playbook stage (hooked into `loop.go`'s tool-execution loop), scoped and cleared per stage
+  attempt. Navigation now feeds the real accumulated call list into verification instead of `nil`.
+- **Duplicate `send_message` within one stage attempt (#485)**: a navigating stage that retries
+  or over-calls could send the same owner report twice — observed live on
+  `facebook-daily-ai-post`, two identical Telegram messages 2 seconds apart, both `status: "ok"`,
+  despite the stage contract saying "send exactly once." `send_message` now checks the current
+  stage attempt's recorded calls (the same tracker built for #486) for an identical prior call
+  (same recipient and content) and suppresses the resend instead of firing it again.
+
 ## [v3.9.0] — usage-driven tool essentials + on-demand tool search (2026-08-31)
 
 ### Added

@@ -1426,17 +1426,21 @@ func navigatePlaybookRun(ctx context.Context, core *Core, name, request, session
 		// A stage already "running" means an earlier navigate call handed it to
 		// Mino; this call is the advance signal — verify its declared outputs
 		// before moving on, the same check #447 already ships, just triggered
-		// by the next run_playbook call instead of a loop-attempt exit. calls
-		// is nil: navigation has no bounded attempt to capture tool calls from,
-		// so verification relies on verifyWorkspaceStageOutputs' mtime fallback
-		// and stageDeviationFlags is limited to the contract-verification flag
-		// (the undeclared-write_file-target flag needs a captured call list and
-		// is a known gap in navigation mode, carried in the ship note).
+		// by the next run_playbook call instead of a loop-attempt exit.
+		// attemptCalls (#486) is loop.go's navCalls tracker for this run's
+		// current stage attempt — populated as the model works, so ## Success
+		// and the undeclared-write_file-target deviation flag both see real
+		// calls instead of the nil this used to always pass.
 		if state.Status == "running" {
-			outputs, verifyErr := verifyWorkspaceStageOutputs(pb, run, stage, nil, state.StartedAt)
-			if flags := stageDeviationFlags(pb, run, stage, nil, verifyErr); len(flags) > 0 {
+			attemptCalls := stageNavCalls(run.ID)
+			outputs, verifyErr := verifyWorkspaceStageOutputs(pb, run, stage, attemptCalls, state.StartedAt)
+			if flags := stageDeviationFlags(pb, run, stage, attemptCalls, verifyErr); len(flags) > 0 {
 				reportStageDeviations(core, sessionID, pb, run, stage, flags)
 			}
+			// #486: verification for this attempt is done — clear the window so
+			// the next attempt (retry or next stage) starts fresh, matching the
+			// old dedicated loop's one-call-list-per-attempt granularity.
+			clearNavCalls(run.ID)
 			if verifyErr == nil {
 				state.Status, state.Outputs, state.EndedAt = "complete", outputs, time.Now().UTC()
 				run.Status = "running"
