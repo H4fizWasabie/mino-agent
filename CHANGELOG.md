@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [v3.10.0] — GLM decode-collapse mitigation: precision-first routing + repetition_penalty (2026-08-31)
+
 ### Added
 
 - **`repetition_penalty` on every OpenRouter request (#495)**: mitigates the decode-time
