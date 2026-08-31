@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [v3.9.0] — usage-driven tool essentials + on-demand tool search (2026-08-31)
+
 ### Added
 
 - **`tool_search` / `tool_call`: on-demand access to every registered tool, not just the
