@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [v3.7.2] — ICM-scoped context for playbook navigation (2026-08-31)
+
 ### Fixed
 
 - **Restored ICM-scoped context for playbook navigation (#477)**: a turn
