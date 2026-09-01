@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -180,6 +181,14 @@ func interpolate(template string, args map[string]any) string {
 func runCommand(cmd string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	if runtime.GOOS == "windows" {
+		c := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", cmd)
+		out, err := c.CombinedOutput()
+		result := string(out)
+		if err != nil { result += fmt.Sprintf("\n(exit: %v)", err) }
+		if len(result) > 1<<20 { result = result[:1<<20] + "\n... (truncated)" }
+		return result
+	}
 	c := exec.CommandContext(ctx, "bash", "-c", cmd)
 	out, err := c.CombinedOutput()
 	result := string(out)

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -81,9 +82,11 @@ func makeListFilesTool(timeout ...time.Duration) *Tool {
 		if d, ok := args["depth"].(float64); ok && d > 0 {
 			depth = int(d)
 		}
-		out, err := runCodingContext(ctx, deadline, "find", dir, "-maxdepth", fmt.Sprint(depth), "-not", "-path", "*/\\.*", "-not", "-path", "*/node_modules/*")
+		binary, cmdArgs := nativeListFilesCommand(runtime.GOOS, dir, depth)
+		out, err := runCodingContext(ctx, deadline, binary, cmdArgs...)
 		if err != nil {
-			out, _ = runCodingContext(ctx, deadline, "ls", "-la", dir)
+			fallbackBinary, fallbackArgs := nativeListFallback(runtime.GOOS, dir)
+			out, _ = runCodingContext(ctx, deadline, fallbackBinary, fallbackArgs...)
 		}
 		return trimOutput(out)
 	}
@@ -108,10 +111,14 @@ func makeGrepTool(timeout ...time.Duration) *Tool {
 		if dir == "" {
 			dir = "."
 		}
-		return runCodingFallbackContext(ctx, deadline,
-			"rg", []string{"--no-heading", "-n", pattern, dir},
-			"grep", []string{"-rn", pattern, dir},
-		)
+		if runtime.GOOS == "windows" {
+			out, err := runCodingContext(ctx, deadline, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Get-ChildItem -Recurse -File "+psQuote(dir)+" | Select-String -Pattern "+psQuote(pattern))
+			if err != nil {
+				return fmt.Sprintf("Error: %v\n%s", err, trimOutput(out))
+			}
+			return trimOutput(out)
+		}
+		return runCodingFallbackContext(ctx, deadline, "rg", []string{"--no-heading", "-n", pattern, dir}, "grep", []string{"-rn", pattern, dir})
 	}
 	return contextualTool(&Tool{
 		Name:        "grep",
@@ -135,7 +142,8 @@ func makeGlobTool(timeout ...time.Duration) *Tool {
 		if dir == "" {
 			dir = "."
 		}
-		out, err := runCodingContext(ctx, deadline, "find", dir, "-name", pattern, "-not", "-path", "*/\\.*", "-not", "-path", "*/node_modules/*")
+		binary, cmdArgs := nativeGlobCommand(runtime.GOOS, dir, pattern)
+		out, err := runCodingContext(ctx, deadline, binary, cmdArgs...)
 		if err != nil {
 			return fmt.Sprintf("Error: %v", err)
 		}
@@ -154,6 +162,29 @@ func makeGlobTool(timeout ...time.Duration) *Tool {
 		},
 	}, run)
 }
+
+func nativeListFilesCommand(goos, dir string, depth int) (string, []string) {
+	if goos == "windows" {
+		return "powershell.exe", []string{"-NoProfile", "-NonInteractive", "-Command", "Get-ChildItem -Force -Depth " + fmt.Sprint(depth) + " -Path " + psQuote(dir) + " | Select-Object -ExpandProperty FullName"}
+	}
+	return "find", []string{dir, "-maxdepth", fmt.Sprint(depth), "-not", "-path", "*/\\.*", "-not", "-path", "*/node_modules/*"}
+}
+
+func nativeListFallback(goos, dir string) (string, []string) {
+	if goos == "windows" {
+		return "cmd", []string{"/c", "dir", "/a", dir}
+	}
+	return "ls", []string{"-la", dir}
+}
+
+func nativeGlobCommand(goos, dir, pattern string) (string, []string) {
+	if goos == "windows" {
+		return "powershell.exe", []string{"-NoProfile", "-NonInteractive", "-Command", "Get-ChildItem -Recurse -File -Filter " + psQuote(pattern) + " -Path " + psQuote(dir) + " | Select-Object -ExpandProperty FullName"}
+	}
+	return "find", []string{dir, "-name", pattern, "-not", "-path", "*/\\.*", "-not", "-path", "*/node_modules/*"}
+}
+
+func psQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "''") + "'" }
 
 func makeGitDiffTool(timeout ...time.Duration) *Tool {
 	deadline := codingToolTimeout(timeout)

@@ -84,3 +84,22 @@ jobs:
           for ext in minowrap threads cost-watch mino-memory; do
             (cd extensions/$ext && go test -count=1 ./...)
           done
+
+  extensions-platform:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Cross-build extensions
+        run: |
+          for ext in minowrap threads cost-watch mino-memory; do
+            (cd extensions/$ext && GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o /tmp/$ext .)
+          done

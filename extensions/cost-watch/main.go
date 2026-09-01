@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -656,6 +657,12 @@ func applyPins(cfg *config, cat catalogue) (changed bool, summary string, err er
 // tests. The write already happened; a failed signal only delays the pin to
 // the next restart (deploy does one anyway).
 var sendHUP = func() error {
+	if runtime.GOOS == "darwin" {
+		return exec.Command("pkill", "-HUP", "-x", "mino").Run()
+	}
+	if runtime.GOOS == "windows" {
+		return fmt.Errorf("automatic provider reload is unavailable on Windows; restart mino manually")
+	}
 	return exec.Command("systemctl", "kill", "-s", "HUP", "mino").Run()
 }
 

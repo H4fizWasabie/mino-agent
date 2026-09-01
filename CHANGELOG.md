@@ -5,7 +5,9 @@
 - **Native host-operation adapters (#233)**: shell execution, package probes/install/remove,
   service discovery/restart, system checks, browser opening, and update restart now select
   native Linux, macOS, or Windows commands. `write_unit` now accepts a neutral service definition
-  and renders native service configuration; raw systemd content remains Linux-only compatibility.
+  and renders native service configuration; coding tools and playbook stages now select native
+  Windows commands or report missing prerequisites. Raw systemd content remains Linux-only
+  compatibility.
 
 ## [v3.11.0] — Real-time provider deprioritization + price-order fix (2026-08-31)
 

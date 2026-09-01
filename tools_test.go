@@ -297,6 +297,21 @@ func TestNativeShellCommand(t *testing.T) {
 	}
 }
 
+func TestNativeCodingCommands(t *testing.T) {
+	binary, args := nativeListFilesCommand("windows", ".", 2)
+	if binary != "powershell.exe" || !strings.Contains(strings.Join(args, " "), "Get-ChildItem") {
+		t.Fatalf("windows list command = %q %v", binary, args)
+	}
+	binary, args = nativeGlobCommand("windows", ".", "*.go")
+	if binary != "powershell.exe" || !strings.Contains(strings.Join(args, " "), "-Filter '*.go'") {
+		t.Fatalf("windows glob command = %q %v", binary, args)
+	}
+	binary, args = nativeListFallback("windows", ".")
+	if binary != "cmd" || !reflect.DeepEqual(args, []string{"/c", "dir", "/a", "."}) {
+		t.Fatalf("windows list fallback = %q %v", binary, args)
+	}
+}
+
 // Issue #235: a pipeline's exit status comes from its LAST element (shells
 // have no pipefail), so `pip install --quiet X | tail -2` reported success
 // while pip failed. The harness must surface the masked statuses —
