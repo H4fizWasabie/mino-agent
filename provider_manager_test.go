@@ -39,7 +39,7 @@ func TestLoadProvidersDoesNotInjectModels(t *testing.T) {
 func testManager() *ProviderManager {
 	return &ProviderManager{
 		providers: []ProviderConfig{{Name: "mimo", Priority: 1, Model: "mimo"}, {Name: "backup", Priority: 2, Model: "backup"}},
-		state:     map[string]*providerState{"mimo": {}, "backup": {}}, sticky: map[string]string{}, stickyAt: map[string]time.Time{}, now: func() time.Time { return time.Unix(100, 0) },
+		state:     map[string]*providerState{"mimo": {}, "backup": {}}, sticky: map[string]string{}, stickyAt: map[string]time.Time{}, upstreamSticky: map[string]string{}, now: func() time.Time { return time.Unix(100, 0) },
 	}
 }
 
@@ -58,6 +58,22 @@ func TestProviderCandidates(t *testing.T) {
 	got := m.candidates("s", MainModel)
 	if len(got) != 1 || got[0].Name != "mimo" {
 		t.Fatalf("open circuit candidates = %#v", got)
+	}
+}
+
+func TestProviderManagerSticksToOpenRouterUpstream(t *testing.T) {
+	m := &ProviderManager{
+		providers: []ProviderConfig{{Name: "mimo", Model: "m", ProviderRouting: []string{"A", "B"}}},
+		clients:   map[string]*Client{"mimo": {}}, state: map[string]*providerState{"mimo": {}},
+		sticky: map[string]string{}, stickyAt: map[string]time.Time{}, upstreamSticky: map[string]string{"s:main:mimo:m": "B"}, now: time.Now,
+	}
+	var got []string
+	resp, err := m.callContextWithConfig(context.Background(), "s", MainModel, func(_ *Client, _ string, _ string, p ProviderConfig) (*LLMResponse, error) {
+		got = p.ProviderRouting
+		return &LLMResponse{UpstreamProvider: "B"}, nil
+	})
+	if err != nil || resp == nil || len(got) != 2 || got[0] != "B" || got[1] != "A" {
+		t.Fatalf("routing = %#v, response = %#v, err = %v", got, resp, err)
 	}
 }
 
@@ -290,25 +306,25 @@ func TestReasoningForRoleKeepsSmallModelIndependent(t *testing.T) {
 	}
 }
 
-func TestNoSessionIDSentToOpenRouter(t *testing.T) {
-	// session_id was removed: empirically it makes DeepInfra prompt-cache hits
-	// unreliable (alternating hit/miss on identical prefixes; OpenRouter's
-	// session pinning spreads requests across upstream replicas). Without it,
-	// OpenRouter's default conversation-hash stickiness keeps the cache warm
-	// (verified: 100% hits on repeated prefixes, 5x cheaper cached reads).
+func TestSessionIDSentToOpenRouter(t *testing.T) {
 	var payload map[string]any
+	var metadataHeader string
 	c := NewClient("key", "https://openrouter.ai/api/v1")
 	c.client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		metadataHeader = req.Header.Get("X-OpenRouter-Metadata")
 		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
 			return nil, err
 		}
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{}}`)), Header: make(http.Header)}, nil
 	})}
-	if _, err := c.createWithRouting(context.Background(), "model-a", "", nil, 10, "system", nil, false, nil, ""); err != nil {
+	if _, err := c.createWithRouting(context.Background(), "model-a", "", nil, 10, "system", nil, false, nil, "session-a"); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := payload["session_id"]; ok {
-		t.Fatalf("session_id = %#v, want absent (it breaks DeepInfra prompt caching)", payload["session_id"])
+	if payload["session_id"] != "session-a" {
+		t.Fatalf("session_id = %#v, want session-a", payload["session_id"])
+	}
+	if metadataHeader != "enabled" {
+		t.Fatalf("router metadata header = %q, want enabled", metadataHeader)
 	}
 }
 
@@ -319,6 +335,26 @@ func TestParseResponseReadsOpenAICompatibleCacheUsage(t *testing.T) {
 	}
 	if resp.Usage.CacheReadTokens != 80 || resp.Usage.CacheCreationTokens != 20 {
 		t.Fatalf("cache usage = %+v", resp.Usage)
+	}
+}
+
+func TestParseResponseReadsOpenRouterUpstream(t *testing.T) {
+	resp, err := parseResponse(strings.NewReader(`{"choices":[{"message":{"content":"ok"}}],"openrouter_metadata":{"endpoints":{"available":[{"provider":"Novita","selected":false},{"provider":"DeepInfra","selected":true}]}}}`), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.UpstreamProvider != "DeepInfra" {
+		t.Fatalf("upstream = %q, want DeepInfra", resp.UpstreamProvider)
+	}
+}
+
+func TestParseResponseMarksMalformedToolCall(t *testing.T) {
+	resp, err := parseResponse(strings.NewReader(`{"choices":[{"message":{"tool_calls":[{"id":"1","function":{"name":"probe","arguments":"{bad"}}]}}]}`), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.MalformedToolCall {
+		t.Fatal("malformed native tool call was not marked")
 	}
 }
 
