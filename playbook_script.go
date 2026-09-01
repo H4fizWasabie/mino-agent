@@ -100,6 +100,11 @@ func validateScriptFile(core *Core, path, label string) error {
 			// Git Bash is a supported best-effort compatibility shell.
 		} else if filepath.Ext(path) != ".ps1" {
 			return fmt.Errorf("%s: %s is a Bash script; provide a native .ps1 script on Windows", label, filepath.Base(path))
+		} else {
+			parse := "$null=[System.Management.Automation.Language.Parser]::ParseFile(" + psQuote(path) + ",[ref]$tokens,[ref]$errors); if ($errors.Count -gt 0) { $errors | ForEach-Object { $_.Message }; exit 1 }"
+			if out, err := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", parse).CombinedOutput(); err != nil {
+				return fmt.Errorf("%s: PowerShell parse failed: %v\n%s", label, err, strings.TrimSpace(string(out)))
+			}
 		}
 	} else if out, err := exec.Command("bash", "-n", path).CombinedOutput(); err != nil {
 		return fmt.Errorf("%s: bash -n failed: %v\n%s", label, err, strings.TrimSpace(string(out)))

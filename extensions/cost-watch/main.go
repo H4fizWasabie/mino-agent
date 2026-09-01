@@ -661,7 +661,7 @@ var sendHUP = func() error {
 		return exec.Command("pkill", "-HUP", "-x", "mino").Run()
 	}
 	if runtime.GOOS == "windows" {
-		return fmt.Errorf("automatic provider reload is unavailable on Windows; restart mino manually")
+		return exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Restart-Service -Name 'mino' -Force").Run()
 	}
 	return exec.Command("systemctl", "kill", "-s", "HUP", "mino").Run()
 }

@@ -176,12 +176,23 @@ func writeNativeService(ctx context.Context, h *HostTools, args map[string]any) 
 			return "Error: determine macOS service user: " + uidErr.Error()
 		}
 		domain := "user/" + strings.TrimSpace(string(uid))
+		if oldErr == nil {
+			_, _ = h.plain(ctx, []string{"launchctl", "bootout", domain, target})
+		}
 		if _, err := h.plain(ctx, []string{"launchctl", "bootstrap", domain, target}); err != nil {
 			cleanup()
 			return "Error: load launchd service: " + err.Error()
 		}
 	} else {
-		argv := []string{"sc.exe", "create", d.Name, "binPath=", content, "start=", "auto"}
+		existing := false
+		if _, probeErr := h.plain(ctx, []string{"sc.exe", "query", d.Name}); probeErr == nil {
+			existing = true
+		}
+		verb := "create"
+		if existing {
+			verb = "config"
+		}
+		argv := []string{"sc.exe", verb, d.Name, "binPath=", content, "start=", "auto"}
 		if d.Restart == "never" {
 			argv[len(argv)-1] = "demand"
 		}
@@ -198,7 +209,18 @@ func writeNativeService(ctx context.Context, h *HostTools, args map[string]any) 
 	if _, err := h.journal.Run(entry, nil); err != nil {
 		cleanup()
 		if runtime.GOOS == "windows" {
-			_, _ = h.sudo(ctx, []string{"sc.exe", "delete", d.Name})
+			if oldErr == nil {
+				_, _ = h.sudo(ctx, []string{"sc.exe", "config", d.Name, "binPath=", string(old), "start=", "auto"})
+			} else {
+				_, _ = h.sudo(ctx, []string{"sc.exe", "delete", d.Name})
+			}
+		} else {
+			uid, _ := exec.CommandContext(ctx, "id", "-u").Output()
+			domain := "user/" + strings.TrimSpace(string(uid))
+			_, _ = h.plain(ctx, []string{"launchctl", "bootout", domain, target})
+			if oldErr == nil {
+				_, _ = h.plain(ctx, []string{"launchctl", "bootstrap", domain, target})
+			}
 		}
 		return fmt.Sprintf("Error: journal write of %s: %v (service restored)", d.Name, err)
 	}

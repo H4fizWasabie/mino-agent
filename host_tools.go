@@ -35,13 +35,14 @@ type HostTools struct {
 	stageDir string // unit staging dir (default <home>/tmp — pinned by the whitelist)
 	unitDir  string // unit install dir (default /etc/systemd/system)
 
-	sudo     func(ctx context.Context, argv []string) (string, error)             // privileged runner
-	plain    func(ctx context.Context, argv []string) (string, error)             // unprivileged runner (probes)
-	probe    func(ctx context.Context, pkg string) bool                           // package installed?
-	resolve  func(ctx context.Context, name string) (id, state string, err error) // systemctl show
-	check    func(argv []string) bool                                             // whitelist membership
-	platform hostPlatform
-	expected string // MINO_SERVICE — the only unit restart_service will touch
+	sudo       func(ctx context.Context, argv []string) (string, error)             // privileged runner
+	plain      func(ctx context.Context, argv []string) (string, error)             // unprivileged runner (probes)
+	probe      func(ctx context.Context, pkg string) bool                           // package installed?
+	resolve    func(ctx context.Context, name string) (id, state string, err error) // systemctl show
+	check      func(argv []string) bool                                             // whitelist membership
+	platform   hostPlatform
+	packageRun func(context.Context, []string) (string, error)
+	expected   string // MINO_SERVICE — the only unit restart_service will touch
 }
 
 const (
@@ -56,18 +57,26 @@ func NewHostTools(home string, j *OpJournal) *HostTools {
 		expected = nativeServiceName(expected)
 	}
 	return &HostTools{
-		home:     home,
-		journal:  j,
-		stageDir: filepath.Join(home, "tmp"),
-		unitDir:  "/etc/systemd/system",
-		sudo:     platform.sudo,
-		plain:    runPlain,
-		probe:    platform.probe,
-		resolve:  platform.resolve,
-		check:    func(argv []string) bool { return platform.allow(home, argv) },
-		platform: platform,
-		expected: expected,
+		home:       home,
+		journal:    j,
+		stageDir:   filepath.Join(home, "tmp"),
+		unitDir:    "/etc/systemd/system",
+		sudo:       platform.sudo,
+		plain:      runPlain,
+		probe:      platform.probe,
+		resolve:    platform.resolve,
+		check:      func(argv []string) bool { return platform.allow(home, argv) },
+		platform:   platform,
+		packageRun: platform.packageRun,
+		expected:   expected,
 	}
+}
+
+func (h *HostTools) runPackage(ctx context.Context, argv []string) (string, error) {
+	if h.packageRun != nil {
+		return h.packageRun(ctx, argv)
+	}
+	return h.sudo(ctx, argv)
 }
 
 func (h *HostTools) packageInstallArgv(pkg string) []string {
@@ -139,7 +148,7 @@ func makeInstallPackageTool(h *HostTools) *Tool {
 			wasInstalled := h.probe(ctx, pkg)
 			ctx, cancel := context.WithTimeout(ctx, hostOpTimeout)
 			defer cancel()
-			out, err := h.sudo(ctx, argv)
+			out, err := h.runPackage(ctx, argv)
 			if err != nil {
 				h.journal.Run(&OpEntry{
 					OpType:      "package.install",
@@ -164,7 +173,7 @@ func makeInstallPackageTool(h *HostTools) *Tool {
 				if !wasInstalled {
 					teardown := h.packageRemoveArgv(pkg)
 					if h.whitelisted(teardown) {
-						if _, terr := h.sudo(ctx, teardown); terr != nil {
+						if _, terr := h.runPackage(ctx, teardown); terr != nil {
 							slog.Error("install_package teardown failed", "package", pkg, "error", terr)
 						}
 					} else {

@@ -173,7 +173,11 @@ func interpolate(template string, args map[string]any) string {
 			return match
 		}
 		s := fmt.Sprint(v)
-		s = strings.ReplaceAll(s, "'", "'\\''")
+		if runtime.GOOS == "windows" {
+			s = strings.ReplaceAll(s, "'", "''")
+		} else {
+			s = strings.ReplaceAll(s, "'", "'\\''")
+		}
 		return "'" + s + "'"
 	})
 }
@@ -185,8 +189,12 @@ func runCommand(cmd string) string {
 		c := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", cmd)
 		out, err := c.CombinedOutput()
 		result := string(out)
-		if err != nil { result += fmt.Sprintf("\n(exit: %v)", err) }
-		if len(result) > 1<<20 { result = result[:1<<20] + "\n... (truncated)" }
+		if err != nil {
+			result += fmt.Sprintf("\n(exit: %v)", err)
+		}
+		if len(result) > 1<<20 {
+			result = result[:1<<20] + "\n... (truncated)"
+		}
 		return result
 	}
 	c := exec.CommandContext(ctx, "bash", "-c", cmd)

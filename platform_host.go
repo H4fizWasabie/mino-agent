@@ -11,14 +11,15 @@ import (
 // hostPlatform is the small command seam for host tools. Tool policy and
 // journaling stay shared; only native package/service commands vary.
 type hostPlatform struct {
-	install func(string) []string
-	remove  func(string) []string
-	restart func(string) []string
-	probe   func(context.Context, string) bool
-	active  func(string) []string
-	resolve func(context.Context, string) (string, string, error)
-	sudo    func(context.Context, []string) (string, error)
-	allow   func(string, []string) bool
+	install    func(string) []string
+	remove     func(string) []string
+	restart    func(string) []string
+	probe      func(context.Context, string) bool
+	active     func(string) []string
+	resolve    func(context.Context, string) (string, string, error)
+	sudo       func(context.Context, []string) (string, error)
+	allow      func(string, []string) bool
+	packageRun func(context.Context, []string) (string, error)
 }
 
 func hostPlatformFor(goos string) hostPlatform {
@@ -42,8 +43,9 @@ func hostPlatformFor(goos string) hostPlatform {
 				}
 				return name, "loaded", nil
 			},
-			sudo:  runSudo,
-			allow: allowNativeHostCommand,
+			sudo:       runSudo,
+			allow:      allowNativeHostCommand,
+			packageRun: runPlain,
 		}
 	case "windows":
 		return hostPlatform{
@@ -68,19 +70,21 @@ func hostPlatformFor(goos string) hostPlatform {
 				}
 				return nativeServiceName(name), "installed", nil
 			},
-			sudo:  runWindowsElevated,
-			allow: allowNativeHostCommand,
+			sudo:       runWindowsElevated,
+			allow:      allowNativeHostCommand,
+			packageRun: runWindowsElevated,
 		}
 	default:
 		return hostPlatform{
-			install: func(pkg string) []string { return []string{"/usr/bin/apt-get", "install", "-y", pkg} },
-			remove:  func(pkg string) []string { return []string{"/usr/bin/apt-get", "remove", "-y", pkg} },
-			restart: func(name string) []string { return []string{"/usr/bin/systemctl", "restart", name} },
-			probe:   pkgInstalled,
-			active:  func(name string) []string { return []string{"/usr/bin/systemctl", "is-active", name} },
-			resolve: resolveUnit,
-			sudo:    runSudo,
-			allow:   allowSudo,
+			install:    func(pkg string) []string { return []string{"/usr/bin/apt-get", "install", "-y", pkg} },
+			remove:     func(pkg string) []string { return []string{"/usr/bin/apt-get", "remove", "-y", pkg} },
+			restart:    func(name string) []string { return []string{"/usr/bin/systemctl", "restart", name} },
+			probe:      pkgInstalled,
+			active:     func(name string) []string { return []string{"/usr/bin/systemctl", "is-active", name} },
+			resolve:    resolveUnit,
+			sudo:       runSudo,
+			allow:      allowSudo,
+			packageRun: runSudo,
 		}
 	}
 }
@@ -109,7 +113,7 @@ func allowNativeHostCommand(_ string, argv []string) bool {
 		return len(argv) == 4 && argv[1] == "kickstart" && argv[2] == "-k" && strings.HasPrefix(argv[3], "user/")
 	}
 	if argv[0] == "sc.exe" {
-		return len(argv) >= 3 && (argv[1] == "create" || argv[1] == "delete")
+		return len(argv) >= 3 && (argv[1] == "create" || argv[1] == "config" || argv[1] == "delete")
 	}
 	return argv[0] == "powershell.exe" && strings.HasPrefix(strings.Join(argv[1:], " "), "-NoProfile -NonInteractive -Command Restart-Service -Name '")
 }
