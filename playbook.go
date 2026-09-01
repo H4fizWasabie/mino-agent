@@ -1243,14 +1243,14 @@ func makeSystemCheckTool(db *sql.DB, home string) *Tool {
 			// log. journald held the exact error that broke every schedule; the LLM
 			// never looked there because nothing told it journald is its log.
 			serviceCmd, errorCmd := hostServiceHealthCommands(runtime.GOOS)
-			out, err := exec.Command(serviceCmd[0], serviceCmd[1:]...).Output()
-			svc := strings.TrimSpace(string(out))
+			serviceOutput, err := runHealthCommand(serviceCmd)
+			svc := strings.TrimSpace(serviceOutput)
 			if err != nil && svc == "" {
 				svc = "unavailable on " + runtime.GOOS
 			}
 			fmt.Fprintf(&b, "service: mino=%s\n", svc)
 			if len(errorCmd) > 0 {
-				if out, err := exec.Command(errorCmd[0], errorCmd[1:]...).Output(); err == nil && len(out) > 0 {
+				if out, err := runHealthCommand(errorCmd); err == nil && out != "" {
 					fmt.Fprintf(&b, "recent_errors:\n%s", out)
 				} else {
 					b.WriteString("recent_errors: none\n")
@@ -1270,6 +1270,19 @@ func makeSystemCheckTool(db *sql.DB, home string) *Tool {
 			return b.String()
 		},
 	}
+}
+
+func runHealthCommand(argv []string) (string, error) {
+	if len(argv) == 0 {
+		return "", fmt.Errorf("empty health command")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, argv[0], argv[1:]...).Output()
+	if len(out) > 12000 {
+		out = out[:12000]
+	}
+	return strings.TrimSpace(string(out)), err
 }
 
 func formatPlaybookResult(home string, result *PlaybookResult, since time.Time) string {

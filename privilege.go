@@ -51,8 +51,8 @@ func sudoersPath() string {
 // covers what Mino manages (its own service, timers like cost-watch's).
 var unitNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*\.(service|timer|socket|path)$`)
 
-// pkgNameRe — Debian package names (lower-case, digits, + . -).
-var pkgNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]*$`)
+// pkgNameRe — package-manager identifiers accepted by apt, Homebrew, and winget.
+var pkgNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9+._@/-]*$`)
 
 // Whitelist is the parsed privilege whitelist: a list of command shapes,
 // each a fixed field prefix. Allows reports whether argv (the full command
@@ -297,8 +297,6 @@ func parseUnitShow(out string) (id, state string) {
 	}
 	return id, state
 }
-
-
 
 // containsSudoInvocation is the bash-tool tripwire: the model must never
 // call sudo itself — privileged operations go through the harness tools.

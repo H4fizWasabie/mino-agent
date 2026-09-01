@@ -108,6 +108,13 @@ func renderLaunchd(d serviceDefinition) string {
 	if d.WorkingDirectory != "" {
 		fmt.Fprintf(&b, "<key>WorkingDirectory</key><string>%s</string>", xmlEscape(d.WorkingDirectory))
 	}
+	if len(d.Environment) > 0 {
+		b.WriteString("<key>EnvironmentVariables</key><dict>")
+		for _, key := range sortedEnvKeys(d.Environment) {
+			fmt.Fprintf(&b, "<key>%s</key><string>%s</string>", xmlEscape(key), xmlEscape(d.Environment[key]))
+		}
+		b.WriteString("</dict>")
+	}
 	if d.Restart != "never" {
 		b.WriteString("<key>KeepAlive</key><true/>")
 	}
@@ -150,6 +157,9 @@ func writeNativeService(ctx context.Context, h *HostTools, args map[string]any) 
 		return "Error: " + err.Error()
 	}
 	filename, content := renderServiceDefinition(runtime.GOOS, d)
+	if runtime.GOOS == "windows" && (len(d.Environment) > 0 || d.WorkingDirectory != "") {
+		return "Error: Windows services do not support environment or working_directory in the native writer"
+	}
 	dir := filepath.Join(filepath.Dir(h.home), "Library", "LaunchAgents")
 	if runtime.GOOS == "windows" {
 		dir = filepath.Join(h.home, "services")
@@ -159,6 +169,15 @@ func writeNativeService(ctx context.Context, h *HostTools, args map[string]any) 
 	}
 	target := filepath.Join(dir, filename)
 	old, oldErr := os.ReadFile(target)
+	existing := false
+	if runtime.GOOS == "windows" {
+		if _, probeErr := h.plain(ctx, []string{"sc.exe", "query", d.Name}); probeErr == nil {
+			existing = true
+		}
+		if existing && oldErr != nil {
+			return "Error: Windows service exists but its local definition is unavailable; refusing an unrollbackable update"
+		}
+	}
 	if err := os.WriteFile(target, []byte(content), 0600); err != nil {
 		return "Error: write native service: " + err.Error()
 	}
@@ -184,10 +203,6 @@ func writeNativeService(ctx context.Context, h *HostTools, args map[string]any) 
 			return "Error: load launchd service: " + err.Error()
 		}
 	} else {
-		existing := false
-		if _, probeErr := h.plain(ctx, []string{"sc.exe", "query", d.Name}); probeErr == nil {
-			existing = true
-		}
 		verb := "create"
 		if existing {
 			verb = "config"
@@ -209,7 +224,7 @@ func writeNativeService(ctx context.Context, h *HostTools, args map[string]any) 
 	if _, err := h.journal.Run(entry, nil); err != nil {
 		cleanup()
 		if runtime.GOOS == "windows" {
-			if oldErr == nil {
+			if existing {
 				_, _ = h.sudo(ctx, []string{"sc.exe", "config", d.Name, "binPath=", string(old), "start=", "auto"})
 			} else {
 				_, _ = h.sudo(ctx, []string{"sc.exe", "delete", d.Name})

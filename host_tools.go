@@ -128,7 +128,7 @@ func (h *HostTools) sessionID(ctx context.Context) string {
 func makeInstallPackageTool(h *HostTools) *Tool {
 	return &Tool{
 		Name:        "install_package",
-		Description: "Install a Debian/Ubuntu package via apt-get as root (through Mino's sudoers command whitelist — the package name is validated and the exact command is journaled with before/after state). Only whitelisted operations are autonomous; anything else is refused for the owner to approve. Prefer this over bash + sudo (which is refused).",
+		Description: "Install a package through the host's native package manager and Mino's fixed privilege whitelist. The package name is validated and the exact command is journaled with before/after state.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -137,13 +137,16 @@ func makeInstallPackageTool(h *HostTools) *Tool {
 			"required": []string{"package"},
 		},
 		ContextFn: func(ctx context.Context, args map[string]any) string {
+			if !h.platform.supported {
+				return "Error: package installation is unsupported on " + runtime.GOOS
+			}
 			pkg, _ := args["package"].(string)
 			if !pkgNameRe.MatchString(pkg) {
-				return "Error: invalid package name " + fmt.Sprintf("%q", pkg) + " (lower-case letters, digits, + . - only)"
+				return "Error: invalid package name " + fmt.Sprintf("%q", pkg) + " (letters, digits, + . _ @ / - only; no whitespace)"
 			}
 			argv := h.packageInstallArgv(pkg)
 			if !h.whitelisted(argv) {
-				return "Error: apt-get install of " + pkg + notWhitelisted
+				return "Error: package install of " + pkg + notWhitelisted
 			}
 			wasInstalled := h.probe(ctx, pkg)
 			ctx, cancel := context.WithTimeout(ctx, hostOpTimeout)
@@ -216,6 +219,9 @@ func makeWriteUnitTool(h *HostTools) *Tool {
 			content, _ := args["content"].(string)
 			executable, _ := args["executable"].(string)
 			if runtime.GOOS != "linux" {
+				if !h.platform.supported {
+					return "Error: native services are unsupported on " + runtime.GOOS
+				}
 				return writeNativeService(ctx, h, args)
 			}
 			if executable != "" {
@@ -340,6 +346,9 @@ func makeRestartServiceTool(h *HostTools) *Tool {
 			"required": []string{"service"},
 		},
 		ContextFn: func(ctx context.Context, args map[string]any) string {
+			if !h.platform.supported {
+				return "Error: service restart is unsupported on " + runtime.GOOS
+			}
 			name, _ := args["service"].(string)
 			if !unitNameRe.MatchString(name) {
 				return "Error: invalid service name " + fmt.Sprintf("%q", name)
