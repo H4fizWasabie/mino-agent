@@ -2074,7 +2074,7 @@ func usageRecords(home string) []map[string]any {
 		return nil
 	}
 	defer db.Close()
-	rows, err := db.Query(`SELECT ts, provider, model, session_id,
+	rows, err := db.Query(`SELECT ts, provider, model, upstream_provider, session_id,
 		in_tokens, out_tokens, cache_read, cache_write, latency_ms, cost_usd
 		FROM usage_log ORDER BY id`)
 	if err != nil {
@@ -2083,15 +2083,15 @@ func usageRecords(home string) []map[string]any {
 	defer rows.Close()
 	var recs []map[string]any
 	for rows.Next() {
-		var ts, provider, model, sessionID string
+		var ts, provider, model, upstreamProvider, sessionID string
 		var in, out, cacheRead, cacheWrite, latencyMS int64
 		var cost any
-		if err := rows.Scan(&ts, &provider, &model, &sessionID,
+		if err := rows.Scan(&ts, &provider, &model, &upstreamProvider, &sessionID,
 			&in, &out, &cacheRead, &cacheWrite, &latencyMS, &cost); err != nil {
 			continue
 		}
 		r := map[string]any{
-			"ts": ts, "provider": provider, "model": model, "session_id": sessionID,
+			"ts": ts, "provider": provider, "model": model, "upstream_provider": upstreamProvider, "session_id": sessionID,
 			"in": float64(in), "out": float64(out),
 			"cache_read": float64(cacheRead), "cache_write": float64(cacheWrite),
 			"latency_ms": float64(latencyMS),

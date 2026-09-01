@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -36,10 +37,12 @@ type UsageInfo struct {
 }
 
 type LLMResponse struct {
-	StopReason string
-	Usage      UsageInfo
-	Content    []ContentBlock
-	FinalText  string
+	StopReason        string
+	Usage             UsageInfo
+	Content           []ContentBlock
+	FinalText         string
+	UpstreamProvider  string
+	MalformedToolCall bool
 }
 
 // Message is (role, content) — matches Core's dict format.
@@ -183,6 +186,9 @@ func (c *Client) createWithRouting(ctx context.Context, model, reasoning string,
 		req, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		if isOpenRouterURL(c.baseURL) {
+			req.Header.Set("X-OpenRouter-Metadata", "enabled")
+		}
 		// Wedge guard (2026-08-14): identity encoding — never let the transport's
 		// gzip layer sit between the cancel/timeout machinery and the body read
 		// (the h2+gzip close deadlock). Responses are a few KB; bandwidth is
@@ -271,6 +277,14 @@ func parseResponse(r io.Reader, jsonMode bool) (*LLMResponse, error) {
 				CacheWriteTokens int `json:"cache_write_tokens"`
 			} `json:"prompt_tokens_details"`
 		} `json:"usage"`
+		OpenRouterMetadata struct {
+			Endpoints struct {
+				Available []struct {
+					Provider string `json:"provider"`
+					Selected bool   `json:"selected"`
+				} `json:"available"`
+			} `json:"endpoints"`
+		} `json:"openrouter_metadata"`
 	}
 	if err := json.Unmarshal(data, &result); err != nil {
 		return nil, fmt.Errorf("parse json: %w, body: %.200s", err, string(data))
@@ -299,6 +313,7 @@ func parseResponse(r io.Reader, jsonMode bool) (*LLMResponse, error) {
 		content = reasoning
 	}
 	blocks := make([]ContentBlock, 0)
+	malformedToolCall := false
 	if content != "" {
 		blocks = append(blocks, ContentBlock{Type: "text", Text: content})
 	}
@@ -310,6 +325,7 @@ func parseResponse(r io.Reader, jsonMode bool) (*LLMResponse, error) {
 			// raw string back as a tool result so the model can self-correct.
 			slog.Warn("unparseable native tool_call arguments", "tool", tc.Function.Name, "arguments", tc.Function.Arguments)
 			args = map[string]any{"__raw_arguments__": tc.Function.Arguments}
+			malformedToolCall = true
 		}
 		blocks = append(blocks, ContentBlock{
 			Type:  "tool_use",
@@ -337,9 +353,28 @@ func parseResponse(r io.Reader, jsonMode bool) (*LLMResponse, error) {
 			CacheCreationTokens: result.Usage.PromptTokenDetails.CacheWriteTokens,
 			CostUSD:             result.Usage.CostUSD,
 		},
-		Content:   blocks,
-		FinalText: content,
+		Content:           blocks,
+		FinalText:         content,
+		UpstreamProvider:  selectedOpenRouterProvider(result.OpenRouterMetadata.Endpoints.Available),
+		MalformedToolCall: malformedToolCall,
 	}, nil
+}
+
+func isOpenRouterURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && (u.Hostname() == "openrouter.ai" || strings.HasSuffix(u.Hostname(), ".openrouter.ai"))
+}
+
+func selectedOpenRouterProvider(endpoints []struct {
+	Provider string `json:"provider"`
+	Selected bool   `json:"selected"`
+}) string {
+	for _, endpoint := range endpoints {
+		if endpoint.Selected {
+			return endpoint.Provider
+		}
+	}
+	return ""
 }
 
 // --- Tool definition (matches Core's input_schema dict) ---
@@ -509,9 +544,9 @@ func (c *Client) logUsage(ctx context.Context, model string, resp *LLMResponse, 
 		cost = resp.Usage.CostUSD
 	}
 	_, err := c.usageDB.Exec(`INSERT INTO usage_log
-		(ts, provider, model, session_id, in_tokens, out_tokens, cache_read, cache_write, latency_ms, cost_usd)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		time.Now().UTC().Format(time.RFC3339), "openai", model, sid,
+		(ts, provider, model, upstream_provider, session_id, in_tokens, out_tokens, cache_read, cache_write, latency_ms, cost_usd)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		time.Now().UTC().Format(time.RFC3339), "openai", model, resp.UpstreamProvider, sid,
 		resp.Usage.InputTokens, resp.Usage.OutputTokens,
 		resp.Usage.CacheReadTokens, resp.Usage.CacheCreationTokens,
 		time.Since(startTime).Milliseconds(), cost)
