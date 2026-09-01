@@ -27,16 +27,16 @@ func hostPlatformFor(goos string) hostPlatform {
 		return hostPlatform{
 			install: func(pkg string) []string { return []string{"brew", "install", pkg} },
 			remove:  func(pkg string) []string { return []string{"brew", "uninstall", pkg} },
-			restart: func(name string) []string { return []string{"launchctl", "kickstart", "-k", "system/" + name} },
+			restart: func(name string) []string { return []string{"launchctl", "kickstart", "-k", macServiceTarget(name)} },
 			probe: func(ctx context.Context, pkg string) bool {
 				_, err := runPlain(ctx, []string{"brew", "list", "--formula", pkg})
 				return err == nil
 			},
 			active: func(name string) []string {
-				return []string{"sh", "-c", "launchctl print system/" + name + " >/dev/null && printf active"}
+				return []string{"sh", "-c", "launchctl print " + macServiceTarget(name) + " >/dev/null && printf active"}
 			},
 			resolve: func(ctx context.Context, name string) (string, string, error) {
-				_, err := runPlain(ctx, []string{"launchctl", "print", "system/" + name})
+				_, err := runPlain(ctx, []string{"launchctl", "print", macServiceTarget(name)})
 				if err != nil {
 					return "", "", fmt.Errorf("resolve service %q: %w", name, err)
 				}
@@ -52,21 +52,21 @@ func hostPlatformFor(goos string) hostPlatform {
 			},
 			remove: func(pkg string) []string { return []string{"winget.exe", "uninstall", pkg} },
 			restart: func(name string) []string {
-				return []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Restart-Service -Name '" + name + "' -Force"}
+				return []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Restart-Service -Name '" + nativeServiceName(name) + "' -Force"}
 			},
 			probe: func(ctx context.Context, pkg string) bool {
 				_, err := runPlain(ctx, []string{"winget.exe", "list", "--id", pkg, "--exact"})
 				return err == nil
 			},
 			active: func(name string) []string {
-				return []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "if ((Get-Service -Name '" + name + "' -ErrorAction SilentlyContinue).Status -eq 'Running') {'active'} else {'inactive'}"}
+				return []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "if ((Get-Service -Name '" + nativeServiceName(name) + "' -ErrorAction SilentlyContinue).Status -eq 'Running') {'active'} else {'inactive'}"}
 			},
 			resolve: func(ctx context.Context, name string) (string, string, error) {
-				_, err := runPlain(ctx, []string{"sc.exe", "query", name})
+				_, err := runPlain(ctx, []string{"sc.exe", "query", nativeServiceName(name)})
 				if err != nil {
 					return "", "", fmt.Errorf("resolve service %q: %w", name, err)
 				}
-				return name, "installed", nil
+				return nativeServiceName(name), "installed", nil
 			},
 			sudo:  runWindowsElevated,
 			allow: allowNativeHostCommand,
@@ -90,7 +90,7 @@ func currentHostPlatform() hostPlatform { return hostPlatformFor(runtime.GOOS) }
 func hostServiceHealthCommands(goos string) (service, recentErrors []string) {
 	switch goos {
 	case "darwin":
-		return []string{"launchctl", "print", "system/mino"}, []string{"log", "show", "--last", "1h", "--style", "compact", "--predicate", "process == 'mino'"}
+		return []string{"launchctl", "print", macServiceTarget("mino")}, []string{"log", "show", "--last", "1h", "--style", "compact", "--predicate", "process == 'mino'"}
 	case "windows":
 		return []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "(Get-Service -Name 'mino' -ErrorAction SilentlyContinue).Status"}, nil
 	default:
@@ -106,10 +106,23 @@ func allowNativeHostCommand(_ string, argv []string) bool {
 		return len(argv) >= 3 && (argv[1] == "install" || argv[1] == "uninstall")
 	}
 	if argv[0] == "launchctl" {
-		return len(argv) == 4 && argv[1] == "kickstart" && argv[2] == "-k" && strings.HasPrefix(argv[3], "system/")
+		return len(argv) == 4 && argv[1] == "kickstart" && argv[2] == "-k" && strings.HasPrefix(argv[3], "user/")
+	}
+	if argv[0] == "sc.exe" {
+		return len(argv) >= 3 && (argv[1] == "create" || argv[1] == "delete")
 	}
 	return argv[0] == "powershell.exe" && strings.HasPrefix(strings.Join(argv[1:], " "), "-NoProfile -NonInteractive -Command Restart-Service -Name '")
 }
+
+func macServiceTarget(name string) string {
+	out, err := exec.Command("id", "-u").Output()
+	if err != nil {
+		return "user/0/" + nativeServiceName(name)
+	}
+	return "user/" + strings.TrimSpace(string(out)) + "/" + nativeServiceName(name)
+}
+
+func nativeServiceName(name string) string { return strings.TrimSuffix(name, ".service") }
 
 func runWindowsElevated(ctx context.Context, argv []string) (string, error) {
 	if len(argv) == 0 {

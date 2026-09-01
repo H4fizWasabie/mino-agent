@@ -17,10 +17,11 @@ Rejected: arbitrary cross-platform shell execution as a single universal command
 | Name | Signature | Purpose |
 |------|-----------|---------|
 | Host operations | existing `HostTools` tool surface | Keep model-facing package/service tools stable. |
-| Platform adapter | private interfaces covering shell execution, package install/probe, service resolve/restart, unit write/reload, system-health probes, browser launch, and privileged command execution | Hide OS-specific implementations from user-facing tools. |
+| Platform adapter | private interfaces covering shell execution, package install/probe, service resolve/restart, neutral service rendering/install, system-health probes, browser launch, and privileged command execution | Hide OS-specific implementations from user-facing tools. |
 | Linux adapter | private adapter selected on Linux | Preserve apt-get, dpkg-query, systemctl, sudoers, and systemd behavior. |
 | macOS adapter | private adapter selected on Darwin | Use native shell/tool paths, Homebrew, launchd/launchctl, browser opening, and macOS privilege execution. |
 | Windows adapter | private adapter selected on Windows | Use PowerShell, native command equivalents, winget or Chocolatey, Windows service control, browser opening, and Windows elevation. |
+| `write_unit` definition | existing tool name with a new neutral schema: name, executable, args, environment, working directory, restart policy | Render native systemd, launchd, or Windows Service configuration while retaining journal/rollback behavior. Raw systemd content remains Linux compatibility input. |
 | Playbook execution | existing script-stage and system-check surfaces | Run supported scripts/probes through the selected platform adapter and report unsupported prerequisites explicitly. |
 | Update restart | existing update lifecycle seam | Delegate post-update restart to the selected adapter and report manual restart when no managed service exists. |
 

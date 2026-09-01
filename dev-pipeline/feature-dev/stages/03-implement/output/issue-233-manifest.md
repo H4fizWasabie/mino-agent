@@ -4,7 +4,7 @@
 
 - `platform_host.go` — native package, service, privilege, and health command adapters for Linux, macOS, and Windows.
 - `tools.go`, `tools_test.go` — select Bash on Unix and PowerShell on Windows while retaining Unix pipeline diagnostics.
-- `host_tools.go`, `host_tools_test.go` — route package and service tools through the adapter; preserve Linux seams and reject systemd unit writing on non-Linux.
+- `host_tools.go`, `host_tools_test.go`, `service_definition.go`, `service_definition_test.go` — route package/service tools through the adapter and render neutral service definitions for each OS.
 - `rollback.go` — route update-time service restart through the native adapter.
 - `playbook.go` — use native service and recent-error probes in `system_check`.
 - `main.go` — open the dashboard through Windows `cmd start`.
@@ -26,4 +26,4 @@
 
 ## Deliberate boundary
 
-`write_unit` remains Linux-only because its input is systemd unit syntax. Non-Linux returns an explicit error before staging or execution. A future portable service-definition contract is a separate issue, not an implicit translation layer.
+Raw systemd content remains Linux-only compatibility mode. New neutral service definitions render to systemd, launchd, or Windows Service commands. Exact runtime behavior still needs user reports from native Windows/macOS hosts.

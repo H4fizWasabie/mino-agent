@@ -51,6 +51,10 @@ const (
 
 func NewHostTools(home string, j *OpJournal) *HostTools {
 	platform := currentHostPlatform()
+	expected := envOr("MINO_SERVICE", "mino.service")
+	if runtime.GOOS != "linux" {
+		expected = nativeServiceName(expected)
+	}
 	return &HostTools{
 		home:     home,
 		journal:  j,
@@ -62,7 +66,7 @@ func NewHostTools(home string, j *OpJournal) *HostTools {
 		resolve:  platform.resolve,
 		check:    func(argv []string) bool { return platform.allow(home, argv) },
 		platform: platform,
-		expected: envOr("MINO_SERVICE", "mino.service"),
+		expected: expected,
 	}
 }
 
@@ -184,22 +188,35 @@ func installStateJSON(installed bool) string {
 func makeWriteUnitTool(h *HostTools) *Tool {
 	return &Tool{
 		Name:        "write_unit",
-		Description: "Write or replace a systemd unit file as root (through Mino's sudoers command whitelist): the content is staged under <home>/tmp, installed to /etc/systemd/system via `install -o root -g root -m 0644`, then `systemctl daemon-reload`. The unit name is validated, and the op is journaled with the old content as before-state — on journal failure the previous unit is restored (or removed if it didn't exist). Use with restart_service to apply. Prefer this over bash + sudo (which is refused).",
+		Description: "Write or replace a native service definition through Mino's fixed host-operation boundary. Provide a service name, executable, optional arguments/environment/working directory, and restart policy; Mino renders systemd, launchd, or Windows Service configuration for the host. The operation is journaled and restored on journal failure. Use with restart_service to apply. Raw systemd content remains accepted only for backward compatibility on Linux.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name":    map[string]any{"type": "string", "description": "Unit file name, e.g. 'mino.service' or 'cost-watch-check.timer'."},
-				"content": map[string]any{"type": "string", "description": "Full unit file content."},
+				"name":              map[string]any{"type": "string", "description": "Service name, e.g. 'mino'."},
+				"executable":        map[string]any{"type": "string", "description": "Absolute or host-resolvable executable path."},
+				"args":              map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				"environment":       map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+				"working_directory": map[string]any{"type": "string"},
+				"restart":           map[string]any{"type": "string", "enum": []string{"always", "on-failure", "never"}},
+				"content":           map[string]any{"type": "string", "description": "Legacy raw systemd content; Linux only."},
 			},
-			"required": []string{"name", "content"},
+			"required": []string{"name"},
 		},
 		ContextFn: func(ctx context.Context, args map[string]any) string {
 			name, _ := args["name"].(string)
 			content, _ := args["content"].(string)
+			executable, _ := args["executable"].(string)
 			if runtime.GOOS != "linux" {
-				return "Error: write_unit requires Linux systemd; configure a native launchd or Windows service outside this tool"
+				return writeNativeService(ctx, h, args)
 			}
-			if !unitNameRe.MatchString(name) {
+			if executable != "" {
+				d, err := parseServiceDefinition(args)
+				if err != nil {
+					return "Error: " + err.Error()
+				}
+				filename, rendered := renderServiceDefinition(runtime.GOOS, d)
+				name, content = filename, rendered
+			} else if !unitNameRe.MatchString(name) {
 				return "Error: invalid unit name " + fmt.Sprintf("%q", name) + " (lower-case letters, digits, . _ - and a .service/.timer/.socket/.path suffix)"
 			}
 			if content == "" {
@@ -305,7 +322,7 @@ func unitStateJSON(content string, present bool) string {
 func makeRestartServiceTool(h *HostTools) *Tool {
 	return &Tool{
 		Name:        "restart_service",
-		Description: fmt.Sprintf("Restart Mino's own systemd service (the unit %q, MINO_SERVICE). The service identity is resolved via `systemctl show` first — a name that resolves to any other unit is refused. The intent is journaled BEFORE the restart (a successful restart terminates this process; the journal entry is what boot reconciliation finds). systemd remains the only thing that keeps Mino alive.", envOr("MINO_SERVICE", "mino.service")),
+		Description: fmt.Sprintf("Restart Mino's own native service (the service %q, MINO_SERVICE). The service identity is resolved through the host's native service manager first — a name that resolves to any other service is refused. The intent is journaled BEFORE the restart (a successful restart terminates this process; the journal entry is what boot reconciliation finds).", envOr("MINO_SERVICE", "mino.service")),
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

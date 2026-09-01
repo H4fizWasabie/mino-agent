@@ -213,7 +213,7 @@ All three degrade gracefully — Mino works without them, but noisy commands and
 
 ### Host privileges (optional)
 
-To let Mino manage host state itself (install packages, write systemd units, restart its own
+To let Mino manage host state itself (install packages, write native service definitions, restart its own
 service — the `install_package` / `write_unit` / `restart_service` tools), install the sudoers
 command whitelist once, as root: `sudo MINO_HOME=/home/mino/.mino mino setup-privileges`.
 This grants the mino user exactly six command shapes as root (apt-get install/remove -y,
@@ -222,9 +222,10 @@ systemctl restart/daemon-reload, `install -o root -g root -m 0644` from `~/.mino
 tools refuse every op with a clear boundary message, and `bash` refuses `sudo` outright.
 
 > **Platform note:** Mino's core tools run natively on Linux, macOS, and Windows (issue #233).
-> Package installation, service discovery/restart, shell execution, browser opening, system checks,
-> and update restart use the host's native commands. `write_unit` remains Linux/systemd-specific
-> because its input is a systemd unit definition; unsupported host operations fail explicitly.
+> Package installation, native service definition, service discovery/restart, shell execution,
+> browser opening, system checks, and update restart use the host's native commands. Existing
+> raw systemd content remains a Linux-only compatibility mode; new calls should use the neutral
+> service definition fields.
 
 ## A task failed — now what?
 

@@ -110,8 +110,8 @@ func TestHostPlatformCommands(t *testing.T) {
 		restart []string
 	}{
 		{name: "linux", goos: "linux", install: []string{"/usr/bin/apt-get", "install", "-y", "jq"}, remove: []string{"/usr/bin/apt-get", "remove", "-y", "jq"}, restart: []string{"/usr/bin/systemctl", "restart", "mino.service"}},
-		{name: "macos", goos: "darwin", install: []string{"brew", "install", "jq"}, remove: []string{"brew", "uninstall", "jq"}, restart: []string{"launchctl", "kickstart", "-k", "system/mino.service"}},
-		{name: "windows", goos: "windows", install: []string{"winget.exe", "install", "--accept-source-agreements", "--accept-package-agreements", "jq"}, remove: []string{"winget.exe", "uninstall", "jq"}, restart: []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Restart-Service -Name 'mino.service' -Force"}},
+		{name: "macos", goos: "darwin", install: []string{"brew", "install", "jq"}, remove: []string{"brew", "uninstall", "jq"}},
+		{name: "windows", goos: "windows", install: []string{"winget.exe", "install", "--accept-source-agreements", "--accept-package-agreements", "jq"}, remove: []string{"winget.exe", "uninstall", "jq"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -122,8 +122,15 @@ func TestHostPlatformCommands(t *testing.T) {
 			if got := p.remove(tt.remove[len(tt.remove)-1]); !reflect.DeepEqual(got, tt.remove) {
 				t.Fatalf("remove = %v, want %v", got, tt.remove)
 			}
-			if got := p.restart("mino.service"); !reflect.DeepEqual(got, tt.restart) {
-				t.Fatalf("restart = %v, want %v", got, tt.restart)
+			wantRestart := tt.restart
+			if tt.goos == "darwin" {
+				wantRestart = []string{"launchctl", "kickstart", "-k", macServiceTarget("mino.service")}
+			}
+			if tt.goos == "windows" {
+				wantRestart = []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Restart-Service -Name 'mino' -Force"}
+			}
+			if got := p.restart("mino.service"); !reflect.DeepEqual(got, wantRestart) {
+				t.Fatalf("restart = %v, want %v", got, wantRestart)
 			}
 		})
 	}
@@ -257,6 +264,20 @@ func TestInstallPackageJournalFailureKeepsPreInstalled(t *testing.T) {
 }
 
 // --- write_unit ---
+
+func TestWriteUnitRendersNeutralDefinition(t *testing.T) {
+	h, f := newTestHost(t)
+	got := makeWriteUnitTool(h).ContextFn(testCtx(), map[string]any{
+		"name": "mino", "executable": "/opt/mino/mino", "args": []any{"--serve"}, "restart": "always",
+	})
+	if !strings.Contains(got, "Wrote mino.service") || len(f.calls) != 2 {
+		t.Fatalf("unexpected neutral write result: %q calls=%v", got, f.calls)
+	}
+	e := lastEntry(t, h, "mino.service")
+	if !strings.Contains(e.AfterState, "ExecStart=/opt/mino/mino --serve") {
+		t.Fatalf("rendered systemd definition missing executable: %q", e.AfterState)
+	}
+}
 
 func TestWriteUnitJournaledAndSudoExactCommand(t *testing.T) {
 	h, f := newTestHost(t)
