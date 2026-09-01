@@ -2,6 +2,10 @@
 
 ### Changed
 
+- **Removed dead runtime paths (#502)**: playbook execution now has one
+  canonical navigator path, and the loop/provider APIs no longer carry unused
+  streaming wrappers or selectors.
+
 - **Cross-platform CI and host-operation hardening (#233)**: fixed the workflow indentation so CI runs, use Homebrew without sudo on macOS, restore loaded launchd services on journal failure, configure existing Windows services instead of only creating them, use PowerShell-safe extension arguments, validate PowerShell playbook syntax, and restart Mino natively after Windows cost-watch updates.
 
 - **Native host-operation adapters (#233)**: shell execution, package probes/install/remove,

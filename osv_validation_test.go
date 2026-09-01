@@ -49,7 +49,7 @@ func TestOSV04ReminderQuestionUsesReminderStoreNotCalendar(t *testing.T) {
 		scriptedResp([]ContentBlock{textBlock("Your last Arachem meeting reminder is Friday 7 Aug at 12:30 — a system reminder, never in your calendar.")}, "stop"),
 	}}
 	msgs := []Message{{Role: "user", Content: "When was my last Arachem meeting?"}}
-	result := RunLoopContext(context.Background(), client, "osv04-reminder", "", msgs, r, 5, 100, nil, false, "")
+	result := RunLoopContext(context.Background(), client, "osv04-reminder", "", msgs, r, 5, 100, nil, "")
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete", result.Status)
 	}

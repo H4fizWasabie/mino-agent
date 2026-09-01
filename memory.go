@@ -1247,7 +1247,7 @@ func (m *Memory) LabelCommunities(communities map[string]int) map[string]string 
 		byComm[c] = append(byComm[c], id)
 	}
 	var comms strings.Builder
-	for _, c := range sortedCommunityIDs(byComm) {
+	for _, c := range sortedInts(byComm) {
 		fmt.Fprintf(&comms, "COMMUNITY %d: %s\n", c, strings.Join(byComm[c], ", "))
 	}
 	resp, err := m.client.CreateJSON("community-labels", SmallModel,
@@ -1279,17 +1279,7 @@ func (m *Memory) LabelCommunities(communities map[string]int) map[string]string 
 	return labels
 }
 
-func sortedCommunityIDs(byComm map[int][]string) []int {
-	ids := make([]int, 0, len(byComm))
-	for c := range byComm {
-		ids = append(ids, c)
-	}
-	sort.Ints(ids)
-	return ids
-}
-
-// sortedInts returns the keys of an int-keyed map in ascending order — the
-// generic twin of sortedCommunityIDs (community synthesis groups []Fact).
+// sortedInts returns the keys of an int-keyed map in ascending order.
 func sortedInts[T any](byComm map[int]T) []int {
 	ids := make([]int, 0, len(byComm))
 	for c := range byComm {

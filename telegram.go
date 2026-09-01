@@ -370,7 +370,7 @@ func handleTelegramMessage(w *Core, bot *tgbotapi.BotAPI, message *tgbotapi.Mess
 		}
 	}
 
-	result := w.RespondFor(sid, text, "telegram", obs, false, images...)
+	result := w.RespondFor(sid, text, "telegram", obs, images...)
 
 	// RunLoop returns only an explicit completion, blocker, cancellation, or hard failure.
 	if statusSent && statusMsg.MessageID != 0 {

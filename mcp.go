@@ -57,33 +57,7 @@ func NewMCPBridge(home string, registry *Registry) *MCPBridge {
 // Start loads every config in mcp.d/, connects each server, and registers its
 // tools. Servers that don't start are skipped with a warning.
 func (b *MCPBridge) Start() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	entries, err := os.ReadDir(b.dir)
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(b.dir, e.Name()))
-		if err != nil {
-			continue
-		}
-		var cfg mcpServerConfig
-		if json.Unmarshal(data, &cfg) != nil {
-			continue
-		}
-		if cfg.Command == "" && cfg.URL == "" {
-			continue
-		}
-		if cfg.Name == "" {
-			cfg.Name = strings.TrimSuffix(e.Name(), ".json")
-		}
-		b.connect(cfg)
-	}
+	b.Reload()
 }
 
 func (b *MCPBridge) connect(cfg mcpServerConfig) {

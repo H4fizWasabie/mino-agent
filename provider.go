@@ -5,7 +5,6 @@ package main
 // OpenAI-style chat.completions API.
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"database/sql"
@@ -14,7 +13,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 )
@@ -84,16 +82,8 @@ func NewClientTimeout(apiKey, baseURL string, timeout time.Duration) *Client {
 	}
 }
 
-func (c *Client) Create(model string, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
-	return c.create(context.Background(), model, "", messages, maxTokens, system, tools, false, false, nil)
-}
-
 func (c *Client) CreateJSON(model string, messages []Message, maxTokens int, system string) (*LLMResponse, error) {
-	return c.create(context.Background(), model, "", messages, maxTokens, system, nil, false, true, nil)
-}
-
-func (c *Client) Stream(model string, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
-	return c.create(context.Background(), model, "", messages, maxTokens, system, tools, true, false, onText)
+	return c.create(context.Background(), model, "", messages, maxTokens, system, nil, true)
 }
 
 // Wedge guard (2026-08-14): the loop's buffered LLM reads must not sit behind
@@ -103,16 +93,16 @@ func (c *Client) Stream(model string, messages []Message, maxTokens int, system 
 // declare identity encoding so the decompressor never enters the read path
 // and the existing timeout/cancel mechanisms work as designed.
 
-func (c *Client) create(ctx context.Context, model, reasoning string, messages []Message, maxTokens int, system string, tools []ToolDef, stream, jsonOutput bool, onText func(string)) (*LLMResponse, error) {
-	return c.createWithRouting(ctx, model, reasoning, messages, maxTokens, system, tools, stream, jsonOutput, onText, c.providerRouting, "")
+func (c *Client) create(ctx context.Context, model, reasoning string, messages []Message, maxTokens int, system string, tools []ToolDef, jsonOutput bool) (*LLMResponse, error) {
+	return c.createWithRouting(ctx, model, reasoning, messages, maxTokens, system, tools, jsonOutput, c.providerRouting, "")
 }
 
-func (c *Client) createWithRouting(ctx context.Context, model, reasoning string, messages []Message, maxTokens int, system string, tools []ToolDef, stream, jsonOutput bool, onText func(string), routing []string, sessionID string) (*LLMResponse, error) {
+func (c *Client) createWithRouting(ctx context.Context, model, reasoning string, messages []Message, maxTokens int, system string, tools []ToolDef, jsonOutput bool, routing []string, sessionID string) (*LLMResponse, error) {
 	if c.isCodex() {
-		return c.createCodex(ctx, model, reasoning, messages, system, tools, onText)
+		return c.createCodex(ctx, model, reasoning, messages, system, tools)
 	}
 	if c.isAnthropic() {
-		return c.createAnthropic(ctx, model, messages, maxTokens, system, tools, stream, onText)
+		return c.createAnthropic(ctx, model, messages, maxTokens, system, tools)
 	}
 
 	oaiMsgs := make([]map[string]any, 0)
@@ -137,7 +127,6 @@ func (c *Client) createWithRouting(ctx context.Context, model, reasoning string,
 		"model":                 model,
 		"messages":              oaiMsgs,
 		"max_completion_tokens": maxTokens,
-		"stream":                stream,
 		// #495: a standard mitigation against decode-time repetition collapse
 		// on long non-streamed completions — observed live 2026-08-31 (GLM
 		// 5.3 Flash ran away to MINO_MAX_TOKENS on plain-text replies).
@@ -207,11 +196,6 @@ func (c *Client) createWithRouting(ctx context.Context, model, reasoning string,
 		}
 		defer resp.Body.Close()
 
-		if stream {
-			resp, err := parseSSEStream(resp.Body, onText)
-			c.logUsage(ctx, model, resp, startTime)
-			return resp, err
-		}
 		resp2, err := parseResponse(resp.Body, jsonOutput && !lastResort)
 		c.logUsage(ctx, model, resp2, startTime)
 		return resp2, err
@@ -358,141 +342,6 @@ func parseResponse(r io.Reader, jsonMode bool) (*LLMResponse, error) {
 	}, nil
 }
 
-// --- SSE stream parser (matches Core's _OpenAIStream) ---
-
-func parseSSEStream(r io.Reader, onText func(string)) (*LLMResponse, error) {
-	var fullText strings.Builder
-	tools := make(map[int]*streamTool)
-	var usage UsageInfo
-
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		data := strings.TrimPrefix(line, "data: ")
-		if data == "[DONE]" {
-			break
-		}
-
-		var chunk struct {
-			Choices []struct {
-				Delta struct {
-					Content          string `json:"content"`
-					ReasoningContent string `json:"reasoning_content"`
-					// Some providers send thinking under "reasoning" (see #163).
-					ReasoningAlt string `json:"reasoning"`
-					ToolCalls    []struct {
-						Index    int    `json:"index"`
-						ID       string `json:"id"`
-						Function struct {
-							Name      string `json:"name"`
-							Arguments string `json:"arguments"`
-						} `json:"function"`
-					} `json:"tool_calls"`
-				} `json:"delta"`
-			} `json:"choices"`
-			Usage *struct {
-				PromptTokens       int `json:"prompt_tokens"`
-				CompletionTokens   int `json:"completion_tokens"`
-				PromptTokenDetails struct {
-					CachedTokens     int `json:"cached_tokens"`
-					CacheWriteTokens int `json:"cache_write_tokens"`
-				} `json:"prompt_tokens_details"`
-			} `json:"usage"`
-		}
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			return nil, fmt.Errorf("parse stream chunk: %w", err)
-		}
-
-		if chunk.Usage != nil {
-			usage.InputTokens = chunk.Usage.PromptTokens
-			usage.OutputTokens = chunk.Usage.CompletionTokens
-			usage.CacheReadTokens = chunk.Usage.PromptTokenDetails.CachedTokens
-			usage.CacheCreationTokens = chunk.Usage.PromptTokenDetails.CacheWriteTokens
-		}
-
-		for _, choice := range chunk.Choices {
-			text := choice.Delta.Content
-			if text == "" {
-				text = choice.Delta.ReasoningContent
-			}
-			if text == "" {
-				text = choice.Delta.ReasoningAlt
-			}
-			if text != "" {
-				fullText.WriteString(text)
-				if onText != nil {
-					onText(text)
-				}
-			}
-			for _, tc := range choice.Delta.ToolCalls {
-				st, ok := tools[tc.Index]
-				if !ok {
-					st = &streamTool{}
-					tools[tc.Index] = st
-				}
-				if tc.ID != "" {
-					st.ID = tc.ID
-				}
-				if tc.Function.Name != "" {
-					st.Name = tc.Function.Name
-				}
-				st.Args += tc.Function.Arguments
-			}
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-
-	blocks := make([]ContentBlock, 0)
-	if text := fullText.String(); text != "" {
-		blocks = append(blocks, ContentBlock{Type: "text", Text: text})
-	}
-	for _, index := range sortedIndexes(tools) {
-		st := tools[index]
-		var args map[string]any
-		json.Unmarshal([]byte(st.Args), &args)
-		blocks = append(blocks, ContentBlock{
-			Type:  "tool_use",
-			ID:    st.ID,
-			Name:  st.Name,
-			Input: args,
-		})
-	}
-	if len(blocks) == 0 {
-		return nil, fmt.Errorf("empty streamed model response")
-	}
-
-	stopReason := "end_turn"
-	if len(tools) > 0 {
-		stopReason = "tool_use"
-	}
-
-	return &LLMResponse{
-		StopReason: stopReason,
-		Usage:      usage,
-		Content:    blocks,
-	}, nil
-}
-
-type streamTool struct {
-	ID   string
-	Name string
-	Args string
-}
-
-func sortedIndexes[T any](items map[int]T) []int {
-	indexes := make([]int, 0, len(items))
-	for index := range items {
-		indexes = append(indexes, index)
-	}
-	sort.Ints(indexes)
-	return indexes
-}
-
 // --- Tool definition (matches Core's input_schema dict) ---
 
 type ToolDef struct {
@@ -507,7 +356,7 @@ func (c *Client) isAnthropic() bool {
 	return c.transport == "anthropic"
 }
 
-func (c *Client) createAnthropic(ctx context.Context, model string, messages []Message, maxTokens int, system string, tools []ToolDef, stream bool, onText func(string)) (*LLMResponse, error) {
+func (c *Client) createAnthropic(ctx context.Context, model string, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
 	// build Anthropic Messages API payload
 	var anthropicTools []map[string]any
 	for _, t := range tools {
@@ -569,10 +418,6 @@ func (c *Client) createAnthropic(ctx context.Context, model string, messages []M
 	if len(anthropicTools) > 0 {
 		payload["tools"] = anthropicTools
 	}
-	if stream {
-		payload["stream"] = true
-	}
-
 	startTime := time.Now()
 	body, _ := json.Marshal(payload)
 	url := c.baseURL + "/v1/messages"
@@ -588,11 +433,6 @@ func (c *Client) createAnthropic(ctx context.Context, model string, messages []M
 	}
 	defer resp.Body.Close()
 
-	if stream {
-		resp, err := parseAnthropicStream(resp.Body, onText)
-		c.logUsage(ctx, model, resp, startTime)
-		return resp, err
-	}
 	resp2, err := parseAnthropicResponse(resp.Body)
 	c.logUsage(ctx, model, resp2, startTime)
 	return resp2, err
@@ -650,119 +490,6 @@ func parseAnthropicResponse(r io.Reader) (*LLMResponse, error) {
 		},
 		Content:   blocks,
 		FinalText: finalText,
-	}, nil
-}
-
-func parseAnthropicStream(r io.Reader, onText func(string)) (*LLMResponse, error) {
-	var fullText strings.Builder
-	var usage UsageInfo
-	type streamTool struct {
-		ID    string
-		Name  string
-		Input string
-	}
-	tools := make(map[int]*streamTool)
-	currentBlockIndex := -1
-
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		data := strings.TrimPrefix(line, "data: ")
-
-		var event struct {
-			Type  string `json:"type"`
-			Index int    `json:"index"`
-			Delta struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"delta"`
-			ContentBlock struct {
-				Type  string `json:"type"`
-				Text  string `json:"text"`
-				ID    string `json:"id"`
-				Name  string `json:"name"`
-				Input any    `json:"input"`
-			} `json:"content_block"`
-			Usage *struct {
-				InputTokens  int `json:"input_tokens"`
-				OutputTokens int `json:"output_tokens"`
-			} `json:"usage"`
-			Message struct {
-				Usage struct {
-					InputTokens  int `json:"input_tokens"`
-					OutputTokens int `json:"output_tokens"`
-				} `json:"usage"`
-			} `json:"message"`
-		}
-		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			return nil, fmt.Errorf("parse anthropic stream event: %w", err)
-		}
-
-		switch event.Type {
-		case "content_block_start":
-			if event.ContentBlock.Type == "text" {
-				currentBlockIndex = event.Index
-			} else if event.ContentBlock.Type == "tool_use" {
-				currentBlockIndex = event.Index
-				tools[event.Index] = &streamTool{
-					ID:   event.ContentBlock.ID,
-					Name: event.ContentBlock.Name,
-				}
-			}
-		case "content_block_delta":
-			if event.Delta.Type == "text_delta" {
-				fullText.WriteString(event.Delta.Text)
-				if onText != nil {
-					onText(event.Delta.Text)
-				}
-			} else if event.Delta.Type == "input_json_delta" {
-				if st, ok := tools[currentBlockIndex]; ok {
-					st.Input += event.Delta.Text
-				}
-			}
-		case "content_block_stop":
-			currentBlockIndex = -1
-		case "message_delta":
-			if event.Usage != nil {
-				usage.InputTokens = event.Usage.InputTokens
-				usage.OutputTokens = event.Usage.OutputTokens
-			}
-		case "message_stop":
-			// stream complete
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-
-	// collapse text blocks into one
-	var textBlocks []ContentBlock
-	if finalText := fullText.String(); finalText != "" {
-		textBlocks = append(textBlocks, ContentBlock{Type: "text", Text: finalText})
-	}
-	for _, index := range sortedIndexes(tools) {
-		st := tools[index]
-		var input map[string]any
-		json.Unmarshal([]byte(st.Input), &input)
-		textBlocks = append(textBlocks, ContentBlock{Type: "tool_use", ID: st.ID, Name: st.Name, Input: input})
-	}
-	if len(textBlocks) == 0 {
-		return nil, fmt.Errorf("empty anthropic streamed response")
-	}
-
-	stopReason := "end_turn"
-	if len(tools) > 0 {
-		stopReason = "tool_use"
-	}
-
-	return &LLMResponse{
-		StopReason: stopReason,
-		Usage:      usage,
-		Content:    textBlocks,
-		FinalText:  fullText.String(),
 	}, nil
 }
 

@@ -18,6 +18,168 @@ import (
 	"time"
 )
 
+type callRecorder struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (r *callRecorder) record(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, name)
+}
+
+func (r *callRecorder) has(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, c := range r.calls {
+		if c == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *callRecorder) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.calls)
+}
+
+func (r *callRecorder) all() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.calls...)
+}
+
+func writeWorkspacePlaybook(t *testing.T, home, name string, stages []string) {
+	t.Helper()
+	root := filepath.Join(home, "playbooks", name)
+	if err := os.MkdirAll(filepath.Join(root, "stages"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "CONTEXT.md"), []byte("# Test playbook\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range stages {
+		dir := filepath.Join(root, "stages", stage)
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		input := ""
+		if stage != stages[0] {
+			input = "| Previous stage | `../" + stages[0] + "/output/result.md` | Full file | Handoff |\n"
+		}
+		content := "# " + stage + "\n\n## Inputs\n\n| Source | File/Location | Section/Scope | Why |\n| --- | --- | --- | --- |\n" + input + "\n## Process\n\n1. Produce the result.\n\n## Tools\n\n- write_file\n\n## Outputs\n\n| Artifact | Location | Format |\n| --- | --- | --- |\n| Result | `output/result.md` | Markdown |\n"
+		if err := os.WriteFile(filepath.Join(dir, "CONTEXT.md"), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func runnerRecording(rec *callRecorder) scheduledPlaybookRunner {
+	return func(ctx context.Context, core *Core, name, purpose, sessionID string, obs Observer) (*PlaybookResult, error) {
+		rec.record(name)
+		return &PlaybookResult{Status: "completed"}, nil
+	}
+}
+
+func waitForCall(t *testing.T, rec *callRecorder, name string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if rec.has(name) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("runner was not called for %q (calls: %v)", name, rec.all())
+}
+
+// waitForRows waits until the responsibility table has at least want rows, so
+// no spawned run is still writing when the temp dir is torn down.
+
+func waitForRows(t *testing.T, db *sql.DB, want int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		var n int
+		if err := db.QueryRow("SELECT COUNT(*) FROM responsibility_events").Scan(&n); err == nil && n >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("expected >= %d responsibility rows, saw fewer", want)
+}
+
+func newScheduleTestCore(t *testing.T) (*Core, string) {
+	t.Helper()
+	home := t.TempDir()
+	db := Connect(home)
+	t.Cleanup(func() { db.Close() })
+	return &Core{
+		Settings:         &Settings{Home: home},
+		DB:               db,
+		Responsibilities: NewResponsibilityStore(db),
+	}, home
+}
+
+func mustKL(t *testing.T) *time.Location {
+	t.Helper()
+	loc, err := time.LoadLocation("Asia/Kuala_Lumpur")
+	if err != nil {
+		t.Fatalf("load KL timezone: %v", err)
+	}
+	return loc
+}
+
+func scheduleHealthEntry(t *testing.T, home, name string) PlaybookSchedule {
+	t.Helper()
+	scheds, err := loadSchedules(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range scheds {
+		if s.Name == name {
+			return s
+		}
+	}
+	t.Fatalf("schedule %q not found", name)
+	return PlaybookSchedule{}
+}
+
+func outboxText(t *testing.T, home string) string {
+	t.Helper()
+	data, err := os.ReadFile(latestOutboxDraft(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+// latestOutboxDraft returns the path of the newest msg_* draft in the outbox,
+// or "" when none exists. UnixNano-suffixed names sort chronologically.
+
+func latestOutboxDraft(home string) string {
+	drafts, _ := filepath.Glob(filepath.Join(home, "outbox", "msg_*"))
+	if len(drafts) == 0 {
+		return ""
+	}
+	sort.Strings(drafts)
+	return drafts[len(drafts)-1]
+}
+
+func writeHealthSchedule(t *testing.T, home, name string, streak int, lastFail, alerted string) {
+	t.Helper()
+	scheds := []PlaybookSchedule{{
+		Name: name, Time: "09:30", Timezone: "Asia/Kuala_Lumpur",
+		FailStreak: streak, LastFailDay: lastFail, AlertedDay: alerted,
+	}}
+	if err := saveSchedules(home, scheds); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // The main loop tail-injects routing + clock into the user message for cache
 // stability (RespondForContext). run_playbook must forward only the clean user
 // message to the stage — the injected "your first action MUST be
@@ -61,164 +223,6 @@ func TestCleanPlaybookRequest(t *testing.T) {
 				t.Fatalf("cleanPlaybookRequest(%q) = %q, want %q", tt.request, got, tt.want)
 			}
 		})
-	}
-}
-
-func TestWorkspaceRunResumesFirstIncompleteStage(t *testing.T) {
-	home := t.TempDir()
-	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect", "02-report"})
-	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
-	registry := NewRegistry()
-	registry.Register(makeWriteTool(home, home))
-	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
-	pb, err := loadPlaybookWorkspace(home, "brief")
-	if err != nil {
-		t.Fatal(err)
-	}
-	run, err := loadOrCreatePlaybookRun(pb, registry, "make the briefing", "test", time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	stage1, _ := workspaceStage(pb, 1)
-	stage2, _ := workspaceStage(pb, 2)
-	path1 := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
-	path2 := playbookRunOutputPath(pb, run, stage2, stage2.Outputs[0])
-	oldLoop := runPlaybookStageLoop
-	defer func() { runPlaybookStageLoop = oldLoop }()
-	calls := 0
-	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
-		calls++
-		if calls == 1 {
-			if err := os.MkdirAll(filepath.Dir(path1), 0700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(path1, []byte("collected"), 0600); err != nil {
-				t.Fatal(err)
-			}
-		}
-		return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{{Name: "write_file", Args: map[string]any{"path": path1}}}}
-	}
-	result, err := RunPlaybook(context.Background(), core, "brief", "make the briefing", "test", nil)
-	if err != nil || result.Status != "failed" || result.StagesRun != 3 {
-		t.Fatalf("first run = %+v, err=%v", result, err)
-	}
-	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
-		if err := os.MkdirAll(filepath.Dir(path2), 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path2, []byte("reported"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{{Name: "write_file", Args: map[string]any{"path": path2}}}}
-	}
-	result, err = RunPlaybook(context.Background(), core, "brief", "ignored on resume", "test", nil)
-	if err != nil || result.Status != "complete" || result.StagesRun != 1 {
-		t.Fatalf("resume = %+v, err=%v", result, err)
-	}
-	data, err := os.ReadFile(filepath.Join(playbookRunsDir(pb), run.ID, "state.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var saved PlaybookRun
-	if err := json.Unmarshal(data, &saved); err != nil {
-		t.Fatal(err)
-	}
-	if saved.Stages[0].Attempts != 1 || saved.Stages[1].Attempts != 3 || saved.Status != "complete" {
-		t.Fatalf("state = %+v", saved)
-	}
-}
-
-func TestWorkspaceRejectsPreSeededOutput(t *testing.T) {
-	// VPS incident reproduction: the main loop did the real work, hand-wrote the
-	// playbook output files, then run_playbook rubber-stamped them. write-attributed
-	// verification must fail the stage when the output was not written by the
-	// stage's own tool calls.
-	home := t.TempDir()
-	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect"})
-	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
-	registry := NewRegistry()
-	registry.Register(makeWriteTool(home, home))
-	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
-	pb, err := loadPlaybookWorkspace(home, "brief")
-	if err != nil {
-		t.Fatal(err)
-	}
-	run, err := loadOrCreatePlaybookRun(pb, registry, "cheat attempt", "test", time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	stage1, _ := workspaceStage(pb, 1)
-	path1 := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
-	// Main loop "cheats": writes the output file before the playbook runs.
-	if err := os.MkdirAll(filepath.Dir(path1), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path1, []byte("preseeded result"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	oldLoop := runPlaybookStageLoop
-	defer func() { runPlaybookStageLoop = oldLoop }()
-	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
-		// Stage does nothing — no write_file call. The pre-seeded file exists.
-		return &LoopResult{Status: "complete", Reply: "done"}
-	}
-	result, err := RunPlaybook(context.Background(), core, "brief", "cheat attempt", "test", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != "failed" {
-		t.Fatalf("pre-seeded output passed verification: %+v", result)
-	}
-	if !strings.Contains(result.Reply, "not written by this stage") {
-		t.Fatalf("reply = %q, want attribution failure", result.Reply)
-	}
-	if result.StagesRun != 2 {
-		t.Fatalf("StagesRun = %d, want 2 (retry-safe stage attempted twice, both failed)", result.StagesRun)
-	}
-}
-
-func TestWorkspaceStageEventsCarryTraceTag(t *testing.T) {
-	// Trace events emitted inside a playbook stage must carry playbook/stage tags
-	// so the dashboard can group stage work instead of showing a flat stream.
-	home := t.TempDir()
-	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect"})
-	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
-	registry := NewRegistry()
-	registry.Register(makeWriteTool(home, home))
-	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
-	oldLoop := runPlaybookStageLoop
-	defer func() { runPlaybookStageLoop = oldLoop }()
-	pb, err := loadPlaybookWorkspace(home, "brief")
-	if err != nil {
-		t.Fatal(err)
-	}
-	stage1, _ := workspaceStage(pb, 1)
-	path := playbookRunOutputPath(pb, &PlaybookRun{ID: "tagtest", Playbook: "brief"}, stage1, stage1.Outputs[0])
-	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
-		// The seam does not carry ctx; emulate the tagged loop by writing a
-		// tagged tool event directly (RunLoopContext does this via trace()).
-		logTrace(home, "tool", map[string]any{"tool": "search_web", "status": "ok", "playbook": "brief", "stage": "01-collect"})
-		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte("collected"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{{Name: "write_file", Args: map[string]any{"path": path}}}}
-	}
-	result, err := RunPlaybook(context.Background(), core, "brief", "tag test", "test", nil)
-	if err != nil || result.Status != "failed" {
-		t.Fatalf("run = %+v, err=%v", result, err)
-	}
-	tail := traceTail(home)
-	found := false
-	for _, ev := range tail {
-		if ev["type"] == "tool" && ev["playbook"] == "brief" && ev["stage"] == "01-collect" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("no stage-tagged tool event in trace tail: %v", tail)
 	}
 }
 
@@ -287,58 +291,6 @@ func TestWorkspaceRejectsHumanCheckpointStage(t *testing.T) {
 	got := tool.Fn(map[string]any{"action": "create", "name": "needs-owner", "context": "# Needs owner\n", "stages": []any{map[string]any{"name": "01-review", "context": stage}}})
 	if !strings.Contains(got, "human checkpoint") {
 		t.Fatalf("create = %q, want human-checkpoint rejection", got)
-	}
-}
-
-func TestWorkspaceLabelsSelfCertifiedStage(t *testing.T) {
-	// A stage whose Audit section declares `self` marks the run self-certified:
-	// the model judged its own work and the audit trail must say so.
-	home := t.TempDir()
-	writeWorkspaceStageTool(t, home, "selfish", "search_web")
-	// add an Audit section declaring self
-	stageDir := filepath.Join(home, "playbooks", "selfish", "stages", "01-work", "CONTEXT.md")
-	data, err := os.ReadFile(stageDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(stageDir, append(data, []byte("\n## Audit\n\n- self\n")...), 0600); err != nil {
-		t.Fatal(err)
-	}
-	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
-	registry := NewRegistry()
-	registry.Register(makeWriteTool(home, home))
-	registry.Register(&Tool{Name: "search_web", Behavior: BehaviorObserve})
-	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
-	pb, err := loadPlaybookWorkspace(home, "selfish")
-	if err != nil {
-		t.Fatal(err)
-	}
-	run, err := loadOrCreatePlaybookRun(pb, registry, "run", "test", time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	stage1, _ := workspaceStage(pb, 1)
-	path := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
-	oldLoop := runPlaybookStageLoop
-	defer func() { runPlaybookStageLoop = oldLoop }()
-	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
-		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte("result"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{{Name: "write_file", Args: map[string]any{"path": path}}}}
-	}
-	result, err := RunPlaybook(context.Background(), core, "selfish", "run", "test", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != "complete" {
-		t.Fatalf("run = %+v", result)
-	}
-	if !result.SelfCertified {
-		t.Fatal("self-certified stage did not label the run")
 	}
 }
 
@@ -434,46 +386,6 @@ func TestCapturePlaybookRequiresEvidence(t *testing.T) {
 	})
 	if !strings.Contains(got, "no completed task turn") {
 		t.Fatalf("capture = %q, want turn requirement", got)
-	}
-}
-
-func TestWorkspaceDoesNotResumeDestructiveStage(t *testing.T) {
-	// A failed run whose next incomplete stage is destructive must be terminal:
-	// resuming it would re-execute the external side effect (the VPS
-	// duplicate-Threads-post incident — the stage posted, then failed
-	// verification, and each resume posted again).
-	home := t.TempDir()
-	writeWorkspaceStageTool(t, home, "destructive", "threads_post")
-	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
-	registry := NewRegistry()
-	registry.Register(makeWriteTool(home, home))
-	registry.Register(&Tool{Name: "threads_post", Behavior: BehaviorMutate})
-	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
-	pb, err := loadPlaybookWorkspace(home, "destructive")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Create a failed run: stage attempts once, writes nothing, fails verification.
-	oldLoop := runPlaybookStageLoop
-	defer func() { runPlaybookStageLoop = oldLoop }()
-	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
-		return &LoopResult{Status: "complete", Reply: "done"} // no output: fails audit
-	}
-	result, err := RunPlaybook(context.Background(), core, "destructive", "run", "test", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != "failed" {
-		t.Fatalf("first run should fail, got %+v", result)
-	}
-	// The failed run is NOT resumable: the next stage is destructive, so a new
-	// invocation must create a fresh run instead of replaying the side effect.
-	run, err := loadOrCreatePlaybookRun(pb, registry, "run again", "test", time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if run.Status != "running" || len(run.Stages) != 1 || run.Stages[0].Attempts != 0 {
-		t.Fatalf("expected fresh run, got %+v", run)
 	}
 }
 
@@ -628,45 +540,6 @@ func writeWorkspaceStageTool(t *testing.T, home, name string, tools ...string) {
 	}
 }
 
-func TestWorkspaceDoesNotRetryDestructiveStage(t *testing.T) {
-	// A stage whose whitelist contains a destructive tool (bash) must fail loud
-	// on the first attempt: retrying a partially-executed destructive stage is
-	// how double-deletions happen.
-	home := t.TempDir()
-	writeWorkspaceStageTool(t, home, "destructive", "bash")
-	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
-	registry := NewRegistry()
-	registry.Register(makeWriteTool(home, home))
-	registry.Register(&Tool{Name: "bash", Behavior: BehaviorMutate})
-	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
-	oldLoop := runPlaybookStageLoop
-	defer func() { runPlaybookStageLoop = oldLoop }()
-	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
-		return &LoopResult{Status: "complete", Reply: "done"} // no output written
-	}
-	result, err := RunPlaybook(context.Background(), core, "destructive", "run", "test", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != "failed" {
-		t.Fatalf("destructive stage should fail, got %+v", result)
-	}
-	if result.StagesRun != 1 {
-		t.Fatalf("StagesRun = %d, want 1 (destructive stage must not retry)", result.StagesRun)
-	}
-	pb, err := loadPlaybookWorkspace(home, "destructive")
-	if err != nil {
-		t.Fatal(err)
-	}
-	run2, err := latestPlaybookRun(pb)
-	if err != nil || run2 == nil {
-		t.Fatalf("latest run: %v %v", run2, err)
-	}
-	if run2.Stages[0].Attempts != 1 {
-		t.Fatalf("Attempts = %d, want 1 (no retry)", run2.Stages[0].Attempts)
-	}
-}
-
 func TestStageDeviationFlagsAndReports(t *testing.T) {
 	home := t.TempDir()
 	writeWorkspaceStageTool(t, home, "deviation", "search_web")
@@ -720,125 +593,6 @@ func TestStageDeviationFlagsCleanAttempt(t *testing.T) {
 		{Name: "write_file", Args: map[string]any{"path": path}},
 	}, nil); len(flags) != 0 {
 		t.Fatalf("clean attempt flags = %v", flags)
-	}
-}
-
-func TestWorkspaceReportsDeviationWithoutBlocking(t *testing.T) {
-	home := t.TempDir()
-	writeWorkspaceStageTool(t, home, "nonblocking", "search_web")
-	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
-	registry := NewRegistry()
-	registry.Register(makeWriteTool(home, home))
-	registry.Register(&Tool{Name: "search_web", Behavior: BehaviorObserve})
-	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
-	pb, err := loadPlaybookWorkspace(home, "nonblocking")
-	if err != nil {
-		t.Fatal(err)
-	}
-	run, err := loadOrCreatePlaybookRun(pb, registry, "run", "test", time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	stage, _ := workspaceStage(pb, 1)
-	path := playbookRunOutputPath(pb, run, stage, stage.Outputs[0])
-	oldLoop := runPlaybookStageLoop
-	defer func() { runPlaybookStageLoop = oldLoop }()
-	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
-		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte("result"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{
-			{Name: "write_file", Args: map[string]any{"path": path}},
-			{Name: "search_web"},
-			{Name: "write_file", Args: map[string]any{"path": filepath.Join(home, "outside.md")}},
-		}}
-	}
-	result, err := RunPlaybook(context.Background(), core, "nonblocking", "run", "test", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != "complete" {
-		t.Fatalf("deviation should not block the stage, got %+v", result)
-	}
-	files, _ := filepath.Glob(filepath.Join(home, "outbox", "msg_owner_*.txt"))
-	if len(files) != 1 {
-		t.Fatalf("outbox files = %v, want one deviation alert", files)
-	}
-}
-
-func TestWorkspaceRetriesReadOnlyStage(t *testing.T) {
-	// A read-only whitelist (search_web + write_file) is retry-safe: the first
-	// attempt fails verification, the retry succeeds.
-	home := t.TempDir()
-	writeWorkspaceStageTool(t, home, "readonly", "search_web")
-	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
-	registry := NewRegistry()
-	registry.Register(makeWriteTool(home, home))
-	registry.Register(&Tool{Name: "search_web", Behavior: BehaviorObserve})
-	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
-	pb, err := loadPlaybookWorkspace(home, "readonly")
-	if err != nil {
-		t.Fatal(err)
-	}
-	run, err := loadOrCreatePlaybookRun(pb, registry, "run", "test", time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	stage1, _ := workspaceStage(pb, 1)
-	path := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
-	oldLoop := runPlaybookStageLoop
-	defer func() { runPlaybookStageLoop = oldLoop }()
-	attempts := 0
-	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
-		attempts++
-		if attempts == 1 {
-			return &LoopResult{Status: "complete", Reply: "done"} // no output: fails audit
-		}
-		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte("result"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{{Name: "write_file", Args: map[string]any{"path": path}}}}
-	}
-	result, err := RunPlaybook(context.Background(), core, "readonly", "run", "test", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != "complete" {
-		t.Fatalf("read-only stage should complete after retry, got %+v", result)
-	}
-	if attempts != 2 || result.StagesRun != 2 {
-		t.Fatalf("attempts = %d, StagesRun = %d, want 2 (retried once)", attempts, result.StagesRun)
-	}
-}
-
-func writeWorkspacePlaybook(t *testing.T, home, name string, stages []string) {
-	t.Helper()
-	root := filepath.Join(home, "playbooks", name)
-	if err := os.MkdirAll(filepath.Join(root, "stages"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "CONTEXT.md"), []byte("# Test playbook\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	for _, stage := range stages {
-		dir := filepath.Join(root, "stages", stage)
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			t.Fatal(err)
-		}
-		input := ""
-		if stage != stages[0] {
-			input = "| Previous stage | `../" + stages[0] + "/output/result.md` | Full file | Handoff |\n"
-		}
-		content := "# " + stage + "\n\n## Inputs\n\n| Source | File/Location | Section/Scope | Why |\n| --- | --- | --- | --- |\n" + input + "\n## Process\n\n1. Produce the result.\n\n## Tools\n\n- write_file\n\n## Outputs\n\n| Artifact | Location | Format |\n| --- | --- | --- |\n| Result | `output/result.md` | Markdown |\n"
-		if err := os.WriteFile(filepath.Join(dir, "CONTEXT.md"), []byte(content), 0600); err != nil {
-			t.Fatal(err)
-		}
 	}
 }
 
@@ -975,71 +729,6 @@ func TestWorkspaceStageInputsResolve(t *testing.T) {
 // final model call flaked (status "error") — the outputs are the contract.
 // Observed 2026-08-08: the 09:30 run failed with "all vision providers
 // failed" while the post was already published and the log written.
-func TestWorkspaceCompletesWhenOutputsVerifiedDespiteRuntimeError(t *testing.T) {
-	home := t.TempDir()
-	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect"})
-	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
-	registry := NewRegistry()
-	registry.Register(makeWriteTool(home, home))
-	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
-	pb, err := loadPlaybookWorkspace(home, "brief")
-	if err != nil {
-		t.Fatal(err)
-	}
-	run, err := loadOrCreatePlaybookRun(pb, registry, "make the briefing", "test", time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	stage1, _ := workspaceStage(pb, 1)
-	path1 := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
-	oldLoop := runPlaybookStageLoop
-	defer func() { runPlaybookStageLoop = oldLoop }()
-	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
-		// The stage writes its output, then the final model call flakes.
-		if err := os.MkdirAll(filepath.Dir(path1), 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path1, []byte("collected"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		return &LoopResult{Status: "error", Reply: "(error: all vision providers failed: empty model response)", ToolCalls: []ToolCall{{Name: "write_file", Args: map[string]any{"path": path1}}}}
-	}
-	result, err := RunPlaybook(context.Background(), core, "brief", "make the briefing", "test", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != "complete" {
-		t.Fatalf("status = %q, want complete (outputs verified despite runtime error)", result.Status)
-	}
-	if !strings.Contains(result.Reply, "work verified complete") {
-		t.Fatalf("reply = %q, want the verified-complete note", result.Reply)
-	}
-}
-
-// Control: a runtime error WITHOUT verified outputs still fails the stage.
-func TestWorkspaceFailsWhenRuntimeErrorAndOutputsMissing(t *testing.T) {
-	home := t.TempDir()
-	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect"})
-	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
-	registry := NewRegistry()
-	registry.Register(makeWriteTool(home, home))
-	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
-	oldLoop := runPlaybookStageLoop
-	defer func() { runPlaybookStageLoop = oldLoop }()
-	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
-		return &LoopResult{Status: "error", Reply: "(error: empty model response)"}
-	}
-	result, err := RunPlaybook(context.Background(), core, "brief", "make the briefing", "test", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != "failed" {
-		t.Fatalf("status = %q, want failed (no outputs written)", result.Status)
-	}
-}
-
-// Issue #22: absolute output paths are quarantined outputs — enforced like
-// any declared output, but resolved as-is (outside the run workspace).
 func TestPlaybookRunOutputPathResolvesAbsoluteAsQuarantined(t *testing.T) {
 	home := t.TempDir()
 	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect"})
@@ -1076,111 +765,6 @@ func appendQuarantinedOutput(t *testing.T, home, stage, absPath string) {
 
 // A stage declaring a quarantined (absolute) output cannot complete until it
 // is written; once written, the stage completes with it.
-func TestWorkspaceQuarantinedOutputEnforced(t *testing.T) {
-	home := t.TempDir()
-	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect"})
-	qpath := filepath.Join(home, "data", "digest.md")
-	appendQuarantinedOutput(t, home, "01-collect", qpath)
-	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
-	registry := NewRegistry()
-	registry.Register(makeWriteTool(home, home))
-	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
-	pb, err := loadPlaybookWorkspace(home, "brief")
-	if err != nil {
-		t.Fatal(err)
-	}
-	stage1, _ := workspaceStage(pb, 1)
-	run, err := loadOrCreatePlaybookRun(pb, registry, "x", "test", time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	path1 := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
-	if got := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[1]); got != qpath {
-		t.Fatalf("quarantined path = %q, want %q", got, qpath)
-	}
-	oldLoop := runPlaybookStageLoop
-	defer func() { runPlaybookStageLoop = oldLoop }()
-	// First attempt: only the normal output written — the quarantined one is
-	// missing, so the stage must not complete; the injected loop gets a second
-	// call, writes both, and the run completes.
-	attempts := 0
-	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
-		attempts++
-		if attempts == 1 {
-			os.MkdirAll(filepath.Dir(path1), 0700)
-			os.WriteFile(path1, []byte("x"), 0600)
-			return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{{Name: "write_file", Args: map[string]any{"path": path1}}}}
-		}
-		os.MkdirAll(filepath.Dir(qpath), 0700)
-		os.WriteFile(qpath, []byte("digest"), 0600)
-		return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{{Name: "write_file", Args: map[string]any{"path": path1}}, {Name: "write_file", Args: map[string]any{"path": qpath}}}}
-	}
-	result, err := RunPlaybook(context.Background(), core, "brief", "x", "test", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != "complete" {
-		t.Fatalf("status = %q, want complete after quarantined output written (reply: %q)", result.Status, result.Reply)
-	}
-	if attempts < 2 {
-		t.Fatalf("stage loop ran %d times, want 2 (first attempt must be blocked by the missing quarantined output)", attempts)
-	}
-}
-
-// Quarantined outputs are never recorded as artifacts (no distill), while
-// normal outputs are.
-func TestQuarantinedOutputsSkippedFromArtifacts(t *testing.T) {
-	home := t.TempDir()
-	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect"})
-	qpath := filepath.Join(home, "data", "digest.md")
-	appendQuarantinedOutput(t, home, "01-collect", qpath)
-	db := Connect(t.TempDir())
-	defer db.Close()
-	mem := NewMemory(db, nil, &Settings{Home: home, TopK: 4, ConsolidateEvery: 0})
-	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
-	registry := NewRegistry()
-	registry.Register(makeWriteTool(home, home))
-	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil), Memory: mem}
-	pb, err := loadPlaybookWorkspace(home, "brief")
-	if err != nil {
-		t.Fatal(err)
-	}
-	stage1, _ := workspaceStage(pb, 1)
-	run, err := loadOrCreatePlaybookRun(pb, registry, "x", "test", time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	path1 := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
-	oldLoop := runPlaybookStageLoop
-	defer func() { runPlaybookStageLoop = oldLoop }()
-	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
-		os.MkdirAll(filepath.Dir(path1), 0700)
-		os.WriteFile(path1, []byte("x"), 0600)
-		os.MkdirAll(filepath.Dir(qpath), 0700)
-		os.WriteFile(qpath, []byte("digest"), 0600)
-		return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{{Name: "write_file", Args: map[string]any{"path": path1}}, {Name: "write_file", Args: map[string]any{"path": qpath}}}}
-	}
-	if _, err := RunPlaybook(context.Background(), core, "brief", "x", "test", nil); err != nil {
-		t.Fatal(err)
-	}
-	var artifacts []string
-	rows, err := db.Query("SELECT path FROM session_artifacts")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var p string
-		rows.Scan(&p)
-		artifacts = append(artifacts, p)
-	}
-	if len(artifacts) != 1 || artifacts[0] != path1 {
-		t.Fatalf("artifacts = %v, want only the normal output %q (quarantined must not distill)", artifacts, path1)
-	}
-}
-
-// Issue #316: a manual run must survive a client disconnect — the run keeps
-// the caller's VALUES (session id, trace tags) but not its cancellation.
 func TestDetachCancelKeepsValuesSeversCancellation(t *testing.T) {
 	parent, cancel := context.WithCancel(context.WithValue(context.Background(), sessionIDKey{}, "tg:1"))
 	defer cancel()
@@ -1213,217 +797,6 @@ func TestDetachCancelKeepsValuesSeversCancellation(t *testing.T) {
 // is now just "the call completes and reports its outcome to the outbox
 // instead of a dead connection," which this covers by cancelling ctx before
 // the call rather than mid-flight.
-func TestManualRunSurvivesClientDisconnect(t *testing.T) {
-	home := t.TempDir()
-	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect"})
-	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
-	registry := NewRegistry()
-	registry.Register(makeWriteTool(home, home))
-	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
-
-	// Simulate the caller (browser tab) having already disconnected: the ctx
-	// is cancelled before the tool call even starts.
-	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), sessionIDKey{}, "tg:1"))
-	cancel()
-	tool := makeRunPlaybookTool(core)
-	out := tool.ContextFn(ctx, map[string]any{"name": "brief"})
-	if !strings.Contains(out, "01-collect") {
-		t.Fatalf("navigate call should still complete despite the disconnected ctx, got %q", out)
-	}
-
-	// The outbox must hold a delivery for the disconnected client.
-	dir := filepath.Join(home, "outbox")
-	entries, err := os.ReadDir(dir)
-	if err != nil || len(entries) == 0 {
-		t.Fatalf("no outbox delivery after disconnect (entries=%v err=%v)", entries, err)
-	}
-	data, err := os.ReadFile(filepath.Join(dir, entries[0].Name()))
-	if err != nil || !strings.Contains(string(data), "brief") {
-		t.Fatalf("outbox entry missing playbook name: %q err=%v", data, err)
-	}
-
-	// Run state persisted, not lost, despite the disconnected caller.
-	pb, err := loadPlaybookWorkspace(home, "brief")
-	if err != nil {
-		t.Fatal(err)
-	}
-	run, err := latestPlaybookRun(pb)
-	if err != nil || run == nil || run.Status != "running" {
-		t.Fatalf("run status = %+v err=%v, want an in-progress run persisted to disk", run, err)
-	}
-}
-
-// TestRunPlaybookToolNoOutboxWhenClientConnected covers the #450/#451
-// navigation model: run_playbook no longer drives the stage loop itself
-// (that's runWorkspacePlaybook, still used by schedule_playbook) — it hands
-// back a stage to act on, verifies it on the next call, and still never
-// pages the owner while the client is connected.
-func TestRunPlaybookToolNoOutboxWhenClientConnected(t *testing.T) {
-	home := t.TempDir()
-	writeWorkspacePlaybook(t, home, "brief", []string{"01-collect"})
-	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
-	registry := NewRegistry()
-	registry.Register(makeWriteTool(home, home))
-	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
-	tool := makeRunPlaybookTool(core)
-
-	out := tool.ContextFn(context.Background(), map[string]any{"name": "brief"})
-	if !strings.Contains(out, "Navigating playbook brief") || !strings.Contains(out, "01-collect") {
-		t.Fatalf("first call should hand back stage 1 to navigate, got %q", out)
-	}
-
-	pb, err := loadPlaybookWorkspace(home, "brief")
-	if err != nil {
-		t.Fatal(err)
-	}
-	run, err := latestPlaybookRun(pb)
-	if err != nil || run == nil {
-		t.Fatalf("expected a run on disk: %v", err)
-	}
-	stage1, _ := workspaceStage(pb, 1)
-	path1 := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
-	if err := os.MkdirAll(filepath.Dir(path1), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path1, []byte("collected"), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	out = tool.ContextFn(context.Background(), map[string]any{"name": "brief"})
-	if !strings.Contains(out, "complete") {
-		t.Fatalf("second call should verify stage 1 and report completion, got %q", out)
-	}
-	if entries, err := os.ReadDir(filepath.Join(home, "outbox")); err == nil && len(entries) > 0 {
-		t.Fatalf("connected client must not get an outbox notice, found %d entries", len(entries))
-	}
-}
-
-func TestRunPlaybookRejectsSamePlaybookRecursion(t *testing.T) {
-	core := &Core{}
-	tool := makeRunPlaybookTool(core)
-	// Inside a stage of "brief".
-	stageCtx := context.WithValue(context.Background(), traceTagKey{}, map[string]string{
-		"playbook": "brief",
-		"stage":    "01-collect",
-		"run":      "run-123",
-	})
-	out := tool.ContextFn(stageCtx, map[string]any{"name": "brief"})
-	if !strings.Contains(out, "already inside playbook brief") {
-		t.Fatalf("same-playbook recursion not rejected: %q", out)
-	}
-	// The guard fires before any core use; allowed paths (cross-playbook and
-	// chat) proceed unchanged — verify the guard passes them through.
-	for _, tc := range []struct {
-		ctx  context.Context
-		name string
-	}{
-		{stageCtx, "other-playbook"},    // cross-playbook delegation allowed
-		{context.Background(), "brief"}, // chat context, no stage tags
-	} {
-		func() {
-			defer func() { recover() }() // nil test Core panics past the guard — fine
-			out = tool.ContextFn(tc.ctx, map[string]any{"name": tc.name})
-			if strings.Contains(out, "already inside") {
-				t.Fatalf("allowed path wrongly rejected: %q", out)
-			}
-		}()
-	}
-}
-
-// --- Schedule reliability (issue #74): serial dispatcher, 1-minute window,
-// no catch-up and no missed-run record made due-but-never-fired schedules
-// invisible. Tests cover the classify seam, parallel dispatch, boot catch-up
-// and missed-run notification. ---
-
-type callRecorder struct {
-	mu    sync.Mutex
-	calls []string
-}
-
-func (r *callRecorder) record(name string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.calls = append(r.calls, name)
-}
-
-func (r *callRecorder) has(name string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, c := range r.calls {
-		if c == name {
-			return true
-		}
-	}
-	return false
-}
-
-func (r *callRecorder) count() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return len(r.calls)
-}
-
-func (r *callRecorder) all() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]string(nil), r.calls...)
-}
-
-func runnerRecording(rec *callRecorder) scheduledPlaybookRunner {
-	return func(ctx context.Context, core *Core, name, purpose, sessionID string, obs Observer) (*PlaybookResult, error) {
-		rec.record(name)
-		return &PlaybookResult{Status: "completed"}, nil
-	}
-}
-
-func waitForCall(t *testing.T, rec *callRecorder, name string) {
-	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if rec.has(name) {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("runner was not called for %q (calls: %v)", name, rec.all())
-}
-
-// waitForRows waits until the responsibility table has at least want rows, so
-// no spawned run is still writing when the temp dir is torn down.
-func waitForRows(t *testing.T, db *sql.DB, want int) {
-	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		var n int
-		if err := db.QueryRow("SELECT COUNT(*) FROM responsibility_events").Scan(&n); err == nil && n >= want {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("expected >= %d responsibility rows, saw fewer", want)
-}
-
-func newScheduleTestCore(t *testing.T) (*Core, string) {
-	t.Helper()
-	home := t.TempDir()
-	db := Connect(home)
-	t.Cleanup(func() { db.Close() })
-	return &Core{
-		Settings:         &Settings{Home: home},
-		DB:               db,
-		Responsibilities: NewResponsibilityStore(db),
-	}, home
-}
-
-func mustKL(t *testing.T) *time.Location {
-	t.Helper()
-	loc, err := time.LoadLocation("Asia/Kuala_Lumpur")
-	if err != nil {
-		t.Fatalf("load KL timezone: %v", err)
-	}
-	return loc
-}
-
 func TestClassifySchedule(t *testing.T) {
 	loc := mustKL(t)
 	at := func(d, h, m int) time.Time { return time.Date(2026, 8, d, h, m, 0, 0, loc) }
@@ -1888,114 +1261,6 @@ func TestVerifyWorkspaceStageOutputsToolAgnostic(t *testing.T) {
 			t.Fatal("pre-seeded output (rubber-stamping) should still fail verification")
 		}
 	})
-}
-
-func TestWorkspaceStageOutcomeFailurePushesOnceThenFails(t *testing.T) {
-	// A declared ## Success outcome the stage never proves triggers the
-	// push-once retry (attempt 2), then the run fails with the outcome reason
-	// and a stage_outcome_failed trace event.
-	home := t.TempDir()
-	writeWorkspaceStageTool(t, home, "outcome", "search_web")
-	addStageSuccess(t, home, "outcome", "Search hit", "`search_web` returned a result ID")
-	settings := &Settings{Home: home, Workspace: home, MaxTokens: 100}
-	registry := NewRegistry()
-	registry.Register(makeWriteTool(home, home))
-	registry.Register(&Tool{Name: "search_web", Behavior: BehaviorObserve})
-	core := &Core{Settings: settings, Tools: registry, Sessions: NewSessionManager(settings, nil)}
-	pb, err := loadPlaybookWorkspace(home, "outcome")
-	if err != nil {
-		t.Fatal(err)
-	}
-	run, err := loadOrCreatePlaybookRun(pb, registry, "run", "test", time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	stage1, _ := workspaceStage(pb, 1)
-	path := playbookRunOutputPath(pb, run, stage1, stage1.Outputs[0])
-	oldLoop := runPlaybookStageLoop
-	defer func() { runPlaybookStageLoop = oldLoop }()
-	attempts := 0
-	runPlaybookStageLoop = func(_ context.Context, _ LLMClient, _ string, _ string, _ []Message, _ *Registry, _ int, _ int, _ Observer, _ string) *LoopResult {
-		attempts++
-		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte("result"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		// search_web never returns a 15+ digit ID: the outcome stays unproven
-		// across both attempts.
-		return &LoopResult{Status: "complete", Reply: "done", ToolCalls: []ToolCall{
-			{Name: "write_file", Args: map[string]any{"path": path}},
-			{Name: "search_web", Output: "no results"},
-		}}
-	}
-	result, err := RunPlaybook(context.Background(), core, "outcome", "run", "test", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Status != "failed" {
-		t.Fatalf("outcome failure should fail the run, got %+v", result)
-	}
-	if attempts != 2 || result.StagesRun != 2 {
-		t.Fatalf("attempts = %d, StagesRun = %d, want 2 (pushed once, then failed)", attempts, result.StagesRun)
-	}
-	if !strings.Contains(result.Reply, "no successful search_web call recorded") {
-		t.Fatalf("reply should carry the outcome reason, got: %s", result.Reply)
-	}
-	traceData, err := os.ReadFile(filepath.Join(home, "traces", time.Now().Format("2006-01-02")+".jsonl"))
-	if err != nil {
-		t.Fatalf("trace file: %v", err)
-	}
-	if !strings.Contains(string(traceData), "stage_outcome_failed") || !strings.Contains(string(traceData), "search_web") {
-		t.Fatalf("trace should record stage_outcome_failed with the tool, got:\n%s", traceData)
-	}
-}
-
-func scheduleHealthEntry(t *testing.T, home, name string) PlaybookSchedule {
-	t.Helper()
-	scheds, err := loadSchedules(home)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, s := range scheds {
-		if s.Name == name {
-			return s
-		}
-	}
-	t.Fatalf("schedule %q not found", name)
-	return PlaybookSchedule{}
-}
-
-func outboxText(t *testing.T, home string) string {
-	t.Helper()
-	data, err := os.ReadFile(latestOutboxDraft(home))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(data)
-}
-
-// latestOutboxDraft returns the path of the newest msg_* draft in the outbox,
-// or "" when none exists. UnixNano-suffixed names sort chronologically.
-func latestOutboxDraft(home string) string {
-	drafts, _ := filepath.Glob(filepath.Join(home, "outbox", "msg_*"))
-	if len(drafts) == 0 {
-		return ""
-	}
-	sort.Strings(drafts)
-	return drafts[len(drafts)-1]
-}
-
-func writeHealthSchedule(t *testing.T, home, name string, streak int, lastFail, alerted string) {
-	t.Helper()
-	scheds := []PlaybookSchedule{{
-		Name: name, Time: "09:30", Timezone: "Asia/Kuala_Lumpur",
-		FailStreak: streak, LastFailDay: lastFail, AlertedDay: alerted,
-	}}
-	if err := saveSchedules(home, scheds); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func TestAlertScheduleHealth(t *testing.T) {

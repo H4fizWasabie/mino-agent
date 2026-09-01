@@ -39,7 +39,7 @@ func TestConcurrentObserveOnlyBatchRunsInParallel(t *testing.T) {
 	}}
 
 	start := time.Now()
-	result := RunLoopContext(context.Background(), client, "concurrent-batch", "", []Message{{Role: "user", Content: "go"}}, tools, 5, 100, nil, false, t.TempDir())
+	result := RunLoopContext(context.Background(), client, "concurrent-batch", "", []Message{{Role: "user", Content: "go"}}, tools, 5, 100, nil, t.TempDir())
 	elapsed := time.Since(start)
 
 	if result.Status != "complete" {
@@ -82,7 +82,7 @@ func TestMixedBatchWithMutateStaysSequential(t *testing.T) {
 	}}
 
 	start := time.Now()
-	result := RunLoopContext(context.Background(), client, "mixed-batch", "", []Message{{Role: "user", Content: "go"}}, tools, 5, 100, nil, false, t.TempDir())
+	result := RunLoopContext(context.Background(), client, "mixed-batch", "", []Message{{Role: "user", Content: "go"}}, tools, 5, 100, nil, t.TempDir())
 	elapsed := time.Since(start)
 
 	if result.Status != "complete" || len(result.ToolCalls) != 2 {
@@ -115,7 +115,7 @@ func TestConcurrentBatchPanicIsolated(t *testing.T) {
 		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
 	}}
 
-	result := RunLoopContext(context.Background(), client, "panic-batch", "", []Message{{Role: "user", Content: "go"}}, tools, 5, 100, nil, false, t.TempDir())
+	result := RunLoopContext(context.Background(), client, "panic-batch", "", []Message{{Role: "user", Content: "go"}}, tools, 5, 100, nil, t.TempDir())
 	if result.Status != "complete" {
 		t.Fatalf("a panicking call in the batch must not crash the loop: %#v", result)
 	}

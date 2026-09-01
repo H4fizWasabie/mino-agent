@@ -66,7 +66,7 @@ func TestScheduledFireUsesICMScopedSystemPrompt(t *testing.T) {
 	var bodies []string
 	core := capturingProviderCore(t, home, &bodies)
 
-	core.RespondForContext(context.Background(), "scheduled-brief", "go", "schedule", nil, false)
+	core.RespondForContext(context.Background(), "scheduled-brief", "go", "schedule", nil)
 	system := lastRequestSystem(t, bodies)
 
 	if !strings.Contains(system, "Operating Rules (absolute") {
@@ -85,7 +85,7 @@ func TestOrdinaryChatUsesGeneralSystemPrompt(t *testing.T) {
 	var bodies []string
 	core := capturingProviderCore(t, home, &bodies)
 
-	core.RespondForContext(context.Background(), "tg:1", "hello", "telegram", nil, false)
+	core.RespondForContext(context.Background(), "tg:1", "hello", "telegram", nil)
 	system := lastRequestSystem(t, bodies)
 
 	if !strings.Contains(system, "Tool preference: prefer the purpose-built tool") {
@@ -107,7 +107,7 @@ func TestChatContinuationOfNavigationUsesICMScopedSystemPrompt(t *testing.T) {
 	setSessionNav("tg:2", "brief", "run-1")
 	defer clearSessionNav("tg:2")
 
-	core.RespondForContext(context.Background(), "tg:2", "continue", "telegram", nil, false)
+	core.RespondForContext(context.Background(), "tg:2", "continue", "telegram", nil)
 	system := lastRequestSystem(t, bodies)
 
 	if !strings.Contains(system, "Operating Rules (absolute") {

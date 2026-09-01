@@ -21,8 +21,6 @@ import (
 	"time"
 )
 
-const maxStageIterations = 50
-
 // maxStageAttempts bounds stage-level retries within a single run. Retry-safe
 // stages (read-only whitelist) get at most this many attempts; the failure of
 // each attempt is fed back into the stage context.
@@ -41,41 +39,11 @@ type PlaybookResult struct {
 	SelfCertified bool
 }
 
-func RunPlaybook(ctx context.Context, core *Core, name, request, sessionID string, obs Observer) (*PlaybookResult, error) {
-	// #309: hold a flock on run-locks/<name>.lock for the run's duration so
-	// the external updater (mino-self-update) defers its restart while a run
-	// is in flight — scheduled runs already protected it; manual run_playbook
-	// calls did not (killed the manual-306-pilot run, 2026-08-20).
-	unlock, err := takeRunLock(core.Settings.Home, name)
-	if err != nil {
-		return nil, err
-	}
-	defer unlock()
-	result, err := runWorkspacePlaybook(ctx, core, name, request, sessionID, obs)
-	if err != nil {
-		return nil, err
-	}
-	for _, output := range result.Outputs {
-		// Quarantined outputs (absolute declared paths, issue #22) are enforced
-		// but never distilled: they carry external text that must not reach
-		// long-term memory. Rule: anything OUTSIDE the playbooks tree is
-		// quarantined — resolved run paths always live under playbooks/.
-		if !strings.HasPrefix(filepath.Clean(output), filepath.Clean(filepath.Join(core.Settings.Home, "playbooks"))+string(os.PathSeparator)) {
-			continue
-		}
-		if info, statErr := os.Stat(output); statErr == nil && core.Memory != nil {
-			core.Memory.RecordArtifact(sessionID, name+" output", output, int(info.Size()))
-		}
-	}
-	logTrace(core.Settings.Home, "playbook_run", map[string]any{"name": name, "status": result.Status, "stages": result.StagesRun, "self_certified": result.SelfCertified})
-	return result, nil
-}
-
 // NavigatePlaybookRun is the chat-facing entry point for the unified-loop
 // navigation model (#450/#451): each call advances a run by one mechanical
 // step (playbook_workspace.go's navigatePlaybookRun) instead of running the
 // whole playbook through a dedicated stage loop. The run-lock here only
-// covers this one bookkeeping call — unlike RunPlaybook's flock, it does NOT
+// covers this one bookkeeping call and does NOT
 // defer the self-updater for the side-effecting work Mino does between calls
 // while navigating a stage. That gap versus #309 is a known limitation,
 // carried in this change's ship note pending a later map ticket.
@@ -101,12 +69,11 @@ func NavigatePlaybookRun(ctx context.Context, core *Core, name, request, session
 	return result, nil
 }
 
-// respondForScheduledPlaybook is an internal seam (same pattern as
-// runPlaybookStageLoop): production drives a scheduled fire through the
-// canonical normal-loop turn; focused tests substitute a deterministic
-// LoopResult instead of running a real model.
+// respondForScheduledPlaybook is an internal seam: production drives a scheduled
+// fire through the canonical normal-loop turn; focused tests substitute a
+// deterministic LoopResult instead of running a real model.
 var respondForScheduledPlaybook = func(core *Core, ctx context.Context, sessionID, instruction string, obs Observer) *LoopResult {
-	return core.RespondForContext(ctx, sessionID, instruction, "schedule", obs, false)
+	return core.RespondForContext(ctx, sessionID, instruction, "schedule", obs)
 }
 
 // scheduledPlaybookInstruction is the synthetic message a scheduled fire
@@ -124,9 +91,8 @@ func scheduledPlaybookInstruction(name string) string {
 
 // NavigateScheduledPlaybook is the scheduler's unified-loop entry point
 // (#452): it fires a synthetic instruction through Mino's normal loop
-// (respondForScheduledPlaybook) instead of calling RunPlaybook's dedicated
-// stage loop directly, so the model drives run_playbook's stage-by-stage
-// navigation the same way a chat-triggered run does. The outcome for
+// (respondForScheduledPlaybook), so the model drives run_playbook's
+// stage-by-stage navigation the same way a chat-triggered run does. The outcome for
 // schedule-health tracking (alertScheduleHealth, finishRoutine) comes from
 // the run's own state.json, not the turn's LoopResult — only the run record
 // knows whether the playbook actually finished, and finishing is what those
@@ -415,14 +381,13 @@ func makeRunPlaybookTool(core *Core) *Tool {
 			request = cleanPlaybookRequest(request)
 			// #450/#451: chat-triggered runs navigate one mechanical step per
 			// call instead of running the whole playbook through a dedicated
-			// stage loop — schedule_playbook is the only remaining caller of
-			// RunPlaybook's full-loop path, until #452.
+			// stage loop.
 			output, err := runPlaybookWithResponsibility(ctx, core, name, request, sid, NavigatePlaybookRun, time.Now().UTC())
 			if err != nil {
 				return fmt.Sprintf("Error: %v", err)
 			}
-			// #316: the run detached from the caller's context inside
-			// runWorkspacePlaybook, so it survives a client disconnect — but the
+			// #316: the run detached from the caller's context, so it survives a
+			// client disconnect — but the
 			// loop's reply dies with the connection. Deliver the outcome where it
 			// cannot be lost (outbox → Telegram), only when the caller is gone.
 			if ctx.Err() != nil {
@@ -1769,4 +1734,3 @@ func notifyMissedSchedule(core *Core, s PlaybookSchedule, now time.Time) {
 }
 
 // ensure playbook types are compatible with existing interfaces
-var _ = time.Now // use time somewhere for future timestamp features

@@ -272,8 +272,8 @@ func telegramDashboardEnabled() bool {
 	return dashboardRequested()
 }
 
-func (w *Core) Respond(userMessage, source string, obs Observer, stream bool) *LoopResult {
-	return w.RespondFor("default", userMessage, source, obs, stream)
+func (w *Core) Respond(userMessage, source string, obs Observer) *LoopResult {
+	return w.RespondFor("default", userMessage, source, obs)
 }
 
 // RespondFor runs one turn. Optional images (data URLs) attach to the current
@@ -335,11 +335,11 @@ func (w *Core) restoreTelegramChatID() {
 	w.notifyMu.Unlock()
 }
 
-func (w *Core) RespondFor(sessionID, userMessage, source string, obs Observer, stream bool, images ...string) *LoopResult {
-	return w.RespondForContext(context.Background(), sessionID, userMessage, source, obs, stream, images...)
+func (w *Core) RespondFor(sessionID, userMessage, source string, obs Observer, images ...string) *LoopResult {
+	return w.RespondForContext(context.Background(), sessionID, userMessage, source, obs, images...)
 }
 
-func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage, source string, obs Observer, stream bool, images ...string) *LoopResult {
+func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage, source string, obs Observer, images ...string) *LoopResult {
 	conversation := w.Sessions.Get(sessionID)
 	conversation.mu.Lock()
 	defer conversation.mu.Unlock()
@@ -424,7 +424,7 @@ func (w *Core) RespondForContext(parent context.Context, sessionID, userMessage,
 	result := RunLoopContext(
 		ctx,
 		w.Client, conversation.Session.sessionID, system, messages, w.Tools,
-		w.Settings.MaxIter, w.Settings.MaxTokens, obs, stream,
+		w.Settings.MaxIter, w.Settings.MaxTokens, obs,
 		w.Settings.Home,
 	)
 

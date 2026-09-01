@@ -767,26 +767,6 @@ func (t *Tool) compiledSchema() (*jsonschema.Schema, error) {
 	return t.schemaCompiled, t.schemaErr
 }
 
-func (r *Registry) Only(names ...string) *Registry {
-	out := NewRegistry()
-	// OBS-002: stage registries must inherit the audit plumbing — a fresh
-	// registry with nil logDB/auditFile made every tool call inside a
-	// playbook stage invisible to audit.jsonl and the tool_calls table
-	// (live evidence 2026-08-15: 61 images generated, 0 audit entries).
-	out.logDB = r.logDB
-	out.auditFile = r.auditFile
-	out.auditMu = r.auditMu // shared mutex: both registries may write concurrently
-	for _, name := range names {
-		r.toolsMu.RLock()
-		t, ok := r.tools[name]
-		r.toolsMu.RUnlock()
-		if ok {
-			out.Register(t)
-		}
-	}
-	return out
-}
-
 // --- BuildRegistry (matches Core's build_registry) ---
 
 func BuildRegistry(db *sql.DB, home, workspace string, mem *Memory, location ...*time.Location) *Registry {

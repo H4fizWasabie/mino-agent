@@ -40,7 +40,7 @@ func codexAccountID(token string) (string, error) {
 	return accountID, nil
 }
 
-func (c *Client) createCodex(ctx context.Context, model, reasoning string, messages []Message, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
+func (c *Client) createCodex(ctx context.Context, model, reasoning string, messages []Message, system string, tools []ToolDef) (*LLMResponse, error) {
 	accountID, err := codexAccountID(c.apiKey)
 	if err != nil {
 		return nil, err
@@ -96,10 +96,10 @@ func (c *Client) createCodex(ctx context.Context, model, reasoning string, messa
 		data, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("codex response failed (%d): %.500s", resp.StatusCode, data)
 	}
-	return parseCodexSSE(resp.Body, onText)
+	return parseCodexSSE(resp.Body)
 }
 
-func parseCodexSSE(r io.Reader, onText func(string)) (*LLMResponse, error) {
+func parseCodexSSE(r io.Reader) (*LLMResponse, error) {
 	var text strings.Builder
 	var blocks []ContentBlock
 	var usage UsageInfo
@@ -143,9 +143,6 @@ func parseCodexSSE(r io.Reader, onText func(string)) (*LLMResponse, error) {
 		switch event.Type {
 		case "response.output_text.delta":
 			text.WriteString(event.Delta)
-			if onText != nil {
-				onText(event.Delta)
-			}
 		case "response.output_item.done":
 			if event.Item.Type == "function_call" {
 				var input map[string]any

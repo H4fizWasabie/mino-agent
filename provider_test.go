@@ -68,7 +68,7 @@ func TestCreateContextSendsRepetitionPenaltyDefault(t *testing.T) {
 	defer srv.Close()
 
 	c := &Client{apiKey: "k", baseURL: srv.URL, client: http.DefaultClient}
-	if _, err := c.Create("model", []Message{{Role: "user", Content: "hi"}}, 100, "", nil); err != nil {
+	if _, err := c.create(context.Background(), "model", "", []Message{{Role: "user", Content: "hi"}}, 100, "", nil, false); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if got["repetition_penalty"] != 1.1 {
@@ -87,7 +87,7 @@ func TestCreateContextSendsRepetitionPenaltyFromEnv(t *testing.T) {
 	defer srv.Close()
 
 	c := &Client{apiKey: "k", baseURL: srv.URL, client: http.DefaultClient}
-	if _, err := c.Create("model", []Message{{Role: "user", Content: "hi"}}, 100, "", nil); err != nil {
+	if _, err := c.create(context.Background(), "model", "", []Message{{Role: "user", Content: "hi"}}, 100, "", nil, false); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if got["repetition_penalty"] != 1.3 {
@@ -110,7 +110,7 @@ func TestCreateContextSendsPreferredLatencyThroughputDefaults(t *testing.T) {
 	defer srv.Close()
 
 	c := &Client{apiKey: "k", baseURL: srv.URL, client: http.DefaultClient, providerRouting: []string{"Novita", "DeepInfra"}}
-	if _, err := c.Create("model", []Message{{Role: "user", Content: "hi"}}, 100, "", nil); err != nil {
+	if _, err := c.create(context.Background(), "model", "", []Message{{Role: "user", Content: "hi"}}, 100, "", nil, false); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	provider, _ := got["provider"].(map[string]any)
@@ -137,7 +137,7 @@ func TestCreateContextSendsPreferredLatencyThroughputFromEnv(t *testing.T) {
 	defer srv.Close()
 
 	c := &Client{apiKey: "k", baseURL: srv.URL, client: http.DefaultClient, providerRouting: []string{"Novita"}}
-	if _, err := c.Create("model", []Message{{Role: "user", Content: "hi"}}, 100, "", nil); err != nil {
+	if _, err := c.create(context.Background(), "model", "", []Message{{Role: "user", Content: "hi"}}, 100, "", nil, false); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	provider, _ := got["provider"].(map[string]any)
@@ -159,11 +159,27 @@ func TestCreateContextOmitsProviderObjectWithNoRouting(t *testing.T) {
 	defer srv.Close()
 
 	c := &Client{apiKey: "k", baseURL: srv.URL, client: http.DefaultClient}
-	if _, err := c.Create("model", []Message{{Role: "user", Content: "hi"}}, 100, "", nil); err != nil {
+	if _, err := c.create(context.Background(), "model", "", []Message{{Role: "user", Content: "hi"}}, 100, "", nil, false); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if _, ok := got["provider"]; ok {
 		t.Fatalf("provider object sent with no routing list: %v", got["provider"])
+	}
+}
+
+func TestAnthropicCreateUsesJSONResponse(t *testing.T) {
+	var path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{apiKey: "k", baseURL: srv.URL, client: srv.Client(), transport: "anthropic"}
+	resp, err := c.create(context.Background(), "model", "", []Message{{Role: "user", Content: "hi"}}, 100, "", nil, false)
+	if err != nil || resp.FinalText != "ok" || path != "/v1/messages" {
+		t.Fatalf("anthropic call = err=%v resp=%+v path=%q", err, resp, path)
 	}
 }
 
@@ -331,7 +347,7 @@ func TestProviderRequestsIdentityEncoding(t *testing.T) {
 	}))
 	defer srv.Close()
 	client := NewClient("test-key", srv.URL)
-	resp, err := client.create(context.Background(), "test-model", "", []Message{{Role: "user", Content: "hi"}}, 100, "", nil, false, false, nil)
+	resp, err := client.create(context.Background(), "test-model", "", []Message{{Role: "user", Content: "hi"}}, 100, "", nil, false)
 	if err != nil || resp.FinalText != "ok" {
 		t.Fatalf("call failed: err=%v resp=%+v", err, resp)
 	}

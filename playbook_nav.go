@@ -98,9 +98,8 @@ func clearNavReads(runID string) {
 }
 
 // navCalls tracks, per run, every tool call made during the current stage
-// attempt (#486/#485). Under the old dedicated stage loop, one
-// runPlaybookStageLoop call was scoped to exactly one stage attempt and
-// naturally produced a bounded ToolCall list; navigatePlaybookRun has no such
+// attempt (#486/#485). navigatePlaybookRun has no separate stage-loop call,
+// so it needs this bounded window to collect calls for verification; without it
 // bounded call, so #450/#451 always verified stage outcomes against calls=nil
 // — a stage declaring ## Success could never pass. This tracker restores that
 // per-attempt window: noteNavCall records every call while a session is
