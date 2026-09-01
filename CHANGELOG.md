@@ -1,5 +1,16 @@
 ## [Unreleased]
 
+### Changed
+
+- **Cross-platform CI and host-operation hardening (#233)**: fixed the workflow indentation so CI runs, use Homebrew without sudo on macOS, restore loaded launchd services on journal failure, configure existing Windows services instead of only creating them, use PowerShell-safe extension arguments, validate PowerShell playbook syntax, and restart Mino natively after Windows cost-watch updates.
+
+- **Native host-operation adapters (#233)**: shell execution, package probes/install/remove,
+  service discovery/restart, system checks, browser opening, and update restart now select
+  native Linux, macOS, or Windows commands. `write_unit` now accepts a neutral service definition
+  and renders native service configuration; coding tools and playbook stages now select native
+  Windows commands or report missing prerequisites. Raw systemd content remains Linux-only
+  compatibility.
+
 ## [v3.11.0] — Real-time provider deprioritization + price-order fix (2026-08-31)
 
 ### Added

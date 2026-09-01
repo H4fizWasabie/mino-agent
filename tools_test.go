@@ -276,6 +276,42 @@ func TestBashHardFailureNoOutput(t *testing.T) {
 	}
 }
 
+func TestNativeShellCommand(t *testing.T) {
+	tests := []struct {
+		name string
+		goos string
+		want string
+		args []string
+	}{
+		{name: "unix", goos: "darwin", want: "bash", args: []string{"-c", "echo ok"}},
+		{name: "linux", goos: "linux", want: "bash", args: []string{"-c", "echo ok"}},
+		{name: "windows", goos: "windows", want: "powershell.exe", args: []string{"-NoProfile", "-NonInteractive", "-Command", "echo ok"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, args := nativeShellCommand(tt.goos, "echo ok")
+			if got != tt.want || !reflect.DeepEqual(args, tt.args) {
+				t.Fatalf("nativeShellCommand(%q) = %q %q, want %q %q", tt.goos, got, args, tt.want, tt.args)
+			}
+		})
+	}
+}
+
+func TestNativeCodingCommands(t *testing.T) {
+	binary, args := nativeListFilesCommand("windows", ".", 2)
+	if binary != "powershell.exe" || !strings.Contains(strings.Join(args, " "), "Get-ChildItem") {
+		t.Fatalf("windows list command = %q %v", binary, args)
+	}
+	binary, args = nativeGlobCommand("windows", ".", "*.go")
+	if binary != "powershell.exe" || !strings.Contains(strings.Join(args, " "), "-Filter '*.go'") {
+		t.Fatalf("windows glob command = %q %v", binary, args)
+	}
+	binary, args = nativeListFallback("windows", ".")
+	if binary != "cmd" || !reflect.DeepEqual(args, []string{"/c", "dir", "/a", "."}) {
+		t.Fatalf("windows list fallback = %q %v", binary, args)
+	}
+}
+
 // Issue #235: a pipeline's exit status comes from its LAST element (shells
 // have no pipefail), so `pip install --quiet X | tail -2` reported success
 // while pip failed. The harness must surface the masked statuses —

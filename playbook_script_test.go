@@ -11,6 +11,15 @@ import (
 	"testing"
 )
 
+func TestScriptFileNameFor(t *testing.T) {
+	if got := scriptFileNameFor("windows"); got != "script.ps1" {
+		t.Fatalf("Windows script name = %q", got)
+	}
+	if got := scriptFileNameFor("darwin"); got != "script.sh" {
+		t.Fatalf("macOS script name = %q", got)
+	}
+}
+
 func TestAINewsFetchAcceptsMarkdownSourceLabel(t *testing.T) {
 	home := t.TempDir()
 	stage := filepath.Join(home, "stages", "02-fetch")

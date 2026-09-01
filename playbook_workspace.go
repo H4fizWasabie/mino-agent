@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -229,7 +230,14 @@ func loadWorkspaceStage(dir, folder string) (*WorkspaceStage, error) {
 	if err != nil {
 		// issue #304: a script-backed stage (script.sh in the stage dir) has
 		// no CONTEXT.md — the script IS the stage contract.
-		if _, serr := os.Stat(filepath.Join(dir, scriptFileName)); serr != nil {
+		foundScript := false
+		for _, scriptName := range scriptCandidatesFor(runtime.GOOS) {
+			if _, serr := os.Stat(filepath.Join(dir, scriptName)); serr == nil {
+				foundScript = true
+				break
+			}
+		}
+		if !foundScript {
 			return nil, fmt.Errorf("stage %s requires CONTEXT.md", folder)
 		}
 	}
@@ -243,8 +251,11 @@ func loadWorkspaceStage(dir, folder string) (*WorkspaceStage, error) {
 	}
 	context := string(data)
 	stage := &WorkspaceStage{Number: number, Name: parts[1], Dir: dir, Context: context}
-	if info, serr := os.Stat(filepath.Join(dir, scriptFileName)); serr == nil && !info.IsDir() {
-		stage.Script = scriptFileName
+	for _, scriptName := range scriptCandidatesFor(runtime.GOOS) {
+		if info, serr := os.Stat(filepath.Join(dir, scriptName)); serr == nil && !info.IsDir() {
+			stage.Script = scriptName
+			break
+		}
 	}
 	stage.Inputs = parseStageInputs(extractSection(context, "## Inputs"))
 	stage.Tools = parseStageTools(extractSection(context, "## Tools"))

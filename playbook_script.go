@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -28,6 +29,20 @@ import (
 
 // scriptFileName is the committed artifact name inside a stage dir.
 const scriptFileName = "script.sh"
+
+func scriptFileNameFor(goos string) string {
+	if goos == "windows" {
+		return "script.ps1"
+	}
+	return scriptFileName
+}
+
+func scriptCandidatesFor(goos string) []string {
+	if goos == "windows" {
+		return []string{"script.ps1", "script.sh"}
+	}
+	return []string{"script.sh"}
+}
 
 // scriptRunTimeout bounds one script run (scheduled pipeline work; the
 // failed LLM run observed in design burned 12 minutes, so 30 is sane
@@ -80,7 +95,18 @@ func validateScriptFile(core *Core, path, label string) error {
 	if err != nil {
 		return fmt.Errorf("%s: no %s present", label, filepath.Base(path))
 	}
-	if out, err := exec.Command("bash", "-n", path).CombinedOutput(); err != nil {
+	if runtime.GOOS == "windows" {
+		if filepath.Ext(path) == ".sh" && exec.Command("bash", "-n", path).Run() == nil {
+			// Git Bash is a supported best-effort compatibility shell.
+		} else if filepath.Ext(path) != ".ps1" {
+			return fmt.Errorf("%s: %s is a Bash script; provide a native .ps1 script on Windows", label, filepath.Base(path))
+		} else {
+			parse := "$null=[System.Management.Automation.Language.Parser]::ParseFile(" + psQuote(path) + ",[ref]$tokens,[ref]$errors); if ($errors.Count -gt 0) { $errors | ForEach-Object { $_.Message }; exit 1 }"
+			if out, err := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", parse).CombinedOutput(); err != nil {
+				return fmt.Errorf("%s: PowerShell parse failed: %v\n%s", label, err, strings.TrimSpace(string(out)))
+			}
+		}
+	} else if out, err := exec.Command("bash", "-n", path).CombinedOutput(); err != nil {
 		return fmt.Errorf("%s: bash -n failed: %v\n%s", label, err, strings.TrimSpace(string(out)))
 	}
 	known := map[string]bool{}
@@ -122,7 +148,7 @@ func runScriptStage(ctx context.Context, core *Core, pb *PlaybookWorkspace, run 
 	}
 	ctx, cancel := context.WithTimeout(ctx, scriptRunTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, script)
+	cmd := nativeScriptCommand(ctx, script)
 	// cwd = the run-scoped stage dir: the script's relative paths (output/,
 	// ../NN-name/output/) resolve inside the run record — consistent with the
 	// LLM path's outputs, and exactly the zone playbookWriteGuard allows for
@@ -144,6 +170,13 @@ func runScriptStage(ctx context.Context, core *Core, pb *PlaybookWorkspace, run 
 		return output, ee.ExitCode(), nil
 	}
 	return output, 1, err
+}
+
+func nativeScriptCommand(ctx context.Context, path string) *exec.Cmd {
+	if runtime.GOOS == "windows" && filepath.Ext(path) == ".ps1" {
+		return exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path)
+	}
+	return exec.CommandContext(ctx, "bash", path)
 }
 
 // missingStageOutputFiles lists the stage's declared outputs absent on disk

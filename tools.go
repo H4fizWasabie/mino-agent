@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -2195,7 +2196,7 @@ var installPattern = regexp.MustCompile(`(?i)\b(pip|pip3|npm|npx|go|cargo|apt-ge
 func runBashContext(parent context.Context, timeout time.Duration, cmd string) (string, []int, error) {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
-	if strings.Contains(cmd, "|") && !strings.Contains(cmd, "\n") {
+	if runtime.GOOS != "windows" && strings.Contains(cmd, "|") && !strings.Contains(cmd, "\n") {
 		// One-shot capture: the command substitution forks a subshell before
 		// any new command runs, so it still sees the pipeline's statuses (a
 		// plain assignment would reset PIPESTATUS first). The shell then
@@ -2204,12 +2205,23 @@ func runBashContext(parent context.Context, timeout time.Duration, cmd string) (
 		// capture — no marker, no change.
 		cmd += `; __mino_cap="$(printf '%s %s' "$?" "${PIPESTATUS[*]}")"; printf '\n__MINO_PIPESTATUS__:%s\n' "$__mino_cap"; exit ${__mino_cap%% *}`
 	}
-	c := exec.CommandContext(ctx, "bash", "-c", cmd)
+	shell, args := nativeShellCommand(runtime.GOOS, cmd)
+	c := exec.CommandContext(ctx, shell, args...)
 	out, err := c.CombinedOutput()
 	if clean, statuses, ok := parsePipeStatuses(string(out)); ok {
 		return clean, statuses, err
 	}
 	return string(out), nil, err
+}
+
+// nativeShellCommand keeps the existing command surface while using the
+// shell that ships with the host. Bash-specific pipeline inspection remains
+// Unix-only; PowerShell has different pipeline semantics and syntax.
+func nativeShellCommand(goos, cmd string) (string, []string) {
+	if goos == "windows" {
+		return "powershell.exe", []string{"-NoProfile", "-NonInteractive", "-Command", cmd}
+	}
+	return "bash", []string{"-c", cmd}
 }
 
 // parsePipeStatuses finds runBashContext's capture line, strips it from the
