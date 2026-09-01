@@ -14,7 +14,7 @@ import (
 
 // CurrentSchemaVersion is incremented when the schema changes in a way
 // that needs explicit migration. Add a migration function in runMigrations().
-const CurrentSchemaVersion = 9
+const CurrentSchemaVersion = 10
 
 // Simplified schema — single statements, no triggers with embedded semicolons.
 var schemaStatements = []string{
@@ -129,6 +129,7 @@ var schemaStatements = []string{
 		ts TEXT NOT NULL,
 		provider TEXT NOT NULL DEFAULT '',
 		model TEXT NOT NULL DEFAULT '',
+		upstream_provider TEXT NOT NULL DEFAULT '',
 		session_id TEXT NOT NULL DEFAULT '',
 		in_tokens INTEGER NOT NULL DEFAULT 0,
 		out_tokens INTEGER NOT NULL DEFAULT 0,
@@ -240,6 +241,12 @@ func runMigrations(db *sql.DB, home string) {
 			db.Exec("DROP TABLE IF EXISTS facts_fts")
 			current = 9
 		}
+	}
+	// v10: record the OpenRouter endpoint that served each completion so
+	// session routing and cache behavior can be inspected after the fact.
+	if current < 10 {
+		db.Exec("ALTER TABLE usage_log ADD COLUMN upstream_provider TEXT NOT NULL DEFAULT ''")
+		current = 10
 	}
 
 	if current != from {

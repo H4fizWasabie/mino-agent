@@ -70,14 +70,15 @@ type ProviderOption struct {
 // ProviderManager applies priority, retries, fallback, a shared circuit breaker,
 // and per-session stickiness around OpenAI-compatible clients.
 type ProviderManager struct {
-	db            *sql.DB // shared state.db handle, handed to clients for usage logging (#344)
-	providers     []ProviderConfig
-	clients       map[string]*Client
-	state         map[string]*providerState
-	sticky        map[string]string
-	stickyAt      map[string]time.Time
-	preferred     map[string]providerPreference
-	providersHash string
+	db             *sql.DB // shared state.db handle, handed to clients for usage logging (#344)
+	providers      []ProviderConfig
+	clients        map[string]*Client
+	state          map[string]*providerState
+	sticky         map[string]string
+	stickyAt       map[string]time.Time
+	upstreamSticky map[string]string
+	preferred      map[string]providerPreference
+	providersHash  string
 	// config-change push signal (#204): set when ReloadProviders sees the
 	// providers.json content change; consumed by the loop's next turn so the
 	// brain re-verifies model-stack memory facts instead of answering stale.
@@ -93,7 +94,7 @@ func NewProviderManager(home string, legacy *Settings, authStore *AuthStore, db 
 	if err != nil {
 		return nil, err
 	}
-	m := &ProviderManager{db: db, clients: map[string]*Client{}, state: map[string]*providerState{}, sticky: map[string]string{}, stickyAt: map[string]time.Time{}, preferred: map[string]providerPreference{}, authStore: authStore, now: time.Now}
+	m := &ProviderManager{db: db, clients: map[string]*Client{}, state: map[string]*providerState{}, sticky: map[string]string{}, stickyAt: map[string]time.Time{}, upstreamSticky: map[string]string{}, preferred: map[string]providerPreference{}, authStore: authStore, now: time.Now}
 	m.providersHash = fileHash(filepath.Join(home, "providers.json"))
 	for _, p := range configs {
 		key := ""
@@ -142,13 +143,13 @@ func loadProviders(home string, legacy *Settings) ([]ProviderConfig, error) {
 
 func (m *ProviderManager) CreateJSON(session string, role ModelRole, messages []Message, maxTokens int, system string) (*LLMResponse, error) {
 	return m.callWithConfig(session, routeRole(role, messages), func(c *Client, model, reasoning string, p ProviderConfig) (*LLMResponse, error) {
-		return c.createWithRouting(context.Background(), model, reasoningForRole(p, role), messages, maxTokens, system, nil, true, routingForRole(p, role), "")
+		return c.createWithRouting(context.Background(), model, reasoningForRole(p, role), messages, maxTokens, system, nil, true, routingForRole(p, role), session)
 	})
 }
 
 func (m *ProviderManager) CreateContext(ctx context.Context, session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
 	return m.callContextWithConfig(ctx, session, routeRole(role, messages), func(c *Client, model, reasoning string, p ProviderConfig) (*LLMResponse, error) {
-		return c.createWithRouting(ctx, model, reasoningForRole(p, role), messages, maxTokens, system, tools, false, routingForRole(p, role), "")
+		return c.createWithRouting(ctx, model, reasoningForRole(p, role), messages, maxTokens, system, tools, false, routingForRole(p, role), session)
 	})
 }
 
@@ -215,15 +216,22 @@ func (m *ProviderManager) callContextWithConfig(ctx context.Context, session str
 		}
 		for attempt := 0; attempt < 3; attempt++ {
 			// #159: same unpin-on-retry as callWithConfig.
-			pmodel := modelFor(p, role)
+			requestProvider := m.withStickyUpstream(session, role, p)
+			pmodel := modelFor(requestProvider, role)
 			if attempt >= 1 {
 				pmodel = stripProviderPin(pmodel)
 			}
-			resp, err := call(client, pmodel, p.ReasoningEffort, p)
+			resp, err := call(client, pmodel, requestProvider.ReasoningEffort, requestProvider)
 			if err == nil {
 				m.success(session, role, p.Name)
+				if resp.MalformedToolCall {
+					m.clearUpstream(session, role, p.Name, modelFor(requestProvider, role))
+				} else {
+					m.recordUpstream(session, role, p.Name, modelFor(requestProvider, role), resp.UpstreamProvider, routingForRole(requestProvider, role))
+				}
 				return resp, nil
 			}
+			m.clearUpstream(session, role, p.Name, modelFor(requestProvider, role))
 			// CTX-010: log every failure with the error string so a silent
 			// failover is diagnosable without post-hoc guessing.
 			slog.Warn("provider call failed", "provider", p.Name, "role", role, "model", pmodel, "attempt", attempt+1, "error", err)
@@ -323,6 +331,68 @@ func stripProviderPin(model string) string {
 }
 func (m *ProviderManager) key(session string, role ModelRole) string {
 	return session + ":" + string(role)
+}
+
+func upstreamKey(session string, role ModelRole, provider, model string) string {
+	return session + ":" + string(role) + ":" + provider + ":" + model
+}
+
+func (m *ProviderManager) withStickyUpstream(session string, role ModelRole, p ProviderConfig) ProviderConfig {
+	routing := routingForRole(p, role)
+	if len(routing) == 0 {
+		return p
+	}
+	model := modelFor(p, role)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	upstream := m.upstreamSticky[upstreamKey(session, role, p.Name, model)]
+	if upstream == "" {
+		return p
+	}
+	ordered := make([]string, 0, len(routing))
+	for _, name := range routing {
+		if strings.EqualFold(name, upstream) {
+			ordered = append(ordered, name)
+		}
+	}
+	if len(ordered) == 0 {
+		delete(m.upstreamSticky, upstreamKey(session, role, p.Name, model))
+		return p
+	}
+	for _, name := range routing {
+		if !strings.EqualFold(name, upstream) {
+			ordered = append(ordered, name)
+		}
+	}
+	if role == SmallModel {
+		p.SmallRouting = ordered
+	} else {
+		p.ProviderRouting = ordered
+	}
+	return p
+}
+
+func (m *ProviderManager) recordUpstream(session string, role ModelRole, provider, model, upstream string, routing []string) {
+	if upstream == "" {
+		return
+	}
+	for _, candidate := range routing {
+		if strings.EqualFold(candidate, upstream) {
+			m.mu.Lock()
+			if m.upstreamSticky == nil {
+				m.upstreamSticky = map[string]string{}
+			}
+			m.upstreamSticky[upstreamKey(session, role, provider, model)] = upstream
+			m.mu.Unlock()
+			return
+		}
+	}
+}
+
+func (m *ProviderManager) clearUpstream(session string, role ModelRole, provider, model string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.upstreamSticky, upstreamKey(session, role, provider, model))
 }
 
 // primaryName returns the name of the highest-priority provider eligible for

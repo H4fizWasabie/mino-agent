@@ -4,6 +4,13 @@
   transfers now use legacy SCP mode for VPS hosts that do not expose the SFTP
   subsystem.
 
+- **Session-sticky OpenRouter upstream routing (#509)**: cost-watch's ranked
+  provider list remains the authority, while Mino now sends a stable session ID,
+  remembers the eligible upstream that served a successful response, prefers it
+  on subsequent turns, clears it after failures, and records OpenRouter's
+  selected upstream with usage data for cache diagnostics. No response caching
+  is enabled.
+
 - **Release lane gate ordering (#505)**: `scripts/release.sh` now requires the
   tagged commit to match `origin/master`, completes the build and VPS
   `stage-smoke` rehearsal before pushing the release tag, and no longer pushes

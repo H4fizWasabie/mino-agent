@@ -41,8 +41,8 @@ func TestSchemaV9RetiresLegacyFactsTable(t *testing.T) {
 	defer db2.Close()
 
 	var version string
-	if err := db2.QueryRow("SELECT value FROM _meta WHERE key = 'schema_version'").Scan(&version); err != nil || version != "9" {
-		t.Fatalf("schema version = %q, err=%v, want 9", version, err)
+	if err := db2.QueryRow("SELECT value FROM _meta WHERE key = 'schema_version'").Scan(&version); err != nil || version != "10" {
+		t.Fatalf("schema version = %q, err=%v, want 10", version, err)
 	}
 
 	var exists int
@@ -74,7 +74,7 @@ func TestSchemaV9NoOpOnFreshInstall(t *testing.T) {
 	db := Connect(home)
 	defer db.Close()
 	var version string
-	if err := db.QueryRow("SELECT value FROM _meta WHERE key = 'schema_version'").Scan(&version); err != nil || version != "9" {
-		t.Fatalf("schema version = %q, err=%v, want 9", version, err)
+	if err := db.QueryRow("SELECT value FROM _meta WHERE key = 'schema_version'").Scan(&version); err != nil || version != "10" {
+		t.Fatalf("schema version = %q, err=%v, want 10", version, err)
 	}
 }
