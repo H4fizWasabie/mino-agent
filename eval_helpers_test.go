@@ -14,7 +14,7 @@ type fakeClient struct {
 	roles    []ModelRole
 }
 
-func (f *fakeClient) Create(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
+func (f *fakeClient) CreateContext(ctx context.Context, session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
 	f.tools = tools
 	f.roles = append(f.roles, role)
 	f.messages = append(f.messages, append([]Message(nil), messages...))
@@ -25,14 +25,6 @@ func (f *fakeClient) Create(session string, role ModelRole, messages []Message, 
 	r := f.script[f.pos]
 	f.pos++
 	return r, nil
-}
-
-func (f *fakeClient) Stream(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
-	return f.Create(session, role, messages, maxTokens, system, tools)
-}
-
-func (f *fakeClient) CreateContext(ctx context.Context, session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
-	return f.Create(session, role, messages, maxTokens, system, tools)
 }
 
 // helpers to build scripted responses

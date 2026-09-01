@@ -99,7 +99,7 @@ func TestContextBudgetBlockInTurnTail(t *testing.T) {
 	}
 
 	// small turn: block present with real numbers, no warning
-	core.RespondForContext(context.Background(), "small", "hello", "test", nil, false)
+	core.RespondForContext(context.Background(), "small", "hello", "test", nil)
 	tail := lastUser()
 	budgetRe := regexp.MustCompile(`context budget: \d+ chars used of 20000 ceiling \(\d+%\), \d+ headroom`)
 	if !budgetRe.MatchString(tail) {
@@ -114,7 +114,7 @@ func TestContextBudgetBlockInTurnTail(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		sess.AddExchange("seed", strings.Repeat("user "+strconv.Itoa(i)+" ", 400), strings.Repeat("assistant "+strconv.Itoa(i)+" ", 400), nil, "test")
 	}
-	core.RespondForContext(context.Background(), "heavy", "wrap up", "test", nil, false)
+	core.RespondForContext(context.Background(), "heavy", "wrap up", "test", nil)
 	tail = lastUser()
 	warnRe := regexp.MustCompile(`WARNING: context at ([0-9]+)% of the ceiling — compact or consolidate \(manage_memory/consolidate\), or wrap up with a status report of what's done and what remains\.`)
 	m := warnRe.FindStringSubmatch(tail)

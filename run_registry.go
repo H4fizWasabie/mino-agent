@@ -8,7 +8,7 @@ import (
 
 // run_registry.go — live playbook run registry (issue #310).
 //
-// Every in-flight runWorkspacePlaybook registers a cancel func here. Two
+// Every in-flight playbook run registers a cancel func here. Two
 // consumers:
 //   - the cancel_run harness tool: the owner (or any session) cancels a run
 //     by id; the stage loop sees ctx.Done() and marks the run interrupted

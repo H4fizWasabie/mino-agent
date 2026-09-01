@@ -260,7 +260,7 @@ func runCLI(w *Core) {
 			}
 		}
 
-		result := w.Respond(input, "cli", nil, false)
+		result := w.Respond(input, "cli", nil)
 		fmt.Printf("\n%s\n", result.Reply)
 	}
 }

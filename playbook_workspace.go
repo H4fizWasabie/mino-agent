@@ -6,7 +6,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -135,12 +134,6 @@ func extractSection(raw, heading string) string {
 		}
 	}
 	return strings.TrimSpace(rest)
-}
-
-// runPlaybookStageLoop is an internal seam: production uses the canonical loop;
-// focused run-state tests can substitute a deterministic stage outcome.
-var runPlaybookStageLoop = func(ctx context.Context, client LLMClient, sessionID, system string, messages []Message, tools *Registry, maxIterations, maxTokens int, obs Observer, traceHome string) *LoopResult {
-	return RunLoopContext(ctx, client, sessionID, system, messages, tools, maxIterations, maxTokens, obs, true, traceHome)
 }
 
 func loadPlaybookWorkspace(home, name string) (*PlaybookWorkspace, error) {
@@ -996,8 +989,7 @@ func truncateWorkspaceInput(s string) string {
 }
 
 // validatePlaybookPreRun runs the shared pre-run checks (issue #449 design
-// note: "one behavior everywhere, so the checks cannot drift"), used by both
-// the dedicated stage loop and the navigation entry point.
+// note: "one behavior everywhere, so the checks cannot drift") for navigation.
 func validatePlaybookPreRun(core *Core, pb *PlaybookWorkspace) error {
 	if err := validateWorkspaceStageTools(pb, core.Tools); err != nil {
 		return err
@@ -1016,8 +1008,8 @@ func validatePlaybookPreRun(core *Core, pb *PlaybookWorkspace) error {
 // bindOrRefreshRunContract binds run.ContractHash on first use, or supersedes
 // a stale run when the playbook definition changed since it started (#310
 // franken-resume class), starting a fresh run against the current source.
-// Shared by the dedicated stage loop and the navigation entry point so both
-// resume paths get the same franken-resume protection.
+// Shared by the navigation entry points so every resume path gets the same
+// franken-resume protection.
 func bindOrRefreshRunContract(pb *PlaybookWorkspace, registry *Registry, run *PlaybookRun, request, sessionID string, now time.Time) (*PlaybookRun, error) {
 	if run.ContractHash == "" {
 		run.ContractHash = stageContractHash(pb, run)
@@ -1042,308 +1034,6 @@ func bindOrRefreshRunContract(pb *PlaybookWorkspace, registry *Registry, run *Pl
 	return fresh, nil
 }
 
-func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessionID string, obs Observer) (*PlaybookResult, error) {
-	pb, err := loadPlaybookWorkspace(core.Settings.Home, name)
-	if err != nil {
-		return nil, err
-	}
-	if err := validatePlaybookPreRun(core, pb); err != nil {
-		return nil, err
-	}
-	run, err := loadOrCreatePlaybookRun(pb, core.Tools, request, sessionID, time.Now())
-	if err != nil {
-		return nil, err
-	}
-	result := &PlaybookResult{Name: name}
-	// CTX-018: design-time audit gate — inject risk flags ONLY when the
-	// playbook is new, its last run failed, or its contract changed since the
-	// last run. A stable, recently-successful playbook runs without the audit
-	// (no wasted resources). Computed once per run; injected per stage.
-	doAudit := needsPlaybookAudit(pb)
-	conversation := core.Sessions.Get(sessionID)
-	// Cache stability: the system prompt must be byte-stable across all
-	// iterations of a stage so the provider's prefix cache stays warm. The
-	// clock goes into the stage prompt (user role) instead — the same intent
-	// the main loop documents ("Time is injected as user message for cache
-	// stability"). Before this fix the timestamp in system forced a full cache
-	// rewrite on every call (~63% of playbook input billed at full rate).
-	system, err := conversation.Session.BuildPlaybookSystem(pb)
-	if err != nil {
-		// PSN-001 review: the bound persona failed to load AFTER pre-run
-		// validation passed (roster file deleted in the gap). Fail loudly —
-		// never run the stage hatless. The run is saved failed so the resume
-		// path does not treat it as a stuck "running" run.
-		for i := range run.Stages {
-			run.Stages[i].Status = "failed"
-			run.Stages[i].Error = err.Error()
-		}
-		run.Status = "failed"
-		_ = savePlaybookRun(pb, run)
-		return nil, fmt.Errorf("playbook %s: %w", name, err)
-	}
-	baseMessages := conversation.Session.PlaybookContext(system)
-	// Label the run self-certified when any stage's Audit declares `self` — the
-	// audit trail then marks that no machine verified those outputs.
-	for _, stage := range pb.Stages {
-		if stageSelfCertified(stage) {
-			result.SelfCertified = true
-			break
-		}
-	}
-
-	run, err = bindOrRefreshRunContract(pb, core.Tools, run, request, sessionID, time.Now())
-	if err != nil {
-		return nil, err
-	}
-
-	// #310: cancellable run context — the cancel_run tool and the shutdown
-	// hook both cancel here; the stage loop checks ctx.Done() at each boundary
-	// and marks the run interrupted cleanly. The parent is detachCancel'd
-	// (#316): manual runs inherit the caller's VALUES (session, trace tags,
-	// audit/snapshot callbacks) but NOT the caller's cancellation — a client
-	// disconnect mid-run no longer kills the playbook; cancel_run does.
-	runCtx, cancelRunCtx := context.WithCancel(detachCancel(ctx))
-	defer cancelRunCtx()
-	deregister := registerRun(run.ID, cancelRunCtx)
-	defer deregister()
-
-	for {
-		state := nextPlaybookStage(run)
-		if state == nil {
-			run.Status = "complete"
-			if err := savePlaybookRun(pb, run); err != nil {
-				return nil, err
-			}
-			result.Status = "complete"
-			return result, nil
-		}
-		// #310: cancellation check at the stage boundary — a cancelled run
-		// marks itself interrupted (distinct from failed) with the reason,
-		// keeps partial outputs on disk, never silent.
-		if runCtx.Err() != nil {
-			run.Status = "interrupted"
-			if reason := takeRunInterruptReason(run.ID); reason != "" {
-				run.InterruptReason = reason
-			} else if run.InterruptReason == "" {
-				run.InterruptReason = "cancelled"
-			}
-			for _, s := range run.Stages {
-				if s.Status == "running" {
-					s.Status = "interrupted"
-				}
-			}
-			_ = savePlaybookRun(pb, run)
-			result.Status = "interrupted"
-			result.Reply = fmt.Sprintf("Run %s interrupted: %s", run.ID, run.InterruptReason)
-			logTrace(core.Settings.Home, "run_interrupted", map[string]any{"playbook": name, "run": run.ID, "reason": run.InterruptReason})
-			core.auditLog(sessionID, "run_interrupted", run.InterruptReason, 0)
-			return result, nil
-		}
-		// #310: vanished run dir guard — the run record must still exist where
-		// the runner believes it is; if someone moved/archived it, fail loud.
-		if _, err := os.Stat(filepath.Join(playbookRunsDir(pb), run.ID)); err != nil {
-			run.Status = "failed"
-			run.InterruptReason = "run dir vanished during execution"
-			result.Status = "failed"
-			result.Reply = fmt.Sprintf("Run %s failed: run directory vanished during execution — manual review required", run.ID)
-			logTrace(core.Settings.Home, "run_dir_vanished", map[string]any{"playbook": name, "run": run.ID})
-			core.auditLog(sessionID, "run_dir_vanished", run.ID, 0)
-			return result, nil
-		}
-
-		stage, ok := workspaceStageFor(pb, state.Number, state.Name)
-		if !ok {
-			return nil, fmt.Errorf("playbook %s run %s references missing stage %d", name, run.ID, state.Number)
-		}
-		// issue #304: a script-backed stage is deterministic — fail-fast, no
-		// retry (owner decision c). Non-zero exit or a missing declared
-		// output fails the stage and the run, never silently.
-		if stage.Script != "" {
-			state.Attempts++
-			state.StartedAt = time.Now().UTC()
-			state.Status = "running"
-			state.Error = ""
-			state.Script = stage.Script
-			if err := savePlaybookRun(pb, run); err != nil {
-				return nil, err
-			}
-			// Tag trace events inside this stage with its playbook/stage/run
-			// identity so the dashboard can group stage work instead of
-			// flattening it; the tags also put any tool-path write under the
-			// playbookWriteGuard's run-scoped writable zone. Built from runCtx,
-			// not ctx (issue #438): ctx is the caller's request context, which
-			// #316 detached specifically so the stage's own work survives a
-			// client disconnect or the outer turn's context ending — wrapping
-			// ctx here silently undid that isolation for every stage's actual
-			// execution, leaving only the stage-boundary check upstream
-			// protected.
-			stageCtx := context.WithValue(runCtx, traceTagKey{}, map[string]string{
-				"playbook": pb.Name,
-				"stage":    fmt.Sprintf("%02d-%s", stage.Number, stage.Name),
-				"run":      run.ID,
-			})
-			out, code, runErr := runScriptStage(stageCtx, core, pb, run, &stage)
-			state.EndedAt = time.Now().UTC()
-			state.ScriptOutput = filepath.Join("runs", run.ID, "stages", fmt.Sprintf("%02d-%s", stage.Number, stage.Name), "script-output.txt")
-			state.ExitCode = code
-			result.StagesRun++
-			missing := missingStageOutputFiles(pb, run, &stage)
-			if runErr != nil || code != 0 || len(missing) > 0 {
-				reason := fmt.Sprintf("script stage %02d-%s: exit %d", stage.Number, stage.Name, code)
-				if len(missing) > 0 {
-					reason += fmt.Sprintf(", missing declared output(s): %s", strings.Join(missing, ", "))
-				}
-				if runErr != nil {
-					reason += ": " + runErr.Error()
-				}
-				state.Status = "failed"
-				state.Error = reason
-				run.Status = "failed"
-				_ = savePlaybookRun(pb, run)
-				result.Status = "failed"
-				result.Reply = fmt.Sprintf("Run %s stopped at stage %02d-%s: %s", run.ID, stage.Number, stage.Name, reason)
-				logTrace(core.Settings.Home, "script_stage_failed", map[string]any{
-					"playbook": pb.Name, "stage": fmt.Sprintf("%02d-%s", stage.Number, stage.Name),
-					"run": run.ID, "exit_code": code, "output_tail": tailOf(out, 200),
-				})
-				core.auditLog(sessionID, "script_stage_failed", reason, 0)
-				return result, nil
-			}
-			state.Status = "complete"
-			state.Outputs = existingStageOutputs(pb, run, &stage)
-			run.Status = "running"
-			result.Outputs = append(result.Outputs, state.Outputs...)
-			if err := savePlaybookRun(pb, run); err != nil {
-				return nil, err
-			}
-			logTrace(core.Settings.Home, "script_stage", map[string]any{
-				"playbook": pb.Name, "stage": fmt.Sprintf("%02d-%s", stage.Number, stage.Name),
-				"run": run.ID, "exit_code": code, "output_chars": len(out),
-			})
-			// OBS-002: every script-stage execution is an auditable action.
-			core.auditLog(sessionID, "script_stage", fmt.Sprintf("%s stage %02d-%s: script exit %d, run %s", pb.Name, stage.Number, stage.Name, code, run.ID), 0)
-			continue
-		}
-		// Stage tools expand the normal loop's tool surface; they are not a
-		// whitelist. Core safety, approval, and registered-tool boundaries stay
-		// authoritative while the model retains its always-available and sliding
-		// choices.
-		stageTools := core.Tools
-		messages := append([]Message(nil), baseMessages...)
-		stagePrompt := buildWorkspaceStagePrompt(pb, run, stage, time.Now(), core.Settings.Location()) + "\n\n" + appendSystemTime("", time.Now(), core.Settings.Location())
-		if doAudit {
-			if flags := stageRiskFlags(stage); flags != "" {
-				stagePrompt += "\n\n" + flags
-			}
-		}
-		messages = append(messages, Message{Role: "user", Content: stagePrompt})
-		retrySafe := stageRetrySafe(core.Tools, stage)
-
-		var outputs []string
-		var verifyErr error
-		for attempt := 1; attempt <= maxStageAttempts; attempt++ {
-			state.Attempts++
-			state.StartedAt = time.Now().UTC()
-			state.Status = "running"
-			state.Error = ""
-			if err := savePlaybookRun(pb, run); err != nil {
-				return nil, err
-			}
-			// Tag every trace event inside this stage with its playbook/stage identity
-			// so the dashboard can group stage work instead of flattening it. Built
-			// from runCtx, not ctx (issue #438) — see the script-stage branch above
-			// for why: ctx is the caller's request context, and wrapping it here
-			// re-exposed the stage's LLM loop to whatever cancels the caller even
-			// though #316 detached the run specifically to prevent that.
-			stageCtx := context.WithValue(runCtx, traceTagKey{}, map[string]string{
-				"playbook": pb.Name,
-				"stage":    fmt.Sprintf("%02d-%s", stage.Number, stage.Name),
-				"run":      run.ID,
-			})
-			// Stage contract travels with the context: the loop refuses to declare
-			// a stage turn complete while its declared outputs are missing, and
-			// pushes the model to write them instead of ending silently.
-			outPaths := make([]string, 0, len(stage.Outputs))
-			for _, o := range stage.Outputs {
-				outPaths = append(outPaths, playbookRunOutputPath(pb, run, stage, o))
-			}
-			stageCtx = context.WithValue(stageCtx, stageOutputsKey{}, outPaths)
-			stageCtx = context.WithValue(stageCtx, stageToolNamesKey{}, append([]string(nil), stage.Tools...))
-			// DRF-002 provenance honesty: facts saved during a playbook run are
-			// model-distilled, not user-authored — save_note consults this
-			// counter and stamps "model-distill" instead of "user".
-			playbookDepth.Add(1)
-			stageResult := runPlaybookStageLoop(stageCtx, core.Client, sessionID, system, messages, stageTools, maxStageIterations, core.Settings.MaxTokens, obs, core.Settings.Home)
-			playbookDepth.Add(-1)
-			result.TokensIn += stageResult.TokensIn
-			result.TokensOut += stageResult.TokensOut
-			result.ToolCalls = append(result.ToolCalls, stageResult.ToolCalls...)
-			result.Reply = stageResult.Reply
-			result.StagesRun++
-			state.EndedAt = time.Now().UTC()
-			outputs, verifyErr = verifyWorkspaceStageOutputs(pb, run, stage, stageResult.ToolCalls, state.StartedAt)
-			if flags := stageDeviationFlags(pb, run, stage, stageResult.ToolCalls, verifyErr); len(flags) > 0 {
-				reportStageDeviations(core, sessionID, pb, run, stage, flags)
-			}
-			// A stage's contract is its verified outputs: a runtime error after
-			// the work is written (e.g. a flaked final model call) must not fail
-			// the stage — only a cancelled run or unverified outputs do.
-			// Observed 2026-08-08: the 09:30 run failed with "all vision
-			// providers failed" while the post was already published and the
-			// log written.
-			if verifyErr == nil && (stageResult.Status == "complete" || stageResult.Status == "error") {
-				if stageResult.Status == "error" {
-					result.Reply = fmt.Sprintf("(work verified complete; final model call failed: %s)", stageResult.Reply)
-				}
-				break
-			}
-			// Failed attempt. Retry only when the stage is retry-safe (read-only
-			// whitelist) and the run was not cancelled — a user stop must never be
-			// overridden by an automatic retry.
-			if !retrySafe || stageResult.Status == "cancelled" || attempt >= maxStageAttempts {
-				state.Status = "failed"
-				if stageResult.Status != "complete" {
-					state.Error = fmt.Sprintf("runtime %s: %s", stageResult.Status, stageResult.Reply)
-				} else {
-					state.Error = verifyErr.Error()
-				}
-				// Outcome failures (## Success) get a dedicated trace event so the
-				// dashboard can surface "ran but did not publish" separately from
-				// missing artifacts.
-				var of *outcomeFailure
-				if errors.As(verifyErr, &of) {
-					logTrace(core.Settings.Home, "stage_outcome_failed", map[string]any{
-						"playbook": pb.Name,
-						"stage":    fmt.Sprintf("%02d-%s", stage.Number, stage.Name),
-						"run":      run.ID,
-						"outcome":  of.Outcome,
-						"tool":     of.Tool,
-					})
-				}
-				run.Status = "failed"
-				_ = savePlaybookRun(pb, run)
-				result.Status = "failed"
-				result.Reply = fmt.Sprintf("Run %s stopped at stage %02d-%s: %s", run.ID, stage.Number, stage.Name, state.Error)
-				return result, nil
-			}
-			// Feed the failure back into the stage context and retry.
-			reason := ""
-			if stageResult.Status != "complete" {
-				reason = fmt.Sprintf("runtime %s: %s", stageResult.Status, stageResult.Reply)
-			} else {
-				reason = verifyErr.Error()
-			}
-			messages = append(messages, Message{Role: "user", Content: fmt.Sprintf("[System: stage attempt %d failed — %s. Fix the issue and complete the stage properly.]", attempt, reason)})
-		}
-		state.Status, state.Outputs = "complete", outputs
-		run.Status = "running"
-		result.Outputs = append(result.Outputs, outputs...)
-		if err := savePlaybookRun(pb, run); err != nil {
-			return nil, err
-		}
-	}
-}
-
 // navigatePlaybookRun is the chat-triggered entry point for the #442 unified
 // loop: it advances a run by one mechanical step instead of running a
 // dedicated stage loop to completion. Each call:
@@ -1355,11 +1045,8 @@ func runWorkspacePlaybook(ctx context.Context, core *Core, name, request, sessio
 //   - hands Mino the next LLM stage's contract to act on directly with its
 //     own tool calls, instead of nesting a second loop.
 //
-// schedule_playbook's own dedicated stage loop (runWorkspacePlaybook) also
-// still exists as a distinct execution path for the pre-#452 tests that
-// exercise it directly; NavigateScheduledPlaybook (playbook.go) drives
-// scheduled fires through this function like any other navigation entry
-// point.
+// NavigateScheduledPlaybook (playbook.go) drives scheduled fires through this
+// function like any other navigation entry point.
 func navigatePlaybookRun(ctx context.Context, core *Core, name, request, sessionID string) (*PlaybookResult, error) {
 	pb, err := loadPlaybookWorkspace(core.Settings.Home, name)
 	if err != nil {

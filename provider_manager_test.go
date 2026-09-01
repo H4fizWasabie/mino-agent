@@ -1,11 +1,11 @@
 package main
 
 import (
-	"net"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -33,19 +33,6 @@ func TestLoadProvidersDoesNotInjectModels(t *testing.T) {
 	}
 	if len(providers) != 1 || len(providers[0].Models) != 0 {
 		t.Fatalf("models = %#v, want none injected (config is the truth, PRV-001)", providers[0].Models)
-	}
-}
-
-func TestParseSSEStreamAcceptsReasoningContent(t *testing.T) {
-	var streamed strings.Builder
-	response, err := parseSSEStream(strings.NewReader("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Hello from streaming\"}}]}\n\ndata: [DONE]\n"), func(delta string) {
-		streamed.WriteString(delta)
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(response.Content) != 1 || response.Content[0].Text != "Hello from streaming" || streamed.String() != response.Content[0].Text {
-		t.Fatalf("streamed=%q response=%+v", streamed.String(), response)
 	}
 }
 
@@ -141,7 +128,9 @@ func TestPreferredModelAndReasoningFollowProvider(t *testing.T) {
 	}
 }
 
-func failCall(*Client, string, string, ProviderConfig) (*LLMResponse, error) { return nil, errors.New("down") }
+func failCall(*Client, string, string, ProviderConfig) (*LLMResponse, error) {
+	return nil, errors.New("down")
+}
 
 func TestRetryBackoff(t *testing.T) {
 	m := testManager()
@@ -315,7 +304,7 @@ func TestNoSessionIDSentToOpenRouter(t *testing.T) {
 		}
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{}}`)), Header: make(http.Header)}, nil
 	})}
-	if _, err := c.createWithRouting(context.Background(), "model-a", "", nil, 10, "system", nil, false, false, nil, nil, ""); err != nil {
+	if _, err := c.createWithRouting(context.Background(), "model-a", "", nil, 10, "system", nil, false, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := payload["session_id"]; ok {
@@ -339,29 +328,13 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { re
 
 // #163: the streaming path must also accept the "reasoning" field name (not
 // only "reasoning_content") for providers that send thinking under it.
-func TestParseSSEStreamAcceptsReasoningAltField(t *testing.T) {
-	var streamed strings.Builder
-	response, err := parseSSEStream(strings.NewReader("data: {\"choices\":[{\"delta\":{\"reasoning\":\"thought stream\"}}]}\n\ndata: [DONE]\n"), func(delta string) {
-		streamed.WriteString(delta)
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(response.Content) != 1 || response.Content[0].Text != "thought stream" {
-		t.Fatalf("Content = %+v, want reasoning-alt fallback in stream", response.Content)
-	}
-}
-
-// #159: the ":provider" routing pin is stripped from the model string on retry
-// so a dead pinned provider doesn't burn all attempts then fail over to a
-// different model. stripProviderPin must only touch the post-slash ":tag".
 func TestStripProviderPin(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"deepseek/deepseek-v4-flash-0731:deepinfra", "deepseek/deepseek-v4-flash-0731"},
 		{"deepseek/deepseek-v4-flash-0731", "deepseek/deepseek-v4-flash-0731"},
-		{"mimo-v2.5", "mimo-v2.5"},                     // no slash, no pin
-		{"deepseek-v4-flash", "deepseek-v4-flash"},      // direct-API model, no pin
-		{"o3:nightly", "o3:nightly"},                    // ':' before slash is part of id
+		{"mimo-v2.5", "mimo-v2.5"},                 // no slash, no pin
+		{"deepseek-v4-flash", "deepseek-v4-flash"}, // direct-API model, no pin
+		{"o3:nightly", "o3:nightly"},               // ':' before slash is part of id
 	}
 	for _, c := range cases {
 		if got := stripProviderPin(c.in); got != c.want {

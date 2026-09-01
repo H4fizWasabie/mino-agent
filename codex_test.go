@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -151,13 +150,12 @@ func TestCodexResponsesTransport(t *testing.T) {
 
 	client := NewClient(token, server.URL+"/codex")
 	client.transport = "codex" // PRV-001: declared, not sniffed from the URL
-	var streamed strings.Builder
-	response, err := client.create(context.Background(), "gpt-5.6-sol", "high", []Message{{Role: "user", Content: "hello"}}, 100, "system", []ToolDef{{Name: "read_file"}}, true, false, func(delta string) { streamed.WriteString(delta) })
+	response, err := client.create(context.Background(), "gpt-5.6-sol", "high", []Message{{Role: "user", Content: "hello"}}, 100, "system", []ToolDef{{Name: "read_file"}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if streamed.String() != "Hello" || response.FinalText != "Hello" || response.StopReason != "tool_use" {
-		t.Fatalf("unexpected response: streamed=%q response=%+v", streamed.String(), response)
+	if response.FinalText != "Hello" || response.StopReason != "tool_use" {
+		t.Fatalf("unexpected response: response=%+v", response)
 	}
 	if response.Usage.InputTokens != 7 || len(extractToolUses(response.Content)) != 1 {
 		t.Fatalf("missing usage or tool call: %+v", response)

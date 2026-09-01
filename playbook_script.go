@@ -71,7 +71,7 @@ func scriptEnv() []string {
 
 // validateStageScripts runs the shared validator over every stage's
 // script.sh: the edit-time path (manage_playbook) and the pre-run path
-// (runWorkspacePlaybook) call this one seam — one behavior everywhere, so the
+// navigation call this one seam — one behavior everywhere, so the
 // checks cannot drift. An invalid stage script fails the run loudly, never
 // silently skips.
 func validateStageScripts(core *Core, pb *PlaybookWorkspace) error {

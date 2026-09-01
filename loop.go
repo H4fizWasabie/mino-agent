@@ -41,9 +41,7 @@ func notify(obs Observer, kind string, data map[string]any) {
 // LLMClient is the interface RunLoop needs to call the model.
 // One real implementation (ProviderManager), one fake for tests.
 type LLMClient interface {
-	Create(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error)
 	CreateContext(context.Context, string, ModelRole, []Message, int, string, []ToolDef) (*LLMResponse, error)
-	Stream(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error)
 }
 
 func RunLoop(
@@ -55,10 +53,9 @@ func RunLoop(
 	maxIter int,
 	maxTokens int,
 	obs Observer,
-	stream bool,
 	traceHome string,
 ) *LoopResult {
-	return RunLoopContext(context.Background(), client, sessionID, system, messages, tools, maxIter, maxTokens, obs, stream, traceHome)
+	return RunLoopContext(context.Background(), client, sessionID, system, messages, tools, maxIter, maxTokens, obs, traceHome)
 }
 
 type traceTagKey struct{}
@@ -70,7 +67,7 @@ type stageToolNamesKey struct{}
 const hardIterationCeiling = 60
 
 // traceTagsFromCtx returns the playbook/stage tag set on the context when the
-// loop is executing inside a playbook stage (see runWorkspacePlaybook).
+// loop is executing inside a playbook stage (see navigatePlaybookRun).
 func traceTagsFromCtx(ctx context.Context) map[string]string {
 	tags, _ := ctx.Value(traceTagKey{}).(map[string]string)
 	return tags
@@ -259,7 +256,6 @@ func RunLoopContext(
 	maxIter int,
 	maxTokens int,
 	obs Observer,
-	stream bool,
 	traceHome string,
 ) *LoopResult {
 	if ctx == nil {

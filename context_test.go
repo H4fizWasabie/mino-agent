@@ -493,7 +493,7 @@ func TestLoopLegacyDetectionAdvisesWithoutHardStop(t *testing.T) {
 		script[i] = scriptedResp([]ContentBlock{toolBlock("probe", map[string]any{"n": i})}, "tool_use")
 	}
 	client := &fakeClient{script: script}
-	result := RunLoopContext(context.Background(), client, "loop-stop", "", []Message{{Role: "user", Content: "go"}}, tools, 20, 100, nil, false, "")
+	result := RunLoopContext(context.Background(), client, "loop-stop", "", []Message{{Role: "user", Content: "go"}}, tools, 20, 100, nil, "")
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete (reply=%q)", result.Status, result.Reply)
 	}
@@ -526,7 +526,7 @@ func TestLoopExecutesModelRequestedToolsWithoutDedupState(t *testing.T) {
 		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
 	}}
 
-	result := RunLoopContext(context.Background(), client, "simple-loop", "", []Message{{Role: "user", Content: "probe twice"}}, tools, 5, 100, nil, false, t.TempDir())
+	result := RunLoopContext(context.Background(), client, "simple-loop", "", []Message{{Role: "user", Content: "probe twice"}}, tools, 5, 100, nil, t.TempDir())
 	if result.Status != "complete" || result.Reply != "done" {
 		t.Fatalf("result = %#v", result)
 	}
@@ -634,7 +634,7 @@ func TestContextDiagTraceLogsRealSchemaBytes(t *testing.T) {
 	tools.Register(&Tool{Name: "read_file", Description: strings.Repeat("d", 2000), Schema: map[string]any{"type": "object", "properties": map[string]any{"p": map[string]any{"type": "string", "description": strings.Repeat("x", 1500)}}}})
 	tools.Register(&Tool{Name: "search_web", Description: "s", Schema: map[string]any{"type": "object"}})
 	client := &fakeClient{script: []*LLMResponse{scriptedResp([]ContentBlock{textBlock("done")}, "stop")}}
-	result := RunLoopContext(context.Background(), client, "diag-bytes", "", []Message{{Role: "user", Content: "go"}}, tools, 3, 100, nil, false, home)
+	result := RunLoopContext(context.Background(), client, "diag-bytes", "", []Message{{Role: "user", Content: "go"}}, tools, 3, 100, nil, home)
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete", result.Status)
 	}
@@ -756,7 +756,7 @@ func TestLoopConvertsViewImageToVisionText(t *testing.T) {
 		scriptedResp([]ContentBlock{textBlock("a red bicycle leaning against a brick wall")}, "stop"),
 		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
 	}}
-	result := RunLoopContext(context.Background(), client, "vision-loop", "", []Message{{Role: "user", Content: "look"}}, tools, 5, 100, nil, false, "")
+	result := RunLoopContext(context.Background(), client, "vision-loop", "", []Message{{Role: "user", Content: "look"}}, tools, 5, 100, nil, "")
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete (reply=%q)", result.Status, result.Reply)
 	}
@@ -808,7 +808,7 @@ func TestLoopLeavesNonImageToolResultsUntouched(t *testing.T) {
 		scriptedResp([]ContentBlock{toolBlock("probe", map[string]any{})}, "tool_use"),
 		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
 	}}
-	result := RunLoopContext(context.Background(), client, "plain-tool-loop", "", []Message{{Role: "user", Content: "go"}}, tools, 5, 100, nil, false, "")
+	result := RunLoopContext(context.Background(), client, "plain-tool-loop", "", []Message{{Role: "user", Content: "go"}}, tools, 5, 100, nil, "")
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete", result.Status)
 	}
@@ -836,7 +836,7 @@ func TestLoopDegradesFailedVisionCallToErrorResult(t *testing.T) {
 		scriptedResp([]ContentBlock{toolBlock("view_image", map[string]any{"path": img})}, "tool_use"),
 		scriptedResp([]ContentBlock{textBlock("done")}, "stop"),
 	}}}
-	result := RunLoopContext(context.Background(), client, "vision-fail-loop", "", []Message{{Role: "user", Content: "look"}}, tools, 5, 100, nil, false, "")
+	result := RunLoopContext(context.Background(), client, "vision-fail-loop", "", []Message{{Role: "user", Content: "look"}}, tools, 5, 100, nil, "")
 	if result.Status != "complete" {
 		t.Fatalf("status = %q, want complete (reply=%q)", result.Status, result.Reply)
 	}
@@ -858,19 +858,11 @@ func TestLoopDegradesFailedVisionCallToErrorResult(t *testing.T) {
 // path can be exercised offline.
 type failingVisionClient struct{ fakeClient *fakeClient }
 
-func (f *failingVisionClient) Create(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
+func (f *failingVisionClient) CreateContext(ctx context.Context, session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
 	if role == VisionModel {
 		return nil, errors.New("vision provider down")
 	}
-	return f.fakeClient.Create(session, role, messages, maxTokens, system, tools)
-}
-
-func (f *failingVisionClient) Stream(session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef, onText func(string)) (*LLMResponse, error) {
-	return f.Create(session, role, messages, maxTokens, system, tools)
-}
-
-func (f *failingVisionClient) CreateContext(ctx context.Context, session string, role ModelRole, messages []Message, maxTokens int, system string, tools []ToolDef) (*LLMResponse, error) {
-	return f.Create(session, role, messages, maxTokens, system, tools)
+	return f.fakeClient.CreateContext(ctx, session, role, messages, maxTokens, system, tools)
 }
 
 // CTX-022 C (structural): a user-provenanced fact on the message's topic is

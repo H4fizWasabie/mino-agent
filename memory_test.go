@@ -5,10 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -209,39 +209,6 @@ func TestDashboardToolStatusUsesRuntimeOutput(t *testing.T) {
 	})
 	if tools[0]["status"] != "ok" || tools[1]["status"] != "error" {
 		t.Fatalf("dashboard statuses = %#v", tools)
-	}
-}
-
-func TestStreamedToolCallsKeepProviderOrder(t *testing.T) {
-	openAI := strings.Join([]string{
-		`data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"b","function":{"name":"second","arguments":"{}"}}]}}]}`,
-		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"first","arguments":"{}"}}]}}]}`,
-		`data: [DONE]`,
-	}, "\n")
-	anthropic := strings.Join([]string{
-		`data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"b","name":"second"}}`,
-		`data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","text":"{}"}}`,
-		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"a","name":"first"}}`,
-		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","text":"{}"}}`,
-	}, "\n")
-	tests := []struct {
-		name  string
-		parse func() (*LLMResponse, error)
-	}{
-		{"openai", func() (*LLMResponse, error) { return parseSSEStream(strings.NewReader(openAI), nil) }},
-		{"anthropic", func() (*LLMResponse, error) { return parseAnthropicStream(strings.NewReader(anthropic), nil) }},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			response, err := tt.parse()
-			if err != nil {
-				t.Fatal(err)
-			}
-			uses := extractToolUses(response.Content)
-			if len(uses) != 2 || uses[0].Name != "first" || uses[1].Name != "second" {
-				t.Fatalf("tool order = %#v", uses)
-			}
-		})
 	}
 }
 

@@ -13,7 +13,7 @@ import (
 
 // Tests for #452: scheduled playbook fires drive Mino's normal loop via a
 // synthetic instruction (NavigateScheduledPlaybook) instead of calling
-// RunPlaybook's dedicated stage loop directly.
+// a dedicated stage loop directly.
 
 func TestBuildSystemInjectsPlaybookRailsForScheduleSource(t *testing.T) {
 	// A scheduled fire has no owner present to notice a run that quietly
@@ -71,13 +71,13 @@ func testProviderCore(t *testing.T, reply string) *Core {
 func TestRespondForContextSkipsAddExchangeForSchedule(t *testing.T) {
 	core := testProviderCore(t, "done")
 
-	core.RespondForContext(context.Background(), "scheduled-brief", "go", "schedule", nil, false)
+	core.RespondForContext(context.Background(), "scheduled-brief", "go", "schedule", nil)
 	sess := core.Sessions.Get("scheduled-brief")
 	if len(sess.Session.history) != 0 {
 		t.Fatalf("expected no history for a schedule-source turn, got %d entries", len(sess.Session.history))
 	}
 
-	core.RespondForContext(context.Background(), "tg:1", "go", "telegram", nil, false)
+	core.RespondForContext(context.Background(), "tg:1", "go", "telegram", nil)
 	sess2 := core.Sessions.Get("tg:1")
 	if len(sess2.Session.history) == 0 {
 		t.Fatal("expected a telegram-source turn to record history as before")

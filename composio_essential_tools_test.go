@@ -112,7 +112,7 @@ func TestNavigatingTurnForceIncludesDeclaredStageTool(t *testing.T) {
 	}
 	core.Tools.Register(&Tool{Name: "stage_only_capability", Description: "capability useful only for the active stage", Schema: map[string]any{"type": "object"}})
 
-	core.RespondForContext(context.Background(), "scheduled-ig", "go", "schedule", nil, false)
+	core.RespondForContext(context.Background(), "scheduled-ig", "go", "schedule", nil)
 	body := bodies[len(bodies)-1]
 	if !strings.Contains(body, "stage_only_capability") {
 		t.Fatalf("expected the declared stage tool force-included in the request payload, got %s", body)

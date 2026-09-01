@@ -291,7 +291,7 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := dashCore.RespondForContext(r.Context(), sid, body.Message, "dashboard", nil, false)
+	result := dashCore.RespondForContext(r.Context(), sid, body.Message, "dashboard", nil)
 
 	json.NewEncoder(w).Encode(map[string]any{
 		"reply":      result.Reply,
@@ -392,7 +392,7 @@ func handleChatStream(w http.ResponseWriter, r *http.Request) {
 
 	pushDashEvent(map[string]any{"type": "turn_start", "session_id": sid})
 
-	result := dashCore.RespondForContext(r.Context(), sid, body.Message, "dashboard", obs, true)
+	result := dashCore.RespondForContext(r.Context(), sid, body.Message, "dashboard", obs)
 
 	// done event — Core format: flat fields, no 'data' wrapper
 	doneEv := map[string]any{
