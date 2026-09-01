@@ -37,10 +37,15 @@ if [ -n "$(git status --porcelain)" ]; then
 	exit 1
 fi
 
-# 1b. push master + the tag BEFORE building: a release created from an
-# unpushed tag silently points at the remote's old HEAD (v2.9.1 lesson).
-git push origin master >/dev/null
-git push origin "$VERSION" >/dev/null
+# The release tag must be the merged remote master commit. Do not push a
+# stale local master from this lane; a release must never move source and tag
+# refs as a side effect of preparing a candidate.
+REMOTE_MASTER="$(git rev-parse refs/remotes/origin/master 2>/dev/null || true)"
+HEAD_COMMIT="$(git rev-parse HEAD)"
+if [ "$REMOTE_MASTER" != "$HEAD_COMMIT" ]; then
+	echo "error: HEAD ($HEAD_COMMIT) is not origin/master (${REMOTE_MASTER:-unavailable}) — fetch and tag the merged master commit" >&2
+	exit 1
+fi
 
 # 2. build the release assets (all platforms + extensions + SHA256SUMS)
 ./build-release.sh "$VERSION"
@@ -65,7 +70,8 @@ if ! ssh "$VPS" "EXPECTED_SCHEMA='${EXPECTED_SCHEMA:-}' bash /tmp/stage-smoke.sh
 fi
 echo "PASS: stage-smoke gate — publishing $VERSION"
 
-# 4. publish the release + assets
+# 4. The gate passed: publish the tag, then the release + assets.
+git push origin "$VERSION" >/dev/null
 gh release create "$VERSION" --repo "$(git remote get-url origin | sed -E 's#.*[:/]([^/]+/[^/.]+)(\.git)?$#\1#')" \
 	--title "$VERSION" --notes "See CHANGELOG.md for the full list." >/dev/null
 for a in mino-linux-amd64 mino-linux-arm64 mino-darwin-amd64 mino-darwin-arm64 \

@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+- **Release lane gate ordering (#505)**: `scripts/release.sh` now requires the
+  tagged commit to match `origin/master`, completes the build and VPS
+  `stage-smoke` rehearsal before pushing the release tag, and no longer pushes
+  a potentially stale local `master` during release preparation.
+
 ### Changed
 
 - **Hardened cross-platform host operations (#233)**: normalized macOS/Windows service identity
