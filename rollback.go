@@ -170,7 +170,11 @@ func maybeRestartService(home string) {
 		fmt.Printf("Restart Mino to use the new version (no native service %q found).\n", unit)
 		return
 	}
-	if id != nativeServiceName(unit) {
+	expectedID := unit
+	if runtime.GOOS != "linux" {
+		expectedID = nativeServiceName(unit)
+	}
+	if id != expectedID {
 		fmt.Printf("Restart Mino to use the new version (%s resolves to %q, not %q — refusing).\n", unit, id, unit)
 		return
 	}
