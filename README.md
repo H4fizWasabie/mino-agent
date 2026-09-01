@@ -216,16 +216,20 @@ All three degrade gracefully — Mino works without them, but noisy commands and
 To let Mino manage host state itself (install packages, write native service definitions, restart its own
 service — the `install_package` / `write_unit` / `restart_service` tools), install the sudoers
 command whitelist once, as root: `sudo MINO_HOME=/home/mino/.mino mino setup-privileges`.
-This grants the mino user exactly six command shapes as root (apt-get install/remove -y,
+On Linux this grants the mino user exactly six command shapes as root (apt-get install/remove -y,
 systemctl restart/daemon-reload, `install -o root -g root -m 0644` from `~/.mino/tmp` to
-/etc/systemd/system, `rm -f /etc/systemd/system/*`) — never a shell, never ALL. Without it the
-tools refuse every op with a clear boundary message, and `bash` refuses `sudo` outright.
+/etc/systemd/system, `rm -f /etc/systemd/system/*`) — never a shell, never ALL. macOS uses
+unprivileged Homebrew and per-user launchd; Windows uses native package/service commands. Without
+the Linux whitelist, privileged tools refuse every op with a clear boundary message, and `bash`
+refuses `sudo` outright.
 
 > **Platform note:** Mino's core tools run natively on Linux, macOS, and Windows (issue #233).
 > Package installation, native service definition, service discovery/restart, shell execution,
 > browser opening, system checks, and update restart use the host's native commands. Existing
 > raw systemd content remains a Linux-only compatibility mode; new calls should use the neutral
-> service definition fields.
+> service definition fields. Windows native service files currently support executable, arguments,
+> and restart policy; environment and working-directory fields are rejected explicitly until a
+> safe native mapping is added.
 
 ## A task failed — now what?
 

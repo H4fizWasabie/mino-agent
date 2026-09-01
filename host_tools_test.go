@@ -67,6 +67,7 @@ func newTestHost(t *testing.T) (*HostTools, *fakeRunner) {
 	f := &fakeRunner{}
 	installed := map[string]bool{}
 	h := &HostTools{
+		platform: hostPlatform{supported: true},
 		home:     home,
 		journal:  NewOpJournal(Connect(home)),
 		stageDir: filepath.Join(home, "tmp"),
@@ -205,7 +206,7 @@ func TestInstallPackageRefusedWhenNotWhitelisted(t *testing.T) {
 
 func TestInstallPackageInvalidName(t *testing.T) {
 	h, f := newTestHost(t)
-	for _, bad := range []string{"rm -rf /", "-evil", "UPPER", "a b"} {
+	for _, bad := range []string{"rm -rf /", "-evil", "a b"} {
 		got := makeInstallPackageTool(h).ContextFn(testCtx(), map[string]any{"package": bad})
 		if !strings.Contains(got, "invalid package name") {
 			t.Fatalf("%q: expected invalid-name error, got %q", bad, got)
@@ -213,6 +214,11 @@ func TestInstallPackageInvalidName(t *testing.T) {
 	}
 	if len(f.calls) != 0 {
 		t.Fatal("no sudo call may happen for an invalid name")
+	}
+	for _, good := range []string{"Microsoft.VisualStudioCode", "python@3.12", "lib/foo"} {
+		if !pkgNameRe.MatchString(good) {
+			t.Fatalf("%q: expected native package ID to be accepted", good)
+		}
 	}
 }
 

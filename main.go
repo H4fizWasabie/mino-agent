@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -269,6 +270,10 @@ func runCLI(w *Core) {
 // Runs in a goroutine with a short delay to let the HTTP server start.
 func autoOpenBrowser(port string) {
 	time.Sleep(500 * time.Millisecond)
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return
+	}
 	url := "http://localhost:" + port
 	var cmd *exec.Cmd
 	switch runtime.GOOS {

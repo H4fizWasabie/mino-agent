@@ -22,11 +22,17 @@
 
 ## Tests and builds
 
-- Focused host/shell/rollback/service/coding/playbook tests: passed.
-- Extension tests/builds: cost-watch (27 tests), threads (4 tests), minowrap (no tests); Windows/macOS cross-builds passed for tested extensions.
-- Compile-only package check: passed.
-- Cross-builds passed for Windows amd64, macOS amd64, and macOS arm64 with `sqlite_fts5`.
-- Full `go test ./...` was attempted twice but exceeded the observed local runtime without output; it was stopped, so CI remains the authoritative full-suite gate.
+- `go test ./... -count=1`: passed.
+- `go test ./... -race -count=1` and `go vet ./...`: passed.
+- Cross-builds passed for Linux amd64, macOS amd64, and Windows amd64.
+- Graph indexes refreshed with `graphify update .` and `codegraph sync`.
+
+## Follow-up hardening in this PR
+
+- Service identities are normalized before self-restart comparisons on native hosts.
+- macOS restart/user resolution fails closed; Windows rollback follows the actual service existence probe.
+- Neutral launchd environment fields are rendered; unsupported Windows fields are rejected rather than dropped.
+- Package IDs, browser ports, unsupported platforms, and health-command output are bounded at their trust boundaries.
 
 ## Deliberate boundary
 

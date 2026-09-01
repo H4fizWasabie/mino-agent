@@ -27,6 +27,9 @@ func TestRenderServiceDefinitionAcrossPlatforms(t *testing.T) {
 			t.Fatalf("%s rendered %q: %q", tt.goos, name, content)
 		}
 	}
+	if launchdContent := renderLaunchd(d); !strings.Contains(launchdContent, "EnvironmentVariables") || !strings.Contains(launchdContent, "MINO_ENV") {
+		t.Fatal("launchd output dropped environment variables")
+	}
 }
 
 func TestParseServiceDefinitionRejectsUnsafeInput(t *testing.T) {

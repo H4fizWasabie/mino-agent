@@ -2,6 +2,12 @@
 
 ### Changed
 
+- **Hardened cross-platform host operations (#233)**: normalized macOS/Windows service identity
+  checks, made macOS service-user resolution fail closed, based Windows rollback on the actual
+  service state, preserved launchd environment variables, accepted valid Homebrew/winget package
+  IDs, rejected unsupported Windows service fields explicitly, validated browser ports, bounded
+  health probes, and report unsupported host platforms instead of silently using Linux commands.
+
 - **Removed dead runtime paths (#502)**: playbook execution now has one
   canonical navigator path, and the loop/provider APIs no longer carry unused
   streaming wrappers or selectors.

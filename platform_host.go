@@ -11,6 +11,7 @@ import (
 // hostPlatform is the small command seam for host tools. Tool policy and
 // journaling stay shared; only native package/service commands vary.
 type hostPlatform struct {
+	supported  bool
 	install    func(string) []string
 	remove     func(string) []string
 	restart    func(string) []string
@@ -26,9 +27,10 @@ func hostPlatformFor(goos string) hostPlatform {
 	switch goos {
 	case "darwin":
 		return hostPlatform{
-			install: func(pkg string) []string { return []string{"brew", "install", pkg} },
-			remove:  func(pkg string) []string { return []string{"brew", "uninstall", pkg} },
-			restart: func(name string) []string { return []string{"launchctl", "kickstart", "-k", macServiceTarget(name)} },
+			supported: true,
+			install:   func(pkg string) []string { return []string{"brew", "install", pkg} },
+			remove:    func(pkg string) []string { return []string{"brew", "uninstall", pkg} },
+			restart:   func(name string) []string { return []string{"launchctl", "kickstart", "-k", macServiceTarget(name)} },
 			probe: func(ctx context.Context, pkg string) bool {
 				_, err := runPlain(ctx, []string{"brew", "list", "--formula", pkg})
 				return err == nil
@@ -37,18 +39,23 @@ func hostPlatformFor(goos string) hostPlatform {
 				return []string{"sh", "-c", "launchctl print " + macServiceTarget(name) + " >/dev/null && printf active"}
 			},
 			resolve: func(ctx context.Context, name string) (string, string, error) {
-				_, err := runPlain(ctx, []string{"launchctl", "print", macServiceTarget(name)})
+				target := macServiceTarget(name)
+				if target == "" {
+					return "", "", fmt.Errorf("resolve service %q: determine macOS service user", name)
+				}
+				_, err := runPlain(ctx, []string{"launchctl", "print", target})
 				if err != nil {
 					return "", "", fmt.Errorf("resolve service %q: %w", name, err)
 				}
-				return name, "loaded", nil
+				return nativeServiceName(name), "loaded", nil
 			},
-			sudo:       runSudo,
+			sudo:       runPlain,
 			allow:      allowNativeHostCommand,
 			packageRun: runPlain,
 		}
 	case "windows":
 		return hostPlatform{
+			supported: true,
 			install: func(pkg string) []string {
 				return []string{"winget.exe", "install", "--accept-source-agreements", "--accept-package-agreements", pkg}
 			},
@@ -76,6 +83,7 @@ func hostPlatformFor(goos string) hostPlatform {
 		}
 	default:
 		return hostPlatform{
+			supported:  goos == "linux",
 			install:    func(pkg string) []string { return []string{"/usr/bin/apt-get", "install", "-y", pkg} },
 			remove:     func(pkg string) []string { return []string{"/usr/bin/apt-get", "remove", "-y", pkg} },
 			restart:    func(name string) []string { return []string{"/usr/bin/systemctl", "restart", name} },
@@ -121,9 +129,13 @@ func allowNativeHostCommand(_ string, argv []string) bool {
 func macServiceTarget(name string) string {
 	out, err := exec.Command("id", "-u").Output()
 	if err != nil {
-		return "user/0/" + nativeServiceName(name)
+		return ""
 	}
-	return "user/" + strings.TrimSpace(string(out)) + "/" + nativeServiceName(name)
+	uid := strings.TrimSpace(string(out))
+	if uid == "" || strings.ContainsAny(uid, "\r\n") {
+		return ""
+	}
+	return "user/" + uid + "/" + nativeServiceName(name)
 }
 
 func nativeServiceName(name string) string { return strings.TrimSuffix(name, ".service") }

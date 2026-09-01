@@ -170,7 +170,7 @@ func maybeRestartService(home string) {
 		fmt.Printf("Restart Mino to use the new version (no native service %q found).\n", unit)
 		return
 	}
-	if id != unit {
+	if id != nativeServiceName(unit) {
 		fmt.Printf("Restart Mino to use the new version (%s resolves to %q, not %q — refusing).\n", unit, id, unit)
 		return
 	}
@@ -179,7 +179,7 @@ func maybeRestartService(home string) {
 		fmt.Printf("Restart Mino to use the new version (%s is not active — nothing running to restart).\n", unit)
 		return
 	}
-	argv := platform.restart(unit)
+	argv := platform.restart(id)
 	if !platform.allow(home, argv) {
 		fmt.Printf("Restart Mino to use the new version (restart of %s%s).\n", unit, notWhitelisted)
 		return
