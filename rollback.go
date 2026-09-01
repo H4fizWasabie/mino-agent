@@ -30,6 +30,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -156,6 +157,7 @@ var sudoRun = runSudo
 // nothing after it may be owed a write. Every refusal degrades to today's
 // manual message; the binary swap is already durable when this runs.
 func maybeRestartService(home string) {
+	platform := currentHostPlatform()
 	unit := envOr("MINO_SERVICE", "mino.service")
 	if !unitNameRe.MatchString(unit) {
 		fmt.Printf("Restart Mino to use the new version (%q is not a valid unit name).\n", unit)
@@ -163,24 +165,23 @@ func maybeRestartService(home string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), hostOpTimeout)
 	defer cancel()
-	id, _, err := resolveUnit(ctx, unit)
+	id, _, err := platform.resolve(ctx, unit)
 	if err != nil {
-		// No systemd here (dev box, Windows release asset) — nothing to roll.
-		fmt.Printf("Restart Mino to use the new version (no systemd unit %q found).\n", unit)
+		fmt.Printf("Restart Mino to use the new version (no native service %q found).\n", unit)
 		return
 	}
 	if id != unit {
 		fmt.Printf("Restart Mino to use the new version (%s resolves to %q, not %q — refusing).\n", unit, id, unit)
 		return
 	}
-	active, err := runPlain(ctx, []string{"systemctl", "is-active", unit})
+	active, err := runPlain(ctx, platform.active(unit))
 	if err != nil || strings.TrimSpace(active) != "active" {
 		fmt.Printf("Restart Mino to use the new version (%s is not active — nothing running to restart).\n", unit)
 		return
 	}
-	argv := []string{"/usr/bin/systemctl", "restart", unit}
-	if !allowSudo(home, argv) {
-		fmt.Printf("Restart Mino to use the new version (systemctl restart of %s%s).\n", unit, notWhitelisted)
+	argv := platform.restart(unit)
+	if !platform.allow(home, argv) {
+		fmt.Printf("Restart Mino to use the new version (restart of %s%s).\n", unit, notWhitelisted)
 		return
 	}
 	j, jerr := openJournal(home)
@@ -201,8 +202,13 @@ func maybeRestartService(home string) {
 	}
 	// Print BEFORE the restart: a successful restart terminates the serving
 	// process (and any session riding it) during this call.
-	fmt.Printf("Restarting %s via systemd — the connection will drop; reconnect and verify with 'systemctl status' or the dashboard.\n", unit)
-	if _, err := sudoRun(ctx, argv); err != nil {
+	fmt.Printf("Restarting %s via the native service manager — the connection will drop; reconnect and verify with the dashboard.\n", unit)
+	runRestart := platform.sudo
+	if runtime.GOOS == "linux" {
+		// Preserve the existing test and deployment seam for the Linux path.
+		runRestart = sudoRun
+	}
+	if _, err := runRestart(ctx, argv); err != nil {
 		j.SetStatus(entry.ID, OpStatusFailed)
 		fmt.Printf("Error: auto-restart failed: %v — restart %s manually to use the new version.\n", err, unit)
 	}

@@ -276,8 +276,10 @@ func autoOpenBrowser(port string) {
 		cmd = exec.Command("xdg-open", url)
 	case "darwin":
 		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", "", url)
 	default:
-		return // windows/other: skip
+		return // unsupported host: skip
 	}
 	cmd.Start()
 }

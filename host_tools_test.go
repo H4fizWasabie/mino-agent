@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -98,6 +99,34 @@ func newTestHost(t *testing.T) (*HostTools, *fakeRunner) {
 		expected: "mino.service",
 	}
 	return h, f
+}
+
+func TestHostPlatformCommands(t *testing.T) {
+	tests := []struct {
+		name    string
+		goos    string
+		install []string
+		remove  []string
+		restart []string
+	}{
+		{name: "linux", goos: "linux", install: []string{"/usr/bin/apt-get", "install", "-y", "jq"}, remove: []string{"/usr/bin/apt-get", "remove", "-y", "jq"}, restart: []string{"/usr/bin/systemctl", "restart", "mino.service"}},
+		{name: "macos", goos: "darwin", install: []string{"brew", "install", "jq"}, remove: []string{"brew", "uninstall", "jq"}, restart: []string{"launchctl", "kickstart", "-k", "system/mino.service"}},
+		{name: "windows", goos: "windows", install: []string{"winget.exe", "install", "--accept-source-agreements", "--accept-package-agreements", "jq"}, remove: []string{"winget.exe", "uninstall", "jq"}, restart: []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Restart-Service -Name 'mino.service' -Force"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := hostPlatformFor(tt.goos)
+			if got := p.install(tt.install[len(tt.install)-1]); !reflect.DeepEqual(got, tt.install) {
+				t.Fatalf("install = %v, want %v", got, tt.install)
+			}
+			if got := p.remove(tt.remove[len(tt.remove)-1]); !reflect.DeepEqual(got, tt.remove) {
+				t.Fatalf("remove = %v, want %v", got, tt.remove)
+			}
+			if got := p.restart("mino.service"); !reflect.DeepEqual(got, tt.restart) {
+				t.Fatalf("restart = %v, want %v", got, tt.restart)
+			}
+		})
+	}
 }
 
 var errNoSuchUnit = errors.New("no such unit")

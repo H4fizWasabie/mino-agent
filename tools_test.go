@@ -276,6 +276,27 @@ func TestBashHardFailureNoOutput(t *testing.T) {
 	}
 }
 
+func TestNativeShellCommand(t *testing.T) {
+	tests := []struct {
+		name string
+		goos string
+		want string
+		args []string
+	}{
+		{name: "unix", goos: "darwin", want: "bash", args: []string{"-c", "echo ok"}},
+		{name: "linux", goos: "linux", want: "bash", args: []string{"-c", "echo ok"}},
+		{name: "windows", goos: "windows", want: "powershell.exe", args: []string{"-NoProfile", "-NonInteractive", "-Command", "echo ok"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, args := nativeShellCommand(tt.goos, "echo ok")
+			if got != tt.want || !reflect.DeepEqual(args, tt.args) {
+				t.Fatalf("nativeShellCommand(%q) = %q %q, want %q %q", tt.goos, got, args, tt.want, tt.args)
+			}
+		})
+	}
+}
+
 // Issue #235: a pipeline's exit status comes from its LAST element (shells
 // have no pipefail), so `pip install --quiet X | tail -2` reported success
 // while pip failed. The harness must surface the masked statuses —

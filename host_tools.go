@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -34,11 +35,12 @@ type HostTools struct {
 	stageDir string // unit staging dir (default <home>/tmp — pinned by the whitelist)
 	unitDir  string // unit install dir (default /etc/systemd/system)
 
-	sudo     func(ctx context.Context, argv []string) (string, error)            // privileged runner
-	plain    func(ctx context.Context, argv []string) (string, error)            // unprivileged runner (probes)
-	probe    func(ctx context.Context, pkg string) bool                          // package installed?
+	sudo     func(ctx context.Context, argv []string) (string, error)             // privileged runner
+	plain    func(ctx context.Context, argv []string) (string, error)             // unprivileged runner (probes)
+	probe    func(ctx context.Context, pkg string) bool                           // package installed?
 	resolve  func(ctx context.Context, name string) (id, state string, err error) // systemctl show
-	check    func(argv []string) bool                                           // whitelist membership
+	check    func(argv []string) bool                                             // whitelist membership
+	platform hostPlatform
 	expected string // MINO_SERVICE — the only unit restart_service will touch
 }
 
@@ -48,18 +50,48 @@ const (
 )
 
 func NewHostTools(home string, j *OpJournal) *HostTools {
+	platform := currentHostPlatform()
 	return &HostTools{
 		home:     home,
 		journal:  j,
 		stageDir: filepath.Join(home, "tmp"),
 		unitDir:  "/etc/systemd/system",
-		sudo:     runSudo,
+		sudo:     platform.sudo,
 		plain:    runPlain,
-		probe:    pkgInstalled,
-		resolve:  resolveUnit,
-		check:    func(argv []string) bool { return allowSudo(home, argv) },
+		probe:    platform.probe,
+		resolve:  platform.resolve,
+		check:    func(argv []string) bool { return platform.allow(home, argv) },
+		platform: platform,
 		expected: envOr("MINO_SERVICE", "mino.service"),
 	}
+}
+
+func (h *HostTools) packageInstallArgv(pkg string) []string {
+	if h.platform.install != nil {
+		return h.platform.install(pkg)
+	}
+	return []string{"/usr/bin/apt-get", "install", "-y", pkg}
+}
+
+func (h *HostTools) packageRemoveArgv(pkg string) []string {
+	if h.platform.remove != nil {
+		return h.platform.remove(pkg)
+	}
+	return []string{"/usr/bin/apt-get", "remove", "-y", pkg}
+}
+
+func (h *HostTools) restartArgv(name string) []string {
+	if h.platform.restart != nil {
+		return h.platform.restart(name)
+	}
+	return []string{"/usr/bin/systemctl", "restart", name}
+}
+
+func (h *HostTools) activeArgv(name string) []string {
+	if h.platform.active != nil {
+		return h.platform.active(name)
+	}
+	return []string{"/usr/bin/systemctl", "is-active", name}
 }
 
 // whitelisted reports whether the harness may invoke argv via sudo.
@@ -96,7 +128,7 @@ func makeInstallPackageTool(h *HostTools) *Tool {
 			if !pkgNameRe.MatchString(pkg) {
 				return "Error: invalid package name " + fmt.Sprintf("%q", pkg) + " (lower-case letters, digits, + . - only)"
 			}
-			argv := []string{"/usr/bin/apt-get", "install", "-y", pkg}
+			argv := h.packageInstallArgv(pkg)
 			if !h.whitelisted(argv) {
 				return "Error: apt-get install of " + pkg + notWhitelisted
 			}
@@ -126,7 +158,7 @@ func makeInstallPackageTool(h *HostTools) *Tool {
 			if _, err := h.journal.Run(entry, nil); err != nil {
 				// Journal is the record of truth: tear the op back down.
 				if !wasInstalled {
-					teardown := []string{"/usr/bin/apt-get", "remove", "-y", pkg}
+					teardown := h.packageRemoveArgv(pkg)
 					if h.whitelisted(teardown) {
 						if _, terr := h.sudo(ctx, teardown); terr != nil {
 							slog.Error("install_package teardown failed", "package", pkg, "error", terr)
@@ -164,6 +196,9 @@ func makeWriteUnitTool(h *HostTools) *Tool {
 		ContextFn: func(ctx context.Context, args map[string]any) string {
 			name, _ := args["name"].(string)
 			content, _ := args["content"].(string)
+			if runtime.GOOS != "linux" {
+				return "Error: write_unit requires Linux systemd; configure a native launchd or Windows service outside this tool"
+			}
 			if !unitNameRe.MatchString(name) {
 				return "Error: invalid unit name " + fmt.Sprintf("%q", name) + " (lower-case letters, digits, . _ - and a .service/.timer/.socket/.path suffix)"
 			}
@@ -290,11 +325,11 @@ func makeRestartServiceTool(h *HostTools) *Tool {
 			if id != h.expected {
 				return fmt.Sprintf("Error: refusing to restart %s — Mino's own service is %q (MINO_SERVICE); other units are outside the whitelist boundary", id, h.expected)
 			}
-			argv := []string{"/usr/bin/systemctl", "restart", id}
+			argv := h.restartArgv(id)
 			if !h.whitelisted(argv) {
 				return "Error: systemctl restart of " + id + notWhitelisted
 			}
-			active, _ := h.plain(ctx, []string{"/usr/bin/systemctl", "is-active", id}) // read-only probe, no privilege needed
+			active, _ := h.plain(ctx, h.activeArgv(id)) // read-only probe, no privilege needed
 			before, _ := json.Marshal(map[string]string{"active": strings.TrimSpace(active), "unit_file_state": state})
 			entry := &OpEntry{
 				OpType:      "service.restart",

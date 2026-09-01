@@ -221,11 +221,10 @@ systemctl restart/daemon-reload, `install -o root -g root -m 0644` from `~/.mino
 /etc/systemd/system, `rm -f /etc/systemd/system/*`) — never a shell, never ALL. Without it the
 tools refuse every op with a clear boundary message, and `bash` refuses `sudo` outright.
 
-> **Platform note:** the privilege bridge (sudoers/apt/systemd) is **Linux-only** (issue #233).
-> On macOS/Windows the host tools fail loudly and safely (nothing runs), while the rest of Mino
-> works normally. **Windows users: run Mino under [WSL](https://learn.microsoft.com/en-us/windows/wsl/install)**
-> to get the full Linux feature set. macOS/Windows host-tool adapters are planned later; see
-> issue #233.
+> **Platform note:** Mino's core tools run natively on Linux, macOS, and Windows (issue #233).
+> Package installation, service discovery/restart, shell execution, browser opening, system checks,
+> and update restart use the host's native commands. `write_unit` remains Linux/systemd-specific
+> because its input is a systemd unit definition; unsupported host operations fail explicitly.
 
 ## A task failed — now what?
 

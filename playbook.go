@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -1276,14 +1277,19 @@ func makeSystemCheckTool(db *sql.DB, home string) *Tool {
 			// runtime truth: systemd service state and recent errors from the real
 			// log. journald held the exact error that broke every schedule; the LLM
 			// never looked there because nothing told it journald is its log.
-			out, err := exec.Command("systemctl", "is-active", "mino").Output()
+			serviceCmd, errorCmd := hostServiceHealthCommands(runtime.GOOS)
+			out, err := exec.Command(serviceCmd[0], serviceCmd[1:]...).Output()
 			svc := strings.TrimSpace(string(out))
 			if err != nil && svc == "" {
-				svc = "not-a-systemd-service"
+				svc = "unavailable on " + runtime.GOOS
 			}
 			fmt.Fprintf(&b, "service: mino=%s\n", svc)
-			if out, err := exec.Command("journalctl", "-u", "mino", "-p", "err", "--since", "1 hour ago", "-n", "10", "--no-pager").Output(); err == nil && len(out) > 0 {
-				fmt.Fprintf(&b, "recent_errors:\n%s", out)
+			if len(errorCmd) > 0 {
+				if out, err := exec.Command(errorCmd[0], errorCmd[1:]...).Output(); err == nil && len(out) > 0 {
+					fmt.Fprintf(&b, "recent_errors:\n%s", out)
+				} else {
+					b.WriteString("recent_errors: none\n")
+				}
 			} else {
 				b.WriteString("recent_errors: none\n")
 			}
