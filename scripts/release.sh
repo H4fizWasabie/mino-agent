@@ -55,7 +55,9 @@ CAND="/tmp/mino-candidate-$VERSION"
 # The VPS link has dropped mid-scp twice (v2.10.0, v2.10.1) — retry before aborting.
 scp_retry() {
 	for attempt in 1 2 3; do
-		if scp -q "$1" "$2"; then return 0; fi
+		# The VPS SSH service exposes legacy SCP but closes the SFTP-backed
+		# default mode used by newer OpenSSH clients.
+		if scp -O -q "$1" "$2"; then return 0; fi
 		echo "  scp attempt $attempt failed, retrying..." >&2
 		sleep 3
 	done

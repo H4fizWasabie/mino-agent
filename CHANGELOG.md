@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+- **Release lane SCP compatibility (#507)**: candidate and smoke-test script
+  transfers now use legacy SCP mode for VPS hosts that do not expose the SFTP
+  subsystem.
+
 - **Release lane gate ordering (#505)**: `scripts/release.sh` now requires the
   tagged commit to match `origin/master`, completes the build and VPS
   `stage-smoke` rehearsal before pushing the release tag, and no longer pushes
