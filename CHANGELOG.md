@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+- **Release lane SCP compatibility (#507)**: candidate and smoke-test script
+  transfers now use legacy SCP mode for VPS hosts that do not expose the SFTP
+  subsystem.
+
 - **Session-sticky OpenRouter upstream routing (#509)**: cost-watch's ranked
   provider list remains the authority, while Mino now sends a stable session ID,
   remembers the eligible upstream that served a successful response, prefers it
