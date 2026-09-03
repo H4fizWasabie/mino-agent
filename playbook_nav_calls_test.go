@@ -183,3 +183,31 @@ func TestNavCallsClearedBetweenStageAttempts(t *testing.T) {
 		t.Fatalf("expected the tracker to be empty after clearNavCalls, got %d: %v", len(got), got)
 	}
 }
+
+func TestDeferredToolExecutionIsRecordedForNavigation(t *testing.T) {
+	runID, sessionID := "run-dispatch-test", "scheduled-dispatch-test"
+	setSessionNav(sessionID, "post-test", runID)
+	defer clearSessionNav(sessionID)
+
+	registry := NewRegistry()
+	registry.Register(&Tool{
+		Name:     "threads_post",
+		Behavior: BehaviorMutate,
+		Fn:       func(map[string]any) string { return `{"result":"18351111289174874"}` },
+	})
+	registry.Register(makeToolCallTool(registry))
+	ctx := context.WithValue(context.Background(), sessionIDKey{}, sessionID)
+	got := registry.ExecuteContext(ctx, toolCallName, map[string]any{
+		"name": "threads_post",
+	})
+	if got != `{"result":"18351111289174874"}` {
+		t.Fatalf("dispatcher returned %q", got)
+	}
+	calls := stageNavCalls(runID)
+	for _, call := range calls {
+		if call.Name == "threads_post" && toolOutputStatus(call.Output) == "ok" && outcomeID.MatchString(call.Output) {
+			return
+		}
+	}
+	t.Fatalf("deferred tool call was not recorded: %+v", calls)
+}
