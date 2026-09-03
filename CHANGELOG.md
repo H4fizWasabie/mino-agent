@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+- **Playbook success verification through deferred tools**: record the actual
+  tool executed inside `tool_call` at the shared registry boundary, so
+  successful publishes are credited by navigation verification without
+  double-recording direct calls.
+
 - **Release lane SCP compatibility (#507)**: candidate and smoke-test script
   transfers now use legacy SCP mode for VPS hosts that do not expose the SFTP
   subsystem.

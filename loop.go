@@ -686,13 +686,6 @@ func RunLoopContext(
 			}
 			output := prepareToolOutput(ctx, traceHome, sessionID, i, tc.Name, raw)
 			result.ToolCalls = append(result.ToolCalls, ToolCall{Name: tc.Name, Args: args, Output: output})
-			// #486: record every call made while navigating a playbook stage, so
-			// verifyWorkspaceStageOutputs/stageDeviationFlags can check a real
-			// call list instead of the nil they were always given (see
-			// playbook_nav.go's navCalls doc comment for the full history).
-			if p, navigating := sessionNav(sessionID); navigating {
-				noteNavCall(p.RunID, ToolCall{Name: tc.Name, Args: args, Output: output})
-			}
 
 			// #337 (finding 4): read-spiral accounting — read_file calls count
 			// up; any file mutation resets the streak.

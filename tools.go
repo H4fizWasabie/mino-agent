@@ -698,6 +698,16 @@ func (r *Registry) ExecuteContext(ctx context.Context, name string, args map[str
 	} else {
 		output = t.Fn(args)
 	}
+	// Navigation verification must observe the actual tool execution, including
+	// deferred tools reached through tool_call. Keep this at the shared execution
+	// boundary so direct and dispatched calls follow the same path.
+	if v := ctx.Value(sessionIDKey{}); v != nil {
+		if sessionID, ok := v.(string); ok {
+			if p, navigating := sessionNav(sessionID); navigating {
+				noteNavCall(p.RunID, ToolCall{Name: name, Args: args, Output: output})
+			}
+		}
+	}
 	// log to tool_calls table if DB is configured
 	if r.logDB != nil {
 		status := toolOutputStatus(output)
